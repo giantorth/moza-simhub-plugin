@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace MozaTelemetryPlugin.Protocol
+namespace MozaPlugin.Protocol
 {
     public class MozaCommand
     {
@@ -107,6 +107,16 @@ namespace MozaTelemetryPlugin.Protocol
             bytes[2] = data[1];
             bytes[3] = data[0];
             return BitConverter.ToSingle(bytes, 0);
+        }
+
+        /// <summary>
+        /// Convenience: build a write message with a float value, encoded big-endian IEEE 754.
+        /// </summary>
+        public byte[]? BuildWriteFloat(byte deviceId, float value)
+        {
+            var le = BitConverter.GetBytes(value);
+            var payload = new byte[] { le[3], le[2], le[1], le[0] };
+            return BuildWriteMessage(deviceId, payload);
         }
     }
 }

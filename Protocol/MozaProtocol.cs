@@ -1,4 +1,4 @@
-namespace MozaTelemetryPlugin.Protocol
+namespace MozaPlugin.Protocol
 {
     /// <summary>
     /// Constants from the MOZA Racing serial protocol (data/serial.yml).

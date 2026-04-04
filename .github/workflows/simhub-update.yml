@@ -1,0 +1,147 @@
+name: SimHub deps update
+
+on:
+  schedule:
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+
+jobs:
+  fetch-binary:
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.precheck.outputs.should_run }}
+      latest_tag: ${{ steps.precheck.outputs.latest_tag }}
+      current_tag: ${{ steps.precheck.outputs.current_tag }}
+      download_url: ${{ steps.precheck.outputs.download_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for newer SimHub release
+        id: precheck
+        run: |
+          curl -Ls "https://api.github.com/repos/SHWotever/SimHub/releases/latest" -o latest_simhub.json
+          LATEST_TAG=$(grep -Po '"tag_name": "\K[^"]*' ./latest_simhub.json)
+          DOWNLOAD_URL=$(grep -Po '"browser_download_url": "\K[^"]*' ./latest_simhub.json)
+          CURRENT_TAG=$(<./libs/SimHub/VERSION)
+
+          echo "Latest build: $LATEST_TAG"
+          echo "Last built: $CURRENT_TAG"
+          echo "Download link: $DOWNLOAD_URL"
+
+          if [ "$LATEST_TAG" != "$CURRENT_TAG" ]; then
+            set +e
+            git ls-remote --exit-code --heads origin "refs/heads/chore/simhub/v$LATEST_TAG" >/dev/null
+
+            if [ $? != 0 ]; then
+              echo "should_run=true" >> $GITHUB_OUTPUT
+              echo "latest_tag=$LATEST_TAG" >> $GITHUB_OUTPUT
+              echo "current_tag=$CURRENT_TAG" >> $GITHUB_OUTPUT
+              echo "download_url=$DOWNLOAD_URL" >> $GITHUB_OUTPUT
+              echo "New version found"
+              exit 0
+            fi
+          fi
+
+          echo "should_run=false" >> $GITHUB_OUTPUT
+          exit 0
+
+      - name: Download binary
+        if: ${{ steps.precheck.outputs.should_run == 'true' }}
+        run: |
+          curl -L "${{ steps.precheck.outputs.download_url }}" -o SimHub.zip
+          unzip -p SimHub.zip > SimHubSetup.exe
+
+      - name: Upload setup file
+        if: ${{ steps.precheck.outputs.should_run == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: simhub-setup
+          path: SimHubSetup.exe
+          retention-days: 1
+          if-no-files-found: error
+          compression-level: 0
+
+  simhub:
+    runs-on: windows-latest
+    needs:
+      - fetch-binary
+    if: ${{ needs.fetch-binary.outputs.should_run == 'true' }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: simhub-setup
+
+      - name: Install SimHub and extract DLLs
+        run: |
+          New-Item -Path "C:\" -Name "simhub" -ItemType "Directory"
+          ./SimHubSetup.exe /VERYSILENT /Dir="C:\simhub"
+
+          do {
+            Write-Output "Waiting for files..."
+            Start-Sleep -Seconds 5
+          } until (
+            (Test-Path -path "C:\simhub\GameReaderCommon.dll" -PathType Leaf) -and
+            (Test-Path -path "C:\simhub\SimHub.Logging.dll" -PathType Leaf) -and
+            (Test-Path -path "C:\simhub\SimHub.Plugins.dll" -PathType Leaf) -and
+            (Test-Path -path "C:\simhub\log4net.dll" -PathType Leaf) -and
+            (Test-Path -path "C:\simhub\Newtonsoft.Json.dll" -PathType Leaf)
+          )
+
+          Start-Sleep -Seconds 3
+          Write-Output "All files found"
+
+      - name: Upload SimHub files
+        uses: actions/upload-artifact@v4
+        with:
+          name: simhub-files
+          path: |
+            C:/simhub/GameReaderCommon.dll
+            C:/simhub/SimHub.Logging.dll
+            C:/simhub/SimHub.Plugins.dll
+            C:/simhub/log4net.dll
+            C:/simhub/Newtonsoft.Json.dll
+          retention-days: 1
+          if-no-files-found: error
+          compression-level: 0
+
+  create-pr:
+    runs-on: ubuntu-latest
+    needs:
+      - fetch-binary
+      - simhub
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download SimHub files
+        uses: actions/download-artifact@v4
+        with:
+          name: simhub-files
+          path: libs/SimHub
+
+      - name: Create branch and push
+        run: |
+          echo "${{ needs.fetch-binary.outputs.latest_tag }}" > ./libs/SimHub/VERSION
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+          git checkout -b chore/simhub/v${{ needs.fetch-binary.outputs.latest_tag }}
+          git add .
+          git commit -m "chore(deps): bump SimHub from v${{ needs.fetch-binary.outputs.current_tag }} to v${{ needs.fetch-binary.outputs.latest_tag }}"
+          git push --set-upstream origin chore/simhub/v${{ needs.fetch-binary.outputs.latest_tag }}
+
+      - name: Create PR
+        run: |
+          PR_URL=$(gh pr create \
+            -H chore/simhub/v${{ needs.fetch-binary.outputs.latest_tag }} \
+            -t "chore(deps): bump SimHub from v${{ needs.fetch-binary.outputs.current_tag }} to v${{ needs.fetch-binary.outputs.latest_tag }}" \
+            -b 'Bump SimHub from v${{ needs.fetch-binary.outputs.current_tag }} to v${{ needs.fetch-binary.outputs.latest_tag }}')
+          echo "$PR_URL"
+
+          # Close previous SimHub update PRs superseded by this one
+          gh pr list -H "chore/simhub/" --json number -q '.[].number' \
+            -S "-head:chore/simhub/v${{ needs.fetch-binary.outputs.latest_tag }}" \
+            | xargs -I {} gh pr close -c "Superseded by $PR_URL" -d {}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

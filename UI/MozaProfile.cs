@@ -3,7 +3,7 @@ using System.Windows.Controls;
 using Newtonsoft.Json;
 using SimHub.Plugins.ProfilesCommon;
 
-namespace MozaTelemetryPlugin
+namespace MozaPlugin
 {
     /// <summary>
     /// A named profile snapshot of all Moza device configuration.
@@ -16,7 +16,7 @@ namespace MozaTelemetryPlugin
         [JsonIgnore]
         public override Control ProfileContentControl => null!;
 
-        // ===== Base/Motor settings (raw device values from MozaTelemetryData) =====
+        // ===== Base/Motor settings (raw device values from MozaData) =====
         public int Limit { get; set; } = -1;               // raw = degrees / 2
         public int FfbStrength { get; set; } = -1;          // raw = percent * 10
         public int Torque { get; set; } = -1;               // percent
@@ -69,10 +69,37 @@ namespace MozaTelemetryPlugin
         public int DashRpmBrightness { get; set; } = -1;
         public int DashFlagsBrightness { get; set; } = -1;
 
+        // ===== FFB Equalizer (6 bands) =====
+        public int Equalizer1 { get; set; } = -1000;
+        public int Equalizer2 { get; set; } = -1000;
+        public int Equalizer3 { get; set; } = -1000;
+        public int Equalizer4 { get; set; } = -1000;
+        public int Equalizer5 { get; set; } = -1000;
+        public int Equalizer6 { get; set; } = -1000;
+
+        // ===== FFB Curve (Y outputs at fixed 20/40/60/80/100% breakpoints) =====
+        public int FfbCurveY1 { get; set; } = -1;
+        public int FfbCurveY2 { get; set; } = -1;
+        public int FfbCurveY3 { get; set; } = -1;
+        public int FfbCurveY4 { get; set; } = -1;
+        public int FfbCurveY5 { get; set; } = -1;
+
         // ===== Handbrake settings =====
         public int HandbrakeMode { get; set; } = -1;             // 0=Axis, 1=Button
         public int HandbrakeButtonThreshold { get; set; } = -1;  // 0-100
         public int HandbrakeDirection { get; set; } = -1;        // 0=Normal, 1=Reversed
+        public int HandbrakeMin { get; set; } = -1;
+        public int HandbrakeMax { get; set; } = -1;
+        public int[]? HandbrakeCurve { get; set; }               // [5] values 0-100
+
+        // ===== Pedal settings =====
+        public int PedalsThrottleDir { get; set; } = -1;
+        public int PedalsBrakeDir { get; set; } = -1;
+        public int PedalsBrakeAngleRatio { get; set; } = -1; // 0=angle sensor, 100=load cell
+        public int PedalsClutchDir { get; set; } = -1;
+        public int[]? PedalsThrottleCurve { get; set; }          // [5] values 0-100
+        public int[]? PedalsBrakeCurve { get; set; }             // [5] values 0-100
+        public int[]? PedalsClutchCurve { get; set; }            // [5] values 0-100
 
         // ===== Color arrays (packed as R<<16 | G<<8 | B) =====
         public int[]? WheelRpmColors { get; set; }       // [10]
@@ -122,10 +149,26 @@ namespace MozaTelemetryPlugin
             DashRpmTimingsRpm = p.DashRpmTimingsRpm != null ? (int[])p.DashRpmTimingsRpm.Clone() : null;
             DashRpmBrightness = p.DashRpmBrightness; DashFlagsBrightness = p.DashFlagsBrightness;
 
+            // FFB Equalizer
+            Equalizer1 = p.Equalizer1; Equalizer2 = p.Equalizer2; Equalizer3 = p.Equalizer3;
+            Equalizer4 = p.Equalizer4; Equalizer5 = p.Equalizer5; Equalizer6 = p.Equalizer6;
+
+            // FFB Curve
+            FfbCurveY1 = p.FfbCurveY1; FfbCurveY2 = p.FfbCurveY2; FfbCurveY3 = p.FfbCurveY3; FfbCurveY4 = p.FfbCurveY4; FfbCurveY5 = p.FfbCurveY5;
+
             // Handbrake
             HandbrakeMode = p.HandbrakeMode;
             HandbrakeButtonThreshold = p.HandbrakeButtonThreshold;
             HandbrakeDirection = p.HandbrakeDirection;
+            HandbrakeMin = p.HandbrakeMin; HandbrakeMax = p.HandbrakeMax;
+            HandbrakeCurve = CloneArray(p.HandbrakeCurve);
+
+            // Pedals
+            PedalsThrottleDir = p.PedalsThrottleDir; PedalsBrakeDir = p.PedalsBrakeDir; PedalsClutchDir = p.PedalsClutchDir;
+            PedalsBrakeAngleRatio = p.PedalsBrakeAngleRatio;
+            PedalsThrottleCurve = CloneArray(p.PedalsThrottleCurve);
+            PedalsBrakeCurve = CloneArray(p.PedalsBrakeCurve);
+            PedalsClutchCurve = CloneArray(p.PedalsClutchCurve);
 
             // Colors (deep copy)
             WheelRpmColors = CloneArray(p.WheelRpmColors);
@@ -142,7 +185,7 @@ namespace MozaTelemetryPlugin
         /// <summary>
         /// Populate this profile by capturing all current device state.
         /// </summary>
-        public void CaptureFromCurrent(MozaPluginSettings settings, MozaTelemetryData data)
+        public void CaptureFromCurrent(MozaPluginSettings settings, MozaData data)
         {
             // Base/Motor
             Limit = data.Limit; FfbStrength = data.FfbStrength; Torque = data.Torque;
@@ -185,10 +228,26 @@ namespace MozaTelemetryPlugin
             DashRpmBrightness = settings.DashRpmBrightness;
             DashFlagsBrightness = settings.DashFlagsBrightness;
 
+            // FFB Equalizer
+            Equalizer1 = data.Equalizer1; Equalizer2 = data.Equalizer2; Equalizer3 = data.Equalizer3;
+            Equalizer4 = data.Equalizer4; Equalizer5 = data.Equalizer5; Equalizer6 = data.Equalizer6;
+
+            // FFB Curve
+            FfbCurveY1 = data.FfbCurveY1; FfbCurveY2 = data.FfbCurveY2; FfbCurveY3 = data.FfbCurveY3; FfbCurveY4 = data.FfbCurveY4; FfbCurveY5 = data.FfbCurveY5;
+
             // Handbrake
             HandbrakeMode = data.HandbrakeMode;
             HandbrakeButtonThreshold = data.HandbrakeButtonThreshold;
             HandbrakeDirection = data.HandbrakeDirection;
+            HandbrakeMin = data.HandbrakeMin; HandbrakeMax = data.HandbrakeMax;
+            HandbrakeCurve = (int[])data.HandbrakeCurve.Clone();
+
+            // Pedals
+            PedalsThrottleDir = data.PedalsThrottleDir; PedalsBrakeDir = data.PedalsBrakeDir; PedalsClutchDir = data.PedalsClutchDir;
+            PedalsBrakeAngleRatio = data.PedalsBrakeAngleRatio;
+            PedalsThrottleCurve = (int[])data.PedalsThrottleCurve.Clone();
+            PedalsBrakeCurve = (int[])data.PedalsBrakeCurve.Clone();
+            PedalsClutchCurve = (int[])data.PedalsClutchCurve.Clone();
 
             // Colors
             WheelRpmColors = PackColors(data.WheelRpmColors);

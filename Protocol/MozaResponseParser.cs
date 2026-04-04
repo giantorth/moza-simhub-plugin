@@ -1,6 +1,6 @@
 using System;
 
-namespace MozaTelemetryPlugin.Protocol
+namespace MozaPlugin.Protocol
 {
     public struct ParsedResponse
     {

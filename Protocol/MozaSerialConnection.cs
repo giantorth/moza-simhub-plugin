@@ -8,7 +8,7 @@ using System.Reflection;
 using System.Threading;
 
 
-namespace MozaTelemetryPlugin.Protocol
+namespace MozaPlugin.Protocol
 {
     public class MozaSerialConnection : IDisposable
     {
@@ -18,15 +18,29 @@ namespace MozaTelemetryPlugin.Protocol
         private readonly ConcurrentQueue<byte[]> _writeQueue = new ConcurrentQueue<byte[]>();
         private volatile bool _running;
         private readonly object _lock = new object();
+        private string? _lastPortName;
 
         public event Action<byte[]>? MessageReceived;
         public bool IsConnected => _port?.IsOpen == true;
 
         public bool Connect()
         {
+            // Try the last known port first to avoid re-probing (which
+            // opens/closes the port and can reset the device under Wine).
+            if (_lastPortName != null && TryOpen(_lastPortName))
+                return true;
+
             var portName = FindMozaPort();
             if (portName == null)
                 return false;
+
+            return TryOpen(portName);
+        }
+
+        private bool TryOpen(string portName)
+        {
+            // Drain any stale messages from a previous connection
+            while (_writeQueue.TryDequeue(out _)) { }
 
             try
             {
@@ -45,12 +59,13 @@ namespace MozaTelemetryPlugin.Protocol
                 _readThread.Start();
                 _writeThread.Start();
 
-                SimHub.Logging.Current.Info($"[MozaTelemetry] Connected to {portName}");
+                _lastPortName = portName;
+                SimHub.Logging.Current.Info($"[Moza] Connected to {portName}");
                 return true;
             }
             catch (Exception ex)
             {
-                SimHub.Logging.Current.Error($"[MozaTelemetry] Failed to connect to {portName}: {ex.Message}");
+                SimHub.Logging.Current.Error($"[Moza] Failed to connect to {portName}: {ex.Message}");
                 return false;
             }
         }
@@ -79,7 +94,7 @@ namespace MozaTelemetryPlugin.Protocol
 
         private void ReadLoop()
         {
-            SimHub.Logging.Current.Info("[MozaTelemetry] Read thread started");
+            SimHub.Logging.Current.Info("[Moza] Read thread started");
             int messageCount = 0;
 
             while (_running)
@@ -144,7 +159,7 @@ namespace MozaTelemetryPlugin.Protocol
                         if (messageCount <= 5)
                         {
                             SimHub.Logging.Current.Info(
-                                $"[MozaTelemetry] Received msg #{messageCount}: len={payloadLength} " +
+                                $"[Moza] Received msg #{messageCount}: len={payloadLength} " +
                                 $"group=0x{data[0]:X2} dev=0x{data[1]:X2} ({totalRead} bytes)");
                         }
                         MessageReceived?.Invoke(data);
@@ -157,7 +172,7 @@ namespace MozaTelemetryPlugin.Protocol
                 catch (Exception ex)
                 {
                     if (_running)
-                        SimHub.Logging.Current.Error($"[MozaTelemetry] Read error: {ex.GetType().Name}: {ex.Message}");
+                        SimHub.Logging.Current.Error($"[Moza] Read error: {ex.GetType().Name}: {ex.Message}");
                     Thread.Sleep(100);
                 }
             }
@@ -165,7 +180,7 @@ namespace MozaTelemetryPlugin.Protocol
 
         private void WriteLoop()
         {
-            SimHub.Logging.Current.Info("[MozaTelemetry] Write thread started");
+            SimHub.Logging.Current.Info("[Moza] Write thread started");
             int writeCount = 0;
 
             while (_running)
@@ -180,12 +195,18 @@ namespace MozaTelemetryPlugin.Protocol
                         }
                         writeCount++;
                         if (writeCount <= 5)
-                            SimHub.Logging.Current.Info($"[MozaTelemetry] Sent cmd #{writeCount}: {msg.Length} bytes, group=0x{(msg.Length > 2 ? msg[2] : 0):X2}");
+                            SimHub.Logging.Current.Info($"[Moza] Sent cmd #{writeCount}: {msg.Length} bytes, group=0x{(msg.Length > 2 ? msg[2] : 0):X2}");
+
+                        // Pace writes: Moza bases drop commands when flooded with rapid-fire
+                        // settings writes (e.g. ApplyProfile sends 30+ commands in a burst).
+                        // 4ms matches boxflat's proven timing for reliable device writes.
+                        if (!_writeQueue.IsEmpty)
+                            Thread.Sleep(4);
                     }
                     catch (Exception ex)
                     {
                         if (_running)
-                            SimHub.Logging.Current.Error($"[MozaTelemetry] Write error: {ex.Message}");
+                            SimHub.Logging.Current.Error($"[Moza] Write error: {ex.Message}");
                     }
                 }
                 else
@@ -207,7 +228,6 @@ namespace MozaTelemetryPlugin.Protocol
                 var collection = (IDisposable)searcherType.GetMethod("Get", Type.EmptyTypes)!.Invoke(searcher, null)!;
                 using (collection)
                 {
-                    var indexer = collection.GetType().GetProperty("Item", new[] { typeof(int) });
                     foreach (var obj in (IEnumerable)collection)
                     {
                         var objType = obj.GetType();
@@ -224,7 +244,7 @@ namespace MozaTelemetryPlugin.Protocol
                                 if (comEnd > comStart)
                                 {
                                     var portName = caption.Substring(comStart + 1, comEnd - comStart - 1);
-                                    SimHub.Logging.Current.Info($"[MozaTelemetry] Found Moza device on {portName} (WMI)");
+                                    SimHub.Logging.Current.Info($"[Moza] Found Moza device on {portName} (WMI)");
                                     return portName;
                                 }
                             }
@@ -234,7 +254,7 @@ namespace MozaTelemetryPlugin.Protocol
             }
             catch (Exception ex)
             {
-                SimHub.Logging.Current.Info($"[MozaTelemetry] WMI discovery unavailable ({ex.GetType().Name}), trying probe");
+                SimHub.Logging.Current.Info($"[Moza] WMI discovery unavailable ({ex.GetType().Name}), trying probe");
             }
 
             // Probe-based discovery: try opening each COM port and sending a Moza read command.
@@ -252,12 +272,12 @@ namespace MozaTelemetryPlugin.Protocol
             {
                 if (ProbeMozaDevice(port))
                 {
-                    SimHub.Logging.Current.Info($"[MozaTelemetry] Found Moza device on {port} (probe)");
+                    SimHub.Logging.Current.Info($"[Moza] Found Moza device on {port} (probe)");
                     return port;
                 }
             }
 
-            SimHub.Logging.Current.Info("[MozaTelemetry] No MOZA device found on any COM port");
+            SimHub.Logging.Current.Info("[Moza] No MOZA device found on any COM port");
             return null;
         }
 

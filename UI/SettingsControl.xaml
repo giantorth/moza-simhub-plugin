@@ -1,4 +1,4 @@
-<UserControl x:Class="MozaTelemetryPlugin.SettingsControl"
+<UserControl x:Class="MozaPlugin.SettingsControl"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:profilescommon="clr-namespace:SimHub.Plugins.ProfilesCommon;assembly=SimHub.Plugins"
@@ -201,6 +201,73 @@
                             <CheckBox x:Name="SoftLimitRetainCheck" VerticalAlignment="Center" Click="SoftLimitRetainCheck_Click"/>
                         </StackPanel>
 
+                        <TextBlock Text="FFB Equalizer" Style="{StaticResource SectionHeader}"/>
+                        <TextBlock Text="Adjust gain per frequency band (100% = default, 0% = off, 400% = max boost)" Foreground="Gray" FontSize="11" Margin="0,0,0,6"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="10 Hz" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="Eq1Slider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="400" TickFrequency="1" ValueChanged="Eq1Slider_ValueChanged"/>
+                            <TextBlock x:Name="Eq1Value" Style="{StaticResource SliderValue}" Text="100%"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="15 Hz" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="Eq2Slider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="400" TickFrequency="1" ValueChanged="Eq2Slider_ValueChanged"/>
+                            <TextBlock x:Name="Eq2Value" Style="{StaticResource SliderValue}" Text="100%"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="25 Hz" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="Eq3Slider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="400" TickFrequency="1" ValueChanged="Eq3Slider_ValueChanged"/>
+                            <TextBlock x:Name="Eq3Value" Style="{StaticResource SliderValue}" Text="100%"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="40 Hz" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="Eq4Slider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="400" TickFrequency="1" ValueChanged="Eq4Slider_ValueChanged"/>
+                            <TextBlock x:Name="Eq4Value" Style="{StaticResource SliderValue}" Text="100%"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="60 Hz" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="Eq5Slider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="400" TickFrequency="1" ValueChanged="Eq5Slider_ValueChanged"/>
+                            <TextBlock x:Name="Eq5Value" Style="{StaticResource SliderValue}" Text="100%"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="100 Hz" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="Eq6Slider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="400" TickFrequency="1" ValueChanged="Eq6Slider_ValueChanged"/>
+                            <TextBlock x:Name="Eq6Value" Style="{StaticResource SliderValue}" Text="100%"/>
+                        </StackPanel>
+
+                        <TextBlock Text="FFB Output Curve" Style="{StaticResource SectionHeader}"/>
+                        <TextBlock Text="Output force at each input position. Input breakpoints are fixed at 20/40/60/80/100%." Foreground="Gray" FontSize="11" Margin="0,0,0,6"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                            <Button Content="Linear" Padding="8,3" Margin="0,0,6,0" Click="FfbCurvePreset_Linear"/>
+                            <Button Content="S Curve" Padding="8,3" Margin="0,0,6,0" Click="FfbCurvePreset_SCurve"/>
+                            <Button Content="Exponential" Padding="8,3" Margin="0,0,6,0" Click="FfbCurvePreset_Exponential"/>
+                            <Button Content="Parabolic" Padding="8,3" Margin="0,0,6,0" Click="FfbCurvePreset_Parabolic"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Output at 20% input" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="FfbCurveY1Slider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="FfbCurveY1Slider_ValueChanged"/>
+                            <TextBlock x:Name="FfbCurveY1Value" Style="{StaticResource SliderValue}" Text="20"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Output at 40% input" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="FfbCurveY2Slider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="FfbCurveY2Slider_ValueChanged"/>
+                            <TextBlock x:Name="FfbCurveY2Value" Style="{StaticResource SliderValue}" Text="40"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Output at 60% input" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="FfbCurveY3Slider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="FfbCurveY3Slider_ValueChanged"/>
+                            <TextBlock x:Name="FfbCurveY3Value" Style="{StaticResource SliderValue}" Text="60"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Output at 80% input" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="FfbCurveY4Slider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="FfbCurveY4Slider_ValueChanged"/>
+                            <TextBlock x:Name="FfbCurveY4Value" Style="{StaticResource SliderValue}" Text="80"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Output at 100% input" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="FfbCurveY5Slider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="FfbCurveY5Slider_ValueChanged"/>
+                            <TextBlock x:Name="FfbCurveY5Value" Style="{StaticResource SliderValue}" Text="100"/>
+                        </StackPanel>
+
                         <TextBlock Text="Miscellaneous" Style="{StaticResource SectionHeader}"/>
                         <StackPanel Orientation="Horizontal" Margin="0,8">
                             <TextBlock Text="Standby Mode" Style="{StaticResource SliderLabel}"/>
@@ -210,12 +277,21 @@
                             <TextBlock Text="Base Status LED" Style="{StaticResource SliderLabel}"/>
                             <CheckBox x:Name="LedStatusCheck" VerticalAlignment="Center" Click="LedStatusCheck_Click"/>
                         </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,8">
+                            <TextBlock Text="Bluetooth" Style="{StaticResource SliderLabel}"/>
+                            <CheckBox x:Name="BluetoothCheck" VerticalAlignment="Center" Click="BluetoothCheck_Click"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,8">
+                            <TextBlock Text="Calibration" Style="{StaticResource SliderLabel}"/>
+                            <Button x:Name="BaseCalibrateButton" Content="Calibrate Center" Padding="12,4" Click="BaseCalibrateButton_Click"/>
+                            <TextBlock x:Name="BaseCalibrateStatus" VerticalAlignment="Center" Margin="10,0,0,0" Foreground="Gray" FontSize="11"/>
+                        </StackPanel>
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>
 
             <!-- ==================== WHEEL TAB ==================== -->
-            <TabItem Header="Wheel LEDs">
+            <TabItem Header="Wheel">
                 <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="10">
                     <StackPanel Margin="5">
 
@@ -304,6 +380,34 @@
                                     <ComboBoxItem Content="Breathing"/><ComboBoxItem Content="Color Cycle"/>
                                     <ComboBoxItem Content="Rainbow"/><ComboBoxItem Content="Sand Flow"/>
                                 </ComboBox>
+                            </StackPanel>
+
+                            <TextBlock Text="Paddle Settings" Style="{StaticResource SectionHeader}"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,4">
+                                <TextBlock Text="Paddles Mode" Style="{StaticResource SliderLabel}"/>
+                                <ComboBox x:Name="PaddlesModeCombo" Width="140" SelectionChanged="PaddlesModeCombo_Changed">
+                                    <ComboBoxItem Content="Buttons"/>
+                                    <ComboBoxItem Content="Combined"/>
+                                    <ComboBoxItem Content="Split"/>
+                                </ComboBox>
+                            </StackPanel>
+                            <StackPanel x:Name="ClutchPointPanel" Orientation="Horizontal" Margin="0,4" Visibility="Collapsed">
+                                <TextBlock Text="Clutch Split Point" Style="{StaticResource SliderLabel}"/>
+                                <Slider x:Name="ClutchPointSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="ClutchPointSlider_ValueChanged"/>
+                                <TextBlock x:Name="ClutchPointValue" Style="{StaticResource SliderValue}" Text="50%"/>
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,4">
+                                <TextBlock Text="Knob Mode" Style="{StaticResource SliderLabel}"/>
+                                <ComboBox x:Name="KnobModeCombo" Width="140" SelectionChanged="KnobModeCombo_Changed">
+                                    <ComboBoxItem Content="Mode 0"/>
+                                    <ComboBoxItem Content="Mode 1"/>
+                                    <ComboBoxItem Content="Mode 2"/>
+                                    <ComboBoxItem Content="Mode 3"/>
+                                </ComboBox>
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,8">
+                                <TextBlock Text="Stick as D-Pad" Style="{StaticResource SliderLabel}"/>
+                                <CheckBox x:Name="StickModeCheck" VerticalAlignment="Center" Click="StickModeCheck_Click"/>
                             </StackPanel>
                         </StackPanel>
 
@@ -531,6 +635,258 @@
                             <TextBlock Text="Reverse Direction" Style="{StaticResource SliderLabel}"/>
                             <CheckBox x:Name="HandbrakeDirectionCheck" VerticalAlignment="Center" Click="HandbrakeDirectionCheck_Click"/>
                         </StackPanel>
+
+                        <TextBlock Text="Range" Style="{StaticResource SectionHeader}"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Min" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="HandbrakeMinSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="HandbrakeMinSlider_ValueChanged"/>
+                            <TextBlock x:Name="HandbrakeMinValue" Style="{StaticResource SliderValue}" Text="0%"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Max" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="HandbrakeMaxSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="HandbrakeMaxSlider_ValueChanged"/>
+                            <TextBlock x:Name="HandbrakeMaxValue" Style="{StaticResource SliderValue}" Text="100%"/>
+                        </StackPanel>
+
+                        <TextBlock Text="Output Curve" Style="{StaticResource SectionHeader}"/>
+                        <TextBlock Text="Map input position to output value (0-100%)" Foreground="Gray" FontSize="11" Margin="0,0,0,6"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                            <Button Content="Linear" Padding="8,3" Margin="0,0,6,0" Click="HbCurvePreset_Linear"/>
+                            <Button Content="S Curve" Padding="8,3" Margin="0,0,6,0" Click="HbCurvePreset_SCurve"/>
+                            <Button Content="Exponential" Padding="8,3" Margin="0,0,6,0" Click="HbCurvePreset_Exponential"/>
+                            <Button Content="Parabolic" Padding="8,3" Margin="0,0,6,0" Click="HbCurvePreset_Parabolic"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Y1 (20%)" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="HbY1Slider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="HbY1Slider_ValueChanged"/>
+                            <TextBlock x:Name="HbY1Value" Style="{StaticResource SliderValue}" Text="20"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Y2 (40%)" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="HbY2Slider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="HbY2Slider_ValueChanged"/>
+                            <TextBlock x:Name="HbY2Value" Style="{StaticResource SliderValue}" Text="40"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Y3 (60%)" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="HbY3Slider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="HbY3Slider_ValueChanged"/>
+                            <TextBlock x:Name="HbY3Value" Style="{StaticResource SliderValue}" Text="60"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Y4 (80%)" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="HbY4Slider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="HbY4Slider_ValueChanged"/>
+                            <TextBlock x:Name="HbY4Value" Style="{StaticResource SliderValue}" Text="80"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Y5 (100%)" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="HbY5Slider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="HbY5Slider_ValueChanged"/>
+                            <TextBlock x:Name="HbY5Value" Style="{StaticResource SliderValue}" Text="100"/>
+                        </StackPanel>
+
+                        <TextBlock Text="Calibration" Style="{StaticResource SectionHeader}"/>
+                        <TextBlock Text="Pull the handbrake fully once while calibrating." Foreground="Gray" FontSize="11" Margin="0,0,0,6"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <Button x:Name="HbCalStartButton" Content="Start Calibration" Padding="12,4" Margin="0,0,10,0" Click="HbCalStartButton_Click"/>
+                            <Button x:Name="HbCalStopButton" Content="Stop Calibration" Padding="12,4" Click="HbCalStopButton_Click"/>
+                            <TextBlock x:Name="HbCalStatus" VerticalAlignment="Center" Margin="10,0,0,0" Foreground="Gray" FontSize="11"/>
+                        </StackPanel>
+
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <!-- ==================== PEDALS TAB ==================== -->
+            <TabItem x:Name="PedalsTab" Header="Pedals" Visibility="Collapsed">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="10">
+                    <StackPanel Margin="5">
+
+                        <!-- ===== THROTTLE ===== -->
+                        <TextBlock Text="Throttle" Style="{StaticResource SectionHeader}"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,8">
+                            <TextBlock Text="Reverse Direction" Style="{StaticResource SliderLabel}"/>
+                            <CheckBox x:Name="ThrottleDirCheck" VerticalAlignment="Center" Click="ThrottleDirCheck_Click"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Range Start" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="ThrottleMinSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="ThrottleMinSlider_ValueChanged"/>
+                            <TextBlock x:Name="ThrottleMinValue" Style="{StaticResource SliderValue}" Text="0%"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Range End" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="ThrottleMaxSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="ThrottleMaxSlider_ValueChanged"/>
+                            <TextBlock x:Name="ThrottleMaxValue" Style="{StaticResource SliderValue}" Text="100%"/>
+                        </StackPanel>
+                        <TextBlock Text="Output Curve" Foreground="Gray" FontSize="12" FontWeight="SemiBold" Margin="0,8,0,4"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                            <Button Content="Linear" Padding="8,3" Margin="0,0,6,0" Click="ThrottleCurvePreset_Linear"/>
+                            <Button Content="S Curve" Padding="8,3" Margin="0,0,6,0" Click="ThrottleCurvePreset_SCurve"/>
+                            <Button Content="Exponential" Padding="8,3" Margin="0,0,6,0" Click="ThrottleCurvePreset_Exponential"/>
+                            <Button Content="Parabolic" Padding="8,3" Margin="0,0,6,0" Click="ThrottleCurvePreset_Parabolic"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Y1 (20%)" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="ThrottleY1Slider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="ThrottleY1Slider_ValueChanged"/>
+                            <TextBlock x:Name="ThrottleY1Value" Style="{StaticResource SliderValue}" Text="20"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Y2 (40%)" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="ThrottleY2Slider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="ThrottleY2Slider_ValueChanged"/>
+                            <TextBlock x:Name="ThrottleY2Value" Style="{StaticResource SliderValue}" Text="40"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Y3 (60%)" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="ThrottleY3Slider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="ThrottleY3Slider_ValueChanged"/>
+                            <TextBlock x:Name="ThrottleY3Value" Style="{StaticResource SliderValue}" Text="60"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Y4 (80%)" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="ThrottleY4Slider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="ThrottleY4Slider_ValueChanged"/>
+                            <TextBlock x:Name="ThrottleY4Value" Style="{StaticResource SliderValue}" Text="80"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Y5 (100%)" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="ThrottleY5Slider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="ThrottleY5Slider_ValueChanged"/>
+                            <TextBlock x:Name="ThrottleY5Value" Style="{StaticResource SliderValue}" Text="100"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,8">
+                            <Button x:Name="ThrottleCalStartButton" Content="Start Calibration" Padding="12,4" Margin="0,0,10,0" Click="ThrottleCalStartButton_Click"/>
+                            <Button x:Name="ThrottleCalStopButton" Content="Stop Calibration" Padding="12,4" Click="ThrottleCalStopButton_Click"/>
+                        </StackPanel>
+
+                        <!-- ===== BRAKE ===== -->
+                        <TextBlock Text="Brake" Style="{StaticResource SectionHeader}"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,8">
+                            <TextBlock Text="Reverse Direction" Style="{StaticResource SliderLabel}"/>
+                            <CheckBox x:Name="BrakeDirCheck" VerticalAlignment="Center" Click="BrakeDirCheck_Click"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Range Start" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="BrakeMinSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="BrakeMinSlider_ValueChanged"/>
+                            <TextBlock x:Name="BrakeMinValue" Style="{StaticResource SliderValue}" Text="0%"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Range End" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="BrakeMaxSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="BrakeMaxSlider_ValueChanged"/>
+                            <TextBlock x:Name="BrakeMaxValue" Style="{StaticResource SliderValue}" Text="100%"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Sensor Ratio" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="BrakeAngleRatioSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="BrakeAngleRatioSlider_ValueChanged"/>
+                            <TextBlock x:Name="BrakeAngleRatioValue" Style="{StaticResource SliderValue}" Text="50%"/>
+                        </StackPanel>
+                        <TextBlock Text="0% = Angle Sensor    100% = Load Cell" Foreground="Gray" FontSize="10" Margin="0,0,0,4"/>
+                        <TextBlock Text="Output Curve" Foreground="Gray" FontSize="12" FontWeight="SemiBold" Margin="0,8,0,4"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                            <Button Content="Linear" Padding="8,3" Margin="0,0,6,0" Click="BrakeCurvePreset_Linear"/>
+                            <Button Content="S Curve" Padding="8,3" Margin="0,0,6,0" Click="BrakeCurvePreset_SCurve"/>
+                            <Button Content="Exponential" Padding="8,3" Margin="0,0,6,0" Click="BrakeCurvePreset_Exponential"/>
+                            <Button Content="Parabolic" Padding="8,3" Margin="0,0,6,0" Click="BrakeCurvePreset_Parabolic"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Y1 (20%)" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="BrakeY1Slider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="BrakeY1Slider_ValueChanged"/>
+                            <TextBlock x:Name="BrakeY1Value" Style="{StaticResource SliderValue}" Text="20"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Y2 (40%)" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="BrakeY2Slider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="BrakeY2Slider_ValueChanged"/>
+                            <TextBlock x:Name="BrakeY2Value" Style="{StaticResource SliderValue}" Text="40"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Y3 (60%)" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="BrakeY3Slider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="BrakeY3Slider_ValueChanged"/>
+                            <TextBlock x:Name="BrakeY3Value" Style="{StaticResource SliderValue}" Text="60"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Y4 (80%)" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="BrakeY4Slider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="BrakeY4Slider_ValueChanged"/>
+                            <TextBlock x:Name="BrakeY4Value" Style="{StaticResource SliderValue}" Text="80"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Y5 (100%)" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="BrakeY5Slider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="BrakeY5Slider_ValueChanged"/>
+                            <TextBlock x:Name="BrakeY5Value" Style="{StaticResource SliderValue}" Text="100"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,8">
+                            <Button x:Name="BrakeCalStartButton" Content="Start Calibration" Padding="12,4" Margin="0,0,10,0" Click="BrakeCalStartButton_Click"/>
+                            <Button x:Name="BrakeCalStopButton" Content="Stop Calibration" Padding="12,4" Click="BrakeCalStopButton_Click"/>
+                        </StackPanel>
+
+                        <!-- ===== CLUTCH ===== -->
+                        <TextBlock Text="Clutch" Style="{StaticResource SectionHeader}"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,8">
+                            <TextBlock Text="Reverse Direction" Style="{StaticResource SliderLabel}"/>
+                            <CheckBox x:Name="ClutchDirCheck" VerticalAlignment="Center" Click="ClutchDirCheck_Click"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Range Start" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="ClutchMinSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="ClutchMinSlider_ValueChanged"/>
+                            <TextBlock x:Name="ClutchMinValue" Style="{StaticResource SliderValue}" Text="0%"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Range End" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="ClutchMaxSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="ClutchMaxSlider_ValueChanged"/>
+                            <TextBlock x:Name="ClutchMaxValue" Style="{StaticResource SliderValue}" Text="100%"/>
+                        </StackPanel>
+                        <TextBlock Text="Output Curve" Foreground="Gray" FontSize="12" FontWeight="SemiBold" Margin="0,8,0,4"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                            <Button Content="Linear" Padding="8,3" Margin="0,0,6,0" Click="ClutchCurvePreset_Linear"/>
+                            <Button Content="S Curve" Padding="8,3" Margin="0,0,6,0" Click="ClutchCurvePreset_SCurve"/>
+                            <Button Content="Exponential" Padding="8,3" Margin="0,0,6,0" Click="ClutchCurvePreset_Exponential"/>
+                            <Button Content="Parabolic" Padding="8,3" Margin="0,0,6,0" Click="ClutchCurvePreset_Parabolic"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Y1 (20%)" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="ClutchY1Slider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="ClutchY1Slider_ValueChanged"/>
+                            <TextBlock x:Name="ClutchY1Value" Style="{StaticResource SliderValue}" Text="20"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Y2 (40%)" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="ClutchY2Slider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="ClutchY2Slider_ValueChanged"/>
+                            <TextBlock x:Name="ClutchY2Value" Style="{StaticResource SliderValue}" Text="40"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Y3 (60%)" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="ClutchY3Slider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="ClutchY3Slider_ValueChanged"/>
+                            <TextBlock x:Name="ClutchY3Value" Style="{StaticResource SliderValue}" Text="60"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Y4 (80%)" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="ClutchY4Slider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="ClutchY4Slider_ValueChanged"/>
+                            <TextBlock x:Name="ClutchY4Value" Style="{StaticResource SliderValue}" Text="80"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Y5 (100%)" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="ClutchY5Slider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="ClutchY5Slider_ValueChanged"/>
+                            <TextBlock x:Name="ClutchY5Value" Style="{StaticResource SliderValue}" Text="100"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,8">
+                            <Button x:Name="ClutchCalStartButton" Content="Start Calibration" Padding="12,4" Margin="0,0,10,0" Click="ClutchCalStartButton_Click"/>
+                            <Button x:Name="ClutchCalStopButton" Content="Stop Calibration" Padding="12,4" Click="ClutchCalStopButton_Click"/>
+                        </StackPanel>
+
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <!-- ==================== OPTIONS TAB ==================== -->
+            <TabItem Header="Options">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="10">
+                    <StackPanel Margin="5">
+
+                        <TextBlock Text="Profiles" Style="{StaticResource SectionHeader}"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,8">
+                            <TextBlock Text="Apply profile settings on launch" Style="{StaticResource SliderLabel}"/>
+                            <CheckBox x:Name="AutoApplyProfileCheck" VerticalAlignment="Center"
+                                      Checked="AutoApplyProfileCheck_Changed" Unchecked="AutoApplyProfileCheck_Changed"/>
+                        </StackPanel>
+
+                        <TextBlock Text="Reset" Style="{StaticResource SectionHeader}"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,8">
+                            <Button x:Name="ClearAllSettingsButton" Content="Clear All Settings &amp; Profiles"
+                                    Padding="12,4" Click="ClearAllSettingsButton_Click"/>
+                        </StackPanel>
+                        <TextBlock Text="This will reset all plugin settings and profiles to their defaults."
+                                   Foreground="Gray" FontSize="11" Margin="0,4,0,0"/>
 
                     </StackPanel>
                 </ScrollViewer>

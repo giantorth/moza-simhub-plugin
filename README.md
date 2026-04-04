@@ -2,11 +2,12 @@
 
 A SimHub plugin that communicates directly with MOZA Racing hardware over serial, providing telemetry: it sends in-game RPM data to your wheel/dashboard LEDs **and** lets you configure your wheelbase, wheel LEDs, and dashboard from within SimHub.
 
-
-
 Built using the amazing work of the [boxflat](https://github.com/Lawstorant/boxflat) project that reverse-engineered the [MOZA serial protocol](../moza-protocol.md).
 
 ![MOZA Plugin Settings](docs/Screenshot.png)
+
+> [!WARNING]
+> **USE AT YOUR OWN RISK.** This software communicates directly with force feedback hardware capable of producing high torque output that can cause serious injury or property damage. This plugin is provided "as is", without warranty of any kind, express or implied. The authors accept no responsibility or liability for any damage to hardware, injury to persons, or any other loss arising from the use of this software. By using this plugin, you acknowledge the inherent risks of controlling force feedback devices via third-party software and accept full responsibility for any consequences.
 
 ## Features
 
@@ -98,15 +99,19 @@ The plugin exposes these properties for use in SimHub dashboards and overlays:
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `MozaTelemetry.BaseConnected` | bool | Wheelbase connection status |
-| `MozaTelemetry.McuTemp` | double | MCU temperature (°C) |
-| `MozaTelemetry.MosfetTemp` | double | MOSFET temperature (°C) |
-| `MozaTelemetry.MotorTemp` | double | Motor temperature (°C) |
-| `MozaTelemetry.BaseState` | int | Wheelbase state |
-| `MozaTelemetry.FfbStrength` | int | FFB strength (%) |
-| `MozaTelemetry.MaxAngle` | int | Max steering angle (degrees) |
+| `Moza.BaseConnected` | bool | Wheelbase connection status |
+| `Moza.McuTemp` | double | MCU temperature (°C) |
+| `Moza.MosfetTemp` | double | MOSFET temperature (°C) |
+| `Moza.MotorTemp` | double | Motor temperature (°C) |
+| `Moza.BaseState` | int | Wheelbase state |
+| `Moza.FfbStrength` | int | FFB strength (%) |
+| `Moza.MaxAngle` | int | Max steering angle (degrees) |
 
-## Building
+## Installation
+
+Download the latest `MozaPlugin_v*.zip` from the [Releases](https://github.com/giantorth/moza-simhub-plugin/releases) page, extract `MozaPlugin.dll`, and copy it into your SimHub installation directory. Restart SimHub — the plugin appears under Settings > Plugins as "MOZA Control".
+
+## Building from Source
 
 ### Building on Windows
 
@@ -114,33 +119,35 @@ The plugin exposes these properties for use in SimHub dashboards and overlays:
 
 - [VS Code](https://code.visualstudio.com/) with the [C# Dev Kit](https://marketplace.visualstudio.com/items?itemName=ms-dotnettools.csdevkit) extension
 - .NET SDK 8.0+ ([download](https://dotnet.microsoft.com/download))
-- SimHub installed
 
 #### Steps
 
 1. **Open the project folder** in VS Code.
 
-2. **Set the SimHub path** environment variable:
-
-   In a terminal (Command Prompt):
-   ```
-   set SIMHUB_PATH=C:\Program Files (x86)\SimHub
-   ```
-
-   Or PowerShell:
-   ```powershell
-   $env:SIMHUB_PATH = "C:\Program Files (x86)\SimHub"
-   ```
-
-3. **Build** from the VS Code terminal:
+2. **Build** from the VS Code terminal:
 
    ```
    dotnet build -c Release
    ```
 
-4. **The DLL is automatically copied** to your SimHub folder on build.
+3. **Copy the DLL** to your SimHub folder:
 
-5. **Restart SimHub.** The plugin appears under Settings > Plugins as "MOZA Control".
+   Copy `bin/x86/Release/MozaPlugin.dll` into your SimHub installation directory.
+
+   Or set the `SIMHUB_PATH` environment variable to have it copied automatically on build:
+
+   ```
+   set SIMHUB_PATH=C:\Program Files (x86)\SimHub
+   dotnet build -c Release
+   ```
+
+   PowerShell:
+   ```powershell
+   $env:SIMHUB_PATH = "C:\Program Files (x86)\SimHub"
+   dotnet build -c Release
+   ```
+
+4. **Restart SimHub.** The plugin appears under Settings > Plugins as "MOZA Control".
 
 ### Cross-Compiling on Linux
 
@@ -149,7 +156,6 @@ You can build the plugin entirely on Linux. The .NET SDK can target .NET Framewo
 #### Prerequisites
 
 - .NET SDK 8.0+ (`dotnet-sdk` package from your distro or [Microsoft repos](https://dotnet.microsoft.com/download))
-- SimHub DLLs copied from a Windows install
 
 #### Steps
 
@@ -166,48 +172,38 @@ You can build the plugin entirely on Linux. The .NET SDK can target .NET Framewo
    sudo dnf install dotnet-sdk-8.0
    ```
 
-2. **Copy the required SimHub DLLs** from a Windows SimHub installation to a local directory:
+2. **Build:**
 
    ```bash
-   mkdir -p simhub-plugin/SimHub
-   # Copy these from your Windows SimHub folder (e.g., via a shared drive, USB, or scp):
-   #   SimHub.Plugins.dll
-   #   GameReaderCommon.dll
-   #   SimHub.Logging.dll
-   #   Newtonsoft.Json.dll
+   dotnet build -c Release
    ```
 
-3. **Build with the SimHub path pointing to your local DLL directory:**
+   The output DLL will be in `bin/x86/Release/MozaPlugin.dll`.
 
-   ```bash
-   cd simhub-plugin
-   SIMHUB_PATH=./path/to/SimHub dotnet build -c Release
-   ```
-
-   The output DLL will be in `bin/x86/Release/MozaTelemetryPlugin.dll`.
-
-4. **Copy the built DLL to your Windows SimHub installation:**
+3. **Copy the built DLL to your Windows SimHub installation:**
 
    ```bash
    # Example: copy to a Windows machine via scp
-   scp bin/x86/Release/MozaTelemetryPlugin.dll user@windows-pc:"C:/Program Files (x86)/SimHub/"
+   scp bin/x86/Release/MozaPlugin.dll user@windows-pc:"C:/Program Files (x86)/SimHub/"
 
    # Or copy to a shared folder, USB drive, etc.
-   cp bin/x86/Release/MozaTelemetryPlugin.dll /mnt/shared/SimHub/
+   cp bin/x86/Release/MozaPlugin.dll /mnt/shared/SimHub/
    ```
 
-5. **Restart SimHub** on Windows.
+4. **Restart SimHub** on Windows.
 
 #### Notes
 
 - The `Microsoft.NETFramework.ReferenceAssemblies.net48` NuGet package provides the .NET Framework 4.8 reference assemblies, so you do **not** need Mono or Windows installed.
 - The build produces a standard .NET Framework DLL that runs natively on Windows under SimHub.
-- Only the 4 SimHub DLLs listed above are needed for compilation. They are referenced but not copied to output (`Private=false`).
+- SimHub DLLs in `libs/SimHub/` are reference-only (`Private=false`) and not copied to output.
 - The build produces a single output DLL with no additional runtime dependencies to deploy.
 
-### Manual Installation
+### CI/CD
 
-Copy `MozaTelemetryPlugin.dll` from `bin/x86/Release/` into your SimHub installation directory.
+- **Build**: Every push to `main` and every PR is built automatically via GitHub Actions.
+- **Release**: Pushing a `v*` tag (e.g., `v0.2.0`) builds a Release, generates a changelog, and publishes a GitHub Release with the zipped DLL.
+- **SimHub dependency updates**: A daily workflow checks for new SimHub releases and creates a PR to update `libs/SimHub/`.
 
 ## How It Works
 
@@ -247,7 +243,7 @@ On every SimHub frame (~60fps):
 ## Project Structure
 
 ```
-MozaTelemetryPlugin.cs             Main plugin class (IPlugin, IDataPlugin, IWPFSettingsV2)
+MozaPlugin.cs             Main plugin class (IPlugin, IDataPlugin, IWPFSettingsV2)
 MozaDeviceManager.cs               Read/write API for device settings
 Protocol/
   MozaProtocol.cs                  Protocol constants (start byte, device IDs, checksums)
@@ -256,7 +252,7 @@ Protocol/
   MozaResponseParser.cs            Response decoder (bit 7 toggle, nibble swap, wildcard matching)
   MozaSerialConnection.cs          Serial port I/O with auto-discovery and background threads
 Telemetry/
-  MozaTelemetryData.cs             Thread-safe data model for all device values
+  MozaData.cs             Thread-safe data model for all device values
   TelemetrySender.cs               RPM LED telemetry output logic
 UI/
   SettingsControl.xaml(.cs)        WPF settings UI (Base, Wheel LEDs, Dashboard*, Handbrake* tabs; *autodetected)

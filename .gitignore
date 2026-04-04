@@ -12,9 +12,6 @@ obj/
 ## NuGet
 packages/
 
-## SimHub runtime DLLs (referenced via $SIMHUB_PATH)
-SimHub/
-
 ## OS
 Thumbs.db
 Desktop.ini

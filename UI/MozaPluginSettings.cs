@@ -1,4 +1,4 @@
-namespace MozaTelemetryPlugin
+namespace MozaPlugin
 {
     /// <summary>
     /// Persisted plugin settings. Saved/loaded via SimHub's ReadCommonSettings/SaveCommonSettings.
@@ -49,6 +49,9 @@ namespace MozaTelemetryPlugin
 
         // Connection enabled (persisted toggle)
         public bool ConnectionEnabled { get; set; } = true;
+
+        // Whether to automatically apply profile settings on launch
+        public bool AutoApplyProfileOnLaunch { get; set; } = true;
 
         // ===== Profile system (SimHub native) =====
         public MozaProfileStore ProfileStore { get; set; } = new MozaProfileStore();

@@ -1,8 +1,8 @@
 using System;
-using MozaTelemetryPlugin.Protocol;
+using MozaPlugin.Protocol;
 
 
-namespace MozaTelemetryPlugin
+namespace MozaPlugin
 {
     /// <summary>
     /// Sends SimHub game telemetry (RPM, flags) to Moza wheel/dashboard LEDs.
@@ -134,7 +134,7 @@ namespace MozaTelemetryPlugin
             if (_debugCounter <= 5 || (_debugCounter % 300 == 0))
             {
                 SimHub.Logging.Current.Info(
-                    $"[MozaTelemetry] RPM: {currentRpm:F0}/{maxRpm:F0} idle={idleRpm:F0} " +
+                    $"[Moza] RPM: {currentRpm:F0}/{maxRpm:F0} idle={idleRpm:F0} " +
                     $"pct={rpmPercent} dashMask=0x{dashBitmask:X3} wheelMask=0x{wheelBitmask:X3} " +
                     $"dash={_dashEnabled} wheel={_wheelEnabled} esProto={_wheelESProtocol} " +
                     $"wheelId={_deviceManager.WheelDeviceId}");
@@ -234,7 +234,7 @@ namespace MozaTelemetryPlugin
         /// </summary>
         private void WakeUpLeds()
         {
-            SimHub.Logging.Current.Info("[MozaTelemetry] Waking up LEDs (all on -> off)");
+            SimHub.Logging.Current.Info("[Moza] Waking up LEDs (all on -> off)");
             int fullBitmask = 0x3FF; // All 10 LEDs on
             SendBitmasks(fullBitmask, fullBitmask);
             SendBitmasks(0, 0);
@@ -291,7 +291,7 @@ namespace MozaTelemetryPlugin
         {
             _sendCount++;
             if (_sendCount <= 3)
-                SimHub.Logging.Current.Info($"[MozaTelemetry] SendBitmask #{_sendCount}: dash=0x{dashBitmask:X3} wheel=0x{wheelBitmask:X3} es={_wheelESProtocol}");
+                SimHub.Logging.Current.Info($"[Moza] SendBitmask #{_sendCount}: dash=0x{dashBitmask:X3} wheel=0x{wheelBitmask:X3} es={_wheelESProtocol}");
 
             if (_dashEnabled)
                 SendDashTelemetry(dashBitmask);
@@ -342,7 +342,7 @@ namespace MozaTelemetryPlugin
 
             var msg = cmd.BuildWriteMessage(_deviceManager.WheelDeviceId, payload);
             if (_sendCount <= 3 && msg != null)
-                SimHub.Logging.Current.Info($"[MozaTelemetry] OldTelemetry: devId={_deviceManager.WheelDeviceId} msg={BitConverter.ToString(msg)}");
+                SimHub.Logging.Current.Info($"[Moza] OldTelemetry: devId={_deviceManager.WheelDeviceId} msg={BitConverter.ToString(msg)}");
             if (msg != null)
                 _connection.Send(msg);
         }
@@ -401,7 +401,7 @@ namespace MozaTelemetryPlugin
             if (msg2 != null)
                 _connection.Send(msg2);
 
-            SimHub.Logging.Current.Info("[MozaTelemetry] Sent wheel LED color configuration");
+            SimHub.Logging.Current.Info("[Moza] Sent wheel LED color configuration");
         }
 
         /// <summary>

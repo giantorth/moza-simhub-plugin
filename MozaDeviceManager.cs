@@ -1,8 +1,8 @@
 using System;
-using MozaTelemetryPlugin.Protocol;
+using MozaPlugin.Protocol;
 
 
-namespace MozaTelemetryPlugin
+namespace MozaPlugin
 {
     /// <summary>
     /// Handles reading and writing settings to Moza devices.
@@ -39,13 +39,13 @@ namespace MozaTelemetryPlugin
 
             _wheelIdIndex = (_wheelIdIndex + 1) % WheelIdCandidates.Length;
             _wheelDeviceId = WheelIdCandidates[_wheelIdIndex];
-            SimHub.Logging.Current.Info($"[MozaTelemetry] Cycling wheel ID to {_wheelDeviceId}");
+            SimHub.Logging.Current.Info($"[Moza] Cycling wheel ID to {_wheelDeviceId}");
         }
 
         public void OnWheelDetected()
         {
             _wheelDetected = true;
-            SimHub.Logging.Current.Info($"[MozaTelemetry] Wheel locked on device ID {_wheelDeviceId}");
+            SimHub.Logging.Current.Info($"[Moza] Wheel locked on device ID {_wheelDeviceId}");
         }
 
         public bool ReadSetting(string commandName)
@@ -65,6 +65,17 @@ namespace MozaTelemetryPlugin
             var cmd = MozaCommandDatabase.Get(commandName);
             if (cmd == null) return false;
             var msg = cmd.BuildWriteInt(GetDeviceId(cmd.DeviceType), value);
+            if (msg == null) return false;
+            _connection.Send(msg);
+            return true;
+        }
+
+        public bool WriteFloat(string commandName, float value)
+        {
+            if (!_connection.IsConnected) return false;
+            var cmd = MozaCommandDatabase.Get(commandName);
+            if (cmd == null) return false;
+            var msg = cmd.BuildWriteFloat(GetDeviceId(cmd.DeviceType), value);
             if (msg == null) return false;
             _connection.Send(msg);
             return true;

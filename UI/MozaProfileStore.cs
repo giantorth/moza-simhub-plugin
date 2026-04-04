@@ -1,6 +1,6 @@
 using SimHub.Plugins.ProfilesCommon;
 
-namespace MozaTelemetryPlugin
+namespace MozaPlugin
 {
     /// <summary>
     /// Manages Moza device profiles using SimHub's native profile system.

@@ -1,6 +1,6 @@
 using System.Collections.Generic;
 
-namespace MozaTelemetryPlugin.Protocol
+namespace MozaPlugin.Protocol
 {
     /// <summary>
     /// Pre-built command definitions from data/serial.yml.
@@ -82,7 +82,44 @@ namespace MozaTelemetryPlugin.Protocol
             AddCommand("main-get-inertia-gain",  "main", 31, 0xFF, new byte[] { 79, 10 }, 1, "int");
             AddCommand("main-get-friction-gain", "main", 31, 0xFF, new byte[] { 79, 11 }, 1, "int");
 
-            // ===== PEDALS (read group 37, read-only outputs) =====
+            // ===== PEDALS (read group 35, write group 36) =====
+            AddCommand("pedals-throttle-dir", "pedals", 35, 36, new byte[] { 1 }, 2, "int");
+            AddCommand("pedals-throttle-min", "pedals", 35, 36, new byte[] { 2 }, 2, "int");
+            AddCommand("pedals-throttle-max", "pedals", 35, 36, new byte[] { 3 }, 2, "int");
+            AddCommand("pedals-brake-dir",    "pedals", 35, 36, new byte[] { 4 }, 2, "int");
+            AddCommand("pedals-brake-min",    "pedals", 35, 36, new byte[] { 5 }, 2, "int");
+            AddCommand("pedals-brake-max",    "pedals", 35, 36, new byte[] { 6 }, 2, "int");
+            AddCommand("pedals-brake-angle-ratio", "pedals", 35, 36, new byte[] { 26 }, 4, "float");
+            AddCommand("pedals-clutch-dir",   "pedals", 35, 36, new byte[] { 7 }, 2, "int");
+            AddCommand("pedals-clutch-min",   "pedals", 35, 36, new byte[] { 8 }, 2, "int");
+            AddCommand("pedals-clutch-max",   "pedals", 35, 36, new byte[] { 9 }, 2, "int");
+
+            // Pedal output curves (4-byte float, read 35 / write 36)
+            AddCommand("pedals-throttle-y1", "pedals", 35, 36, new byte[] { 14 }, 4, "float");
+            AddCommand("pedals-throttle-y2", "pedals", 35, 36, new byte[] { 15 }, 4, "float");
+            AddCommand("pedals-throttle-y3", "pedals", 35, 36, new byte[] { 16 }, 4, "float");
+            AddCommand("pedals-throttle-y4", "pedals", 35, 36, new byte[] { 17 }, 4, "float");
+            AddCommand("pedals-throttle-y5", "pedals", 35, 36, new byte[] { 27 }, 4, "float");
+            AddCommand("pedals-brake-y1",    "pedals", 35, 36, new byte[] { 18 }, 4, "float");
+            AddCommand("pedals-brake-y2",    "pedals", 35, 36, new byte[] { 19 }, 4, "float");
+            AddCommand("pedals-brake-y3",    "pedals", 35, 36, new byte[] { 20 }, 4, "float");
+            AddCommand("pedals-brake-y4",    "pedals", 35, 36, new byte[] { 21 }, 4, "float");
+            AddCommand("pedals-brake-y5",    "pedals", 35, 36, new byte[] { 28 }, 4, "float");
+            AddCommand("pedals-clutch-y1",   "pedals", 35, 36, new byte[] { 22 }, 4, "float");
+            AddCommand("pedals-clutch-y2",   "pedals", 35, 36, new byte[] { 23 }, 4, "float");
+            AddCommand("pedals-clutch-y3",   "pedals", 35, 36, new byte[] { 24 }, 4, "float");
+            AddCommand("pedals-clutch-y4",   "pedals", 35, 36, new byte[] { 25 }, 4, "float");
+            AddCommand("pedals-clutch-y5",   "pedals", 35, 36, new byte[] { 29 }, 4, "float");
+
+            // Pedal calibration (write-only, group 38)
+            AddCommand("pedals-throttle-cal-start", "pedals", 0xFF, 38, new byte[] { 12 }, 2, "int");
+            AddCommand("pedals-throttle-cal-stop",  "pedals", 0xFF, 38, new byte[] { 16 }, 2, "int");
+            AddCommand("pedals-brake-cal-start",    "pedals", 0xFF, 38, new byte[] { 13 }, 2, "int");
+            AddCommand("pedals-brake-cal-stop",     "pedals", 0xFF, 38, new byte[] { 17 }, 2, "int");
+            AddCommand("pedals-clutch-cal-start",   "pedals", 0xFF, 38, new byte[] { 14 }, 2, "int");
+            AddCommand("pedals-clutch-cal-stop",    "pedals", 0xFF, 38, new byte[] { 18 }, 2, "int");
+
+            // Pedal outputs (read group 37, read-only)
             AddCommand("pedals-throttle-output", "pedals", 37, 0xFF, new byte[] { 1 }, 2, "int");
             AddCommand("pedals-brake-output",    "pedals", 37, 0xFF, new byte[] { 2 }, 2, "int");
             AddCommand("pedals-clutch-output",   "pedals", 37, 0xFF, new byte[] { 3 }, 2, "int");
@@ -193,8 +230,21 @@ namespace MozaTelemetryPlugin.Protocol
 
             // ===== HANDBRAKE (device: handbrake, read group 91, write group 92) =====
             AddCommand("handbrake-direction",        "handbrake", 91, 92, new byte[] { 1 },  2, "int");
+            AddCommand("handbrake-min",              "handbrake", 91, 92, new byte[] { 2 },  2, "int");
+            AddCommand("handbrake-max",              "handbrake", 91, 92, new byte[] { 3 },  2, "int");
             AddCommand("handbrake-mode",             "handbrake", 91, 92, new byte[] { 11 }, 2, "int");
             AddCommand("handbrake-button-threshold", "handbrake", 91, 92, new byte[] { 10 }, 2, "int");
+
+            // Handbrake output curve (4-byte float, read 91 / write 92)
+            AddCommand("handbrake-y1", "handbrake", 91, 92, new byte[] { 5 }, 4, "float");
+            AddCommand("handbrake-y2", "handbrake", 91, 92, new byte[] { 6 }, 4, "float");
+            AddCommand("handbrake-y3", "handbrake", 91, 92, new byte[] { 7 }, 4, "float");
+            AddCommand("handbrake-y4", "handbrake", 91, 92, new byte[] { 8 }, 4, "float");
+            AddCommand("handbrake-y5", "handbrake", 91, 92, new byte[] { 9 }, 4, "float");
+
+            // Handbrake calibration (write-only, group 94)
+            AddCommand("handbrake-cal-start", "handbrake", 0xFF, 94, new byte[] { 3 }, 2, "int");
+            AddCommand("handbrake-cal-stop",  "handbrake", 0xFF, 94, new byte[] { 4 }, 2, "int");
         }
 
         private static void AddCommand(string name, string device, byte readGroup, byte writeGroup,

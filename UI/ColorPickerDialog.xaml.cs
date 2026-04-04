@@ -2,7 +2,7 @@ using System;
 using System.Windows;
 using System.Windows.Media;
 
-namespace MozaTelemetryPlugin
+namespace MozaPlugin
 {
     public partial class ColorPickerDialog : Window
     {
