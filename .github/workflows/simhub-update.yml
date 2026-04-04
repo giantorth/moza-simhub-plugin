@@ -53,7 +53,7 @@ jobs:
 
       - name: Upload setup file
         if: ${{ steps.precheck.outputs.should_run == 'true' }}
-        uses: actions/upload-artifact@v4.6
+        uses: actions/upload-artifact@v4
         with:
           name: simhub-setup
           path: SimHubSetup.exe
@@ -67,7 +67,7 @@ jobs:
       - fetch-binary
     if: ${{ needs.fetch-binary.outputs.should_run == 'true' }}
     steps:
-      - uses: actions/download-artifact@v4.3
+      - uses: actions/download-artifact@v4
         with:
           name: simhub-setup
 
@@ -91,7 +91,7 @@ jobs:
           Write-Output "All files found"
 
       - name: Upload SimHub files
-        uses: actions/upload-artifact@v4.6
+        uses: actions/upload-artifact@v4
         with:
           name: simhub-files
           path: |
@@ -116,7 +116,7 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Download SimHub files
-        uses: actions/download-artifact@v4.3
+        uses: actions/download-artifact@v4
         with:
           name: simhub-files
           path: libs/SimHub
