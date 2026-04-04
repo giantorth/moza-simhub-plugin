@@ -24,13 +24,14 @@ namespace MozaPlugin
         private readonly MozaPluginSettings _settings;
 
         private const int LedCount = 10;
-        private const int BlinkThreshold = 95;
+        private const int AllLedsMask = 0x3FF; // All 10 RPM LEDs lit
         private const int FlagBit = 15; // Bit 15 in dash-send-telemetry activates flag LEDs
 
-        // Blink state
-        private bool _blinkState = true;
-        private int _blinkCounter;
-        private const int BlinkInterval = 4; // Toggle every N frames
+        // Per-device blink state (time-based, using configured intervals)
+        private bool _dashBlinkState = true;
+        private bool _wheelBlinkState = true;
+        private DateTime _dashLastBlinkToggle = DateTime.UtcNow;
+        private DateTime _wheelLastBlinkToggle = DateTime.UtcNow;
 
         // Last sent state (avoid redundant writes)
         private int _lastBitmask = -1;
@@ -140,29 +141,15 @@ namespace MozaPlugin
                     $"wheelId={_deviceManager.WheelDeviceId}");
             }
 
-            // Blink at high RPM; in SimHub mode use redLineReached instead of hardcoded threshold
-            bool inSimHubMode = (_wheelEnabled && _settings.RpmMode == 2)
-                             || (_dashEnabled && _settings.DashRpmMode == 2);
-            bool shouldBlink = inSimHubMode ? (redLineReached != 0) : (rpmPercent >= BlinkThreshold);
-            if (shouldBlink)
-            {
-                _blinkCounter++;
-                if (_blinkCounter >= BlinkInterval)
-                {
-                    _blinkCounter = 0;
-                    _blinkState = !_blinkState;
-                }
-                if (!_blinkState)
-                {
-                    dashBitmask = 0;
-                    wheelBitmask = 0;
-                }
-            }
-            else
-            {
-                _blinkState = true;
-                _blinkCounter = 0;
-            }
+            // Per-device blink: triggers when all LEDs are lit (or redline in SimHub mode),
+            // blinks at each device's configured interval
+            var blinkNow = DateTime.UtcNow;
+            if (_dashEnabled)
+                ApplyBlink(ref dashBitmask, _settings.DashRpmMode == 2, redLineReached,
+                    _settings.DashRpmBlinkInterval, ref _dashBlinkState, ref _dashLastBlinkToggle, blinkNow);
+            if (_wheelEnabled)
+                ApplyBlink(ref wheelBitmask, _settings.RpmMode == 2, redLineReached,
+                    _settings.RpmBlinkInterval, ref _wheelBlinkState, ref _wheelLastBlinkToggle, blinkNow);
 
             // Flag LEDs: set bit 15 and update flag colors when flag changes
             if (_dashEnabled && activeFlag != RaceFlag.None)
@@ -240,6 +227,27 @@ namespace MozaPlugin
             SendBitmasks(0, 0);
             // Reset so the next real telemetry update gets sent
             _lastBitmask = -1;
+        }
+
+        private static void ApplyBlink(ref int bitmask, bool simHubMode, int redLineReached,
+            int intervalMs, ref bool blinkState, ref DateTime lastToggle, DateTime now)
+        {
+            bool shouldBlink = simHubMode ? (redLineReached != 0) : ((bitmask & AllLedsMask) == AllLedsMask);
+            if (shouldBlink)
+            {
+                if ((now - lastToggle).TotalMilliseconds >= intervalMs)
+                {
+                    lastToggle = now;
+                    blinkState = !blinkState;
+                }
+                if (!blinkState)
+                    bitmask = 0;
+            }
+            else
+            {
+                blinkState = true;
+                lastToggle = now;
+            }
         }
 
         private int CalculateRpmPercent(double rpm, double maxRpm, double idleRpm)

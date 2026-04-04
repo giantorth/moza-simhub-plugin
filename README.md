@@ -230,7 +230,7 @@ On every SimHub frame (~60fps):
    - **Percent**: user-configured % thresholds per LED
    - **RPM**: user-configured absolute RPM thresholds per LED
    - **SimHub**: uses SimHub's Car Settings shift light zones (3 LEDs per zone: shift 1 / shift 2 / redline)
-4. At 95%+ (or when SimHub's redline is reached in SimHub mode), toggle all LEDs on/off every 4 frames for blink effect
+4. When all 10 LEDs are lit (or redline reached in SimHub mode), blink LEDs on/off at the configured blink interval (independent per wheel and dashboard)
 5. Send bitmask to dashboard (`write group 65, cmd [253, 222]`) and/or wheel (`write group 63, cmd [26, 0]`)
 
 ### Settings Read/Write Flow
