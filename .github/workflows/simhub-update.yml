@@ -14,7 +14,7 @@ jobs:
       current_tag: ${{ steps.precheck.outputs.current_tag }}
       download_url: ${{ steps.precheck.outputs.download_url }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Check for newer SimHub release
         id: precheck
@@ -53,7 +53,7 @@ jobs:
 
       - name: Upload setup file
         if: ${{ steps.precheck.outputs.should_run == 'true' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.6
         with:
           name: simhub-setup
           path: SimHubSetup.exe
@@ -67,7 +67,7 @@ jobs:
       - fetch-binary
     if: ${{ needs.fetch-binary.outputs.should_run == 'true' }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4.3
         with:
           name: simhub-setup
 
@@ -91,7 +91,7 @@ jobs:
           Write-Output "All files found"
 
       - name: Upload SimHub files
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.6
         with:
           name: simhub-files
           path: |
@@ -113,10 +113,10 @@ jobs:
       contents: write
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Download SimHub files
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v4.3
         with:
           name: simhub-files
           path: libs/SimHub
