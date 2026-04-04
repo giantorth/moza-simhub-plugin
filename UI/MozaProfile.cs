@@ -60,12 +60,16 @@ namespace MozaPlugin
         public int[]? RpmTimingsPercent { get; set; }
         public int[]? RpmTimingsRpm { get; set; }
         public int RpmBlinkInterval { get; set; } = -1;
+        public int WheelRpmRangeMin { get; set; } = -1;
+        public int WheelRpmRangeMax { get; set; } = -1;
 
         // ===== Dashboard settings =====
         public int DashRpmMode { get; set; } = -1;
         public int[]? DashRpmTimingsPercent { get; set; }
         public int[]? DashRpmTimingsRpm { get; set; }
         public int DashRpmBlinkInterval { get; set; } = -1;
+        public int DashRpmRangeMin { get; set; } = -1;
+        public int DashRpmRangeMax { get; set; } = -1;
         public int DashRpmBrightness { get; set; } = -1;
         public int DashFlagsBrightness { get; set; } = -1;
 
@@ -142,12 +146,14 @@ namespace MozaPlugin
             RpmMode = p.RpmMode; RpmBlinkInterval = p.RpmBlinkInterval;
             RpmTimingsPercent = p.RpmTimingsPercent != null ? (int[])p.RpmTimingsPercent.Clone() : null;
             RpmTimingsRpm = p.RpmTimingsRpm != null ? (int[])p.RpmTimingsRpm.Clone() : null;
+            WheelRpmRangeMin = p.WheelRpmRangeMin; WheelRpmRangeMax = p.WheelRpmRangeMax;
 
             // Dashboard
             DashRpmMode = p.DashRpmMode; DashRpmBlinkInterval = p.DashRpmBlinkInterval;
             DashRpmTimingsPercent = p.DashRpmTimingsPercent != null ? (int[])p.DashRpmTimingsPercent.Clone() : null;
             DashRpmTimingsRpm = p.DashRpmTimingsRpm != null ? (int[])p.DashRpmTimingsRpm.Clone() : null;
             DashRpmBrightness = p.DashRpmBrightness; DashFlagsBrightness = p.DashFlagsBrightness;
+            DashRpmRangeMin = p.DashRpmRangeMin; DashRpmRangeMax = p.DashRpmRangeMax;
 
             // FFB Equalizer
             Equalizer1 = p.Equalizer1; Equalizer2 = p.Equalizer2; Equalizer3 = p.Equalizer3;
@@ -219,6 +225,8 @@ namespace MozaPlugin
             RpmTimingsPercent = (int[])settings.RpmTimingsPercent.Clone();
             RpmTimingsRpm = (int[])settings.RpmTimingsRpm.Clone();
             RpmBlinkInterval = settings.RpmBlinkInterval;
+            WheelRpmRangeMin = settings.WheelRpmRangeMin;
+            WheelRpmRangeMax = settings.WheelRpmRangeMax;
 
             // Dashboard
             DashRpmMode = settings.DashRpmMode;
@@ -227,6 +235,8 @@ namespace MozaPlugin
             DashRpmBlinkInterval = settings.DashRpmBlinkInterval;
             DashRpmBrightness = settings.DashRpmBrightness;
             DashFlagsBrightness = settings.DashFlagsBrightness;
+            DashRpmRangeMin = settings.DashRpmRangeMin;
+            DashRpmRangeMax = settings.DashRpmRangeMax;
 
             // FFB Equalizer
             Equalizer1 = data.Equalizer1; Equalizer2 = data.Equalizer2; Equalizer3 = data.Equalizer3;

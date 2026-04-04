@@ -31,9 +31,15 @@ Untested:
 - Dashboard (**testers needed**)
 - New-protocol wheels (GS/FSR/CS/RS/TSW) (**testers needed**)
 
+### Per-Game Profiles
+
+All settings (base, wheel LEDs, dashboard, handbrake, pedals) are stored per-game using SimHub's built-in profile system. Profiles switch automatically when you launch a different game. A profile selector is shown at the top of the settings panel.
+
 ### Wheelbase Configuration (Base Tab)
 
 Read/write control of wheelbase settings:
+
+**Core Settings**
 
 | Setting | Range | Notes |
 |---------|-------|-------|
@@ -41,30 +47,93 @@ Read/write control of wheelbase settings:
 | Game FFB Strength | 0-100% | |
 | Base Torque Output | 50-100% | |
 | Maximum Wheel Speed | 0-200% | |
+
+**Wheelbase Effects**
+
+| Setting | Range | Notes |
+|---------|-------|-------|
 | Wheel Damper | 0-100% | |
 | Wheel Friction | 0-100% | |
 | Natural Inertia | 100-500 | |
 | Wheel Spring | 0-100% | |
 | FFB Reversal | On/Off | |
+
+**Game Effects**
+
+| Setting | Range | Notes |
+|---------|-------|-------|
 | Game Damper | 0-100% | Default 50% |
 | Game Friction | 0-100% | Default 50% |
 | Game Inertia | 0-100% | Default 50% |
 | Game Spring | 0-100% | Default 100% |
+
+**High Speed Damping**
+
+| Setting | Range | Notes |
+|---------|-------|-------|
 | High Speed Damping Level | 0-100% | |
 | High Speed Damping Trigger | 0-400 kph | |
+
+**Protection**
+
+| Setting | Range | Notes |
+|---------|-------|-------|
 | Hands-Off Protection | On/Off | |
 | Steering Wheel Inertia | 100-4000 | For protection mode |
+
+**Soft Limit**
+
+| Setting | Range | Notes |
+|---------|-------|-------|
 | Soft Limit Stiffness | 1-10 | |
 | Soft Limit Retain Game FFB | On/Off | |
-| Standby Mode | On/Off | |
-| Base Status LED | On/Off | |
 
-Live temperature monitoring:
+**FFB Equalizer**
+
+6-band equalizer for fine-tuning force feedback frequency response:
+
+| Band | Range |
+|------|-------|
+| 10 Hz | 0-400% |
+| 15 Hz | 0-400% |
+| 25 Hz | 0-400% |
+| 40 Hz | 0-400% |
+| 60 Hz | 0-400% |
+| 100 Hz | 0-400% |
+
+100% is flat/default. Values below 100% attenuate, above 100% boost.
+
+**FFB Output Curve**
+
+5-point force feedback output curve with presets (Linear, S Curve, Exponential, Parabolic):
+
+| Point | Input | Output Range |
+|-------|-------|-------------|
+| Y1 | 20% | 0-100% |
+| Y2 | 40% | 0-100% |
+| Y3 | 60% | 0-100% |
+| Y4 | 80% | 0-100% |
+| Y5 | 100% | 0-100% |
+
+**Miscellaneous**
+
+| Setting | Range |
+|---------|-------|
+| Standby Mode | On/Off |
+| Base Status LED | On/Off |
+| Bluetooth | On/Off |
+
+**Live Temperature Monitoring**
+
 - MCU Temperature
 - MOSFET Temperature
 - Motor Temperature
 
-### Wheel LED Configuration (Wheel LEDs Tab)
+### Wheel Configuration (Wheel Tab)
+
+The Wheel tab auto-detects which wheel is connected and shows the appropriate settings. A **Test LEDs** button is available for both wheel types.
+
+#### New-Protocol Wheels (GS/FSR/CS/RS/TSW)
 
 | Setting | Range | Notes |
 |---------|-------|-------|
@@ -72,14 +141,36 @@ Live temperature monitoring:
 | Idle Effect | Off / Constant / Breathing / Color Cycle / Rainbow / Sand Flow | |
 | RPM LED Colors | 10 RGB color pickers | Click swatch to open picker |
 | RPM Brightness | 0-100 | |
-| RPM Blink Interval | 0-1000 ms | |
 | Flag LED Colors | 6 RGB color pickers | |
 | Flags Brightness | 0-100 | |
 | Button LED Colors | 14 RGB color pickers | Includes TSW buttons |
 | Buttons Brightness | 0-100 | |
 | Button Idle Effect | Off / Constant / Breathing / Color Cycle / Rainbow / Sand Flow | |
+| Paddles Mode | Buttons / Combined / Split | |
+| Clutch Split Point | 0-100% | Only shown in Split mode |
+| Knob Mode | Mode 0-3 | |
+| Stick as D-Pad | On/Off | |
+
+#### ES Wheels (Old Protocol)
+
+| Setting | Range | Notes |
+|---------|-------|-------|
+| RPM Indicator Mode | RPM / Off / On | |
+| RPM Display Mode | Mode 1 / Mode 2 | |
+| RPM Brightness | 0-15 | |
+
+#### Shared RPM Timing Settings (Both Wheel Types)
+
+| Setting | Range | Notes |
+|---------|-------|-------|
+| RPM Mode | Percent / RPM / SimHub | SimHub mode uses Car Settings shift light zones |
+| RPM Thresholds (Percent) | 10 sliders, 0-99% | Presets: Linear, Early, Normal, Late |
+| RPM Thresholds (RPM) | 10 sliders, 2000-20000 | Presets: Early, Normal, Late |
+| Blink Interval | 0-1000 ms | |
 
 ### Dashboard LED Configuration (Dashboard Tab)
+
+> Auto-detected — tab is hidden if no dashboard is connected.
 
 | Setting | Range | Notes |
 |---------|-------|-------|
@@ -92,6 +183,43 @@ Live temperature monitoring:
 | Flags Mode | Off / Flags / On | |
 | Flag LED Colors | 6 RGB color pickers | |
 | Flags Brightness | 0-15 | |
+
+### Handbrake Configuration (Handbrake Tab)
+
+> Auto-detected — tab is hidden if no handbrake is connected.
+
+| Setting | Range | Notes |
+|---------|-------|-------|
+| Mode | Axis / Button | |
+| Button Threshold | 0-100% | Trigger point for button mode |
+| Reverse Direction | On/Off | |
+| Range Start | 0-100% | |
+| Range End | 0-100% | |
+
+**Output Curve** — 5-point curve with presets (Linear, S Curve, Exponential, Parabolic), same format as the FFB output curve. Calibration start/stop buttons are also available.
+
+### Pedals Configuration (Pedals Tab)
+
+> Auto-detected — tab is hidden if no pedals are connected.
+
+Settings for **Throttle**, **Brake**, and **Clutch** (each configured independently):
+
+| Setting | Range | Notes |
+|---------|-------|-------|
+| Reverse Direction | On/Off | |
+| Range Start | 0-100% | |
+| Range End | 0-100% | |
+| Output Curve | 5-point with presets | Linear, S Curve, Exponential, Parabolic |
+| Calibration | Start/Stop | Interactive calibration |
+
+Brake has an additional **Sensor Ratio** slider (0-100%) to blend between angle sensor (0%) and load cell (100%).
+
+### Options Tab
+
+| Setting | Description |
+|---------|-------------|
+| Apply profile settings on launch | Automatically apply the saved profile when a game starts |
+| Clear All Settings & Profiles | Reset all plugin settings and profiles to defaults |
 
 ### SimHub Properties
 
@@ -243,7 +371,7 @@ On every SimHub frame (~60fps):
 ## Project Structure
 
 ```
-MozaPlugin.cs             Main plugin class (IPlugin, IDataPlugin, IWPFSettingsV2)
+MozaPlugin.cs                      Main plugin class (IPlugin, IDataPlugin, IWPFSettingsV2)
 MozaDeviceManager.cs               Read/write API for device settings
 Protocol/
   MozaProtocol.cs                  Protocol constants (start byte, device IDs, checksums)
@@ -252,18 +380,12 @@ Protocol/
   MozaResponseParser.cs            Response decoder (bit 7 toggle, nibble swap, wildcard matching)
   MozaSerialConnection.cs          Serial port I/O with auto-discovery and background threads
 Telemetry/
-  MozaData.cs             Thread-safe data model for all device values
+  MozaData.cs                      Thread-safe data model for all device values
   TelemetrySender.cs               RPM LED telemetry output logic
 UI/
-  SettingsControl.xaml(.cs)        WPF settings UI (Base, Wheel LEDs, Dashboard*, Handbrake* tabs; *autodetected)
+  SettingsControl.xaml(.cs)        WPF settings UI (Base, Wheel, Dashboard*, Handbrake*, Pedals*, Options tabs; *autodetected)
   ColorPickerDialog.xaml(.cs)      RGB color picker dialog
   MozaPluginSettings.cs            Persisted plugin settings (brightness, timings, colors)
-  MozaProfile.cs                   Per-game configuration snapshot
+  MozaProfile.cs                   Per-game configuration snapshot (80+ settings)
   MozaProfileStore.cs              SimHub profile storage integration
 ```
-
-## Supported Devices
-
-- Wheelbases: R5, R9, R12, R16, R21
-- Wheels: ES series (tested), GS/FSR/CS/RS/TSW (untested)
-- Dashboards: All MOZA digital dashes (untested)

@@ -18,6 +18,10 @@ namespace MozaPlugin
         // RPM mode (0=Percent, 1=RPM)
         public int RpmMode { get; set; }
 
+        // RPM slider range (absolute RPM mode) — controls min/max of LED threshold sliders
+        public int WheelRpmRangeMin { get; set; } = 500;
+        public int WheelRpmRangeMax { get; set; } = 20000;
+
         // Wheel LED mode settings (-1 = not yet saved)
         public int WheelTelemetryMode { get; set; } = -1;
         public int WheelIdleEffect { get; set; } = -1;
@@ -35,6 +39,10 @@ namespace MozaPlugin
 
         // Dashboard RPM mode (0=Percent, 1=RPM)
         public int DashRpmMode { get; set; }
+
+        // Dashboard RPM slider range (absolute RPM mode)
+        public int DashRpmRangeMin { get; set; } = 500;
+        public int DashRpmRangeMax { get; set; } = 20000;
 
         // Dashboard blink interval in ms
         public int DashRpmBlinkInterval { get; set; } = 250;

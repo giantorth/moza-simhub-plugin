@@ -470,10 +470,20 @@
                                 <StackPanel x:Name="EsTimingsPercentSliders"/>
                             </StackPanel>
 
-                            <!-- RPM Mode (10 sliders, 2000-20000) -->
+                            <!-- RPM Mode (10 sliders, configurable range) -->
                             <StackPanel x:Name="EsTimingsRpmPanel" Visibility="Collapsed">
                                 <TextBlock Text="RPM Thresholds (Absolute)" Style="{StaticResource SectionHeader}"/>
                                 <TextBlock Text="Each slider sets the absolute RPM at which that LED turns on" Foreground="Gray" FontSize="11" Margin="0,0,0,6"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,4">
+                                    <TextBlock Text="Range Min" Style="{StaticResource SliderLabel}"/>
+                                    <Slider x:Name="EsRpmRangeMinSlider" Style="{StaticResource SettingSlider}" Minimum="500" Maximum="20000" TickFrequency="500" ValueChanged="EsRpmRangeMinSlider_ValueChanged"/>
+                                    <TextBlock x:Name="EsRpmRangeMinValue" Style="{StaticResource SliderValue}" Text="500 RPM"/>
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Margin="0,4,0,8">
+                                    <TextBlock Text="Range Max" Style="{StaticResource SliderLabel}"/>
+                                    <Slider x:Name="EsRpmRangeMaxSlider" Style="{StaticResource SettingSlider}" Minimum="500" Maximum="20000" TickFrequency="500" ValueChanged="EsRpmRangeMaxSlider_ValueChanged"/>
+                                    <TextBlock x:Name="EsRpmRangeMaxValue" Style="{StaticResource SliderValue}" Text="20000 RPM"/>
+                                </StackPanel>
                                 <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
                                     <Button Content="Early" Padding="8,3" Margin="0,0,6,0" Click="EsRpmPreset_Early"/>
                                     <Button Content="Normal" Padding="8,3" Margin="0,0,6,0" Click="EsRpmPreset_Normal"/>
@@ -542,10 +552,20 @@
                             <StackPanel x:Name="DashTimingsPercentSliders"/>
                         </StackPanel>
 
-                        <!-- RPM Mode (10 sliders, 2000-20000) -->
+                        <!-- RPM Mode (10 sliders, configurable range) -->
                         <StackPanel x:Name="DashTimingsRpmPanel" Visibility="Collapsed">
                             <TextBlock Text="RPM Thresholds (Absolute)" Style="{StaticResource SectionHeader}"/>
                             <TextBlock Text="Each slider sets the absolute RPM at which that LED turns on" Foreground="Gray" FontSize="11" Margin="0,0,0,6"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,4">
+                                <TextBlock Text="Range Min" Style="{StaticResource SliderLabel}"/>
+                                <Slider x:Name="DashRpmRangeMinSlider" Style="{StaticResource SettingSlider}" Minimum="500" Maximum="20000" TickFrequency="500" ValueChanged="DashRpmRangeMinSlider_ValueChanged"/>
+                                <TextBlock x:Name="DashRpmRangeMinValue" Style="{StaticResource SliderValue}" Text="500 RPM"/>
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,4,0,8">
+                                <TextBlock Text="Range Max" Style="{StaticResource SliderLabel}"/>
+                                <Slider x:Name="DashRpmRangeMaxSlider" Style="{StaticResource SettingSlider}" Minimum="500" Maximum="20000" TickFrequency="500" ValueChanged="DashRpmRangeMaxSlider_ValueChanged"/>
+                                <TextBlock x:Name="DashRpmRangeMaxValue" Style="{StaticResource SliderValue}" Text="20000 RPM"/>
+                            </StackPanel>
                             <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
                                 <Button Content="Early" Padding="8,3" Margin="0,0,6,0" Click="DashRpmPreset_Early"/>
                                 <Button Content="Normal" Padding="8,3" Margin="0,0,6,0" Click="DashRpmPreset_Normal"/>

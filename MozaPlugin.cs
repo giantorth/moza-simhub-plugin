@@ -751,6 +751,10 @@ namespace MozaPlugin
                 _settings.RpmBlinkInterval = profile.RpmBlinkInterval;
                 _data.WheelRpmInterval = profile.RpmBlinkInterval;
             }
+            if (profile.WheelRpmRangeMin >= 0)
+                _settings.WheelRpmRangeMin = profile.WheelRpmRangeMin;
+            if (profile.WheelRpmRangeMax >= 0)
+                _settings.WheelRpmRangeMax = profile.WheelRpmRangeMax;
 
             // Dashboard RPM timing settings → _settings + _data + device
             if (profile.DashRpmMode >= 0)
@@ -775,6 +779,10 @@ namespace MozaPlugin
                 _settings.DashRpmBlinkInterval = profile.DashRpmBlinkInterval;
                 _data.DashRpmInterval = profile.DashRpmBlinkInterval;
             }
+            if (profile.DashRpmRangeMin >= 0)
+                _settings.DashRpmRangeMin = profile.DashRpmRangeMin;
+            if (profile.DashRpmRangeMax >= 0)
+                _settings.DashRpmRangeMax = profile.DashRpmRangeMax;
 
             // Dashboard brightness
             if (profile.DashRpmBrightness >= 0)
