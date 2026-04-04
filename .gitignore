@@ -1,0 +1,23 @@
+## Build output
+bin/
+obj/
+
+## Visual Studio / Rider
+.vs/
+*.user
+*.suo
+*.userprefs
+*.csproj.user
+
+## NuGet
+packages/
+
+## SimHub runtime DLLs (referenced via $SIMHUB_PATH)
+SimHub/
+
+## OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+settings.local.json

@@ -1,0 +1,541 @@
+<UserControl x:Class="MozaTelemetryPlugin.SettingsControl"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:profilescommon="clr-namespace:SimHub.Plugins.ProfilesCommon;assembly=SimHub.Plugins"
+             Padding="10">
+    <UserControl.Resources>
+        <Style x:Key="SectionHeader" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="16"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Margin" Value="0,20,0,8"/>
+        </Style>
+        <Style x:Key="SliderLabel" TargetType="TextBlock">
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Width" Value="180"/>
+        </Style>
+        <Style x:Key="SliderValue" TargetType="TextBlock">
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Width" Value="60"/>
+            <Setter Property="TextAlignment" Value="Right"/>
+            <Setter Property="Margin" Value="8,0,0,0"/>
+            <Setter Property="FontFamily" Value="Consolas"/>
+        </Style>
+        <Style x:Key="SettingSlider" TargetType="Slider">
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Width" Value="300"/>
+            <Setter Property="IsSnapToTickEnabled" Value="True"/>
+        </Style>
+        <Style x:Key="TempValue" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="Consolas"/>
+            <Setter Property="FontSize" Value="18"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Margin" Value="10,0,20,0"/>
+        </Style>
+        <Style x:Key="ConnectionDot" TargetType="Ellipse">
+            <Setter Property="Width" Value="12"/>
+            <Setter Property="Height" Value="12"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Margin" Value="0,0,8,0"/>
+        </Style>
+        <Style x:Key="ColorRect" TargetType="Border">
+            <Setter Property="Width" Value="28"/>
+            <Setter Property="Height" Value="28"/>
+            <Setter Property="BorderBrush" Value="#555"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="3"/>
+            <Setter Property="Margin" Value="2,0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+        </Style>
+        <Style x:Key="LedIndex" TargetType="TextBlock">
+            <Setter Property="Width" Value="28"/>
+            <Setter Property="TextAlignment" Value="Center"/>
+            <Setter Property="Foreground" Value="Gray"/>
+            <Setter Property="FontSize" Value="10"/>
+            <Setter Property="Margin" Value="2,0"/>
+        </Style>
+    </UserControl.Resources>
+
+    <DockPanel>
+        <!-- Header -->
+        <StackPanel DockPanel.Dock="Top" Margin="10,5,10,5">
+            <StackPanel Orientation="Horizontal">
+                <StackPanel Orientation="Horizontal" Margin="20,0,0,0" VerticalAlignment="Center">
+                    <Ellipse x:Name="ConnectionIndicator" Style="{StaticResource ConnectionDot}" Fill="Gray"/>
+                    <TextBlock x:Name="ConnectionLabel" Text="Disconnected" VerticalAlignment="Center"/>
+                </StackPanel>
+                <CheckBox x:Name="ConnectionToggle" Content="Enabled" Margin="20,0,0,0"
+                          VerticalAlignment="Center" IsChecked="True"
+                          Checked="ConnectionToggle_Changed" Unchecked="ConnectionToggle_Changed"/>
+                <Button x:Name="RefreshButton" Content="Refresh" Margin="20,0,0,0"
+                        Padding="12,4" Click="RefreshButton_Click" VerticalAlignment="Center"/>
+            </StackPanel>
+            <!-- Profile selector (visible on all tabs) -->
+            <profilescommon:ProfileList x:Name="ProfileListControl" Margin="0,6,0,2"/>
+        </StackPanel>
+
+        <!-- Tabs -->
+        <TabControl Margin="5">
+
+            <!-- ==================== BASE TAB ==================== -->
+            <TabItem Header="Base">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="10">
+                    <StackPanel Margin="5">
+                        <!-- Temperatures -->
+                        <TextBlock Text="Temperatures" Style="{StaticResource SectionHeader}"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                            <StackPanel Margin="0,0,30,0">
+                                <TextBlock Text="MCU" Foreground="Gray" FontSize="11"/>
+                                <TextBlock x:Name="McuTempLabel" Style="{StaticResource TempValue}" Text="--"/>
+                            </StackPanel>
+                            <StackPanel Margin="0,0,30,0">
+                                <TextBlock Text="MOSFET" Foreground="Gray" FontSize="11"/>
+                                <TextBlock x:Name="MosfetTempLabel" Style="{StaticResource TempValue}" Text="--"/>
+                            </StackPanel>
+                            <StackPanel>
+                                <TextBlock Text="Motor" Foreground="Gray" FontSize="11"/>
+                                <TextBlock x:Name="MotorTempLabel" Style="{StaticResource TempValue}" Text="--"/>
+                            </StackPanel>
+                        </StackPanel>
+
+                        <TextBlock Text="Core Settings" Style="{StaticResource SectionHeader}"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Wheel Rotation Angle" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="RotationSlider" Style="{StaticResource SettingSlider}" Minimum="90" Maximum="2700" TickFrequency="90" ValueChanged="RotationSlider_ValueChanged"/>
+                            <TextBlock x:Name="RotationValue" Style="{StaticResource SliderValue}" Text="900°"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Game FFB Strength" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="FfbStrengthSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="FfbStrengthSlider_ValueChanged"/>
+                            <TextBlock x:Name="FfbStrengthValue" Style="{StaticResource SliderValue}" Text="80%"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Base Torque Output" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="TorqueSlider" Style="{StaticResource SettingSlider}" Minimum="50" Maximum="100" TickFrequency="5" ValueChanged="TorqueSlider_ValueChanged"/>
+                            <TextBlock x:Name="TorqueValue" Style="{StaticResource SliderValue}" Text="100%"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Maximum Wheel Speed" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="SpeedSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="200" TickFrequency="1" ValueChanged="SpeedSlider_ValueChanged"/>
+                            <TextBlock x:Name="SpeedValue" Style="{StaticResource SliderValue}" Text="100%"/>
+                        </StackPanel>
+
+                        <TextBlock Text="Wheelbase Effects" Style="{StaticResource SectionHeader}"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Wheel Damper" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="DamperSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="DamperSlider_ValueChanged"/>
+                            <TextBlock x:Name="DamperValue" Style="{StaticResource SliderValue}" Text="0%"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Wheel Friction" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="FrictionSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="FrictionSlider_ValueChanged"/>
+                            <TextBlock x:Name="FrictionValue" Style="{StaticResource SliderValue}" Text="0%"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Natural Inertia" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="InertiaSlider" Style="{StaticResource SettingSlider}" Minimum="100" Maximum="500" TickFrequency="50" ValueChanged="InertiaSlider_ValueChanged"/>
+                            <TextBlock x:Name="InertiaValue" Style="{StaticResource SliderValue}" Text="250"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Wheel Spring" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="SpringSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="SpringSlider_ValueChanged"/>
+                            <TextBlock x:Name="SpringValue" Style="{StaticResource SliderValue}" Text="0%"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,8">
+                            <TextBlock Text="Force Feedback Reversal" Style="{StaticResource SliderLabel}"/>
+                            <CheckBox x:Name="FfbReverseCheck" VerticalAlignment="Center" Click="FfbReverseCheck_Click"/>
+                        </StackPanel>
+
+                        <TextBlock Text="Game Effects" Style="{StaticResource SectionHeader}"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Game Damper" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="GameDamperSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="5" ValueChanged="GameDamperSlider_ValueChanged"/>
+                            <TextBlock x:Name="GameDamperValue" Style="{StaticResource SliderValue}" Text="50%"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Game Friction" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="GameFrictionSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="5" ValueChanged="GameFrictionSlider_ValueChanged"/>
+                            <TextBlock x:Name="GameFrictionValue" Style="{StaticResource SliderValue}" Text="50%"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Game Inertia" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="GameInertiaSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="5" ValueChanged="GameInertiaSlider_ValueChanged"/>
+                            <TextBlock x:Name="GameInertiaValue" Style="{StaticResource SliderValue}" Text="50%"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Game Spring" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="GameSpringSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="5" ValueChanged="GameSpringSlider_ValueChanged"/>
+                            <TextBlock x:Name="GameSpringValue" Style="{StaticResource SliderValue}" Text="100%"/>
+                        </StackPanel>
+
+                        <TextBlock Text="High Speed Damping" Style="{StaticResource SectionHeader}"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Damping Level" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="SpeedDampingSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="SpeedDampingSlider_ValueChanged"/>
+                            <TextBlock x:Name="SpeedDampingValue" Style="{StaticResource SliderValue}" Text="0%"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Trigger Speed" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="SpeedDampingPointSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="400" TickFrequency="10" ValueChanged="SpeedDampingPointSlider_ValueChanged"/>
+                            <TextBlock x:Name="SpeedDampingPointValue" Style="{StaticResource SliderValue}" Text="120 kph"/>
+                        </StackPanel>
+
+                        <TextBlock Text="Protection" Style="{StaticResource SectionHeader}"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,8">
+                            <TextBlock Text="Hands-Off Protection" Style="{StaticResource SliderLabel}"/>
+                            <CheckBox x:Name="ProtectionCheck" VerticalAlignment="Center" Click="ProtectionCheck_Click"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Steering Wheel Inertia" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="NaturalInertiaSlider" Style="{StaticResource SettingSlider}" Minimum="100" Maximum="4000" TickFrequency="50" ValueChanged="NaturalInertiaSlider_ValueChanged"/>
+                            <TextBlock x:Name="NaturalInertiaValue" Style="{StaticResource SliderValue}" Text="1100"/>
+                        </StackPanel>
+
+                        <TextBlock Text="Soft Limit" Style="{StaticResource SectionHeader}"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Stiffness" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="SoftLimitStiffnessSlider" Style="{StaticResource SettingSlider}" Minimum="1" Maximum="10" TickFrequency="1" ValueChanged="SoftLimitStiffnessSlider_ValueChanged"/>
+                            <TextBlock x:Name="SoftLimitStiffnessValue" Style="{StaticResource SliderValue}" Text="5"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,8">
+                            <TextBlock Text="Retain Game FFB" Style="{StaticResource SliderLabel}"/>
+                            <CheckBox x:Name="SoftLimitRetainCheck" VerticalAlignment="Center" Click="SoftLimitRetainCheck_Click"/>
+                        </StackPanel>
+
+                        <TextBlock Text="Miscellaneous" Style="{StaticResource SectionHeader}"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,8">
+                            <TextBlock Text="Standby Mode" Style="{StaticResource SliderLabel}"/>
+                            <CheckBox x:Name="StandbyCheck" VerticalAlignment="Center" Click="StandbyCheck_Click"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,8">
+                            <TextBlock Text="Base Status LED" Style="{StaticResource SliderLabel}"/>
+                            <CheckBox x:Name="LedStatusCheck" VerticalAlignment="Center" Click="LedStatusCheck_Click"/>
+                        </StackPanel>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <!-- ==================== WHEEL TAB ==================== -->
+            <TabItem Header="Wheel LEDs">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="10">
+                    <StackPanel Margin="5">
+
+                        <!-- Detection status -->
+                        <StackPanel x:Name="WheelNotDetectedPanel">
+                            <TextBlock Text="Searching for wheel..." Foreground="Gray" FontStyle="Italic" Margin="0,10"/>
+                        </StackPanel>
+
+                        <!-- Test LEDs button (visible when any wheel detected) -->
+                        <StackPanel x:Name="TestLedsPanel" Orientation="Horizontal" Margin="0,10,0,5" Visibility="Collapsed">
+                            <Button x:Name="TestLedsButton" Content="Test LEDs" Padding="12,4" Click="TestLedsButton_Click"/>
+                            <TextBlock x:Name="TestLedsStatus" VerticalAlignment="Center" Margin="10,0,0,0" Foreground="Gray" FontSize="11"/>
+                        </StackPanel>
+
+                        <!-- ===== NEW WHEEL (GS/FSR/CS/RS/TSW) ===== -->
+                        <StackPanel x:Name="NewWheelPanel" Visibility="Collapsed">
+                            <TextBlock Text="Wheel (New Protocol)" FontSize="14" FontWeight="SemiBold" Foreground="CornflowerBlue" Margin="0,0,0,5"/>
+
+                            <TextBlock Text="Telemetry Mode" Style="{StaticResource SectionHeader}"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,4">
+                                <TextBlock Text="Mode" Style="{StaticResource SliderLabel}"/>
+                                <ComboBox x:Name="WheelTelemetryModeCombo" Width="140" SelectionChanged="WheelTelemetryModeCombo_Changed">
+                                    <ComboBoxItem Content="Off"/>
+                                    <ComboBoxItem Content="Telemetry"/>
+                                    <ComboBoxItem Content="Static"/>
+                                </ComboBox>
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,4">
+                                <TextBlock Text="Idle Effect" Style="{StaticResource SliderLabel}"/>
+                                <ComboBox x:Name="WheelIdleEffectCombo" Width="140" SelectionChanged="WheelIdleEffectCombo_Changed">
+                                    <ComboBoxItem Content="Off"/>
+                                    <ComboBoxItem Content="Constant"/>
+                                    <ComboBoxItem Content="Breathing"/>
+                                    <ComboBoxItem Content="Color Cycle"/>
+                                    <ComboBoxItem Content="Rainbow"/>
+                                    <ComboBoxItem Content="Sand Flow"/>
+                                </ComboBox>
+                            </StackPanel>
+
+                            <TextBlock Text="RPM LED Colors" Style="{StaticResource SectionHeader}"/>
+                            <TextBlock Text="Click a color to change it" Foreground="Gray" FontSize="11" Margin="0,0,0,6"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
+                                <TextBlock Style="{StaticResource LedIndex}" Text="1"/><TextBlock Style="{StaticResource LedIndex}" Text="2"/>
+                                <TextBlock Style="{StaticResource LedIndex}" Text="3"/><TextBlock Style="{StaticResource LedIndex}" Text="4"/>
+                                <TextBlock Style="{StaticResource LedIndex}" Text="5"/><TextBlock Style="{StaticResource LedIndex}" Text="6"/>
+                                <TextBlock Style="{StaticResource LedIndex}" Text="7"/><TextBlock Style="{StaticResource LedIndex}" Text="8"/>
+                                <TextBlock Style="{StaticResource LedIndex}" Text="9"/><TextBlock Style="{StaticResource LedIndex}" Text="10"/>
+                            </StackPanel>
+                            <StackPanel x:Name="WheelRpmColorPanel" Orientation="Horizontal" Margin="0,0,0,10"/>
+
+                            <StackPanel Orientation="Horizontal" Margin="0,4">
+                                <TextBlock Text="RPM Brightness" Style="{StaticResource SliderLabel}"/>
+                                <Slider x:Name="WheelRpmBrightnessSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="WheelRpmBrightnessSlider_ValueChanged"/>
+                                <TextBlock x:Name="WheelRpmBrightnessValue" Style="{StaticResource SliderValue}" Text="100"/>
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,4">
+                                <TextBlock Text="Blink Interval" Style="{StaticResource SliderLabel}"/>
+                                <Slider x:Name="WheelRpmIntervalSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="1000" TickFrequency="50" ValueChanged="WheelRpmIntervalSlider_ValueChanged"/>
+                                <TextBlock x:Name="WheelRpmIntervalValue" Style="{StaticResource SliderValue}" Text="250 ms"/>
+                            </StackPanel>
+
+                            <TextBlock Text="Flag LED Colors" Style="{StaticResource SectionHeader}"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
+                                <TextBlock Style="{StaticResource LedIndex}" Text="1"/><TextBlock Style="{StaticResource LedIndex}" Text="2"/>
+                                <TextBlock Style="{StaticResource LedIndex}" Text="3"/><TextBlock Style="{StaticResource LedIndex}" Text="4"/>
+                                <TextBlock Style="{StaticResource LedIndex}" Text="5"/><TextBlock Style="{StaticResource LedIndex}" Text="6"/>
+                            </StackPanel>
+                            <StackPanel x:Name="WheelFlagColorPanel" Orientation="Horizontal" Margin="0,0,0,10"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,4">
+                                <TextBlock Text="Flags Brightness" Style="{StaticResource SliderLabel}"/>
+                                <Slider x:Name="WheelFlagsBrightnessSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="WheelFlagsBrightnessSlider_ValueChanged"/>
+                                <TextBlock x:Name="WheelFlagsBrightnessValue" Style="{StaticResource SliderValue}" Text="100"/>
+                            </StackPanel>
+
+                            <TextBlock Text="Button LED Colors" Style="{StaticResource SectionHeader}"/>
+                            <StackPanel x:Name="WheelButtonColorPanel" Orientation="Horizontal" Margin="0,0,0,10"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,4">
+                                <TextBlock Text="Buttons Brightness" Style="{StaticResource SliderLabel}"/>
+                                <Slider x:Name="WheelButtonsBrightnessSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="WheelButtonsBrightnessSlider_ValueChanged"/>
+                                <TextBlock x:Name="WheelButtonsBrightnessValue" Style="{StaticResource SliderValue}" Text="100"/>
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,4">
+                                <TextBlock Text="Button Idle Effect" Style="{StaticResource SliderLabel}"/>
+                                <ComboBox x:Name="WheelButtonIdleEffectCombo" Width="140" SelectionChanged="WheelButtonIdleEffectCombo_Changed">
+                                    <ComboBoxItem Content="Off"/><ComboBoxItem Content="Constant"/>
+                                    <ComboBoxItem Content="Breathing"/><ComboBoxItem Content="Color Cycle"/>
+                                    <ComboBoxItem Content="Rainbow"/><ComboBoxItem Content="Sand Flow"/>
+                                </ComboBox>
+                            </StackPanel>
+                        </StackPanel>
+
+                        <!-- ===== ES WHEEL (Old Protocol) ===== -->
+                        <StackPanel x:Name="EsWheelPanel" Visibility="Collapsed">
+                            <TextBlock Text="ES Wheel" FontSize="14" FontWeight="SemiBold" Foreground="CornflowerBlue" Margin="0,0,0,5"/>
+
+                            <TextBlock Text="RPM Indicator" Style="{StaticResource SectionHeader}"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,4">
+                                <TextBlock Text="Indicator Mode" Style="{StaticResource SliderLabel}"/>
+                                <ComboBox x:Name="EsRpmIndicatorCombo" Width="140" SelectionChanged="EsRpmIndicatorCombo_Changed">
+                                    <ComboBoxItem Content="RPM"/>
+                                    <ComboBoxItem Content="Off"/>
+                                    <ComboBoxItem Content="On"/>
+                                </ComboBox>
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,4">
+                                <TextBlock Text="Display Mode" Style="{StaticResource SliderLabel}"/>
+                                <ComboBox x:Name="EsRpmDisplayCombo" Width="140" SelectionChanged="EsRpmDisplayCombo_Changed">
+                                    <ComboBoxItem Content="Mode 1"/>
+                                    <ComboBoxItem Content="Mode 2"/>
+                                </ComboBox>
+                            </StackPanel>
+
+                            <StackPanel Orientation="Horizontal" Margin="0,4">
+                                <TextBlock Text="RPM Brightness" Style="{StaticResource SliderLabel}"/>
+                                <Slider x:Name="EsRpmBrightnessSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="15" TickFrequency="1" ValueChanged="EsRpmBrightnessSlider_ValueChanged"/>
+                                <TextBlock x:Name="EsRpmBrightnessValue" Style="{StaticResource SliderValue}" Text="15"/>
+                            </StackPanel>
+                        </StackPanel>
+
+                        <!-- ===== SHARED RPM TIMING SETTINGS (both wheel types) ===== -->
+                        <StackPanel x:Name="WheelTimingsPanel" Visibility="Collapsed">
+                            <TextBlock Text="RPM Timing" Style="{StaticResource SectionHeader}"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,4">
+                                <TextBlock Text="RPM Mode" Style="{StaticResource SliderLabel}"/>
+                                <ComboBox x:Name="EsRpmModeCombo" Width="140" SelectionChanged="EsRpmModeCombo_Changed">
+                                    <ComboBoxItem Content="Percent"/>
+                                    <ComboBoxItem Content="RPM"/>
+                                    <ComboBoxItem Content="SimHub"/>
+                                </ComboBox>
+                            </StackPanel>
+
+                            <!-- SimHub Mode info -->
+                            <StackPanel x:Name="EsTimingsSimHubPanel" Visibility="Collapsed" Margin="0,6,0,0">
+                                <TextBlock TextWrapping="Wrap" Foreground="Gray" FontSize="11"
+                                           Text="Shift light thresholds are taken from SimHub's car settings. Configure them in SimHub's Car Settings panel."/>
+                            </StackPanel>
+
+                            <!-- Percent Mode (10 sliders, 0-99%) -->
+                            <StackPanel x:Name="EsTimingsPercentPanel">
+                                <TextBlock Text="RPM Thresholds (Percent)" Style="{StaticResource SectionHeader}"/>
+                                <TextBlock Text="Each slider sets the RPM % at which that LED turns on" Foreground="Gray" FontSize="11" Margin="0,0,0,6"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                    <Button Content="Linear" Padding="8,3" Margin="0,0,6,0" Click="EsTimingsPreset_Linear"/>
+                                    <Button Content="Early" Padding="8,3" Margin="0,0,6,0" Click="EsTimingsPreset_Early"/>
+                                    <Button Content="Normal" Padding="8,3" Margin="0,0,6,0" Click="EsTimingsPreset_Normal"/>
+                                    <Button Content="Late" Padding="8,3" Margin="0,0,6,0" Click="EsTimingsPreset_Late"/>
+                                </StackPanel>
+                                <StackPanel x:Name="EsTimingsPercentSliders"/>
+                            </StackPanel>
+
+                            <!-- RPM Mode (10 sliders, 2000-20000) -->
+                            <StackPanel x:Name="EsTimingsRpmPanel" Visibility="Collapsed">
+                                <TextBlock Text="RPM Thresholds (Absolute)" Style="{StaticResource SectionHeader}"/>
+                                <TextBlock Text="Each slider sets the absolute RPM at which that LED turns on" Foreground="Gray" FontSize="11" Margin="0,0,0,6"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                    <Button Content="Early" Padding="8,3" Margin="0,0,6,0" Click="EsRpmPreset_Early"/>
+                                    <Button Content="Normal" Padding="8,3" Margin="0,0,6,0" Click="EsRpmPreset_Normal"/>
+                                    <Button Content="Late" Padding="8,3" Margin="0,0,6,0" Click="EsRpmPreset_Late"/>
+                                </StackPanel>
+                                <StackPanel x:Name="EsTimingsRpmSliders"/>
+                            </StackPanel>
+
+                            <StackPanel Orientation="Horizontal" Margin="0,4">
+                                <TextBlock Text="Blink Interval" Style="{StaticResource SliderLabel}"/>
+                                <Slider x:Name="EsRpmIntervalSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="1000" TickFrequency="50" ValueChanged="EsRpmIntervalSlider_ValueChanged"/>
+                                <TextBlock x:Name="EsRpmIntervalValue" Style="{StaticResource SliderValue}" Text="250 ms"/>
+                            </StackPanel>
+                        </StackPanel>
+
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <!-- ==================== DASH TAB ==================== -->
+            <TabItem x:Name="DashTab" Header="Dashboard" Visibility="Collapsed">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="10">
+                    <StackPanel Margin="5">
+
+                        <TextBlock Text="RPM Indicator" Style="{StaticResource SectionHeader}"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="RPM Indicator Mode" Style="{StaticResource SliderLabel}"/>
+                            <ComboBox x:Name="DashRpmIndicatorCombo" Width="140" SelectionChanged="DashRpmIndicatorCombo_Changed">
+                                <ComboBoxItem Content="Off"/>
+                                <ComboBoxItem Content="RPM"/>
+                                <ComboBoxItem Content="On"/>
+                            </ComboBox>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="RPM Display Mode" Style="{StaticResource SliderLabel}"/>
+                            <ComboBox x:Name="DashRpmDisplayCombo" Width="140" SelectionChanged="DashRpmDisplayCombo_Changed">
+                                <ComboBoxItem Content="Mode 1"/>
+                                <ComboBoxItem Content="Mode 2"/>
+                            </ComboBox>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="RPM Mode" Style="{StaticResource SliderLabel}"/>
+                            <ComboBox x:Name="DashRpmModeCombo" Width="140" SelectionChanged="DashRpmModeCombo_Changed">
+                                <ComboBoxItem Content="Percent"/>
+                                <ComboBoxItem Content="RPM"/>
+                                <ComboBoxItem Content="SimHub"/>
+                            </ComboBox>
+                        </StackPanel>
+
+                        <!-- SimHub Mode info -->
+                        <StackPanel x:Name="DashTimingsSimHubPanel" Visibility="Collapsed" Margin="0,6,0,0">
+                            <TextBlock TextWrapping="Wrap" Foreground="Gray" FontSize="11"
+                                       Text="Shift light thresholds are taken from SimHub's car settings. Configure them in SimHub's Car Settings panel."/>
+                        </StackPanel>
+
+                        <!-- Percent Mode (10 sliders, 0-99%) -->
+                        <StackPanel x:Name="DashTimingsPercentPanel">
+                            <TextBlock Text="RPM Thresholds (Percent)" Style="{StaticResource SectionHeader}"/>
+                            <TextBlock Text="Each slider sets the RPM % at which that LED turns on" Foreground="Gray" FontSize="11" Margin="0,0,0,6"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                <Button Content="Linear" Padding="8,3" Margin="0,0,6,0" Click="DashTimingsPreset_Linear"/>
+                                <Button Content="Early" Padding="8,3" Margin="0,0,6,0" Click="DashTimingsPreset_Early"/>
+                                <Button Content="Normal" Padding="8,3" Margin="0,0,6,0" Click="DashTimingsPreset_Normal"/>
+                                <Button Content="Late" Padding="8,3" Margin="0,0,6,0" Click="DashTimingsPreset_Late"/>
+                            </StackPanel>
+                            <StackPanel x:Name="DashTimingsPercentSliders"/>
+                        </StackPanel>
+
+                        <!-- RPM Mode (10 sliders, 2000-20000) -->
+                        <StackPanel x:Name="DashTimingsRpmPanel" Visibility="Collapsed">
+                            <TextBlock Text="RPM Thresholds (Absolute)" Style="{StaticResource SectionHeader}"/>
+                            <TextBlock Text="Each slider sets the absolute RPM at which that LED turns on" Foreground="Gray" FontSize="11" Margin="0,0,0,6"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                <Button Content="Early" Padding="8,3" Margin="0,0,6,0" Click="DashRpmPreset_Early"/>
+                                <Button Content="Normal" Padding="8,3" Margin="0,0,6,0" Click="DashRpmPreset_Normal"/>
+                                <Button Content="Late" Padding="8,3" Margin="0,0,6,0" Click="DashRpmPreset_Late"/>
+                            </StackPanel>
+                            <StackPanel x:Name="DashTimingsRpmSliders"/>
+                        </StackPanel>
+
+                        <TextBlock Text="RPM LED Colors" Style="{StaticResource SectionHeader}"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
+                            <TextBlock Style="{StaticResource LedIndex}" Text="1"/>
+                            <TextBlock Style="{StaticResource LedIndex}" Text="2"/>
+                            <TextBlock Style="{StaticResource LedIndex}" Text="3"/>
+                            <TextBlock Style="{StaticResource LedIndex}" Text="4"/>
+                            <TextBlock Style="{StaticResource LedIndex}" Text="5"/>
+                            <TextBlock Style="{StaticResource LedIndex}" Text="6"/>
+                            <TextBlock Style="{StaticResource LedIndex}" Text="7"/>
+                            <TextBlock Style="{StaticResource LedIndex}" Text="8"/>
+                            <TextBlock Style="{StaticResource LedIndex}" Text="9"/>
+                            <TextBlock Style="{StaticResource LedIndex}" Text="10"/>
+                        </StackPanel>
+                        <StackPanel x:Name="DashRpmColorPanel" Orientation="Horizontal" Margin="0,0,0,10"/>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="RPM Brightness" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="DashRpmBrightnessSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="15" TickFrequency="1" ValueChanged="DashRpmBrightnessSlider_ValueChanged"/>
+                            <TextBlock x:Name="DashRpmBrightnessValue" Style="{StaticResource SliderValue}" Text="15"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Blink Interval" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="DashRpmIntervalSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="1000" TickFrequency="50" ValueChanged="DashRpmIntervalSlider_ValueChanged"/>
+                            <TextBlock x:Name="DashRpmIntervalValue" Style="{StaticResource SliderValue}" Text="250 ms"/>
+                        </StackPanel>
+
+                        <TextBlock Text="Flags Indicator" Style="{StaticResource SectionHeader}"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Flags Mode" Style="{StaticResource SliderLabel}"/>
+                            <ComboBox x:Name="DashFlagsIndicatorCombo" Width="140" SelectionChanged="DashFlagsIndicatorCombo_Changed">
+                                <ComboBoxItem Content="Off"/>
+                                <ComboBoxItem Content="Flags"/>
+                                <ComboBoxItem Content="On"/>
+                            </ComboBox>
+                        </StackPanel>
+
+                        <TextBlock Text="Flag LED Colors" Style="{StaticResource SectionHeader}"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
+                            <TextBlock Style="{StaticResource LedIndex}" Text="1"/>
+                            <TextBlock Style="{StaticResource LedIndex}" Text="2"/>
+                            <TextBlock Style="{StaticResource LedIndex}" Text="3"/>
+                            <TextBlock Style="{StaticResource LedIndex}" Text="4"/>
+                            <TextBlock Style="{StaticResource LedIndex}" Text="5"/>
+                            <TextBlock Style="{StaticResource LedIndex}" Text="6"/>
+                        </StackPanel>
+                        <StackPanel x:Name="DashFlagColorPanel" Orientation="Horizontal" Margin="0,0,0,10"/>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Flags Brightness" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="DashFlagsBrightnessSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="15" TickFrequency="1" ValueChanged="DashFlagsBrightnessSlider_ValueChanged"/>
+                            <TextBlock x:Name="DashFlagsBrightnessValue" Style="{StaticResource SliderValue}" Text="15"/>
+                        </StackPanel>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <!-- ==================== HANDBRAKE TAB ==================== -->
+            <TabItem x:Name="HandbrakeTab" Header="Handbrake" Visibility="Collapsed">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="10">
+                    <StackPanel Margin="5">
+
+                        <TextBlock Text="Handbrake Settings" Style="{StaticResource SectionHeader}"/>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Mode" Style="{StaticResource SliderLabel}"/>
+                            <ComboBox x:Name="HandbrakeModeCombo" Width="140" SelectionChanged="HandbrakeModeCombo_Changed">
+                                <ComboBoxItem Content="Axis"/>
+                                <ComboBoxItem Content="Button"/>
+                            </ComboBox>
+                        </StackPanel>
+
+                        <StackPanel x:Name="HandbrakeThresholdPanel" Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Button Threshold" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="HandbrakeThresholdSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="HandbrakeThresholdSlider_ValueChanged"/>
+                            <TextBlock x:Name="HandbrakeThresholdValue" Style="{StaticResource SliderValue}" Text="50%"/>
+                        </StackPanel>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,8">
+                            <TextBlock Text="Reverse Direction" Style="{StaticResource SliderLabel}"/>
+                            <CheckBox x:Name="HandbrakeDirectionCheck" VerticalAlignment="Center" Click="HandbrakeDirectionCheck_Click"/>
+                        </StackPanel>
+
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+        </TabControl>
+    </DockPanel>
+</UserControl>

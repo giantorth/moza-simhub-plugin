@@ -1,0 +1,212 @@
+using System.Collections.Generic;
+
+namespace MozaTelemetryPlugin.Protocol
+{
+    /// <summary>
+    /// Pre-built command definitions from data/serial.yml.
+    /// </summary>
+    public static class MozaCommandDatabase
+    {
+        public static readonly Dictionary<string, MozaCommand> Commands = new Dictionary<string, MozaCommand>();
+
+        static MozaCommandDatabase()
+        {
+            // ===== WHEELBASE (device: base, read group 40, write group 41) =====
+            AddCommand("base-limit",              "base", 40, 41, new byte[] { 1 },      2, "int");
+            AddCommand("base-ffb-strength",       "base", 40, 41, new byte[] { 2 },      2, "int");
+            AddCommand("base-inertia",            "base", 40, 41, new byte[] { 4 },      2, "int");
+            AddCommand("base-damper",             "base", 40, 41, new byte[] { 7 },      2, "int");
+            AddCommand("base-friction",           "base", 40, 41, new byte[] { 8 },      2, "int");
+            AddCommand("base-spring",             "base", 40, 41, new byte[] { 9 },      2, "int");
+            AddCommand("base-speed",              "base", 40, 41, new byte[] { 10 },     2, "int");
+            AddCommand("base-road-sensitivity",   "base", 40, 41, new byte[] { 12 },     2, "int");
+            AddCommand("base-protection",         "base", 40, 41, new byte[] { 13 },     2, "int");
+            AddCommand("base-equalizer1",         "base", 40, 41, new byte[] { 14 },     2, "int");
+            AddCommand("base-equalizer2",         "base", 40, 41, new byte[] { 15 },     2, "int");
+            AddCommand("base-equalizer3",         "base", 40, 41, new byte[] { 16 },     2, "int");
+            AddCommand("base-equalizer4",         "base", 40, 41, new byte[] { 17 },     2, "int");
+            AddCommand("base-torque",             "base", 40, 41, new byte[] { 18 },     2, "int");
+            AddCommand("base-natural-inertia",    "base", 40, 41, new byte[] { 19 },     2, "int");
+            AddCommand("base-equalizer5",         "base", 40, 41, new byte[] { 20 },     2, "int");
+            AddCommand("base-natural-inertia-enable", "base", 40, 41, new byte[] { 22 }, 2, "int");
+            AddCommand("base-max-angle",          "base", 40, 41, new byte[] { 23 },     2, "int");
+            AddCommand("base-ffb-reverse",        "base", 40, 41, new byte[] { 24 },     2, "int");
+            AddCommand("base-speed-damping",      "base", 40, 41, new byte[] { 25 },     2, "int");
+            AddCommand("base-speed-damping-point","base", 40, 41, new byte[] { 26 },     2, "int");
+            AddCommand("base-soft-limit-strength","base", 40, 41, new byte[] { 27 },     2, "int");
+            AddCommand("base-soft-limit-retain",  "base", 40, 41, new byte[] { 28 },     2, "int");
+            AddCommand("base-temp-strategy",      "base", 40, 41, new byte[] { 30 },     2, "int");
+            AddCommand("base-soft-limit-stiffness","base",40, 41, new byte[] { 31 },     2, "int");
+            AddCommand("base-equalizer6",         "base", 40, 41, new byte[] { 44 },     2, "int");
+            AddCommand("base-protection-mode",    "base", 40, 41, new byte[] { 45 },     2, "int");
+            AddCommand("base-ffb-disable",        "base", 40, 41, new byte[] { 254 },    2, "int");
+
+            // FFB curve (read group 40, write group 41)
+            AddCommand("base-ffb-curve-x1", "base", 40, 41, new byte[] { 34, 1 }, 1, "int");
+            AddCommand("base-ffb-curve-x2", "base", 40, 41, new byte[] { 34, 2 }, 1, "int");
+            AddCommand("base-ffb-curve-x3", "base", 40, 41, new byte[] { 34, 3 }, 1, "int");
+            AddCommand("base-ffb-curve-x4", "base", 40, 41, new byte[] { 34, 4 }, 1, "int");
+            AddCommand("base-ffb-curve-y1", "base", 40, 41, new byte[] { 34, 5 }, 1, "int");
+            AddCommand("base-ffb-curve-y2", "base", 40, 41, new byte[] { 34, 6 }, 1, "int");
+            AddCommand("base-ffb-curve-y3", "base", 40, 41, new byte[] { 34, 7 }, 1, "int");
+            AddCommand("base-ffb-curve-y4", "base", 40, 41, new byte[] { 34, 8 }, 1, "int");
+            AddCommand("base-ffb-curve-y5", "base", 40, 41, new byte[] { 34, 9 }, 1, "int");
+
+            // Wheelbase telemetry (read group 43, read-only)
+            AddCommand("base-state",       "base", 43, 0xFF, new byte[] { 1 }, 2, "int");
+            AddCommand("base-state-err",   "base", 43, 0xFF, new byte[] { 2 }, 2, "int");
+            AddCommand("base-mcu-temp",    "base", 43, 0xFF, new byte[] { 4 }, 2, "int");
+            AddCommand("base-mosfet-temp", "base", 43, 0xFF, new byte[] { 5 }, 2, "int");
+            AddCommand("base-motor-temp",  "base", 43, 0xFF, new byte[] { 6 }, 2, "int");
+
+            // Wheelbase calibration (write group 42)
+            AddCommand("base-calibration", "base", 0xFF, 42, new byte[] { 1 }, 2, "int");
+
+            // ===== MAIN DEVICE (device: main, read/write group 31) =====
+            AddCommand("main-set-compat-mode",   "main", 0xFF, 31, new byte[] { 19 }, 1, "int");
+            AddCommand("main-get-compat-mode",   "main", 31, 0xFF, new byte[] { 23 }, 1, "int");
+            AddCommand("main-set-ble-mode",      "main", 0xFF, 31, new byte[] { 71 }, 1, "int");
+            AddCommand("main-get-ble-mode",      "main", 31, 0xFF, new byte[] { 70 }, 1, "int");
+            AddCommand("main-set-led-status",    "main", 0xFF, 31, new byte[] { 9 },  1, "int");
+            AddCommand("main-get-led-status",    "main", 31, 0xFF, new byte[] { 8 },  1, "int");
+            AddCommand("main-set-work-mode",     "main", 0xFF, 31, new byte[] { 51 }, 1, "int");
+            AddCommand("main-get-work-mode",     "main", 31, 0xFF, new byte[] { 52 }, 1, "int");
+            AddCommand("main-set-interpolation", "main", 0xFF, 31, new byte[] { 76 }, 1, "int");
+            AddCommand("main-get-interpolation", "main", 31, 0xFF, new byte[] { 77 }, 1, "int");
+            AddCommand("main-set-spring-gain",   "main", 0xFF, 31, new byte[] { 78, 8 },  1, "int");
+            AddCommand("main-set-damper-gain",   "main", 0xFF, 31, new byte[] { 78, 9 },  1, "int");
+            AddCommand("main-set-inertia-gain",  "main", 0xFF, 31, new byte[] { 78, 10 }, 1, "int");
+            AddCommand("main-set-friction-gain", "main", 0xFF, 31, new byte[] { 78, 11 }, 1, "int");
+            AddCommand("main-get-spring-gain",   "main", 31, 0xFF, new byte[] { 79, 8 },  1, "int");
+            AddCommand("main-get-damper-gain",   "main", 31, 0xFF, new byte[] { 79, 9 },  1, "int");
+            AddCommand("main-get-inertia-gain",  "main", 31, 0xFF, new byte[] { 79, 10 }, 1, "int");
+            AddCommand("main-get-friction-gain", "main", 31, 0xFF, new byte[] { 79, 11 }, 1, "int");
+
+            // ===== PEDALS (read group 37, read-only outputs) =====
+            AddCommand("pedals-throttle-output", "pedals", 37, 0xFF, new byte[] { 1 }, 2, "int");
+            AddCommand("pedals-brake-output",    "pedals", 37, 0xFF, new byte[] { 2 }, 2, "int");
+            AddCommand("pedals-clutch-output",   "pedals", 37, 0xFF, new byte[] { 3 }, 2, "int");
+
+            // ===== HUB (read group 100, read-only) =====
+            AddCommand("hub-base-power",    "hub", 100, 0xFF, new byte[] { 1 }, 2, "int");
+            AddCommand("hub-port1-power",   "hub", 100, 0xFF, new byte[] { 2 }, 2, "int");
+            AddCommand("hub-port2-power",   "hub", 100, 0xFF, new byte[] { 3 }, 2, "int");
+            AddCommand("hub-port3-power",   "hub", 100, 0xFF, new byte[] { 4 }, 2, "int");
+            AddCommand("hub-pedals1-power", "hub", 100, 0xFF, new byte[] { 5 }, 2, "int");
+            AddCommand("hub-pedals2-power", "hub", 100, 0xFF, new byte[] { 6 }, 2, "int");
+            AddCommand("hub-pedals3-power", "hub", 100, 0xFF, new byte[] { 7 }, 2, "int");
+
+            // ===== TELEMETRY OUTPUT =====
+            AddCommand("dash-send-telemetry",           "dash",  0xFF, 65, new byte[] { 253, 222 }, 4, "int");
+            AddCommand("wheel-send-rpm-telemetry",      "wheel", 0xFF, 63, new byte[] { 26, 0 },    2, "array");
+            AddCommand("wheel-send-buttons-telemetry",  "wheel", 0xFF, 63, new byte[] { 26, 1 },    2, "array");
+            AddCommand("wheel-telemetry-rpm-colors",    "wheel", 0xFF, 63, new byte[] { 25, 0 },   20, "array");
+            AddCommand("wheel-telemetry-button-colors", "wheel", 0xFF, 63, new byte[] { 25, 1 },   20, "array");
+            AddCommand("wheel-old-send-telemetry",      "wheel", 0xFF, 65, new byte[] { 253, 222 }, 4, "int");
+
+            // ===== WHEEL SETTINGS (read group 64, write group 63) =====
+            AddCommand("wheel-brightness",         "wheel", 64, 63, new byte[] { 1 },          1, "int");
+            AddCommand("wheel-rpm-timings",        "wheel", 64, 63, new byte[] { 2 },         10, "array");
+            AddCommand("wheel-paddles-mode",       "wheel", 64, 63, new byte[] { 3 },          1, "int");
+            AddCommand("wheel-rpm-indicator-mode", "wheel", 64, 63, new byte[] { 4 },          1, "int");
+            AddCommand("wheel-stick-mode",         "wheel", 64, 63, new byte[] { 5 },          2, "int");
+            AddCommand("wheel-set-rpm-display-mode","wheel",0xFF,63, new byte[] { 7 },         1, "int");
+            AddCommand("wheel-get-rpm-display-mode","wheel", 64, 0xFF, new byte[] { 8 },       1, "int");
+            AddCommand("wheel-clutch-point",       "wheel", 64, 63, new byte[] { 9 },          1, "int");
+            AddCommand("wheel-knob-mode",          "wheel", 64, 63, new byte[] { 10 },         1, "int");
+            AddCommand("wheel-paddle-adaptive-mode","wheel",64, 63, new byte[] { 11 },         1, "int");
+            AddCommand("wheel-paddle-button-mode", "wheel", 64, 63, new byte[] { 13 },         1, "int");
+            AddCommand("wheel-rpm-interval",       "wheel", 64, 63, new byte[] { 22 },         4, "int");
+            AddCommand("wheel-rpm-mode",           "wheel", 64, 63, new byte[] { 23 },         1, "int");
+
+            // Wheel RPM threshold values (read group 64, write group 63)
+            for (byte i = 0; i < 10; i++)
+                AddCommand($"wheel-rpm-value{i + 1}", "wheel", 64, 63, new byte[] { 24, i }, 2, "int");
+
+            // Wheel RPM LED colors (read group 64, write group 63, id [31, 0, 0xFF, index])
+            for (byte i = 0; i < 10; i++)
+                AddCommand($"wheel-rpm-color{i + 1}", "wheel", 64, 63, new byte[] { 31, 0, 0xFF, i }, 3, "array");
+
+            // Wheel button colors (id [31, 1, 0xFF, index])
+            for (byte i = 0; i < 14; i++)
+                AddCommand($"wheel-button-color{i + 1}", "wheel", 64, 63, new byte[] { 31, 1, 0xFF, i }, 3, "array");
+
+            // Wheel flag colors (id [21, 2, index])
+            for (byte i = 0; i < 6; i++)
+                AddCommand($"wheel-flag-color{i + 1}", "wheel", 64, 63, new byte[] { 21, 2, i }, 3, "array");
+
+            // Wheel RPM blink colors (write-only, id [15, index])
+            for (byte i = 0; i < 10; i++)
+                AddCommand($"wheel-rpm-blink-color{i + 1}", "wheel", 0xFF, 63, new byte[] { 15, i }, 3, "array");
+
+            // Wheel brightness (by zone: 0=rpm, 1=buttons, 2=flags)
+            AddCommand("wheel-rpm-brightness",     "wheel", 64, 63, new byte[] { 27, 0, 0xFF }, 1, "int");
+            AddCommand("wheel-buttons-brightness",  "wheel", 64, 63, new byte[] { 27, 1, 0xFF }, 1, "int");
+            AddCommand("wheel-flags-brightness",    "wheel", 64, 63, new byte[] { 27, 2, 0xFF }, 1, "int");
+
+            // Wheel telemetry mode and idle effects
+            AddCommand("wheel-telemetry-mode",          "wheel", 64, 63, new byte[] { 28, 0 },  1, "int");
+            AddCommand("wheel-telemetry-idle-effect",   "wheel", 64, 63, new byte[] { 29, 0 },  1, "int");
+            AddCommand("wheel-buttons-idle-effect",     "wheel", 64, 63, new byte[] { 29, 1 },  1, "int");
+            AddCommand("wheel-telemetry-idle-interval", "wheel", 0xFF, 63, new byte[] { 30, 0 }, 3, "int");
+            AddCommand("wheel-buttons-idle-interval",   "wheel", 0xFF, 63, new byte[] { 30, 1 }, 3, "int");
+
+            // Wheel idle settings
+            AddCommand("wheel-idle-mode",    "wheel", 64, 63, new byte[] { 32 },       1, "int");
+            AddCommand("wheel-idle-timeout", "wheel", 64, 63, new byte[] { 33 },       2, "int");
+            AddCommand("wheel-idle-speed",   "wheel", 64, 63, new byte[] { 34, 0 },    2, "int");
+            AddCommand("wheel-idle-color",   "wheel", 64, 63, new byte[] { 36, 255, 1, 255 }, 3, "array");
+
+            // Old wheel (ES) colors
+            for (byte i = 0; i < 10; i++)
+                AddCommand($"wheel-old-rpm-color{i + 1}", "wheel", 64, 63, new byte[] { 21, 0, i }, 3, "array");
+            AddCommand("wheel-old-rpm-brightness", "wheel", 64, 63, new byte[] { 20, 0 }, 1, "int");
+
+            // ===== DASHBOARD SETTINGS (read group 51, write group 50) =====
+            AddCommand("dash-rpm-timings",         "dash", 51, 50, new byte[] { 5 },       10, "array");
+            AddCommand("dash-rpm-display-mode",    "dash", 51, 50, new byte[] { 7 },        1, "int");
+            AddCommand("dash-rpm-brightness",      "dash", 51, 50, new byte[] { 10, 0 },    1, "int");
+            AddCommand("dash-flags-brightness",    "dash", 51, 50, new byte[] { 10, 2 },    1, "int");
+            AddCommand("dash-rpm-interval",        "dash", 51, 50, new byte[] { 12 },       4, "int");
+            AddCommand("dash-rpm-mode",            "dash", 51, 50, new byte[] { 13 },       1, "int");
+            AddCommand("dash-rpm-indicator-mode",  "dash", 51, 50, new byte[] { 17, 0 },    1, "int");
+            AddCommand("dash-flags-indicator-mode", "dash", 51, 50, new byte[] { 17, 2 },   1, "int");
+
+            // Dash RPM threshold values (read group 51, write group 50, id [14, index])
+            for (byte i = 0; i < 10; i++)
+                AddCommand($"dash-rpm-value{i + 1}", "dash", 51, 50, new byte[] { 14, i }, 4, "int");
+
+            // Dash RPM LED colors (id [11, 0, index])
+            for (byte i = 0; i < 10; i++)
+                AddCommand($"dash-rpm-color{i + 1}", "dash", 51, 50, new byte[] { 11, 0, i }, 3, "array");
+
+            // Dash RPM blink colors (write-only, id [9, index])
+            for (byte i = 0; i < 10; i++)
+                AddCommand($"dash-rpm-blink-color{i + 1}", "dash", 0xFF, 50, new byte[] { 9, i }, 3, "array");
+
+            // Dash flag colors (id [11, 2, index])
+            for (byte i = 0; i < 6; i++)
+                AddCommand($"dash-flag-color{i + 1}", "dash", 51, 50, new byte[] { 11, 2, i }, 3, "array");
+
+            // Dash flag default colors (write-only, id [8, 0])
+            AddCommand("dash-flag-colors", "dash", 0xFF, 50, new byte[] { 8, 0 }, 18, "array");
+
+            // ===== HANDBRAKE (device: handbrake, read group 91, write group 92) =====
+            AddCommand("handbrake-direction",        "handbrake", 91, 92, new byte[] { 1 },  2, "int");
+            AddCommand("handbrake-mode",             "handbrake", 91, 92, new byte[] { 11 }, 2, "int");
+            AddCommand("handbrake-button-threshold", "handbrake", 91, 92, new byte[] { 10 }, 2, "int");
+        }
+
+        private static void AddCommand(string name, string device, byte readGroup, byte writeGroup,
+            byte[] commandId, int payloadBytes, string payloadType)
+        {
+            Commands[name] = new MozaCommand(name, device, readGroup, writeGroup,
+                commandId, payloadBytes, payloadType);
+        }
+
+        public static MozaCommand? Get(string name)
+        {
+            return Commands.TryGetValue(name, out var cmd) ? cmd : null;
+        }
+    }
+}

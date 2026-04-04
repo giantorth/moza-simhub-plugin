@@ -1,0 +1,62 @@
+using System;
+using System.Windows;
+using System.Windows.Media;
+
+namespace MozaTelemetryPlugin
+{
+    public partial class ColorPickerDialog : Window
+    {
+        public byte SelectedR { get; private set; }
+        public byte SelectedG { get; private set; }
+        public byte SelectedB { get; private set; }
+
+        public ColorPickerDialog(byte r, byte g, byte b)
+        {
+            InitializeComponent();
+            RSlider.Value = r;
+            GSlider.Value = g;
+            BSlider.Value = b;
+            UpdatePreview();
+        }
+
+        private void Slider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            UpdatePreview();
+        }
+
+        private void UpdatePreview()
+        {
+            if (RSlider == null) return;
+            byte r = (byte)RSlider.Value;
+            byte g = (byte)GSlider.Value;
+            byte b = (byte)BSlider.Value;
+
+            RValue.Text = r.ToString();
+            GValue.Text = g.ToString();
+            BValue.Text = b.ToString();
+
+            ColorPreview.Background = new SolidColorBrush(Color.FromRgb(r, g, b));
+        }
+
+        private void Ok_Click(object sender, RoutedEventArgs e)
+        {
+            SelectedR = (byte)RSlider.Value;
+            SelectedG = (byte)GSlider.Value;
+            SelectedB = (byte)BSlider.Value;
+            DialogResult = true;
+        }
+
+        private void Cancel_Click(object sender, RoutedEventArgs e)
+        {
+            DialogResult = false;
+        }
+
+        private void Off_Click(object sender, RoutedEventArgs e)
+        {
+            SelectedR = 0;
+            SelectedG = 0;
+            SelectedB = 0;
+            DialogResult = true;
+        }
+    }
+}
