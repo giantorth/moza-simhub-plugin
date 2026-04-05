@@ -22,6 +22,7 @@ namespace MozaPlugin
     {
         private readonly MozaSerialConnection _connection;
         private readonly MozaPluginSettings _settings;
+        private readonly MozaData _data;
 
         private const int LedCount = 10;
         private const int AllLedsMask = 0x3FF; // All 10 RPM LEDs lit
@@ -49,32 +50,18 @@ namespace MozaPlugin
         private bool _wheelESProtocol;
         private bool _wheelColorsSent;
 
-        // Default LED colors: green(1-3), red(4-7), blue(8-10)
-        private static readonly byte[][] DefaultColors = new byte[][]
-        {
-            new byte[] { 0, 255, 0 },
-            new byte[] { 0, 255, 0 },
-            new byte[] { 0, 255, 0 },
-            new byte[] { 255, 0, 0 },
-            new byte[] { 255, 0, 0 },
-            new byte[] { 255, 0, 0 },
-            new byte[] { 255, 0, 0 },
-            new byte[] { 0, 0, 255 },
-            new byte[] { 0, 0, 255 },
-            new byte[] { 0, 0, 255 },
-        };
-
         private MozaDeviceManager _deviceManager;
 
         public bool DashEnabled { get => _dashEnabled; set => _dashEnabled = value; }
         public bool WheelEnabled { get => _wheelEnabled; set { _wheelEnabled = value; _wheelColorsSent = false; _ledsAwake = false; } }
         public bool WheelESProtocol { get => _wheelESProtocol; set { _wheelESProtocol = value; _wheelColorsSent = false; } }
 
-        public TelemetrySender(MozaSerialConnection connection, MozaDeviceManager deviceManager, MozaPluginSettings settings)
+        public TelemetrySender(MozaSerialConnection connection, MozaDeviceManager deviceManager, MozaPluginSettings settings, MozaData data)
         {
             _connection = connection;
             _deviceManager = deviceManager;
             _settings = settings;
+            _data = data;
         }
 
         /// <summary>
@@ -386,14 +373,15 @@ namespace MozaPlugin
             if (cmd == null) return;
 
             // Build color data: [index, R, G, B] * 10 LEDs = 40 bytes total
+            // Use colors read from the device (MozaData) so they match Pithouse/plugin config
             var colorData = new byte[40];
             for (int i = 0; i < 10; i++)
             {
                 int offset = i * 4;
                 colorData[offset] = (byte)i;
-                colorData[offset + 1] = DefaultColors[i][0];
-                colorData[offset + 2] = DefaultColors[i][1];
-                colorData[offset + 3] = DefaultColors[i][2];
+                colorData[offset + 1] = _data.WheelRpmColors[i][0];
+                colorData[offset + 2] = _data.WheelRpmColors[i][1];
+                colorData[offset + 3] = _data.WheelRpmColors[i][2];
             }
 
             // Send in two 20-byte chunks

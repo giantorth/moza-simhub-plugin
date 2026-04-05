@@ -164,7 +164,7 @@ namespace MozaPlugin
 
             _deviceManager = new MozaDeviceManager(_connection);
 
-            _sender = new TelemetrySender(_connection, _deviceManager, _settings);
+            _sender = new TelemetrySender(_connection, _deviceManager, _settings, _data);
             // Don't enable anything yet - auto-detection will enable the right targets
             _sender.DashEnabled = false;
             _sender.WheelEnabled = false;
