@@ -49,11 +49,13 @@ namespace MozaPlugin
         private bool _wheelEnabled;
         private bool _wheelESProtocol;
         private bool _wheelColorsSent;
+        private bool _buttonColorsSent;
+        private RaceFlag _lastButtonFlag = RaceFlag.None;
 
         private MozaDeviceManager _deviceManager;
 
         public bool DashEnabled { get => _dashEnabled; set => _dashEnabled = value; }
-        public bool WheelEnabled { get => _wheelEnabled; set { _wheelEnabled = value; _wheelColorsSent = false; _ledsAwake = false; } }
+        public bool WheelEnabled { get => _wheelEnabled; set { _wheelEnabled = value; _wheelColorsSent = false; _buttonColorsSent = false; _ledsAwake = false; } }
         public bool WheelESProtocol { get => _wheelESProtocol; set { _wheelESProtocol = value; _wheelColorsSent = false; } }
 
         public TelemetrySender(MozaSerialConnection connection, MozaDeviceManager deviceManager, MozaPluginSettings settings, MozaData data)
@@ -170,6 +172,22 @@ namespace MozaPlugin
                 // Bit 15 not set = flag LEDs off
             }
 
+            // Button flag LEDs (new-protocol wheel, Flags mode)
+            if (_wheelEnabled && !_wheelESProtocol && _settings.ButtonTelemetryMode == 1)
+            {
+                if (activeFlag != RaceFlag.None && activeFlag != _lastButtonFlag)
+                {
+                    _lastButtonFlag = activeFlag;
+                    SetupButtonFlagColors(activeFlag);
+                    SendButtonBitmask(0x3FFF); // all 14 buttons lit
+                }
+                else if (activeFlag == RaceFlag.None && _lastButtonFlag != RaceFlag.None)
+                {
+                    _lastButtonFlag = RaceFlag.None;
+                    SendButtonBitmask(0);
+                }
+            }
+
             // Send if changed or as keepalive (at least once per second)
             int combinedBitmask = dashBitmask | wheelBitmask;
             var now = DateTime.UtcNow;
@@ -187,6 +205,12 @@ namespace MozaPlugin
             _lastFlag = RaceFlag.None;
             _flagPhase = false;
             _lastFlagToggle = DateTime.MinValue;
+            if (_lastButtonFlag != RaceFlag.None)
+            {
+                _lastButtonFlag = RaceFlag.None;
+                if (_wheelEnabled && !_wheelESProtocol)
+                    SendButtonBitmask(0);
+            }
             SendBitmasks(0, 0);
         }
 
@@ -353,6 +377,11 @@ namespace MozaPlugin
                 SetupWheelColors();
                 _wheelColorsSent = true;
             }
+            if (!_buttonColorsSent && _settings.ButtonTelemetryMode == 0)
+            {
+                SetupButtonColors();
+                _buttonColorsSent = true;
+            }
 
             var cmd = MozaCommandDatabase.Get("wheel-send-rpm-telemetry");
             if (cmd == null) return;
@@ -397,7 +426,84 @@ namespace MozaPlugin
             if (msg2 != null)
                 _connection.Send(msg2);
 
-            SimHub.Logging.Current.Info("[Moza] Sent wheel LED color configuration");
+            // Send blink colors (write-only persistent device settings)
+            for (int i = 0; i < 10; i++)
+                _deviceManager.WriteColor($"wheel-rpm-blink-color{i + 1}",
+                    _data.WheelRpmBlinkColors[i][0], _data.WheelRpmBlinkColors[i][1], _data.WheelRpmBlinkColors[i][2]);
+
+            SimHub.Logging.Current.Info("[Moza] Sent wheel LED color + blink configuration");
+        }
+
+        /// <summary>
+        /// Send button LED colors to new-protocol wheels via wheel-telemetry-button-colors.
+        /// Format: [index, R, G, B] per button, 20-byte chunks.
+        /// </summary>
+        private void SetupButtonColors()
+        {
+            var cmd = MozaCommandDatabase.Get("wheel-telemetry-button-colors");
+            if (cmd == null) return;
+
+            // 14 buttons × 4 bytes = 56 bytes, sent in 3 chunks of 20 bytes (last padded)
+            var colorData = new byte[60];
+            for (int i = 0; i < 14; i++)
+            {
+                int offset = i * 4;
+                colorData[offset] = (byte)i;
+                colorData[offset + 1] = _data.WheelButtonColors[i][0];
+                colorData[offset + 2] = _data.WheelButtonColors[i][1];
+                colorData[offset + 3] = _data.WheelButtonColors[i][2];
+            }
+
+            for (int chunk = 0; chunk < 3; chunk++)
+            {
+                var data = new byte[20];
+                Array.Copy(colorData, chunk * 20, data, 0, 20);
+                var msg = cmd.BuildWriteMessage(_deviceManager.WheelDeviceId, data);
+                if (msg != null) _connection.Send(msg);
+            }
+
+            SimHub.Logging.Current.Info("[Moza] Sent button LED color configuration");
+        }
+
+        /// <summary>
+        /// Send flag colors to all 14 button LEDs via wheel-telemetry-button-colors.
+        /// </summary>
+        private void SetupButtonFlagColors(RaceFlag flag)
+        {
+            var cmd = MozaCommandDatabase.Get("wheel-telemetry-button-colors");
+            if (cmd == null) return;
+
+            var rgb = GetFlagColor(flag);
+            var colorData = new byte[60];
+            for (int i = 0; i < 14; i++)
+            {
+                int offset = i * 4;
+                colorData[offset] = (byte)i;
+                colorData[offset + 1] = rgb[0];
+                colorData[offset + 2] = rgb[1];
+                colorData[offset + 3] = rgb[2];
+            }
+
+            for (int chunk = 0; chunk < 3; chunk++)
+            {
+                var data = new byte[20];
+                Array.Copy(colorData, chunk * 20, data, 0, 20);
+                var msg = cmd.BuildWriteMessage(_deviceManager.WheelDeviceId, data);
+                if (msg != null) _connection.Send(msg);
+            }
+        }
+
+        /// <summary>
+        /// Send button LED bitmask via wheel-send-buttons-telemetry.
+        /// </summary>
+        private void SendButtonBitmask(int bitmask)
+        {
+            var cmd = MozaCommandDatabase.Get("wheel-send-buttons-telemetry");
+            if (cmd == null) return;
+
+            var payload = new byte[] { (byte)(bitmask & 0xFF), (byte)((bitmask >> 8) & 0xFF) };
+            var msg = cmd.BuildWriteMessage(_deviceManager.WheelDeviceId, payload);
+            if (msg != null) _connection.Send(msg);
         }
 
         /// <summary>

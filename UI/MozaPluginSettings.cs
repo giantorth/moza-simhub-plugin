@@ -55,6 +55,14 @@ namespace MozaPlugin
         public int DashRpmBrightness { get; set; } = 15;
         public int DashFlagsBrightness { get; set; } = 15;
 
+        // Blink colors (write-only, can't be polled — persisted here)
+        // Packed as R<<16 | G<<8 | B, null = defaults not yet customized
+        public int[]? WheelRpmBlinkColors { get; set; }
+        public int[]? DashRpmBlinkColors { get; set; }
+
+        // Button telemetry mode (0=Static, 1=Flags)
+        public int ButtonTelemetryMode { get; set; } = 0;
+
         // Connection enabled (persisted toggle)
         public bool ConnectionEnabled { get; set; } = true;
 

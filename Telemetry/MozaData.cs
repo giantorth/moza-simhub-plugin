@@ -86,6 +86,7 @@ namespace MozaPlugin
 
         // Wheel RPM colors (10 LEDs, [R, G, B] each)
         public readonly byte[][] WheelRpmColors = InitRpmColorArray();
+        public readonly byte[][] WheelRpmBlinkColors = InitRpmColorArray();
         public readonly byte[][] WheelButtonColors = InitColorArray(14);
         public readonly byte[][] WheelFlagColors = InitFlagColorArray();
         public readonly byte[] WheelIdleColor = new byte[] { 255, 255, 255 };
@@ -106,6 +107,7 @@ namespace MozaPlugin
 
         public readonly int[] DashRpmValues = new int[10];
         public readonly byte[][] DashRpmColors = InitRpmColorArray();
+        public readonly byte[][] DashRpmBlinkColors = InitRpmColorArray();
         public readonly byte[][] DashFlagColors = InitFlagColorArray();
 
         // RPM timings array (percent mode, 10 values)

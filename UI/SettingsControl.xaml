@@ -353,6 +353,17 @@
                                 <TextBlock x:Name="WheelRpmIntervalValue" Style="{StaticResource SliderValue}" Text="250 ms"/>
                             </StackPanel>
 
+                            <TextBlock Text="RPM Blink Colors" Style="{StaticResource SectionHeader}"/>
+                            <TextBlock Text="Colors shown when LEDs blink at redline" Foreground="Gray" FontSize="11" Margin="0,0,0,6"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
+                                <TextBlock Style="{StaticResource LedIndex}" Text="1"/><TextBlock Style="{StaticResource LedIndex}" Text="2"/>
+                                <TextBlock Style="{StaticResource LedIndex}" Text="3"/><TextBlock Style="{StaticResource LedIndex}" Text="4"/>
+                                <TextBlock Style="{StaticResource LedIndex}" Text="5"/><TextBlock Style="{StaticResource LedIndex}" Text="6"/>
+                                <TextBlock Style="{StaticResource LedIndex}" Text="7"/><TextBlock Style="{StaticResource LedIndex}" Text="8"/>
+                                <TextBlock Style="{StaticResource LedIndex}" Text="9"/><TextBlock Style="{StaticResource LedIndex}" Text="10"/>
+                            </StackPanel>
+                            <StackPanel x:Name="WheelBlinkColorPanel" Orientation="Horizontal" Margin="0,0,0,10"/>
+
                             <TextBlock Text="Flag LED Colors" Style="{StaticResource SectionHeader}"/>
                             <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
                                 <TextBlock Style="{StaticResource LedIndex}" Text="1"/><TextBlock Style="{StaticResource LedIndex}" Text="2"/>
@@ -379,6 +390,13 @@
                                     <ComboBoxItem Content="Off"/><ComboBoxItem Content="Constant"/>
                                     <ComboBoxItem Content="Breathing"/><ComboBoxItem Content="Color Cycle"/>
                                     <ComboBoxItem Content="Rainbow"/><ComboBoxItem Content="Sand Flow"/>
+                                </ComboBox>
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,4">
+                                <TextBlock Text="Button Telemetry" Style="{StaticResource SliderLabel}"/>
+                                <ComboBox x:Name="ButtonTelemetryModeCombo" Width="140" SelectionChanged="ButtonTelemetryModeCombo_Changed">
+                                    <ComboBoxItem Content="Static"/>
+                                    <ComboBoxItem Content="Flags"/>
                                 </ComboBox>
                             </StackPanel>
 
@@ -599,6 +617,17 @@
                             <Slider x:Name="DashRpmIntervalSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="1000" TickFrequency="50" ValueChanged="DashRpmIntervalSlider_ValueChanged"/>
                             <TextBlock x:Name="DashRpmIntervalValue" Style="{StaticResource SliderValue}" Text="250 ms"/>
                         </StackPanel>
+
+                        <TextBlock Text="RPM Blink Colors" Style="{StaticResource SectionHeader}"/>
+                        <TextBlock Text="Colors shown when LEDs blink at redline" Foreground="Gray" FontSize="11" Margin="0,0,0,6"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
+                            <TextBlock Style="{StaticResource LedIndex}" Text="1"/><TextBlock Style="{StaticResource LedIndex}" Text="2"/>
+                            <TextBlock Style="{StaticResource LedIndex}" Text="3"/><TextBlock Style="{StaticResource LedIndex}" Text="4"/>
+                            <TextBlock Style="{StaticResource LedIndex}" Text="5"/><TextBlock Style="{StaticResource LedIndex}" Text="6"/>
+                            <TextBlock Style="{StaticResource LedIndex}" Text="7"/><TextBlock Style="{StaticResource LedIndex}" Text="8"/>
+                            <TextBlock Style="{StaticResource LedIndex}" Text="9"/><TextBlock Style="{StaticResource LedIndex}" Text="10"/>
+                        </StackPanel>
+                        <StackPanel x:Name="DashBlinkColorPanel" Orientation="Horizontal" Margin="0,0,0,10"/>
 
                         <TextBlock Text="Flags Indicator" Style="{StaticResource SectionHeader}"/>
                         <StackPanel Orientation="Horizontal" Margin="0,4">

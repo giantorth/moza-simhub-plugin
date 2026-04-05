@@ -49,6 +49,7 @@ namespace MozaPlugin
         public int WheelRpmBrightness { get; set; } = -1;
         public int WheelButtonsBrightness { get; set; } = -1;
         public int WheelFlagsBrightness { get; set; } = -1;
+        public int ButtonTelemetryMode { get; set; } = -1;
 
         // ===== ES/Old wheel settings =====
         public int WheelRpmIndicatorMode { get; set; } = -1;
@@ -107,11 +108,13 @@ namespace MozaPlugin
 
         // ===== Color arrays (packed as R<<16 | G<<8 | B) =====
         public int[]? WheelRpmColors { get; set; }       // [10]
+        public int[]? WheelRpmBlinkColors { get; set; }  // [10]
         public int[]? WheelButtonColors { get; set; }     // [14]
         public int[]? WheelFlagColors { get; set; }       // [6]
         public int[]? WheelIdleColor { get; set; }        // [1]
         public int[]? WheelESRpmColors { get; set; }     // [10]
         public int[]? DashRpmColors { get; set; }         // [10]
+        public int[]? DashRpmBlinkColors { get; set; }   // [10]
         public int[]? DashFlagColors { get; set; }        // [6]
 
         // ===== ProfileBase abstract implementation =====
@@ -137,6 +140,7 @@ namespace MozaPlugin
             WheelButtonsIdleEffect = p.WheelButtonsIdleEffect;
             WheelRpmBrightness = p.WheelRpmBrightness; WheelButtonsBrightness = p.WheelButtonsBrightness;
             WheelFlagsBrightness = p.WheelFlagsBrightness;
+            ButtonTelemetryMode = p.ButtonTelemetryMode;
 
             // ES wheel
             WheelRpmIndicatorMode = p.WheelRpmIndicatorMode; WheelRpmDisplayMode = p.WheelRpmDisplayMode;
@@ -178,11 +182,13 @@ namespace MozaPlugin
 
             // Colors (deep copy)
             WheelRpmColors = CloneArray(p.WheelRpmColors);
+            WheelRpmBlinkColors = CloneArray(p.WheelRpmBlinkColors);
             WheelButtonColors = CloneArray(p.WheelButtonColors);
             WheelFlagColors = CloneArray(p.WheelFlagColors);
             WheelIdleColor = CloneArray(p.WheelIdleColor);
             WheelESRpmColors = CloneArray(p.WheelESRpmColors);
             DashRpmColors = CloneArray(p.DashRpmColors);
+            DashRpmBlinkColors = CloneArray(p.DashRpmBlinkColors);
             DashFlagColors = CloneArray(p.DashFlagColors);
         }
 
@@ -214,6 +220,7 @@ namespace MozaPlugin
             WheelRpmBrightness = settings.WheelRpmBrightness;
             WheelButtonsBrightness = settings.WheelButtonsBrightness;
             WheelFlagsBrightness = settings.WheelFlagsBrightness;
+            ButtonTelemetryMode = settings.ButtonTelemetryMode;
 
             // ES wheel
             WheelRpmIndicatorMode = settings.WheelRpmIndicatorMode;
@@ -261,11 +268,13 @@ namespace MozaPlugin
 
             // Colors
             WheelRpmColors = PackColors(data.WheelRpmColors);
+            WheelRpmBlinkColors = PackColors(data.WheelRpmBlinkColors);
             WheelButtonColors = PackColors(data.WheelButtonColors);
             WheelFlagColors = PackColors(data.WheelFlagColors);
             WheelIdleColor = new[] { PackColor(data.WheelIdleColor) };
             WheelESRpmColors = PackColors(data.WheelESRpmColors);
             DashRpmColors = PackColors(data.DashRpmColors);
+            DashRpmBlinkColors = PackColors(data.DashRpmBlinkColors);
             DashFlagColors = PackColors(data.DashFlagColors);
         }
 

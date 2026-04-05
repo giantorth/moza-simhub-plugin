@@ -146,6 +146,10 @@ namespace MozaPlugin
             if (_settings.ProfileStore == null)
                 _settings.ProfileStore = new MozaProfileStore();
 
+            // Restore blink colors from settings (write-only, can't be polled from device)
+            MozaProfile.UnpackColorsInto(_settings.WheelRpmBlinkColors, _data.WheelRpmBlinkColors);
+            MozaProfile.UnpackColorsInto(_settings.DashRpmBlinkColors, _data.DashRpmBlinkColors);
+
             SimHub.Logging.Current.Info("[Moza] Initializing plugin");
 
             // Read SimHub's global temperature unit preference (set at first launch)
@@ -712,6 +716,8 @@ namespace MozaPlugin
                 _settings.WheelFlagsBrightness = profile.WheelFlagsBrightness;
                 _data.WheelFlagsBrightness = profile.WheelFlagsBrightness;
             }
+            if (profile.ButtonTelemetryMode >= 0)
+                _settings.ButtonTelemetryMode = profile.ButtonTelemetryMode;
             if (profile.WheelRpmIndicatorMode >= 0)
             {
                 _settings.WheelRpmIndicatorMode = profile.WheelRpmIndicatorMode;
@@ -855,6 +861,7 @@ namespace MozaPlugin
 
             // --- Colors → _data ---
             MozaProfile.UnpackColorsInto(profile.WheelRpmColors, _data.WheelRpmColors);
+            MozaProfile.UnpackColorsInto(profile.WheelRpmBlinkColors, _data.WheelRpmBlinkColors);
             MozaProfile.UnpackColorsInto(profile.WheelButtonColors, _data.WheelButtonColors);
             MozaProfile.UnpackColorsInto(profile.WheelFlagColors, _data.WheelFlagColors);
             if (profile.WheelIdleColor != null && profile.WheelIdleColor.Length > 0)
@@ -866,7 +873,12 @@ namespace MozaPlugin
             }
             MozaProfile.UnpackColorsInto(profile.WheelESRpmColors, _data.WheelESRpmColors);
             MozaProfile.UnpackColorsInto(profile.DashRpmColors, _data.DashRpmColors);
+            MozaProfile.UnpackColorsInto(profile.DashRpmBlinkColors, _data.DashRpmBlinkColors);
             MozaProfile.UnpackColorsInto(profile.DashFlagColors, _data.DashFlagColors);
+
+            // Persist blink colors to settings (write-only, not polled from device)
+            _settings.WheelRpmBlinkColors = profile.WheelRpmBlinkColors;
+            _settings.DashRpmBlinkColors = profile.DashRpmBlinkColors;
 
             // --- Write to device if connected ---
             if (_data.IsBaseConnected)
@@ -965,6 +977,8 @@ namespace MozaPlugin
         {
             // Wheel RPM colors
             WriteColorArray(profile.WheelRpmColors, "wheel-rpm-color", 10);
+            // Wheel RPM blink colors
+            WriteColorArray(profile.WheelRpmBlinkColors, "wheel-rpm-blink-color", 10);
             // Wheel button colors
             WriteColorArray(profile.WheelButtonColors, "wheel-button-color", 14);
             // Wheel flag colors
@@ -979,6 +993,8 @@ namespace MozaPlugin
             WriteColorArray(profile.WheelESRpmColors, "wheel-old-rpm-color", 10);
             // Dash RPM colors
             WriteColorArray(profile.DashRpmColors, "dash-rpm-color", 10);
+            // Dash RPM blink colors
+            WriteColorArray(profile.DashRpmBlinkColors, "dash-rpm-blink-color", 10);
             // Dash flag colors
             WriteColorArray(profile.DashFlagColors, "dash-flag-color", 6);
         }

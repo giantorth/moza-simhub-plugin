@@ -21,6 +21,8 @@ namespace MozaPlugin
         private readonly Border[] _wheelFlagColorSwatches = new Border[6];
         private readonly Border[] _wheelButtonColorSwatches = new Border[14];
         private readonly Border[] _dashRpmColorSwatches = new Border[10];
+        private readonly Border[] _wheelBlinkColorSwatches = new Border[10];
+        private readonly Border[] _dashRpmBlinkColorSwatches = new Border[10];
         private readonly Border[] _dashFlagColorSwatches = new Border[6];
 
         // LED test animation
@@ -83,10 +85,12 @@ namespace MozaPlugin
         {
             // New wheel colors
             BuildSwatchRow(WheelRpmColorPanel, _wheelRpmColorSwatches, 10, "wheel-rpm-color", _data.WheelRpmColors);
+            BuildSwatchRow(WheelBlinkColorPanel, _wheelBlinkColorSwatches, 10, "wheel-rpm-blink-color", _data.WheelRpmBlinkColors);
             BuildSwatchRow(WheelFlagColorPanel, _wheelFlagColorSwatches, 6, "wheel-flag-color", _data.WheelFlagColors);
             BuildSwatchRow(WheelButtonColorPanel, _wheelButtonColorSwatches, 14, "wheel-button-color", _data.WheelButtonColors);
             // Dash colors
             BuildSwatchRow(DashRpmColorPanel, _dashRpmColorSwatches, 10, "dash-rpm-color", _data.DashRpmColors);
+            BuildSwatchRow(DashBlinkColorPanel, _dashRpmBlinkColorSwatches, 10, "dash-rpm-blink-color", _data.DashRpmBlinkColors);
             BuildSwatchRow(DashFlagColorPanel, _dashFlagColorSwatches, 6, "dash-flag-color", _data.DashFlagColors);
         }
 
@@ -272,6 +276,13 @@ namespace MozaPlugin
                 info.ColorSource[info.Index][1] = g;
                 info.ColorSource[info.Index][2] = b;
                 border.Background = new SolidColorBrush(Color.FromRgb(r, g, b));
+
+                // Blink colors are write-only (can't be polled) — persist to settings
+                if (info.CommandPrefix == "wheel-rpm-blink-color")
+                    _plugin.Settings.WheelRpmBlinkColors = MozaProfile.PackColors(_data.WheelRpmBlinkColors);
+                else if (info.CommandPrefix == "dash-rpm-blink-color")
+                    _plugin.Settings.DashRpmBlinkColors = MozaProfile.PackColors(_data.DashRpmBlinkColors);
+
                 _plugin.SaveSettings();
             }
         }
@@ -421,8 +432,10 @@ namespace MozaPlugin
                 WheelRpmIntervalValue.Text = $"{_data.WheelRpmInterval} ms";
 
                 UpdateSwatches(_wheelRpmColorSwatches, _data.WheelRpmColors, 10);
+                UpdateSwatches(_wheelBlinkColorSwatches, _data.WheelRpmBlinkColors, 10);
                 UpdateSwatches(_wheelFlagColorSwatches, _data.WheelFlagColors, 6);
                 UpdateSwatches(_wheelButtonColorSwatches, _data.WheelButtonColors, 14);
+                SetComboSafe(ButtonTelemetryModeCombo, _plugin.Settings.ButtonTelemetryMode);
             }
 
             if (oldWheel)
@@ -499,6 +512,7 @@ namespace MozaPlugin
             DashRpmIntervalValue.Text = $"{_data.DashRpmInterval} ms";
 
             UpdateSwatches(_dashRpmColorSwatches, _data.DashRpmColors, 10);
+            UpdateSwatches(_dashRpmBlinkColorSwatches, _data.DashRpmBlinkColors, 10);
             UpdateSwatches(_dashFlagColorSwatches, _data.DashFlagColors, 6);
         }
 
@@ -766,6 +780,14 @@ namespace MozaPlugin
             _data.WheelButtonsIdleEffect = val;
             _settings.WheelButtonsIdleEffect = val;
             _device.WriteSetting("wheel-buttons-idle-effect", val);
+            _plugin.SaveSettings();
+        }
+
+        private void ButtonTelemetryModeCombo_Changed(object sender, SelectionChangedEventArgs e)
+        {
+            if (_suppressEvents) return;
+            int val = ButtonTelemetryModeCombo.SelectedIndex;
+            _plugin.Settings.ButtonTelemetryMode = val;
             _plugin.SaveSettings();
         }
 
