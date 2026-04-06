@@ -3,6 +3,7 @@ using System.Timers;
 using System.Windows.Media;
 using GameReaderCommon;
 using SimHub.Plugins;
+using MozaPlugin.Devices;
 using MozaPlugin.Protocol;
 
 namespace MozaPlugin
@@ -12,6 +13,8 @@ namespace MozaPlugin
     [PluginName("MOZA Control")]
     public class MozaPlugin : IPlugin, IDataPlugin, IWPFSettingsV2
     {
+        internal static MozaPlugin? Instance { get; private set; }
+
         private MozaSerialConnection _connection = null!;
         private MozaData _data = null!;
         private MozaDeviceManager _deviceManager = null!;
@@ -33,14 +36,6 @@ namespace MozaPlugin
         {
             "base-mcu-temp", "base-mosfet-temp", "base-motor-temp",
             "base-state",
-            // Device detection probes - retried every poll until detected.
-            "dash-rpm-indicator-mode",
-            "wheel-telemetry-mode",
-            "wheel-rpm-value1",
-            // Handbrake detection probe
-            "handbrake-direction",
-            // Pedals detection probe
-            "pedals-throttle-dir",
         };
 
         private static readonly string[] SettingsPollCommands = new[]
@@ -131,6 +126,11 @@ namespace MozaPlugin
         internal MozaPluginSettings Settings => _settings;
         internal bool IsNewWheelDetected => _newWheelDetected;
         internal bool IsOldWheelDetected => _oldWheelDetected;
+        /// <summary>
+        /// When true, the device extension's MozaLedDeviceManager handles wheel LED output
+        /// and the built-in TelemetrySender should not send wheel data.
+        /// </summary>
+        internal bool DeviceExtensionActive { get; set; }
         internal bool IsDashDetected => _dashDetected;
         internal bool IsHandbrakeDetected => _handbrakeDetected;
         internal bool IsPedalsDetected => _pedalsDetected;
@@ -138,6 +138,7 @@ namespace MozaPlugin
 
         public void Init(PluginManager pluginManager)
         {
+            Instance = this;
             _pluginManager = pluginManager;
             _data = new MozaData();
             _settings = this.ReadCommonSettings<MozaPluginSettings>("MozaPluginSettings", () => new MozaPluginSettings());
@@ -236,6 +237,7 @@ namespace MozaPlugin
 
         public void End(PluginManager pluginManager)
         {
+            Instance = null;
             SimHub.Logging.Current.Info("[Moza] Shutting down plugin");
             this.SaveCommonSettings("MozaPluginSettings", _settings);
             _sender?.ClearLeds();
@@ -341,24 +343,26 @@ namespace MozaPlugin
             {
                 SimHub.Logging.Current.Info("[Moza] Connected to MOZA device");
                 _deviceManager.ReadSettings(SettingsPollCommands);
+                // Probe all wheel IDs immediately for fast detection
+                _deviceManager.ProbeWheelDetection();
             }
         }
-
-        private volatile int _pollCount;
 
         private void PollStatus(object sender, ElapsedEventArgs e)
         {
             if (!_connection.IsConnected) return;
 
-            // Cycle wheel ID every poll until wheel is detected: tries 23, 21, 19 in rotation
-            if (!_newWheelDetected && !_oldWheelDetected)
-            {
-                _pollCount++;
-                if (_pollCount % 2 == 0) // Cycle every other poll (~4s)
-                    _deviceManager.CycleWheelId();
-            }
-
             _deviceManager.ReadSettings(StatusPollCommands);
+
+            // Device detection probes — only sent until each device is found
+            if (!_newWheelDetected && !_oldWheelDetected)
+                _deviceManager.ProbeWheelDetection();
+            if (!_dashDetected)
+                _deviceManager.ReadSetting("dash-rpm-indicator-mode");
+            if (!_handbrakeDetected)
+                _deviceManager.ReadSetting("handbrake-direction");
+            if (!_pedalsDetected)
+                _deviceManager.ReadSetting("pedals-throttle-dir");
         }
 
         private volatile int _unmatched;
@@ -390,7 +394,7 @@ namespace MozaPlugin
             if (r.ArrayValue != null)
                 _data.UpdateFromArray(r.Name, r.ArrayValue);
 
-            DetectDevices(r.Name, r.IntValue);
+            DetectDevices(r.Name, r.IntValue, r.DeviceId);
         }
 
         /// <summary>
@@ -399,7 +403,7 @@ namespace MozaPlugin
         ///   - wheel-telemetry-mode responds -> new protocol wheel (GS/FSR/CS/RS/TSW)
         ///   - wheel-rpm-value1 responds (but not telemetry-mode) -> old protocol wheel (ES)
         /// </summary>
-        private void DetectDevices(string commandName, int value)
+        private void DetectDevices(string commandName, int value, byte deviceId)
         {
             if (value < 0) return; // No valid response
 
@@ -430,11 +434,12 @@ namespace MozaPlugin
                     if (!_newWheelDetected)
                     {
                         _newWheelDetected = true;
-                        _deviceManager.OnWheelDetected();
-                        _sender.WheelEnabled = true;
+                        _deviceManager.LockWheelId(deviceId);
+                        if (!DeviceExtensionActive)
+                            _sender.WheelEnabled = true;
                         _sender.WheelESProtocol = false;
                         ApplySavedWheelSettings();
-                        SimHub.Logging.Current.Info("[Moza] New-protocol wheel detected (GS/FSR/CS/RS/TSW)");
+                        SimHub.Logging.Current.Info($"[Moza] New-protocol wheel detected on ID {deviceId} (GS/FSR/CS/RS/TSW), sender={!DeviceExtensionActive}");
                     }
                     break;
 
@@ -442,11 +447,12 @@ namespace MozaPlugin
                     if (!_newWheelDetected && !_oldWheelDetected)
                     {
                         _oldWheelDetected = true;
-                        _deviceManager.OnWheelDetected();
-                        _sender.WheelEnabled = true;
+                        _deviceManager.LockWheelId(deviceId);
+                        if (!DeviceExtensionActive)
+                            _sender.WheelEnabled = true;
                         _sender.WheelESProtocol = true;
                         ApplySavedWheelSettings();
-                        SimHub.Logging.Current.Info("[Moza] Old-protocol wheel detected (ES series)");
+                        SimHub.Logging.Current.Info($"[Moza] Old-protocol wheel detected on ID {deviceId} (ES series), sender={!DeviceExtensionActive}");
                     }
                     break;
 
@@ -1047,6 +1053,83 @@ namespace MozaPlugin
                 var rgb = MozaProfile.UnpackColor(packedColors[i]);
                 _deviceManager.WriteColor($"{commandPrefix}{i + 1}", rgb[0], rgb[1], rgb[2]);
             }
+        }
+
+        /// <summary>
+        /// Apply wheel settings from the SimHub device extension profile system.
+        /// Updates _settings, _data, and writes to hardware if connected.
+        /// </summary>
+        internal void ApplyWheelExtensionSettings(MozaWheelExtensionSettings extSettings)
+        {
+            SimHub.Logging.Current.Info("[Moza] Applying wheel device extension settings");
+
+            // Update _settings and _data in-memory
+            extSettings.ApplyTo(_settings, _data);
+
+            // Persist blink colors
+            _settings.WheelRpmBlinkColors = extSettings.WheelRpmBlinkColors;
+
+            // Write to hardware if connected
+            if (_data.IsBaseConnected)
+            {
+                // Wheel mode/brightness settings
+                if (_newWheelDetected)
+                {
+                    if (extSettings.WheelTelemetryMode >= 0)
+                        _deviceManager.WriteSetting("wheel-telemetry-mode", extSettings.WheelTelemetryMode);
+                    if (extSettings.WheelIdleEffect >= 0)
+                        _deviceManager.WriteSetting("wheel-telemetry-idle-effect", extSettings.WheelIdleEffect);
+                    if (extSettings.WheelButtonsIdleEffect >= 0)
+                        _deviceManager.WriteSetting("wheel-buttons-idle-effect", extSettings.WheelButtonsIdleEffect);
+                    if (extSettings.WheelRpmBrightness >= 0)
+                        _deviceManager.WriteSetting("wheel-rpm-brightness", extSettings.WheelRpmBrightness);
+                    if (extSettings.WheelButtonsBrightness >= 0)
+                        _deviceManager.WriteSetting("wheel-buttons-brightness", extSettings.WheelButtonsBrightness);
+                    if (extSettings.WheelFlagsBrightness >= 0)
+                        _deviceManager.WriteSetting("wheel-flags-brightness", extSettings.WheelFlagsBrightness);
+                }
+
+                if (_oldWheelDetected)
+                {
+                    if (extSettings.WheelRpmIndicatorMode >= 0)
+                        _deviceManager.WriteSetting("wheel-rpm-indicator-mode", extSettings.WheelRpmIndicatorMode + 1);
+                    if (extSettings.WheelRpmDisplayMode >= 0)
+                        _deviceManager.WriteSetting("wheel-set-rpm-display-mode", extSettings.WheelRpmDisplayMode);
+                    if (extSettings.WheelESRpmBrightness >= 0)
+                        _deviceManager.WriteSetting("wheel-old-rpm-brightness", extSettings.WheelESRpmBrightness);
+                }
+
+                // Colors
+                WriteColorArray(extSettings.WheelRpmColors, "wheel-rpm-color", 10);
+                WriteColorArray(extSettings.WheelRpmBlinkColors, "wheel-rpm-blink-color", 10);
+                WriteColorArray(extSettings.WheelFlagColors, "wheel-flag-color", 6);
+                if (extSettings.WheelIdleColor != null && extSettings.WheelIdleColor.Length > 0)
+                {
+                    var rgb = MozaProfile.UnpackColor(extSettings.WheelIdleColor[0]);
+                    _deviceManager.WriteColor("wheel-idle-color", rgb[0], rgb[1], rgb[2]);
+                }
+                WriteColorArray(extSettings.WheelESRpmColors, "wheel-old-rpm-color", 10);
+
+                // Timings
+                if (extSettings.RpmMode >= 0)
+                    _deviceManager.WriteSetting("wheel-rpm-mode", extSettings.RpmMode);
+                if (extSettings.RpmTimingsPercent != null)
+                {
+                    var timings = new byte[10];
+                    for (int i = 0; i < 10; i++)
+                        timings[i] = (byte)extSettings.RpmTimingsPercent[i];
+                    _deviceManager.WriteArray("wheel-rpm-timings", timings);
+                }
+                if (extSettings.RpmTimingsRpm != null)
+                {
+                    for (int i = 0; i < 10; i++)
+                        _deviceManager.WriteSetting($"wheel-rpm-value{i + 1}", extSettings.RpmTimingsRpm[i]);
+                }
+                if (extSettings.RpmBlinkInterval >= 0)
+                    _deviceManager.WriteSetting("wheel-rpm-interval", extSettings.RpmBlinkInterval);
+            }
+
+            PersistSettings();
         }
 
     }

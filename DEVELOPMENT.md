@@ -39,6 +39,15 @@ The project targets .NET Framework 4.8 (x86) and uses the `Microsoft.NETFramewor
 
 **Profile System** (`UI/MozaProfile.cs`, `UI/MozaProfileStore.cs`) — Per-game configuration snapshots using SimHub's `ProfileBase`. Uses -1 sentinel to mark settings not included in a profile.
 
+**Device Extension System** (`Devices/`) — Registers MOZA wheels as SimHub devices so they appear in SimHub's Devices section with native LED effects support:
+- `MozaDeviceExtensionFilter` — `IDeviceExtensionFilter` that attaches the extension to MOZA devices
+- `MozaWheelDeviceExtension` — `DeviceExtension` subclass providing a settings tab and per-game device profiles via `GetSettings()`/`SetSettings()`
+- `MozaLedDeviceManager` — Virtual `ILedDeviceManager` injected via reflection into the device's LED module. Reports as always-connected (enabling SimHub's effects UI) and forwards computed `Color[]` to MOZA hardware in `Display()`
+- `MozaWheelExtensionSettings` — Wheel-specific settings serialized to SimHub device profiles
+- `MozaWheelSettingsControl` — Lightweight status panel for the device tab
+
+**Device Template** (`DeviceTemplates/MozaWheel/`) — `.shdevicetemplate` ZIP (built automatically) containing `device.json`, `defaults.json`, and `picture.png`. Deployed to SimHub's `StandardDevicesTemplatesUser/` directory. SimHub deletes this file when the user removes the device, so the plugin should re-deploy it.
+
 ### Adding New Device Settings
 
 When adding a new setting that is written to the device, it must also be saved/restored with the profile system:
@@ -65,4 +74,6 @@ Every setting that writes to the device on UI change must round-trip through pro
 
 - **NuGet:** `System.IO.Ports`, `Microsoft.NETFramework.ReferenceAssemblies.net48`
 - **Runtime (Windows only):** `System.Management` — loaded via reflection for WMI port discovery; falls back to probe-based discovery if unavailable
-- **SimHub DLLs** (checked into `libs/SimHub/`, reference-only, not packaged): `SimHub.Plugins.dll`, `GameReaderCommon.dll`, `SimHub.Logging.dll`, `Newtonsoft.Json.dll`, `log4net.dll`. A daily GitHub Actions workflow automatically creates PRs when new SimHub versions are released.
+- **SimHub DLLs** (checked into `libs/SimHub/`, reference-only, not packaged): `SimHub.Plugins.dll`, `GameReaderCommon.dll`, `SimHub.Logging.dll`, `Newtonsoft.Json.dll`, `log4net.dll`, `SerialDash.dll`, `BA63Driver.dll`. A daily GitHub Actions workflow automatically creates PRs when new SimHub versions are released.
+
+**Important:** The SimHub DLLs in `libs/SimHub/` must match the runtime SimHub version. The PluginSdk ships older DLLs that may be missing interface members added in newer releases, causing `TypeLoadException` at runtime. Always update from the actual SimHub installation directory.

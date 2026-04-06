@@ -39,6 +39,14 @@
       <HintPath>libs\SimHub\log4net.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <Reference Include="SerialDash">
+      <HintPath>libs\SimHub\SerialDash.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="BA63Driver">
+      <HintPath>libs\SimHub\BA63Driver.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
   </ItemGroup>
 
   <ItemGroup>
@@ -51,6 +59,23 @@
   <!-- Copy output DLL to SimHub folder on build -->
   <Target Name="CopyToSimHub" AfterTargets="Build" Condition="'$(SIMHUB_PATH)' != ''">
     <Copy SourceFiles="$(OutputPath)$(AssemblyName).dll" DestinationFolder="$(SIMHUB_PATH)" />
+  </Target>
+
+  <!-- Build .shdevicetemplate ZIP from DeviceTemplates/MozaWheel/ -->
+  <Target Name="BuildDeviceTemplate" AfterTargets="Build">
+    <PropertyGroup>
+      <DeviceTemplateDir>$(MSBuildProjectDirectory)/DeviceTemplates/MozaWheel</DeviceTemplateDir>
+      <DeviceTemplateOutput>$(OutputPath)MozaRacingWheel.shdevicetemplate</DeviceTemplateOutput>
+    </PropertyGroup>
+    <Delete Files="$(DeviceTemplateOutput)" Condition="Exists('$(DeviceTemplateOutput)')" />
+    <ZipDirectory SourceDirectory="$(DeviceTemplateDir)" DestinationFile="$(DeviceTemplateOutput)" />
+  </Target>
+
+  <!-- Copy device template to SimHub on deploy -->
+  <Target Name="DeployDeviceTemplate" AfterTargets="BuildDeviceTemplate" Condition="'$(SIMHUB_PATH)' != ''">
+    <MakeDir Directories="$(SIMHUB_PATH)/DevicesDefaults/StandardDevicesTemplatesUser" />
+    <Copy SourceFiles="$(OutputPath)MozaRacingWheel.shdevicetemplate"
+          DestinationFolder="$(SIMHUB_PATH)/DevicesDefaults/StandardDevicesTemplatesUser" />
   </Target>
 
 </Project>

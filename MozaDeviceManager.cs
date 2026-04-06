@@ -12,8 +12,8 @@ namespace MozaPlugin
     {
         private readonly MozaSerialConnection _connection;
 
-        // Wheel device ID cycling
-        // ES wheels may be on ID 21 instead of 23
+        // Wheel device ID detection
+        // ES wheels may be on ID 21 instead of 23; R5 ES wheels share base ID 19
         private byte _wheelDeviceId = MozaProtocol.DeviceWheel; // starts at 23
         private bool _wheelDetected;
 
@@ -24,28 +24,45 @@ namespace MozaPlugin
             _connection = connection;
         }
 
-        // Valid wheel device IDs to try (23 → 21 → 19)
-        // ID 19 (base) is needed for ES wheels on the R5 where the wheel shares the base ID
+        // Valid wheel device IDs to try (23, 21, 19)
         private static readonly byte[] WheelIdCandidates = { 23, 21, 19 };
-        private int _wheelIdIndex;
 
         /// <summary>
-        /// Cycle the wheel device ID through candidates: 23 → 21 → 19 → 23 → ...
-        /// Called when wheel detection probes get no response.
+        /// Send detection probes for all candidate wheel IDs simultaneously.
+        /// Much faster than cycling through IDs one at a time (~2s vs ~12s worst case).
         /// </summary>
-        public void CycleWheelId()
+        public void ProbeWheelDetection()
         {
             if (_wheelDetected) return;
 
-            _wheelIdIndex = (_wheelIdIndex + 1) % WheelIdCandidates.Length;
-            _wheelDeviceId = WheelIdCandidates[_wheelIdIndex];
-            SimHub.Logging.Current.Info($"[Moza] Cycling wheel ID to {_wheelDeviceId}");
+            foreach (var id in WheelIdCandidates)
+            {
+                ReadSettingForDevice("wheel-telemetry-mode", id);
+                ReadSettingForDevice("wheel-rpm-value1", id);
+            }
         }
 
-        public void OnWheelDetected()
+        /// <summary>
+        /// Lock the wheel device ID to the one that actually responded.
+        /// Called when a wheel detection probe gets a valid response.
+        /// </summary>
+        public void LockWheelId(byte deviceId)
         {
+            if (_wheelDetected) return;
             _wheelDetected = true;
+            _wheelDeviceId = deviceId;
             SimHub.Logging.Current.Info($"[Moza] Wheel locked on device ID {_wheelDeviceId}");
+        }
+
+        public bool ReadSettingForDevice(string commandName, byte deviceId)
+        {
+            if (!_connection.IsConnected) return false;
+            var cmd = MozaCommandDatabase.Get(commandName);
+            if (cmd == null) return false;
+            var msg = cmd.BuildReadMessage(deviceId);
+            if (msg == null) return false;
+            _connection.Send(msg);
+            return true;
         }
 
         public bool ReadSetting(string commandName)

@@ -17,24 +17,9 @@ namespace MozaPlugin
         private bool _suppressEvents;
 
         // Color swatch references
-        private readonly Border[] _wheelRpmColorSwatches = new Border[10];
-        private readonly Border[] _wheelFlagColorSwatches = new Border[6];
-        private readonly Border[] _wheelButtonColorSwatches = new Border[14];
         private readonly Border[] _dashRpmColorSwatches = new Border[10];
-        private readonly Border[] _wheelBlinkColorSwatches = new Border[10];
         private readonly Border[] _dashRpmBlinkColorSwatches = new Border[10];
         private readonly Border[] _dashFlagColorSwatches = new Border[6];
-
-        // LED test animation
-        private DispatcherTimer _testTimer = null!;
-        private int _testStep;
-        private int _savedIndicatorMode = -1;
-
-        // RPM timing sliders (10 per mode) — wheel
-        private readonly Slider[] _esPercentSliders = new Slider[10];
-        private readonly TextBlock[] _esPercentLabels = new TextBlock[10];
-        private readonly Slider[] _esRpmSliders = new Slider[10];
-        private readonly TextBlock[] _esRpmLabels = new TextBlock[10];
 
         // RPM timing sliders (10 per mode) — dashboard
         private readonly Slider[] _dashPercentSliders = new Slider[10];
@@ -83,11 +68,6 @@ namespace MozaPlugin
 
         private void BuildColorSwatches()
         {
-            // New wheel colors
-            BuildSwatchRow(WheelRpmColorPanel, _wheelRpmColorSwatches, 10, "wheel-rpm-color", _data.WheelRpmColors);
-            BuildSwatchRow(WheelBlinkColorPanel, _wheelBlinkColorSwatches, 10, "wheel-rpm-blink-color", _data.WheelRpmBlinkColors);
-            BuildSwatchRow(WheelFlagColorPanel, _wheelFlagColorSwatches, 6, "wheel-flag-color", _data.WheelFlagColors);
-            BuildSwatchRow(WheelButtonColorPanel, _wheelButtonColorSwatches, 14, "wheel-button-color", _data.WheelButtonColors);
             // Dash colors
             BuildSwatchRow(DashRpmColorPanel, _dashRpmColorSwatches, 10, "dash-rpm-color", _data.DashRpmColors);
             BuildSwatchRow(DashBlinkColorPanel, _dashRpmBlinkColorSwatches, 10, "dash-rpm-blink-color", _data.DashRpmBlinkColors);
@@ -122,11 +102,6 @@ namespace MozaPlugin
 
         private void BuildTimingSliders()
         {
-            BuildTimingSliderRow(EsTimingsPercentSliders, _esPercentSliders, _esPercentLabels,
-                10, 0, 99, 1, "%", EsPercentSlider_ValueChanged);
-            BuildTimingSliderRow(EsTimingsRpmSliders, _esRpmSliders, _esRpmLabels,
-                10, _settings.WheelRpmRangeMin, _settings.WheelRpmRangeMax,
-                RpmTick(_settings.WheelRpmRangeMin, _settings.WheelRpmRangeMax), " RPM", EsRpmSlider_ValueChanged);
             BuildTimingSliderRow(DashTimingsPercentSliders, _dashPercentSliders, _dashPercentLabels,
                 10, 0, 99, 1, "%", DashPercentSlider_ValueChanged);
             BuildTimingSliderRow(DashTimingsRpmSliders, _dashRpmSliders, _dashRpmLabels,
@@ -178,79 +153,6 @@ namespace MozaPlugin
 
         private MozaPluginSettings _settings => _plugin.Settings;
 
-        private void EsPercentSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-        {
-            if (_suppressEvents) return;
-            var slider = (Slider)sender;
-            int idx = (int)slider.Tag;
-            int val = (int)Math.Round(e.NewValue);
-            _esPercentLabels[idx].Text = $"{val}%";
-
-            var timings = new byte[10];
-            for (int i = 0; i < 10; i++)
-                timings[i] = (byte)Math.Round(_esPercentSliders[i].Value);
-            _data.WheelRpmTimings[idx] = timings[idx];
-            _settings.RpmTimingsPercent[idx] = val;
-            _device.WriteArray("wheel-rpm-timings", timings);
-            _plugin.SaveSettings();
-        }
-
-        private void EsRpmSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-        {
-            if (_suppressEvents) return;
-            var slider = (Slider)sender;
-            int idx = (int)slider.Tag;
-            int val = (int)Math.Round(e.NewValue);
-            _esRpmLabels[idx].Text = $"{val} RPM";
-            _data.WheelRpmValues[idx] = val;
-            _settings.RpmTimingsRpm[idx] = val;
-            _device.WriteSetting($"wheel-rpm-value{idx + 1}", val);
-            _plugin.SaveSettings();
-        }
-
-        private void ApplyEsPercentPreset(int[] values)
-        {
-            _suppressEvents = true;
-            for (int i = 0; i < 10; i++)
-            {
-                _esPercentSliders[i].Value = values[i];
-                _esPercentLabels[i].Text = $"{values[i]}%";
-                _data.WheelRpmTimings[i] = (byte)values[i];
-                _settings.RpmTimingsPercent[i] = values[i];
-            }
-            _suppressEvents = false;
-            _device.WriteArray("wheel-rpm-timings", _data.WheelRpmTimings);
-            _plugin.SaveSettings();
-        }
-
-        private void ApplyEsRpmPreset(double[] fractions)
-        {
-            int min = _settings.WheelRpmRangeMin, max = _settings.WheelRpmRangeMax;
-            _suppressEvents = true;
-            for (int i = 0; i < 10; i++)
-            {
-                int val = min + (int)Math.Round(fractions[i] * (max - min));
-                _esRpmSliders[i].Value = val;
-                int clamped = (int)_esRpmSliders[i].Value;
-                _esRpmLabels[i].Text = $"{clamped} RPM";
-                _data.WheelRpmValues[i] = clamped;
-                _settings.RpmTimingsRpm[i] = clamped;
-            }
-            _suppressEvents = false;
-            for (int i = 0; i < 10; i++)
-                _device.WriteSetting($"wheel-rpm-value{i + 1}", _data.WheelRpmValues[i]);
-            _plugin.SaveSettings();
-        }
-
-        private void EsTimingsPreset_Linear(object s, RoutedEventArgs e) => ApplyEsPercentPreset(EsPercentPresets[0]);
-        private void EsTimingsPreset_Early(object s, RoutedEventArgs e) => ApplyEsPercentPreset(EsPercentPresets[1]);
-        private void EsTimingsPreset_Normal(object s, RoutedEventArgs e) => ApplyEsPercentPreset(EsPercentPresets[2]);
-        private void EsTimingsPreset_Late(object s, RoutedEventArgs e) => ApplyEsPercentPreset(EsPercentPresets[3]);
-
-        private void EsRpmPreset_Early(object s, RoutedEventArgs e) => ApplyEsRpmPreset(RpmPresetFractions[0]);
-        private void EsRpmPreset_Normal(object s, RoutedEventArgs e) => ApplyEsRpmPreset(RpmPresetFractions[1]);
-        private void EsRpmPreset_Late(object s, RoutedEventArgs e) => ApplyEsRpmPreset(RpmPresetFractions[2]);
-
         private class ColorSwatchInfo
         {
             public string CommandPrefix = "";
@@ -278,9 +180,7 @@ namespace MozaPlugin
                 border.Background = new SolidColorBrush(Color.FromRgb(r, g, b));
 
                 // Blink colors are write-only (can't be polled) — persist to settings
-                if (info.CommandPrefix == "wheel-rpm-blink-color")
-                    _plugin.Settings.WheelRpmBlinkColors = MozaProfile.PackColors(_data.WheelRpmBlinkColors);
-                else if (info.CommandPrefix == "dash-rpm-blink-color")
+                if (info.CommandPrefix == "dash-rpm-blink-color")
                     _plugin.Settings.DashRpmBlinkColors = MozaProfile.PackColors(_data.DashRpmBlinkColors);
 
                 _plugin.SaveSettings();
@@ -311,7 +211,6 @@ namespace MozaPlugin
             try
             {
                 RefreshBaseTab();
-                RefreshWheelTab();
                 RefreshDashTab();
                 RefreshHandbrakeTab();
                 RefreshPedalsTab();
@@ -394,84 +293,6 @@ namespace MozaPlugin
             SetSliderRaw(FfbCurveY3Slider, FfbCurveY3Value, _data.FfbCurveY3, 0, 100, "");
             SetSliderRaw(FfbCurveY4Slider, FfbCurveY4Value, _data.FfbCurveY4, 0, 100, "");
             SetSliderRaw(FfbCurveY5Slider, FfbCurveY5Value, _data.FfbCurveY5, 0, 100, "");
-        }
-
-        private void RefreshWheelTab()
-        {
-            // Show/hide panels based on detection
-            bool newWheel = _plugin.IsNewWheelDetected;
-            bool oldWheel = _plugin.IsOldWheelDetected;
-
-            bool anyWheel = newWheel || oldWheel;
-            WheelNotDetectedPanel.Visibility = anyWheel ? Visibility.Collapsed : Visibility.Visible;
-            TestLedsPanel.Visibility = anyWheel ? Visibility.Visible : Visibility.Collapsed;
-            NewWheelPanel.Visibility = newWheel ? Visibility.Visible : Visibility.Collapsed;
-            EsWheelPanel.Visibility = oldWheel ? Visibility.Visible : Visibility.Collapsed;
-            WheelTimingsPanel.Visibility = anyWheel ? Visibility.Visible : Visibility.Collapsed;
-
-            if (newWheel)
-            {
-                SetComboSafe(WheelTelemetryModeCombo, _data.WheelTelemetryMode);
-                SetComboSafe(WheelIdleEffectCombo, _data.WheelTelemetryIdleEffect);
-                SetComboSafe(WheelButtonIdleEffectCombo, _data.WheelButtonsIdleEffect);
-                SetComboSafe(PaddlesModeCombo, _data.WheelPaddlesMode);
-                ClutchPointPanel.Visibility = _data.WheelPaddlesMode == 2 ? Visibility.Visible : Visibility.Collapsed;
-                ClutchPointSlider.Value = Clamp(_data.WheelClutchPoint, 0, 100);
-                ClutchPointValue.Text = $"{_data.WheelClutchPoint}%";
-                SetComboSafe(KnobModeCombo, _data.WheelKnobMode);
-                StickModeCheck.IsChecked = _data.WheelStickMode != 0; // stick-mode: 0=buttons, non-zero=dpad
-
-                WheelRpmBrightnessSlider.Value = Clamp(_data.WheelRpmBrightness, 0, 100);
-                WheelRpmBrightnessValue.Text = $"{_data.WheelRpmBrightness}";
-                WheelButtonsBrightnessSlider.Value = Clamp(_data.WheelButtonsBrightness, 0, 100);
-                WheelButtonsBrightnessValue.Text = $"{_data.WheelButtonsBrightness}";
-                WheelFlagsBrightnessSlider.Value = Clamp(_data.WheelFlagsBrightness, 0, 100);
-                WheelFlagsBrightnessValue.Text = $"{_data.WheelFlagsBrightness}";
-
-                WheelRpmIntervalSlider.Value = Clamp(_data.WheelRpmInterval, 0, 1000);
-                WheelRpmIntervalValue.Text = $"{_data.WheelRpmInterval} ms";
-
-                UpdateSwatches(_wheelRpmColorSwatches, _data.WheelRpmColors, 10);
-                UpdateSwatches(_wheelBlinkColorSwatches, _data.WheelRpmBlinkColors, 10);
-                UpdateSwatches(_wheelFlagColorSwatches, _data.WheelFlagColors, 6);
-                UpdateSwatches(_wheelButtonColorSwatches, _data.WheelButtonColors, 14);
-                SetComboSafe(ButtonTelemetryModeCombo, _plugin.Settings.ButtonTelemetryMode);
-            }
-
-            if (oldWheel)
-            {
-                SetComboSafe(EsRpmIndicatorCombo, _data.WheelRpmIndicatorMode);
-                SetComboSafe(EsRpmDisplayCombo, _data.WheelRpmDisplayMode);
-
-                EsRpmBrightnessSlider.Value = Clamp(_data.WheelESRpmBrightness, 0, 15);
-                EsRpmBrightnessValue.Text = $"{_data.WheelESRpmBrightness}";
-            }
-
-            // Shared timing section (both wheel types)
-            if (anyWheel)
-            {
-                SetComboSafe(EsRpmModeCombo, _data.WheelRpmMode);
-
-                EsTimingsSimHubPanel.Visibility = _data.WheelRpmMode == 2 ? Visibility.Visible : Visibility.Collapsed;
-                EsTimingsPercentPanel.Visibility = _data.WheelRpmMode == 0 ? Visibility.Visible : Visibility.Collapsed;
-                EsTimingsRpmPanel.Visibility = _data.WheelRpmMode == 1 ? Visibility.Visible : Visibility.Collapsed;
-
-                for (int i = 0; i < 10; i++)
-                {
-                    _esPercentSliders[i].Value = Clamp(_data.WheelRpmTimings[i], 0, 99);
-                    _esPercentLabels[i].Text = $"{_data.WheelRpmTimings[i]}%";
-                    _esRpmSliders[i].Value = Clamp(_data.WheelRpmValues[i], _settings.WheelRpmRangeMin, _settings.WheelRpmRangeMax);
-                    _esRpmLabels[i].Text = $"{_data.WheelRpmValues[i]} RPM";
-                }
-
-                EsRpmRangeMinSlider.Value = Clamp(_settings.WheelRpmRangeMin, 500, 20000);
-                EsRpmRangeMinValue.Text = $"{_settings.WheelRpmRangeMin} RPM";
-                EsRpmRangeMaxSlider.Value = Clamp(_settings.WheelRpmRangeMax, 500, 20000);
-                EsRpmRangeMaxValue.Text = $"{_settings.WheelRpmRangeMax} RPM";
-
-                EsRpmIntervalSlider.Value = Clamp(_data.WheelRpmInterval, 0, 1000);
-                EsRpmIntervalValue.Text = $"{_data.WheelRpmInterval} ms";
-            }
         }
 
         private void RefreshDashTab()
@@ -751,149 +572,6 @@ namespace MozaPlugin
             _plugin.SaveSettings();
         }
 
-        // ===== Wheel tab handlers =====
-
-        private void WheelTelemetryModeCombo_Changed(object sender, SelectionChangedEventArgs e)
-        {
-            if (_suppressEvents) return;
-            int val = WheelTelemetryModeCombo.SelectedIndex;
-            _data.WheelTelemetryMode = val;
-            _settings.WheelTelemetryMode = val;
-            _device.WriteSetting("wheel-telemetry-mode", val);
-            _plugin.SaveSettings();
-        }
-
-        private void WheelIdleEffectCombo_Changed(object sender, SelectionChangedEventArgs e)
-        {
-            if (_suppressEvents) return;
-            int val = WheelIdleEffectCombo.SelectedIndex;
-            _data.WheelTelemetryIdleEffect = val;
-            _settings.WheelIdleEffect = val;
-            _device.WriteSetting("wheel-telemetry-idle-effect", val);
-            _plugin.SaveSettings();
-        }
-
-        private void WheelButtonIdleEffectCombo_Changed(object sender, SelectionChangedEventArgs e)
-        {
-            if (_suppressEvents) return;
-            int val = WheelButtonIdleEffectCombo.SelectedIndex;
-            _data.WheelButtonsIdleEffect = val;
-            _settings.WheelButtonsIdleEffect = val;
-            _device.WriteSetting("wheel-buttons-idle-effect", val);
-            _plugin.SaveSettings();
-        }
-
-        private void ButtonTelemetryModeCombo_Changed(object sender, SelectionChangedEventArgs e)
-        {
-            if (_suppressEvents) return;
-            int val = ButtonTelemetryModeCombo.SelectedIndex;
-            _plugin.Settings.ButtonTelemetryMode = val;
-            _plugin.SaveSettings();
-        }
-
-        private void WheelRpmBrightnessSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-        {
-            if (_suppressEvents) return;
-            int val = (int)Math.Round(e.NewValue);
-            WheelRpmBrightnessValue.Text = $"{val}";
-            _data.WheelRpmBrightness = val;
-            _settings.WheelRpmBrightness = val;
-            _device.WriteSetting("wheel-rpm-brightness", val);
-            _plugin.SaveSettings();
-        }
-
-        private void WheelButtonsBrightnessSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-        {
-            if (_suppressEvents) return;
-            int val = (int)Math.Round(e.NewValue);
-            WheelButtonsBrightnessValue.Text = $"{val}";
-            _data.WheelButtonsBrightness = val;
-            _settings.WheelButtonsBrightness = val;
-            _device.WriteSetting("wheel-buttons-brightness", val);
-            _plugin.SaveSettings();
-        }
-
-        private void WheelFlagsBrightnessSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-        {
-            if (_suppressEvents) return;
-            int val = (int)Math.Round(e.NewValue);
-            WheelFlagsBrightnessValue.Text = $"{val}";
-            _data.WheelFlagsBrightness = val;
-            _settings.WheelFlagsBrightness = val;
-            _device.WriteSetting("wheel-flags-brightness", val);
-            _plugin.SaveSettings();
-        }
-
-        private void WheelRpmIntervalSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-        {
-            if (_suppressEvents) return;
-            int val = (int)Math.Round(e.NewValue);
-            WheelRpmIntervalValue.Text = $"{val} ms";
-            _data.WheelRpmInterval = val;
-            _device.WriteSetting("wheel-rpm-interval", val);
-            _plugin.SaveSettings();
-        }
-
-        // ===== ES Wheel handlers =====
-
-        private void EsRpmIndicatorCombo_Changed(object sender, SelectionChangedEventArgs e)
-        {
-            if (_suppressEvents) return;
-            int display = EsRpmIndicatorCombo.SelectedIndex;
-            // ES wheel uses +1 expression: display 0 -> raw 1, display 1 -> raw 2, etc.
-            int raw = display + 1;
-            _data.WheelRpmIndicatorMode = display;
-            _settings.WheelRpmIndicatorMode = display;
-            _device.WriteSetting("wheel-rpm-indicator-mode", raw);
-            _plugin.SaveSettings();
-        }
-
-        private void EsRpmDisplayCombo_Changed(object sender, SelectionChangedEventArgs e)
-        {
-            if (_suppressEvents) return;
-            int val = EsRpmDisplayCombo.SelectedIndex;
-            _data.WheelRpmDisplayMode = val;
-            _settings.WheelRpmDisplayMode = val;
-            _device.WriteSetting("wheel-set-rpm-display-mode", val);
-            _plugin.SaveSettings();
-        }
-
-        private void EsRpmModeCombo_Changed(object sender, SelectionChangedEventArgs e)
-        {
-            if (_suppressEvents) return;
-            int val = EsRpmModeCombo.SelectedIndex;
-            _data.WheelRpmMode = val;
-            _settings.RpmMode = val;
-            EsTimingsSimHubPanel.Visibility = val == 2 ? Visibility.Visible : Visibility.Collapsed;
-            EsTimingsPercentPanel.Visibility = val == 0 ? Visibility.Visible : Visibility.Collapsed;
-            EsTimingsRpmPanel.Visibility = val == 1 ? Visibility.Visible : Visibility.Collapsed;
-            if (val < 2)
-                _device.WriteSetting("wheel-rpm-mode", val);
-            _plugin.SaveSettings();
-        }
-
-        private void EsRpmBrightnessSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-        {
-            if (_suppressEvents) return;
-            int val = (int)Math.Round(e.NewValue);
-            EsRpmBrightnessValue.Text = $"{val}";
-            _data.WheelESRpmBrightness = val;
-            _settings.WheelESRpmBrightness = val;
-            _device.WriteSetting("wheel-old-rpm-brightness", val);
-            _plugin.SaveSettings();
-        }
-
-        private void EsRpmIntervalSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-        {
-            if (_suppressEvents) return;
-            int val = (int)Math.Round(e.NewValue);
-            EsRpmIntervalValue.Text = $"{val} ms";
-            _data.WheelRpmInterval = val;
-            _settings.RpmBlinkInterval = val;
-            _device.WriteSetting("wheel-rpm-interval", val);
-            _plugin.SaveSettings();
-        }
-
         // ===== RPM range slider handlers =====
 
         private void RebuildRpmSliders(StackPanel panel, Slider[] sliders, TextBlock[] labels,
@@ -911,52 +589,6 @@ namespace MozaPlugin
                 labels[i].Text = $"{clamped} RPM";
             }
             _suppressEvents = false;
-        }
-
-        private void EsRpmRangeMinSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-        {
-            if (_suppressEvents) return;
-            int val = (int)Math.Round(e.NewValue);
-            if (val > _settings.WheelRpmRangeMax)
-            {
-                val = _settings.WheelRpmRangeMax;
-                _suppressEvents = true; EsRpmRangeMinSlider.Value = val; _suppressEvents = false;
-            }
-            EsRpmRangeMinValue.Text = $"{val} RPM";
-            _settings.WheelRpmRangeMin = val;
-            RebuildRpmSliders(EsTimingsRpmSliders, _esRpmSliders, _esRpmLabels,
-                val, _settings.WheelRpmRangeMax, _settings.RpmTimingsRpm, EsRpmSlider_ValueChanged);
-            for (int i = 0; i < 10; i++)
-            {
-                int clamped = (int)_esRpmSliders[i].Value;
-                _settings.RpmTimingsRpm[i] = clamped;
-                _data.WheelRpmValues[i] = clamped;
-                _device.WriteSetting($"wheel-rpm-value{i + 1}", clamped);
-            }
-            _plugin.SaveSettings();
-        }
-
-        private void EsRpmRangeMaxSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-        {
-            if (_suppressEvents) return;
-            int val = (int)Math.Round(e.NewValue);
-            if (val < _settings.WheelRpmRangeMin)
-            {
-                val = _settings.WheelRpmRangeMin;
-                _suppressEvents = true; EsRpmRangeMaxSlider.Value = val; _suppressEvents = false;
-            }
-            EsRpmRangeMaxValue.Text = $"{val} RPM";
-            _settings.WheelRpmRangeMax = val;
-            RebuildRpmSliders(EsTimingsRpmSliders, _esRpmSliders, _esRpmLabels,
-                _settings.WheelRpmRangeMin, val, _settings.RpmTimingsRpm, EsRpmSlider_ValueChanged);
-            for (int i = 0; i < 10; i++)
-            {
-                int clamped = (int)_esRpmSliders[i].Value;
-                _settings.RpmTimingsRpm[i] = clamped;
-                _data.WheelRpmValues[i] = clamped;
-                _device.WriteSetting($"wheel-rpm-value{i + 1}", clamped);
-            }
-            _plugin.SaveSettings();
         }
 
         private void DashRpmRangeMinSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -1214,88 +846,6 @@ namespace MozaPlugin
             _plugin.SaveSettings();
         }
 
-        // ===== Test LEDs =====
-
-        // Pattern: light each LED 1-10 individually, then all on, then all off
-        private static readonly int[] TestPattern =
-        {
-            0x001, 0x002, 0x004, 0x008, 0x010,
-            0x020, 0x040, 0x080, 0x100, 0x200,
-            0x3FF, 0x000
-        };
-
-        private void TestLedsButton_Click(object sender, RoutedEventArgs e)
-        {
-            if (_testTimer != null) return; // already running
-
-            _testStep = 0;
-            TestLedsButton.IsEnabled = false;
-            TestLedsButton.Content = "Testing...";
-            TestLedsStatus.Text = "";
-
-            // Switch wheel into RPM/telemetry mode so bitmask commands are accepted
-            if (_plugin.IsOldWheelDetected)
-            {
-                _savedIndicatorMode = _data.WheelRpmIndicatorMode;
-                // ES: raw 1 = RPM mode (display index 0)
-                _device.WriteSetting("wheel-rpm-indicator-mode", 1);
-            }
-            else if (_plugin.IsNewWheelDetected)
-            {
-                _savedIndicatorMode = _data.WheelTelemetryMode;
-                // New wheel: 1 = Telemetry mode
-                _device.WriteSetting("wheel-telemetry-mode", 1);
-            }
-
-            // Wake up LEDs (ES wheels ignore telemetry until they see a non-zero bitmask)
-            _plugin.Sender.SendTestBitmask(0x3FF);
-            _plugin.Sender.SendTestBitmask(0x000);
-
-            _testTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(150) };
-            _testTimer.Tick += TestLedsTick;
-            _testTimer.Start();
-
-            // Send the first step immediately
-            _plugin.Sender.SendTestBitmask(TestPattern[0]);
-            TestLedsStatus.Text = "LED 1";
-            _testStep = 1;
-        }
-
-        private void TestLedsTick(object sender, EventArgs e)
-        {
-            if (_testStep >= TestPattern.Length)
-            {
-                _testTimer.Stop();
-                _testTimer = null!;
-
-                // Restore original indicator mode
-                if (_savedIndicatorMode >= 0)
-                {
-                    if (_plugin.IsOldWheelDetected)
-                        _device.WriteSetting("wheel-rpm-indicator-mode", _savedIndicatorMode + 1); // +1: display→raw
-                    else if (_plugin.IsNewWheelDetected)
-                        _device.WriteSetting("wheel-telemetry-mode", _savedIndicatorMode);
-                    _savedIndicatorMode = -1;
-                }
-
-                TestLedsButton.IsEnabled = true;
-                TestLedsButton.Content = "Test LEDs";
-                TestLedsStatus.Text = "";
-                return;
-            }
-
-            _plugin.Sender.SendTestBitmask(TestPattern[_testStep]);
-
-            if (_testStep < 10)
-                TestLedsStatus.Text = $"LED {_testStep + 1}";
-            else if (_testStep == 10)
-                TestLedsStatus.Text = "All on";
-            else
-                TestLedsStatus.Text = "";
-
-            _testStep++;
-        }
-
         // ===== Connection toggle =====
 
         private void ConnectionToggle_Changed(object sender, RoutedEventArgs e)
@@ -1424,46 +974,6 @@ namespace MozaPlugin
             var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
             timer.Tick += (s, _) => { BaseCalibrateStatus.Text = ""; ((DispatcherTimer)s!).Stop(); };
             timer.Start();
-        }
-
-        // ===== Wheel Paddle Settings =====
-
-        private void PaddlesModeCombo_Changed(object sender, SelectionChangedEventArgs e)
-        {
-            if (_suppressEvents) return;
-            int val = PaddlesModeCombo.SelectedIndex;
-            _data.WheelPaddlesMode = val;
-            ClutchPointPanel.Visibility = val == 2 ? Visibility.Visible : Visibility.Collapsed;
-            _device.WriteSetting("wheel-paddles-mode", val);
-            _plugin.SaveSettings();
-        }
-
-        private void ClutchPointSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-        {
-            if (_suppressEvents) return;
-            int val = (int)Math.Round(e.NewValue);
-            ClutchPointValue.Text = $"{val}%";
-            _data.WheelClutchPoint = val;
-            _device.WriteSetting("wheel-clutch-point", val);
-            _plugin.SaveSettings();
-        }
-
-        private void KnobModeCombo_Changed(object sender, SelectionChangedEventArgs e)
-        {
-            if (_suppressEvents) return;
-            int val = KnobModeCombo.SelectedIndex;
-            _data.WheelKnobMode = val;
-            _device.WriteSetting("wheel-knob-mode", val);
-            _plugin.SaveSettings();
-        }
-
-        private void StickModeCheck_Click(object sender, RoutedEventArgs e)
-        {
-            if (_suppressEvents) return;
-            int val = StickModeCheck.IsChecked == true ? 1 : 0;
-            _data.WheelStickMode = val;
-            _device.WriteSetting("wheel-stick-mode", val);
-            _plugin.SaveSettings();
         }
 
         // ===== Handbrake Range + Curve + Calibration =====

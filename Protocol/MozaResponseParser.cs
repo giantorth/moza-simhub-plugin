@@ -7,6 +7,7 @@ namespace MozaPlugin.Protocol
         public string Name;
         public int IntValue;
         public byte[] ArrayValue;
+        public byte DeviceId;
     }
 
     /// <summary>
@@ -79,7 +80,7 @@ namespace MozaPlugin.Protocol
                 var valueData = new byte[payload.Length - cmd.CommandId.Length];
                 Array.Copy(payload, cmd.CommandId.Length, valueData, 0, valueData.Length);
 
-                var result = new ParsedResponse { Name = kvp.Key };
+                var result = new ParsedResponse { Name = kvp.Key, DeviceId = deviceId };
 
                 if (cmd.PayloadType == "array")
                 {

@@ -1,0 +1,154 @@
+<UserControl x:Class="MozaPlugin.Devices.MozaWheelSettingsControl"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Padding="10">
+    <UserControl.Resources>
+        <Style x:Key="SectionHeader" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="16"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Margin" Value="0,20,0,8"/>
+        </Style>
+        <Style x:Key="SliderLabel" TargetType="TextBlock">
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Width" Value="180"/>
+        </Style>
+        <Style x:Key="SliderValue" TargetType="TextBlock">
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Width" Value="60"/>
+            <Setter Property="TextAlignment" Value="Right"/>
+            <Setter Property="Margin" Value="8,0,0,0"/>
+            <Setter Property="FontFamily" Value="Consolas"/>
+        </Style>
+        <Style x:Key="SettingSlider" TargetType="Slider">
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Width" Value="300"/>
+            <Setter Property="IsSnapToTickEnabled" Value="True"/>
+        </Style>
+        <Style x:Key="LedIndex" TargetType="TextBlock">
+            <Setter Property="Width" Value="28"/>
+            <Setter Property="TextAlignment" Value="Center"/>
+            <Setter Property="Foreground" Value="Gray"/>
+            <Setter Property="FontSize" Value="10"/>
+            <Setter Property="Margin" Value="2,0"/>
+        </Style>
+    </UserControl.Resources>
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="5">
+            <TextBlock Text="MOZA Wheel" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,12"/>
+
+            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                <Ellipse x:Name="StatusDot" Width="12" Height="12" Margin="0,0,8,0"/>
+                <TextBlock x:Name="StatusText" VerticalAlignment="Center" FontSize="14"/>
+            </StackPanel>
+
+            <TextBlock x:Name="WheelTypeText" Margin="0,4,0,8" Foreground="Gray"/>
+
+            <!-- Detection status -->
+            <StackPanel x:Name="WheelNotDetectedPanel">
+                <TextBlock Text="Searching for wheel..." Foreground="Gray" FontStyle="Italic" Margin="0,10"/>
+            </StackPanel>
+
+            <!-- ===== NEW WHEEL (GS/FSR/CS/RS/TSW) ===== -->
+            <StackPanel x:Name="NewWheelPanel" Visibility="Collapsed">
+                <TextBlock Text="Wheel (New Protocol)" FontSize="14" FontWeight="SemiBold" Foreground="CornflowerBlue" Margin="0,0,0,5"/>
+
+                <TextBlock Text="Telemetry Mode" Style="{StaticResource SectionHeader}"/>
+                <StackPanel Orientation="Horizontal" Margin="0,4">
+                    <TextBlock Text="Mode" Style="{StaticResource SliderLabel}"/>
+                    <ComboBox x:Name="WheelTelemetryModeCombo" Width="140" SelectionChanged="WheelTelemetryModeCombo_Changed">
+                        <ComboBoxItem Content="Off"/>
+                        <ComboBoxItem Content="SimHub Mode"/>
+                        <ComboBoxItem Content="Static"/>
+                    </ComboBox>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Margin="0,4">
+                    <TextBlock Text="Idle Effect" Style="{StaticResource SliderLabel}"/>
+                    <ComboBox x:Name="WheelIdleEffectCombo" Width="140" SelectionChanged="WheelIdleEffectCombo_Changed">
+                        <ComboBoxItem Content="Off"/>
+                        <ComboBoxItem Content="Constant"/>
+                        <ComboBoxItem Content="Breathing"/>
+                        <ComboBoxItem Content="Color Cycle"/>
+                        <ComboBoxItem Content="Rainbow"/>
+                        <ComboBoxItem Content="Sand Flow"/>
+                    </ComboBox>
+                </StackPanel>
+
+                <TextBlock Text="Flag LED Colors" Style="{StaticResource SectionHeader}"/>
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
+                    <TextBlock Style="{StaticResource LedIndex}" Text="1"/><TextBlock Style="{StaticResource LedIndex}" Text="2"/>
+                    <TextBlock Style="{StaticResource LedIndex}" Text="3"/><TextBlock Style="{StaticResource LedIndex}" Text="4"/>
+                    <TextBlock Style="{StaticResource LedIndex}" Text="5"/><TextBlock Style="{StaticResource LedIndex}" Text="6"/>
+                </StackPanel>
+                <StackPanel x:Name="WheelFlagColorPanel" Orientation="Horizontal" Margin="0,0,0,10"/>
+                <StackPanel Orientation="Horizontal" Margin="0,4">
+                    <TextBlock Text="Flags Brightness" Style="{StaticResource SliderLabel}"/>
+                    <Slider x:Name="WheelFlagsBrightnessSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="WheelFlagsBrightnessSlider_ValueChanged"/>
+                    <TextBlock x:Name="WheelFlagsBrightnessValue" Style="{StaticResource SliderValue}" Text="100"/>
+                </StackPanel>
+
+                <TextBlock Text="Button LED Colors" Style="{StaticResource SectionHeader}"/>
+                <StackPanel x:Name="WheelButtonColorPanel" Orientation="Horizontal" Margin="0,0,0,10"/>
+                <StackPanel Orientation="Horizontal" Margin="0,4">
+                    <TextBlock Text="Button Idle Effect" Style="{StaticResource SliderLabel}"/>
+                    <ComboBox x:Name="WheelButtonIdleEffectCombo" Width="140" SelectionChanged="WheelButtonIdleEffectCombo_Changed">
+                        <ComboBoxItem Content="Off"/><ComboBoxItem Content="Constant"/>
+                        <ComboBoxItem Content="Breathing"/><ComboBoxItem Content="Color Cycle"/>
+                        <ComboBoxItem Content="Rainbow"/><ComboBoxItem Content="Sand Flow"/>
+                    </ComboBox>
+                </StackPanel>
+
+                <TextBlock Text="Paddle Settings" Style="{StaticResource SectionHeader}"/>
+                <StackPanel Orientation="Horizontal" Margin="0,4">
+                    <TextBlock Text="Paddles Mode" Style="{StaticResource SliderLabel}"/>
+                    <ComboBox x:Name="PaddlesModeCombo" Width="140" SelectionChanged="PaddlesModeCombo_Changed">
+                        <ComboBoxItem Content="Buttons"/>
+                        <ComboBoxItem Content="Combined"/>
+                        <ComboBoxItem Content="Split"/>
+                    </ComboBox>
+                </StackPanel>
+                <StackPanel x:Name="ClutchPointPanel" Orientation="Horizontal" Margin="0,4" Visibility="Collapsed">
+                    <TextBlock Text="Clutch Split Point" Style="{StaticResource SliderLabel}"/>
+                    <Slider x:Name="ClutchPointSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="ClutchPointSlider_ValueChanged"/>
+                    <TextBlock x:Name="ClutchPointValue" Style="{StaticResource SliderValue}" Text="50%"/>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Margin="0,4">
+                    <TextBlock Text="Knob Mode" Style="{StaticResource SliderLabel}"/>
+                    <ComboBox x:Name="KnobModeCombo" Width="140" SelectionChanged="KnobModeCombo_Changed">
+                        <ComboBoxItem Content="Mode 0"/>
+                        <ComboBoxItem Content="Mode 1"/>
+                        <ComboBoxItem Content="Mode 2"/>
+                        <ComboBoxItem Content="Mode 3"/>
+                    </ComboBox>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Margin="0,8">
+                    <TextBlock Text="Stick as D-Pad" Style="{StaticResource SliderLabel}"/>
+                    <CheckBox x:Name="StickModeCheck" VerticalAlignment="Center" Click="StickModeCheck_Click"/>
+                </StackPanel>
+            </StackPanel>
+
+            <!-- ===== ES WHEEL (Old Protocol) ===== -->
+            <StackPanel x:Name="EsWheelPanel" Visibility="Collapsed">
+                <TextBlock Text="ES Wheel" FontSize="14" FontWeight="SemiBold" Foreground="CornflowerBlue" Margin="0,0,0,5"/>
+
+                <TextBlock Text="RPM Indicator" Style="{StaticResource SectionHeader}"/>
+                <StackPanel Orientation="Horizontal" Margin="0,4">
+                    <TextBlock Text="Indicator Mode" Style="{StaticResource SliderLabel}"/>
+                    <ComboBox x:Name="EsRpmIndicatorCombo" Width="140" SelectionChanged="EsRpmIndicatorCombo_Changed">
+                        <ComboBoxItem Content="SimHub Mode"/>
+                        <ComboBoxItem Content="Always On"/>
+                        <ComboBoxItem Content="Off"/>
+                    </ComboBox>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Margin="0,4">
+                    <TextBlock Text="Display Mode" Style="{StaticResource SliderLabel}"/>
+                    <ComboBox x:Name="EsRpmDisplayCombo" Width="140" SelectionChanged="EsRpmDisplayCombo_Changed">
+                        <ComboBoxItem Content="Mode 1"/>
+                        <ComboBoxItem Content="Mode 2"/>
+                    </ComboBox>
+                </StackPanel>
+            </StackPanel>
+
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

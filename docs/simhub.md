@@ -194,11 +194,390 @@ Check `data.GameRunning` and `data.NewData != null` before accessing.
 
 ## PluginManager Properties
 
-Plugins can read SimHub-wide properties via `pluginManager.GetPropertyValue("name")`. These are available at startup (no game required).
+Plugins can read SimHub-wide properties via `pluginManager.GetPropertyValue("name")`. Returns `object`; cast or convert as needed. Available at startup unless noted.
 
 | Property | Type | Description |
 |----------|------|-------------|
 | `DataCorePlugin.GameData.TemperatureUnit` | `string` | Global temperature unit preference (`"Celsius"` or `"Fahrenheit"`), configured at first launch |
+| `DataCorePlugin.GameData.CarSettings_RPMShiftLight1` | `double` | Shift light zone 1 progress (0.0–1.0). Game-dependent; requires active session. |
+| `DataCorePlugin.GameData.CarSettings_RPMShiftLight2` | `double` | Shift light zone 2 progress (0.0–1.0). Game-dependent; requires active session. |
+| `DataCorePlugin.GameData.CarSettings_RPMRedLineReached` | `int` | Nonzero when RPM is at/above redline. Game-dependent; requires active session. |
+
+Note: `ShiftLight1`/`ShiftLight2` are progress values within their respective shift zones (not absolute RPM). They map to the three-zone LED pattern common on steering wheels (e.g. 3 green + 4 red + 3 blue). `RedLineReached` triggers blink behavior.
+
+## Device Extension System
+
+SimHub has a device definition and extension system for hardware devices (LED controllers, button boxes, displays). Plugins can register device extensions that add tabs and behavior to devices in SimHub's "Devices" section.
+
+### Device Templates (`.shdevicetemplate`)
+
+A `.shdevicetemplate` is a ZIP file containing three files that registers a device type with SimHub:
+
+- **`device.json`** — Device metadata and USB detection
+- **`defaults.json`** — Default device settings
+- **`picture.png`** — Device thumbnail
+
+Templates are placed in `DevicesDefaults/StandardDevicesTemplatesUser/` (survives SimHub updates).
+
+**`device.json` schema:**
+```json
+{
+  "Brand": "Manufacturer Name",
+  "Name": "Device Model",
+  "DetectionDescriptor": {
+    "IsValid": true,
+    "iVID": 13422,
+    "iPID": 4,
+    "IgnoreForArduino": true
+  },
+  "StandardDeviceId": "UniqueDeviceId",
+  "InheritedFrom": "D8415EF5-1052-451F-916F-B286531AD0FE",
+  "IsDeprecated": false,
+  "MaximumInstances": 1,
+  "MinimumSimHubVersion": "9.5.0",
+  "TemplateVersion": 1
+}
+```
+
+Key fields:
+- `iVID`/`iPID` — USB Vendor/Product ID in **decimal**. `iPID: 0` causes SimHub to mark `IsValid: false`, disabling auto-detection.
+- `InheritedFrom` — **Required.** UUID of a base device type. Without it, device creation fails with NullReferenceException. Known base types:
+  - `D8415EF5-1052-451F-916F-B286531AD0FE` — Simple LED device (MLD, Delta SL-20)
+  - `4D631FFA-B696-4F4A-BF7C-A1F35621529D` — Dashboard/DDU device
+  - `EC6EA501-35F4-4009-9E46-B46A79A04CC1` — Wheel/pedal device
+- `StandardDeviceId` — String identifier used as `DeviceTypeID`. At runtime, may be suffixed with `_UserProject` or `_Embedded`.
+
+**`defaults.json` schema:**
+```json
+{
+  "InstanceId": null,
+  "DeviceTypeID": "UniqueDeviceId",
+  "Settings": {
+    "LEDS": {
+      "ledModuleSettings": {
+        "VID": 13422,
+        "PID": 4,
+        "Ledcount": 10,
+        "ButtonsCount": 0,
+        "IsEnabled": true,
+        "_LEDsBrightness": 100.0
+      }
+    }
+  }
+}
+```
+
+`DeviceTypeID` must match `StandardDeviceId` from `device.json`.
+
+SimHub caches template metadata in `PluginsData/DevicesDesccriptorCache.json`. Delete the cache entry to force re-read after template changes.
+
+### IDeviceExtensionFilter
+
+Tells SimHub which `DeviceExtension` to attach to which device type. SimHub discovers implementations via assembly scanning.
+
+```csharp
+using SimHub.Plugins.Devices;
+using SimHub.Plugins.Devices.DeviceExtensions;
+
+public class MyExtensionFilter : IDeviceExtensionFilter
+{
+    public IEnumerable<Type> GetExtensionsTypes(DeviceInstance device)
+    {
+        // DeviceTypeID may be suffixed at runtime (_UserProject, _Embedded)
+        var typeId = device.DeviceDescriptor.DeviceTypeID ?? "";
+        if (typeId == "MyDeviceId" || typeId.StartsWith("MyDeviceId_"))
+            yield return typeof(MyDeviceExtension);
+    }
+}
+```
+
+### DeviceExtension
+
+Abstract base class for adding a settings tab and behavior to a device.
+
+```csharp
+using SimHub.Plugins.Devices.DeviceExtensions;
+
+internal class MyDeviceExtension : DeviceExtension
+{
+    // Tab title in the device's settings panel
+    public override string ExtentionTabTitle => "My Tab";
+
+    // Called when device is created or after game change
+    public override void Init(PluginManager pluginManager) { }
+
+    // Called on app exit or device deletion
+    public override void End(PluginManager pluginManager) { }
+
+    // Called every game loop
+    public override void DataUpdate(PluginManager pluginManager, ref GameData data) { }
+
+    // Called when no saved profile exists
+    public override void LoadDefaultSettings() { }
+
+    // Called to reload a saved device profile (game change, user action)
+    public override void SetSettings(JToken settings, bool isDefault) { }
+
+    // Called to export current settings for profile save
+    public override JToken GetSettings() { return JToken.FromObject(settings); }
+
+    // WPF control for the extension tab
+    public override Control CreateSettingControl() { return new MyControl(); }
+
+    // Actions available for button mapping
+    public override IEnumerable<DynamicButtonAction> GetDynamicButtonActions() { yield break; }
+
+    // The device this extension is attached to
+    // DeviceInstance LinkedDevice { get; }
+}
+```
+
+`SetSettings()`/`GetSettings()` are the per-game profile mechanism — SimHub calls `SetSettings()` on game change with the saved profile's JSON, and `GetSettings()` when saving.
+
+### Accessing the LED Effects Engine
+
+SimHub computes LED colors per-frame based on user-configured effects (RPM indicators, flags, speed limiter animations, etc.). For devices with proprietary protocols, the extension can read these computed colors and forward them.
+
+**Architecture:**
+```
+Device Instance
+  └── LedModuleDevice (sub-device, inherits from CompositableDeviceInstance)
+        └── LedModuleSettings
+              ├── RGBLedsDriver (effects engine)
+              │     └── GetResult() → Color[]
+              └── DeviceDriver (USB/HID connection — may be disconnected)
+```
+
+**Key classes:**
+
+| Class | Namespace | Description |
+|-------|-----------|-------------|
+| `LedModuleDevice` | `SimHub.Plugins.OutputPlugins.GraphicalDash.LedModules` | Sub-device handling LEDs. Has `ledModuleSettings` field. |
+| `LedModuleSettings` | Same namespace | Abstract class with `LedsDriver` property and `Display()` method. |
+| `RGBLedsDriver` | `SimHub.Plugins.DataPlugins.RGBDriver` | Effects engine. `GetResult()` returns `System.Drawing.Color[]`. |
+| `LedResult` | `SimHub.Plugins.DataPlugins.RGBDriver` | Sparse LED state: `Dictionary<int, Color>` indexed by position. Has `ToArray()`. |
+
+**Accessing from a DeviceExtension:**
+
+```csharp
+using SimHub.Plugins.DataPlugins.RGBDriver;
+using SimHub.Plugins.OutputPlugins.GraphicalDash.LedModules;
+
+private RGBLedsDriver _ledsDriver;
+
+public override void Init(PluginManager pluginManager)
+{
+    foreach (var instance in LinkedDevice.GetInstances())
+    {
+        if (instance is LedModuleDevice lmd)
+        {
+            _ledsDriver = lmd.ledModuleSettings?.LedsDriver;
+            break;
+        }
+    }
+}
+
+public override void DataUpdate(PluginManager pluginManager, ref GameData data)
+{
+    Color[] colors = _ledsDriver?.GetResult();
+    if (colors != null)
+    {
+        // Forward colors[0..N] to your device's proprietary protocol
+    }
+}
+```
+
+`GetResult()` applies brightness and returns the final `Color[]` array.
+
+**Problem:** SimHub's effects UI is gated on the LED driver being "connected." If the built-in driver can't connect to the hardware (shows "searching device..."), the effects configuration is disabled. Polling `GetResult()` directly works but users can't configure effects. The solution is to inject a virtual `ILedDeviceManager`.
+
+### ILedDeviceManager (Virtual Driver Injection)
+
+SimHub's LED pipeline flows through `ILedDeviceManager` on `LedModuleSettings.DeviceDriver`. By replacing this with a custom implementation, you can:
+1. Report as always-connected (enabling effects UI)
+2. Receive computed LED colors directly in `Display()`
+3. Forward them to proprietary hardware
+
+**Interface** (namespace `SimHub.Plugins.OutputPlugins.GraphicalDash.PSE`, assembly `SimHub.Plugins.dll`):
+
+```csharp
+public interface ILedDeviceManager
+{
+    LedModuleSettings LedModuleSettings { get; set; }
+    LedDeviceState LastState { get; }
+
+    event EventHandler BeforeDisplay;
+    event EventHandler AfterDisplay;
+    event EventHandler OnConnect;
+    event EventHandler OnError;
+    event EventHandler OnDisconnect;
+
+    void Display(Func<Color[]> leds, Func<Color[]> buttons, Func<Color[]> encoders,
+                 Func<Color[]> matrix, Func<Color[]> rawState, bool forceRefresh,
+                 Func<object> extraData = null,
+                 double rpmBrightness = 1.0, double buttonsBrightness = 1.0,
+                 double encodersBrightness = 1.0, double matrixBrightness = 1.0);
+
+    bool IsConnected();
+    string GetSerialNumber();
+    string GetFirmwareVersion();
+    object GetDriverInstance();
+    void Close();
+    void ResetDetection();
+    void SerialPortCanBeScanned(object sender, SerialDashController.ScanArgs e);
+    IPhysicalMapper GetPhysicalMapper();
+    ILedDriverBase GetLedDriver();
+}
+```
+
+**Required assemblies:**
+| Assembly | Provides |
+|----------|----------|
+| `SimHub.Plugins.dll` | `ILedDeviceManager`, `LedModuleSettings`, `LedModuleDevice` |
+| `BA63Driver.dll` | `LedDeviceState`, `IPhysicalMapper`, `NeutralLedsMapper`, `ILedDriverBase` |
+| `SerialDash.dll` | `SerialDashController.ScanArgs` |
+
+**`LedDeviceState`** (namespace `BA63Driver.Interfaces`):
+```csharp
+public class LedDeviceState
+{
+    public Color[] LedsState { get; }
+    public Color[] ButtonsState { get; }
+    public Color[] EncodersState { get; }
+    public Color[] MatrixState { get; }
+    public Color[] RawState { get; }
+    public double RpmBrightness { get; }
+    public double ButtonsBrightness { get; }
+    public double EncodersBrightness { get; }
+    public double MatrixBrightness { get; }
+    public object ExtraData { get; set; }
+
+    public LedDeviceState(Color[] leds, Color[] buttons, Color[] encoders,
+        Color[] matrix, Color[] raw,
+        double rpmBrightness = 1.0, double buttonsBrightness = 1.0,
+        double encodersBrightness = 1.0, double matrixBrightness = 1.0);
+}
+```
+
+**Virtual driver implementation pattern:**
+
+```csharp
+using BA63Driver.Interfaces;
+using BA63Driver.Mapper;
+using SimHub.Plugins.OutputPlugins.GraphicalDash.LedModules;
+using SimHub.Plugins.OutputPlugins.GraphicalDash.PSE;
+
+internal class VirtualLedDriver : ILedDeviceManager
+{
+    public LedModuleSettings LedModuleSettings { get; set; }
+    public LedDeviceState LastState { get; private set; }
+
+    // Events (required by interface, may not need to be fired)
+    public event EventHandler BeforeDisplay;
+    public event EventHandler AfterDisplay;
+    public event EventHandler OnConnect;
+    public event EventHandler OnError;
+    public event EventHandler OnDisconnect;
+
+    // Always report connected — this enables the effects UI
+    public bool IsConnected() => true;
+
+    public string GetSerialNumber() => "VIRTUAL";
+    public string GetFirmwareVersion() => "1.0";
+    public object GetDriverInstance() => this;
+    public void Close() { }
+    public void ResetDetection() { }
+    public void SerialPortCanBeScanned(object sender, SerialDashController.ScanArgs e) { }
+    public IPhysicalMapper GetPhysicalMapper() => new NeutralLedsMapper();
+    public ILedDriverBase GetLedDriver() => null;
+
+    public void Display(Func<Color[]> leds, Func<Color[]> buttons,
+        Func<Color[]> encoders, Func<Color[]> matrix, Func<Color[]> rawState,
+        bool forceRefresh, Func<object> extraData = null,
+        double rpmBrightness = 1.0, double buttonsBrightness = 1.0,
+        double encodersBrightness = 1.0, double matrixBrightness = 1.0)
+    {
+        var ledColors = leds?.Invoke() ?? Array.Empty<Color>();
+        var buttonColors = buttons?.Invoke() ?? Array.Empty<Color>();
+        var encoderColors = encoders?.Invoke() ?? Array.Empty<Color>();
+        var matrixColors = matrix?.Invoke() ?? Array.Empty<Color>();
+        var rawColors = rawState?.Invoke() ?? Array.Empty<Color>();
+
+        // Store state (required — SimHub reads LastState for NCalc formulas)
+        LastState = new LedDeviceState(ledColors, buttonColors, encoderColors,
+            matrixColors, rawColors, rpmBrightness, buttonsBrightness,
+            encodersBrightness, matrixBrightness);
+
+        // Forward ledColors to your device here
+    }
+}
+```
+
+**Injecting the driver** (from a DeviceExtension):
+
+The `DeviceDriver` setter on `LedModuleSettings` is `protected`, so reflection is needed:
+
+```csharp
+foreach (var instance in LinkedDevice.GetInstances())
+{
+    if (instance is LedModuleDevice lmd && lmd.ledModuleSettings != null)
+    {
+        var driver = new VirtualLedDriver();
+        driver.LedModuleSettings = lmd.ledModuleSettings;
+
+        var prop = typeof(LedModuleSettings).GetProperty("DeviceDriver",
+            BindingFlags.Public | BindingFlags.Instance);
+        prop?.GetSetMethod(nonPublic: true)?.Invoke(lmd.ledModuleSettings,
+            new object[] { driver });
+    }
+}
+```
+
+After injection, SimHub's LEDs tab shows "Connected" and the full effects configuration UI is available. SimHub calls `Display()` every frame with the computed `Func<Color[]>` callbacks, which the virtual driver evaluates and forwards.
+
+**`LedModuleSettings.Display()` internals:**
+```csharp
+DeviceDriver.Display(
+    () => OverrideResult(LedsDriver?.GetResult(100.0) ?? new Color[0]),
+    () => OverrideResult(ButtonsDriver?.GetResult(100.0) ?? new Color[0]),
+    () => OverrideResult(EncodersDriver?.GetResult(100.0) ?? new Color[0]),
+    () => OverrideResult(MatrixDriver?.GetResult(...) ?? new Color[0]),
+    () => OverrideResult(RawDriver?.GetResult(100.0) ?? new Color[0]),
+    rpmBrightness: GetEffectiveLedsBrightness(),
+    buttonsBrightness: GetEffectiveButtonsBrightness(),
+    ...);
+```
+
+### Device Definition Locations
+
+| Path | Description | Survives Update |
+|------|-------------|-----------------|
+| `DevicesDefinitions/Embedded/` | Built-in device definitions (binary `.def` files) | No |
+| `DevicesDefinitions/User/` | User-created definitions | Yes |
+| `DevicesDefaults/StandardDevicesTemplatesOffline/` | Built-in `.shdevicetemplate` files | No |
+| `DevicesDefaults/StandardDevicesTemplatesUser/` | Custom `.shdevicetemplate` files | Yes |
+| `DevicesDefaults/StandardDevicesTemplatesOnline/` | Downloaded templates | — |
+| `DevicesDefaults/*.shdevice` | Instantiated device defaults (UUID-named JSON files) | — |
+| `PluginsData/Common/Devices/index.json` | Active device instances | — |
+| `PluginsData/DevicesDesccriptorCache.json` | Template metadata cache | — |
+| `DevicesLogos/` | Device images by GUID (PNG files) | — |
+
+### Gotchas and Practical Notes
+
+**Template deletion:** SimHub deletes the `.shdevicetemplate` file from `StandardDevicesTemplatesUser/` when a user removes the device. Plugins should re-deploy the template on startup or the device won't be available to re-add.
+
+**Cache:** SimHub caches template metadata in `DevicesDesccriptorCache.json`. Templates are only read at startup. After deploying a changed template, either delete the cache entry or bump `TemplateVersion` in `device.json` to force re-read.
+
+**DeviceTypeID format:** Embedded devices (`.def` files) use UUID-style DeviceTypeIDs with suffixes like `_UserProject` or `_Embedded` (e.g. `a5272f03-fc8b-4e03-a708-a6d192e450f6_UserProject`). Template-based devices use the `StandardDeviceId` string. The `IDeviceExtensionFilter` should match both the exact string and the suffixed variant.
+
+**Instantiated devices:** All 170+ `.shdevice` files in `DevicesDefaults/` use UUID-based DeviceTypeIDs. These are the default settings for embedded device types, not user instances.
+
+**Assembly version mismatch:** The `SimHub.Plugins.dll` shipped in the PluginSdk may be older than the runtime version. Interfaces can have additional members in newer versions. The runtime DLL throws `TypeLoadException` if an interface implementation is missing members. Always build against the actual runtime DLL, not the SDK copy. Key assemblies that may need updating:
+- `SimHub.Plugins.dll` — core plugin/device API
+- `BA63Driver.dll` — `LedDeviceState`, `IPhysicalMapper`, `ILedDriverBase`
+- `SerialDash.dll` — `SerialDashController.ScanArgs`
+
+**LED pipeline event:** `PluginManager.OnLedsUpdate` is an `internal static event` that fires after LED data is computed each frame. Not accessible from plugins without reflection. The `ILedDeviceManager.Display()` injection is the supported path.
 
 ## MahApps Metro
 

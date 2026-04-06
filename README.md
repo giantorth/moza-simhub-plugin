@@ -31,6 +31,16 @@ Untested:
 - Dashboard (**testers needed**)
 - New-protocol wheels (GS/FSR/CS/RS/TSW) (**testers needed**)
 
+### SimHub Device Integration
+
+MOZA wheels register as native SimHub devices, appearing in SimHub's **Devices** section. This enables:
+
+- **LED Effects System** — Use SimHub's full effects configuration UI (RPM indicators, flags, speed limiter animations, scripted effects, etc.) to control your wheel LEDs instead of the plugin's built-in RPM modes
+- **Per-Game Device Profiles** — SimHub's device profile system saves and restores LED effect configurations per game
+- **Auto-Detection** — MOZA devices are automatically detected by USB VID/PID when adding a new device
+
+The plugin injects a virtual LED driver so SimHub's effects UI shows the device as connected, even though MOZA uses a proprietary serial protocol. The computed LED colors are forwarded to the wheel hardware each frame.
+
 ### Per-Game Profiles
 
 All settings (base, wheel LEDs, dashboard, handbrake, pedals) are stored per-game using SimHub's built-in profile system. Profiles switch automatically when you launch a different game. A profile selector is shown at the top of the settings panel.
@@ -237,7 +247,12 @@ The plugin exposes these properties for use in SimHub dashboards and overlays:
 
 ## Installation
 
-Download the latest `MozaPlugin_v*.zip` from the [Releases](https://github.com/giantorth/moza-simhub-plugin/releases) page, extract `MozaPlugin.dll`, and copy it into your SimHub installation directory. Restart SimHub — the plugin appears under Settings > Plugins as "MOZA Control".
+Download the latest `MozaPlugin_v*.zip` from the [Releases](https://github.com/giantorth/moza-simhub-plugin/releases) page and extract into your SimHub installation directory:
+
+- `MozaPlugin.dll` — copy to the SimHub root directory
+- `MozaRacingWheel.shdevicetemplate` — copy to `DevicesDefaults/StandardDevicesTemplatesUser/` (create the folder if it doesn't exist)
+
+Restart SimHub — the plugin appears under Settings > Plugins as "MOZA Control". To use SimHub's LED effects system, go to Devices and add the "MOZA Wheel" device.
 
 ## Building from Source
 
@@ -382,6 +397,15 @@ Protocol/
 Telemetry/
   MozaData.cs                      Thread-safe data model for all device values
   TelemetrySender.cs               RPM LED telemetry output logic
+Devices/
+  MozaDeviceExtensionFilter.cs     Attaches extension to MOZA devices in SimHub's device system
+  MozaWheelDeviceExtension.cs      Device extension — settings tab, profiles, LED driver injection
+  MozaLedDeviceManager.cs          Virtual LED driver — spoofs connection, forwards LED colors
+  MozaWheelExtensionSettings.cs    Wheel settings for SimHub device profiles
+  MozaWheelSettingsControl.xaml(.cs) Status panel for the device extension tab
+  MozaDeviceConstants.cs           Shared device type ID constant
+DeviceTemplates/
+  MozaWheel/                       Source files for .shdevicetemplate (zipped at build time)
 UI/
   SettingsControl.xaml(.cs)        WPF settings UI (Base, Wheel, Dashboard*, Handbrake*, Pedals*, Options tabs; *autodetected)
   ColorPickerDialog.xaml(.cs)      RGB color picker dialog

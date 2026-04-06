@@ -52,8 +52,8 @@ jobs:
       - name: Build plugin DLL
         run: dotnet build -c Release --no-restore /p:Version=${{ steps.version.outputs.version }}
 
-      - name: Zip output DLL
-        run: Compress-Archive -Path ./bin/x86/Release/MozaPlugin.dll -DestinationPath ./${{ env.ReleaseFileName }}
+      - name: Zip release files
+        run: Compress-Archive -Path ./bin/x86/Release/MozaPlugin.dll, ./bin/x86/Release/MozaRacingWheel.shdevicetemplate -DestinationPath ./${{ env.ReleaseFileName }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
