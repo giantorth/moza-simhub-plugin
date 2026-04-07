@@ -18,7 +18,6 @@ namespace MozaPlugin
         private MozaSerialConnection _connection = null!;
         private MozaData _data = null!;
         private MozaDeviceManager _deviceManager = null!;
-        private TelemetrySender _sender = null!;
         private MozaPluginSettings _settings = null!;
         private Timer _pollTimer = null!;
         private Timer _reconnectTimer = null!;
@@ -122,13 +121,12 @@ namespace MozaPlugin
 
         internal MozaData Data => _data;
         internal MozaDeviceManager DeviceManager => _deviceManager;
-        internal TelemetrySender Sender => _sender;
         internal MozaPluginSettings Settings => _settings;
         internal bool IsNewWheelDetected => _newWheelDetected;
         internal bool IsOldWheelDetected => _oldWheelDetected;
         /// <summary>
-        /// When true, the device extension's MozaLedDeviceManager handles wheel LED output
-        /// and the built-in TelemetrySender should not send wheel data.
+        /// When true, the device extension owns wheel LED settings via its own profile system.
+        /// Plugin profile application skips wheel settings to avoid conflicts.
         /// </summary>
         private volatile bool _deviceExtensionActive;
         internal bool DeviceExtensionActive
@@ -174,11 +172,6 @@ namespace MozaPlugin
 
             _deviceManager = new MozaDeviceManager(_connection);
 
-            _sender = new TelemetrySender(_connection, _deviceManager, _settings, _data);
-            // Don't enable anything yet - auto-detection will enable the right targets
-            _sender.DashEnabled = false;
-            _sender.WheelEnabled = false;
-
             if (_settings.ConnectionEnabled)
                 TryConnect();
 
@@ -198,54 +191,14 @@ namespace MozaPlugin
                 _reconnectTimer.Start();
         }
 
-        public void DataUpdate(PluginManager pluginManager, ref GameData data)
-        {
-            bool gameRunning = data.GameRunning && data.NewData != null;
-            if (gameRunning)
-            {
-                double rpm = data.NewData!.Rpms;
-                double maxRpm = data.NewData.MaxRpm;
-                var flag = GetActiveFlag(data.NewData);
-
-                double sl1 = 0, sl2 = 0;
-                int rl = 0;
-                if (_settings.RpmMode == 2 || _settings.DashRpmMode == 2)
-                {
-                    sl1 = Convert.ToDouble(pluginManager.GetPropertyValue("DataCorePlugin.GameData.CarSettings_RPMShiftLight1") ?? 0.0);
-                    sl2 = Convert.ToDouble(pluginManager.GetPropertyValue("DataCorePlugin.GameData.CarSettings_RPMShiftLight2") ?? 0.0);
-                    rl  = Convert.ToInt32(pluginManager.GetPropertyValue("DataCorePlugin.GameData.CarSettings_RPMRedLineReached") ?? 0);
-                }
-
-                _sender.ProcessGameData(rpm, maxRpm, 0, true, flag, sl1, sl2, rl);
-            }
-            else
-            {
-                _sender.ProcessGameData(0, 0, 0, false);
-            }
-        }
-
-        /// <summary>
-        /// Read SimHub flag properties and return the highest-priority active flag.
-        /// Priority order: Checkered > Black > Orange > Yellow > Blue > White > Green.
-        /// </summary>
-        private static RaceFlag GetActiveFlag(GameReaderCommon.StatusDataBase status)
-        {
-            if (status.Flag_Checkered != 0) return RaceFlag.Checkered;
-            if (status.Flag_Black != 0)     return RaceFlag.Black;
-            if (status.Flag_Orange != 0)    return RaceFlag.Orange;
-            if (status.Flag_Yellow != 0)    return RaceFlag.Yellow;
-            if (status.Flag_Blue != 0)      return RaceFlag.Blue;
-            if (status.Flag_White != 0)     return RaceFlag.White;
-            if (status.Flag_Green != 0)     return RaceFlag.Green;
-            return RaceFlag.None;
-        }
+        public void DataUpdate(PluginManager pluginManager, ref GameData data) { }
 
         public void End(PluginManager pluginManager)
         {
             Instance = null;
             SimHub.Logging.Current.Info("[Moza] Shutting down plugin");
             this.SaveCommonSettings("MozaPluginSettings", _settings);
-            _sender?.ClearLeds();
+            ClearLedsOnHardware();
             _pollTimer?.Stop();
             _pollTimer?.Dispose();
             _reconnectTimer?.Stop();
@@ -286,7 +239,7 @@ namespace MozaPlugin
             else
             {
                 _reconnectTimer.Stop();
-                _sender?.ClearLeds();
+                ClearLedsOnHardware();
                 _connection?.Disconnect();
                 _data.IsBaseConnected = false;
                 _baseDetected = false;
@@ -295,11 +248,6 @@ namespace MozaPlugin
                 _oldWheelDetected = false;
                 _handbrakeDetected = false;
                 _pedalsDetected = false;
-                if (_sender != null)
-                {
-                    _sender.DashEnabled = false;
-                    _sender.WheelEnabled = false;
-                }
                 SimHub.Logging.Current.Info("[Moza] Connection disabled");
             }
         }
@@ -328,18 +276,22 @@ namespace MozaPlugin
 
         private void RegisterActions()
         {
-            this.AddAction("Moza.ToggleTelemetry", (a, b) =>
-            {
-                _sender.WheelEnabled = !_sender.WheelEnabled;
-                _sender.DashEnabled = !_sender.DashEnabled;
-                SimHub.Logging.Current.Info($"[Moza] Telemetry toggled: wheel={_sender.WheelEnabled} dash={_sender.DashEnabled}");
-            });
-
             this.AddAction("Moza.ClearLeds", (a, b) =>
             {
-                _sender.ClearLeds();
+                ClearLedsOnHardware();
                 SimHub.Logging.Current.Info("[Moza] LEDs cleared via action");
             });
+        }
+
+        /// <summary>
+        /// Send all-off to wheel and dash LEDs via device manager.
+        /// </summary>
+        private void ClearLedsOnHardware()
+        {
+            if (!_connection.IsConnected) return;
+            _deviceManager.WriteArray("wheel-send-rpm-telemetry", new byte[] { 0, 0 });
+            _deviceManager.WriteArray("wheel-send-buttons-telemetry", new byte[] { 0, 0 });
+            _deviceManager.WriteSetting("wheel-old-send-telemetry", 0);
         }
 
         private void TryConnect()
@@ -429,9 +381,8 @@ namespace MozaPlugin
                     if (!_dashDetected)
                     {
                         _dashDetected = true;
-                        _sender.DashEnabled = true;
                         ApplySavedDashSettings();
-                        SimHub.Logging.Current.Info("[Moza] Dashboard detected, telemetry enabled");
+                        SimHub.Logging.Current.Info("[Moza] Dashboard detected");
                     }
                     break;
 
@@ -440,11 +391,8 @@ namespace MozaPlugin
                     {
                         _newWheelDetected = true;
                         _deviceManager.LockWheelId(deviceId);
-                        if (!DeviceExtensionActive)
-                            _sender.WheelEnabled = true;
-                        _sender.WheelESProtocol = false;
                         ApplySavedWheelSettings();
-                        SimHub.Logging.Current.Info($"[Moza] New-protocol wheel detected on ID {deviceId} (GS/FSR/CS/RS/TSW), sender={!DeviceExtensionActive}");
+                        SimHub.Logging.Current.Info($"[Moza] New-protocol wheel detected on ID {deviceId} (GS/FSR/CS/RS/TSW)");
                     }
                     break;
 
@@ -453,11 +401,8 @@ namespace MozaPlugin
                     {
                         _oldWheelDetected = true;
                         _deviceManager.LockWheelId(deviceId);
-                        if (!DeviceExtensionActive)
-                            _sender.WheelEnabled = true;
-                        _sender.WheelESProtocol = true;
                         ApplySavedWheelSettings();
-                        SimHub.Logging.Current.Info($"[Moza] Old-protocol wheel detected on ID {deviceId} (ES series), sender={!DeviceExtensionActive}");
+                        SimHub.Logging.Current.Info($"[Moza] Old-protocol wheel detected on ID {deviceId} (ES series)");
                     }
                     break;
 

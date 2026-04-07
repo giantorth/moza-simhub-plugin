@@ -25,6 +25,17 @@ namespace MozaPlugin.Devices
         private double _lastBrightness = -1;
         private double _lastButtonsBrightness = -1;
 
+        // Per-component bitmask tracking (avoid redundant bitmask sends)
+        private int _lastRpmBitmask = -1;
+        private int _lastButtonBitmask = -1;
+
+        // Keepalive timer
+        private DateTime _lastSendTime = DateTime.MinValue;
+        private const double KeepaliveIntervalSeconds = 1.0;
+
+        // ES wheel wake-up
+        private bool _ledsAwake;
+
         public LedModuleSettings LedModuleSettings { get; set; } = null!;
 
         public LedDeviceState LastState => _lastState;
@@ -85,12 +96,6 @@ namespace MozaPlugin.Devices
                 if (ledColors.Length == 0)
                     return;
 
-                // Only send if colors changed
-                if (!forceRefresh && _lastLeds != null && ledColors.SequenceEqual(_lastLeds))
-                    return;
-
-                _lastLeds = (Color[])ledColors.Clone();
-
                 var plugin = MozaPlugin.Instance;
                 if (plugin == null || !plugin.Data.IsBaseConnected)
                     return;
@@ -100,32 +105,67 @@ namespace MozaPlugin.Devices
                 if (!isNewWheel && !isOldWheel)
                     return;
 
-                int count = Math.Min(ledColors.Length, MozaDeviceConstants.RpmLedCount);
-
-                // Build bitmask: bit i set if LED i has any color
-                int bitmask = 0;
-                for (int i = 0; i < count; i++)
+                // ES wheel wake-up: flash all LEDs on then off to enter telemetry mode
+                if (!_ledsAwake && isOldWheel)
                 {
-                    if (ledColors[i].R > 0 || ledColors[i].G > 0 || ledColors[i].B > 0)
-                        bitmask |= (1 << i);
+                    _ledsAwake = true;
+                    plugin.DeviceManager.WriteSetting("wheel-old-send-telemetry", 0x3FF);
+                    plugin.DeviceManager.WriteSetting("wheel-old-send-telemetry", 0);
+                    SimHub.Logging.Current.Info("[Moza] ES wheel LED wake-up sent");
                 }
 
-                if (isNewWheel)
+                bool limitUpdates = plugin.Settings.LimitWheelUpdates;
+                bool anySent = false;
+
+                // --- RPM LEDs ---
+                bool rpmChanged = _lastLeds == null || !ledColors.SequenceEqual(_lastLeds);
+                bool shouldSendRpm = rpmChanged || (!limitUpdates && forceRefresh);
+
+                if (shouldSendRpm)
                 {
-                    SendColorChunks(plugin, ledColors, count, "wheel-telemetry-rpm-colors");
-                    plugin.DeviceManager.WriteArray("wheel-send-rpm-telemetry",
-                        new byte[] { (byte)(bitmask & 0xFF), (byte)((bitmask >> 8) & 0xFF) });
-                }
-                else if (isOldWheel)
-                {
-                    // ES wheels: can't set colors per-frame, just send bitmask
-                    plugin.DeviceManager.WriteSetting("wheel-old-send-telemetry", bitmask);
+                    _lastLeds = (Color[])ledColors.Clone();
+
+                    int count = Math.Min(ledColors.Length, MozaDeviceConstants.RpmLedCount);
+
+                    // Build bitmask: bit i set if LED i has any color
+                    int bitmask = 0;
+                    for (int i = 0; i < count; i++)
+                    {
+                        if (ledColors[i].R > 0 || ledColors[i].G > 0 || ledColors[i].B > 0)
+                            bitmask |= (1 << i);
+                    }
+
+                    if (isNewWheel)
+                    {
+                        SendColorChunks(plugin, ledColors, count, "wheel-telemetry-rpm-colors");
+
+                        if (bitmask != _lastRpmBitmask)
+                        {
+                            _lastRpmBitmask = bitmask;
+                            plugin.DeviceManager.WriteArray("wheel-send-rpm-telemetry",
+                                new byte[] { (byte)(bitmask & 0xFF), (byte)((bitmask >> 8) & 0xFF) });
+                        }
+                        anySent = true;
+                    }
+                    else if (isOldWheel)
+                    {
+                        // ES wheels: can't set colors per-frame, just send bitmask
+                        if (bitmask != _lastRpmBitmask)
+                        {
+                            _lastRpmBitmask = bitmask;
+                            plugin.DeviceManager.WriteSetting("wheel-old-send-telemetry", bitmask);
+                            anySent = true;
+                        }
+                    }
                 }
 
-                // Forward button colors for new-protocol wheels
+                // --- Button LEDs (new-protocol wheels only) ---
                 if (isNewWheel && buttonColors.Length > 0)
                 {
-                    if (forceRefresh || _lastButtons == null || !buttonColors.SequenceEqual(_lastButtons))
+                    bool buttonsChanged = _lastButtons == null || !buttonColors.SequenceEqual(_lastButtons);
+                    bool shouldSendButtons = buttonsChanged || (!limitUpdates && forceRefresh);
+
+                    if (shouldSendButtons)
                     {
                         _lastButtons = (Color[])buttonColors.Clone();
 
@@ -139,12 +179,18 @@ namespace MozaPlugin.Devices
                         }
 
                         SendColorChunks(plugin, buttonColors, buttonCount, "wheel-telemetry-button-colors");
-                        plugin.DeviceManager.WriteArray("wheel-send-buttons-telemetry",
-                            new byte[] { (byte)(buttonBitmask & 0xFF), (byte)((buttonBitmask >> 8) & 0xFF) });
+
+                        if (buttonBitmask != _lastButtonBitmask)
+                        {
+                            _lastButtonBitmask = buttonBitmask;
+                            plugin.DeviceManager.WriteArray("wheel-send-buttons-telemetry",
+                                new byte[] { (byte)(buttonBitmask & 0xFF), (byte)((buttonBitmask >> 8) & 0xFF) });
+                        }
+                        anySent = true;
                     }
                 }
 
-                // Forward brightness to wheel hardware when it changes
+                // --- Brightness (existing change detection) ---
                 if (rpmBrightness != _lastBrightness)
                 {
                     _lastBrightness = rpmBrightness;
@@ -152,17 +198,57 @@ namespace MozaPlugin.Devices
                         plugin.DeviceManager.WriteSetting("wheel-rpm-brightness", (int)(rpmBrightness * 100));
                     else if (isOldWheel)
                         plugin.DeviceManager.WriteSetting("wheel-old-rpm-brightness", (int)(rpmBrightness * 15));
+                    anySent = true;
                 }
 
                 if (isNewWheel && buttonsBrightness != _lastButtonsBrightness)
                 {
                     _lastButtonsBrightness = buttonsBrightness;
                     plugin.DeviceManager.WriteSetting("wheel-buttons-brightness", (int)(buttonsBrightness * 100));
+                    anySent = true;
+                }
+
+                // --- Keepalive: resend last state periodically for ES wheel compat ---
+                if (anySent)
+                {
+                    _lastSendTime = DateTime.UtcNow;
+                }
+                else if (plugin.Settings.WheelKeepalive && _lastLeds != null)
+                {
+                    var now = DateTime.UtcNow;
+                    if ((now - _lastSendTime).TotalSeconds >= KeepaliveIntervalSeconds)
+                    {
+                        _lastSendTime = now;
+                        ResendLastState(plugin, isNewWheel, isOldWheel);
+                    }
                 }
             }
             finally
             {
                 AfterDisplay?.Invoke(this, EventArgs.Empty);
+            }
+        }
+
+        /// <summary>
+        /// Resend the last known LED state as a keepalive.
+        /// </summary>
+        private void ResendLastState(MozaPlugin plugin, bool isNewWheel, bool isOldWheel)
+        {
+            if (_lastLeds == null) return;
+
+            int count = Math.Min(_lastLeds.Length, MozaDeviceConstants.RpmLedCount);
+
+            if (isNewWheel)
+            {
+                SendColorChunks(plugin, _lastLeds, count, "wheel-telemetry-rpm-colors");
+                if (_lastRpmBitmask >= 0)
+                    plugin.DeviceManager.WriteArray("wheel-send-rpm-telemetry",
+                        new byte[] { (byte)(_lastRpmBitmask & 0xFF), (byte)((_lastRpmBitmask >> 8) & 0xFF) });
+            }
+            else if (isOldWheel)
+            {
+                if (_lastRpmBitmask >= 0)
+                    plugin.DeviceManager.WriteSetting("wheel-old-send-telemetry", _lastRpmBitmask);
             }
         }
 

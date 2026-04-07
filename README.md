@@ -396,7 +396,6 @@ Protocol/
   MozaSerialConnection.cs          Serial port I/O with auto-discovery and background threads
 Telemetry/
   MozaData.cs                      Thread-safe data model for all device values
-  TelemetrySender.cs               RPM LED telemetry output logic
 Devices/
   MozaDeviceExtensionFilter.cs     Attaches extension to MOZA devices in SimHub's device system
   MozaWheelDeviceExtension.cs      Device extension — settings tab, profiles, LED driver injection

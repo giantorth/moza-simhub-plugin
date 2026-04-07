@@ -69,6 +69,14 @@ namespace MozaPlugin
         // Whether to automatically apply profile settings on launch
         public bool AutoApplyProfileOnLaunch { get; set; } = true;
 
+        // When true, only send LED updates to wheel when data actually changed (ignores SimHub forceRefresh).
+        // Fixes flickering on some non-ES wheels. When false, respects SimHub's refresh cycle.
+        public bool LimitWheelUpdates { get; set; } = true;
+
+        // When true, resend LED state to wheel every ~1 second even if unchanged.
+        // Some ES wheels need this to stay in telemetry mode.
+        public bool WheelKeepalive { get; set; } = true;
+
         // ===== Profile system (SimHub native) =====
         public MozaProfileStore ProfileStore { get; set; } = new MozaProfileStore();
     }

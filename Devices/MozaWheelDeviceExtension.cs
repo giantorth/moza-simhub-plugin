@@ -72,14 +72,10 @@ namespace MozaPlugin.Devices
                                 _buttonsCountSet = true;
                             }
 
-                            // Take over wheel LED output — disable the built-in TelemetrySender for wheel
                             if (plugin != null)
-                            {
                                 plugin.DeviceExtensionActive = true;
-                                plugin.Sender.WheelEnabled = false;
-                            }
 
-                            SimHub.Logging.Current.Info("[Moza] Injected virtual LED driver — effects UI should be available, built-in telemetry disabled for wheel");
+                            SimHub.Logging.Current.Info("[Moza] Injected virtual LED driver — effects UI should be available");
                         }
                         else
                         {
@@ -102,13 +98,11 @@ namespace MozaPlugin.Devices
                 LinkedDevice.DeviceDescriptor.Name + "_MozaWheelActive",
                 this.GetType());
 
-            // Restore built-in telemetry sender for wheel
             var plugin = MozaPlugin.Instance;
             if (plugin != null)
             {
                 plugin.DeviceExtensionActive = false;
-                plugin.Sender.WheelEnabled = true;
-                SimHub.Logging.Current.Info("[Moza] Device extension ended — restored built-in wheel telemetry");
+                SimHub.Logging.Current.Info("[Moza] Device extension ended");
             }
         }
 

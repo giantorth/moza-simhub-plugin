@@ -51,6 +51,8 @@ namespace MozaPlugin
             InitializeComponent();
             ConnectionToggle.IsChecked = plugin.ConnectionEnabled;
             AutoApplyProfileCheck.IsChecked = plugin.Settings.AutoApplyProfileOnLaunch;
+            LimitWheelUpdatesCheck.IsChecked = plugin.Settings.LimitWheelUpdates;
+            WheelKeepaliveCheck.IsChecked = plugin.Settings.WheelKeepalive;
             _suppressEvents = false;
 
             BuildColorSwatches();
@@ -1167,6 +1169,20 @@ namespace MozaPlugin
             _plugin.SaveSettings();
         }
 
+        private void LimitWheelUpdatesCheck_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_suppressEvents) return;
+            _plugin.Settings.LimitWheelUpdates = LimitWheelUpdatesCheck.IsChecked == true;
+            _plugin.SaveSettings();
+        }
+
+        private void WheelKeepaliveCheck_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_suppressEvents) return;
+            _plugin.Settings.WheelKeepalive = WheelKeepaliveCheck.IsChecked == true;
+            _plugin.SaveSettings();
+        }
+
         private void ClearAllSettingsButton_Click(object sender, RoutedEventArgs e)
         {
             var result = MessageBox.Show(
@@ -1184,6 +1200,8 @@ namespace MozaPlugin
             try
             {
                 AutoApplyProfileCheck.IsChecked = _plugin.Settings.AutoApplyProfileOnLaunch;
+                LimitWheelUpdatesCheck.IsChecked = _plugin.Settings.LimitWheelUpdates;
+                WheelKeepaliveCheck.IsChecked = _plugin.Settings.WheelKeepalive;
                 ConnectionToggle.IsChecked = _plugin.Settings.ConnectionEnabled;
                 ProfileListControl.DataContext = null;
                 ProfileListControl.DataContext = _plugin.ProfileStore;

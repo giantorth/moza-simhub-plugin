@@ -31,8 +31,6 @@ The project targets .NET Framework 4.8 (x86) and uses the `Microsoft.NETFramewor
 
 **Device Management** (`MozaDeviceManager.cs`) — High-level read/write API. Handles wheel device ID cycling (IDs 23→21→19) since ES wheels respond on different IDs.
 
-**Telemetry Output** (`Telemetry/TelemetrySender.cs`) — Converts game RPM to 10-bit LED bitmask with progressive thresholds and redline blink. Sends to dashboard and wheel via different write groups/command IDs.
-
 **Data Model** (`Telemetry/MozaData.cs`) — Thread-safe storage (~60 volatile fields) for all device values. `UpdateFromCommand()` maps parsed responses to fields; `UpdateFromArray()` handles color/timing byte arrays.
 
 **UI** (`UI/`) — WPF settings with 4 tabs (Base, Wheel LEDs, Dashboard, Handbrake). The Dashboard and Handbrake tabs are hidden until the respective device is detected. Uses `_suppressEvents` flag during 500ms refresh timer to prevent feedback loops. 30+ RGB color pickers via `ColorPickerDialog`.
