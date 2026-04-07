@@ -303,6 +303,11 @@ namespace MozaPlugin.Devices
                 colorData[offset + 3] = colors[i].B;
             }
 
+            // Fill padding entries with unused index 0xFF so firmware doesn't
+            // interpret zero-padding as "set LED 0 to black" (causes button 0 flicker)
+            for (int pos = dataLen; pos < bufferLen; pos += 4)
+                colorData[pos] = 0xFF;
+
             for (int pos = 0; pos < bufferLen; pos += 20)
             {
                 var chunk = new byte[20];
