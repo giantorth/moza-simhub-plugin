@@ -3,7 +3,6 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
-using System.Windows.Shapes;
 using System.Windows.Threading;
 
 namespace MozaPlugin.Devices
@@ -40,7 +39,6 @@ namespace MozaPlugin.Devices
 
             _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
             _refreshTimer.Tick += (s, e) => RefreshWheel();
-            _refreshTimer.Start();
 
             Loaded += (s, e) => _refreshTimer.Start();
             Unloaded += (s, e) => _refreshTimer.Stop();

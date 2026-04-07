@@ -68,7 +68,7 @@ namespace MozaPlugin.Devices
                             var plugin = MozaPlugin.Instance;
                             if (plugin?.IsNewWheelDetected == true)
                             {
-                                lmd.ledModuleSettings.ButtonsCount = 14;
+                                lmd.ledModuleSettings.ButtonsCount = MozaDeviceConstants.ButtonLedCount;
                                 _buttonsCountSet = true;
                             }
 
@@ -101,6 +101,15 @@ namespace MozaPlugin.Devices
             pluginManager.DetachDelegate(
                 LinkedDevice.DeviceDescriptor.Name + "_MozaWheelActive",
                 this.GetType());
+
+            // Restore built-in telemetry sender for wheel
+            var plugin = MozaPlugin.Instance;
+            if (plugin != null)
+            {
+                plugin.DeviceExtensionActive = false;
+                plugin.Sender.WheelEnabled = true;
+                SimHub.Logging.Current.Info("[Moza] Device extension ended — restored built-in wheel telemetry");
+            }
         }
 
         public override void DataUpdate(PluginManager pluginManager, ref GameData data)
@@ -118,7 +127,7 @@ namespace MozaPlugin.Devices
                 {
                     if (instance is LedModuleDevice lmd && lmd.ledModuleSettings != null)
                     {
-                        lmd.ledModuleSettings.ButtonsCount = 14;
+                        lmd.ledModuleSettings.ButtonsCount = MozaDeviceConstants.ButtonLedCount;
                         _buttonsCountSet = true;
                         SimHub.Logging.Current.Info("[Moza] Set ButtonsCount=14 for new-protocol wheel");
                         break;

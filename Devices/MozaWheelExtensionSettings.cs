@@ -47,6 +47,7 @@ namespace MozaPlugin.Devices
         // Color arrays (packed as R<<16 | G<<8 | B)
         public int[]? WheelRpmColors { get; set; }
         public int[]? WheelRpmBlinkColors { get; set; }
+        public int[]? WheelButtonColors { get; set; }
         public int[]? WheelFlagColors { get; set; }
         public int[]? WheelIdleColor { get; set; }
         public int[]? WheelESRpmColors { get; set; }
@@ -76,6 +77,7 @@ namespace MozaPlugin.Devices
 
             WheelRpmColors = MozaProfile.PackColors(data.WheelRpmColors);
             WheelRpmBlinkColors = MozaProfile.PackColors(data.WheelRpmBlinkColors);
+            WheelButtonColors = MozaProfile.PackColors(data.WheelButtonColors);
             WheelFlagColors = MozaProfile.PackColors(data.WheelFlagColors);
             WheelIdleColor = new[] { MozaProfile.PackColor(data.WheelIdleColor) };
             WheelESRpmColors = MozaProfile.PackColors(data.WheelESRpmColors);
@@ -107,6 +109,7 @@ namespace MozaPlugin.Devices
 
             MozaProfile.UnpackColorsInto(WheelRpmColors, data.WheelRpmColors);
             MozaProfile.UnpackColorsInto(WheelRpmBlinkColors, data.WheelRpmBlinkColors);
+            MozaProfile.UnpackColorsInto(WheelButtonColors, data.WheelButtonColors);
             MozaProfile.UnpackColorsInto(WheelFlagColors, data.WheelFlagColors);
             if (WheelIdleColor != null && WheelIdleColor.Length > 0)
             {

@@ -130,7 +130,12 @@ namespace MozaPlugin
         /// When true, the device extension's MozaLedDeviceManager handles wheel LED output
         /// and the built-in TelemetrySender should not send wheel data.
         /// </summary>
-        internal bool DeviceExtensionActive { get; set; }
+        private volatile bool _deviceExtensionActive;
+        internal bool DeviceExtensionActive
+        {
+            get => _deviceExtensionActive;
+            set => _deviceExtensionActive = value;
+        }
         internal bool IsDashDetected => _dashDetected;
         internal bool IsHandbrakeDetected => _handbrakeDetected;
         internal bool IsPedalsDetected => _pedalsDetected;
@@ -581,38 +586,7 @@ namespace MozaPlugin
             _deviceManager.WriteSetting("dash-flags-brightness", _settings.DashFlagsBrightness);
         }
 
-        /// <summary>
-        /// Re-read wheel settings now that the correct device ID is known.
-        /// The initial read on connect goes to device 23, but ES wheels may be on 21 or 19.
-        /// </summary>
-        private static readonly string[] WheelSettingsCommands = new[]
-        {
-            "wheel-telemetry-mode", "wheel-telemetry-idle-effect",
-            "wheel-buttons-idle-effect",
-            "wheel-rpm-brightness", "wheel-buttons-brightness", "wheel-flags-brightness",
-            "wheel-rpm-mode", "wheel-rpm-interval",
-            "wheel-rpm-timings",
-            "wheel-rpm-color1", "wheel-rpm-color2", "wheel-rpm-color3",
-            "wheel-rpm-color4", "wheel-rpm-color5", "wheel-rpm-color6",
-            "wheel-rpm-color7", "wheel-rpm-color8", "wheel-rpm-color9",
-            "wheel-rpm-color10",
-            "wheel-rpm-value1", "wheel-rpm-value2", "wheel-rpm-value3",
-            "wheel-rpm-value4", "wheel-rpm-value5", "wheel-rpm-value6",
-            "wheel-rpm-value7", "wheel-rpm-value8", "wheel-rpm-value9",
-            "wheel-rpm-value10",
-            "wheel-rpm-indicator-mode", "wheel-get-rpm-display-mode",
-            "wheel-old-rpm-brightness",
-            "wheel-old-rpm-color1", "wheel-old-rpm-color2", "wheel-old-rpm-color3",
-            "wheel-old-rpm-color4", "wheel-old-rpm-color5", "wheel-old-rpm-color6",
-            "wheel-old-rpm-color7", "wheel-old-rpm-color8", "wheel-old-rpm-color9",
-            "wheel-old-rpm-color10",
-        };
 
-        private void ReadWheelSettings()
-        {
-            SimHub.Logging.Current.Info("[Moza] Re-reading wheel settings with correct device ID");
-            _deviceManager.ReadSettings(WheelSettingsCommands);
-        }
 
         // ===== Profile system (SimHub native) =====
 
@@ -692,81 +666,86 @@ namespace MozaPlugin
             ApplyBaseSettingIfSet(profile.WorkMode, v => _data.WorkMode = v, "main-set-work-mode");
 
             // --- Wheel LED settings → _settings + _data ---
-            if (profile.WheelTelemetryMode >= 0)
+            // When the device extension is active, it owns wheel LED settings
+            // via SetSettings()/GetSettings() — skip to avoid conflicts.
+            if (!DeviceExtensionActive)
             {
-                _settings.WheelTelemetryMode = profile.WheelTelemetryMode;
-                _data.WheelTelemetryMode = profile.WheelTelemetryMode;
-            }
-            if (profile.WheelIdleEffect >= 0)
-            {
-                _settings.WheelIdleEffect = profile.WheelIdleEffect;
-                _data.WheelTelemetryIdleEffect = profile.WheelIdleEffect;
-            }
-            if (profile.WheelButtonsIdleEffect >= 0)
-            {
-                _settings.WheelButtonsIdleEffect = profile.WheelButtonsIdleEffect;
-                _data.WheelButtonsIdleEffect = profile.WheelButtonsIdleEffect;
-            }
-            if (profile.WheelRpmBrightness >= 0)
-            {
-                _settings.WheelRpmBrightness = profile.WheelRpmBrightness;
-                _data.WheelRpmBrightness = profile.WheelRpmBrightness;
-            }
-            if (profile.WheelButtonsBrightness >= 0)
-            {
-                _settings.WheelButtonsBrightness = profile.WheelButtonsBrightness;
-                _data.WheelButtonsBrightness = profile.WheelButtonsBrightness;
-            }
-            if (profile.WheelFlagsBrightness >= 0)
-            {
-                _settings.WheelFlagsBrightness = profile.WheelFlagsBrightness;
-                _data.WheelFlagsBrightness = profile.WheelFlagsBrightness;
-            }
-            if (profile.ButtonTelemetryMode >= 0)
-                _settings.ButtonTelemetryMode = profile.ButtonTelemetryMode;
-            if (profile.WheelRpmIndicatorMode >= 0)
-            {
-                _settings.WheelRpmIndicatorMode = profile.WheelRpmIndicatorMode;
-                _data.WheelRpmIndicatorMode = profile.WheelRpmIndicatorMode;
-            }
-            if (profile.WheelRpmDisplayMode >= 0)
-            {
-                _settings.WheelRpmDisplayMode = profile.WheelRpmDisplayMode;
-                _data.WheelRpmDisplayMode = profile.WheelRpmDisplayMode;
-            }
-            if (profile.WheelESRpmBrightness >= 0)
-            {
-                _settings.WheelESRpmBrightness = profile.WheelESRpmBrightness;
-                _data.WheelESRpmBrightness = profile.WheelESRpmBrightness;
-            }
+                if (profile.WheelTelemetryMode >= 0)
+                {
+                    _settings.WheelTelemetryMode = profile.WheelTelemetryMode;
+                    _data.WheelTelemetryMode = profile.WheelTelemetryMode;
+                }
+                if (profile.WheelIdleEffect >= 0)
+                {
+                    _settings.WheelIdleEffect = profile.WheelIdleEffect;
+                    _data.WheelTelemetryIdleEffect = profile.WheelIdleEffect;
+                }
+                if (profile.WheelButtonsIdleEffect >= 0)
+                {
+                    _settings.WheelButtonsIdleEffect = profile.WheelButtonsIdleEffect;
+                    _data.WheelButtonsIdleEffect = profile.WheelButtonsIdleEffect;
+                }
+                if (profile.WheelRpmBrightness >= 0)
+                {
+                    _settings.WheelRpmBrightness = profile.WheelRpmBrightness;
+                    _data.WheelRpmBrightness = profile.WheelRpmBrightness;
+                }
+                if (profile.WheelButtonsBrightness >= 0)
+                {
+                    _settings.WheelButtonsBrightness = profile.WheelButtonsBrightness;
+                    _data.WheelButtonsBrightness = profile.WheelButtonsBrightness;
+                }
+                if (profile.WheelFlagsBrightness >= 0)
+                {
+                    _settings.WheelFlagsBrightness = profile.WheelFlagsBrightness;
+                    _data.WheelFlagsBrightness = profile.WheelFlagsBrightness;
+                }
+                if (profile.ButtonTelemetryMode >= 0)
+                    _settings.ButtonTelemetryMode = profile.ButtonTelemetryMode;
+                if (profile.WheelRpmIndicatorMode >= 0)
+                {
+                    _settings.WheelRpmIndicatorMode = profile.WheelRpmIndicatorMode;
+                    _data.WheelRpmIndicatorMode = profile.WheelRpmIndicatorMode;
+                }
+                if (profile.WheelRpmDisplayMode >= 0)
+                {
+                    _settings.WheelRpmDisplayMode = profile.WheelRpmDisplayMode;
+                    _data.WheelRpmDisplayMode = profile.WheelRpmDisplayMode;
+                }
+                if (profile.WheelESRpmBrightness >= 0)
+                {
+                    _settings.WheelESRpmBrightness = profile.WheelESRpmBrightness;
+                    _data.WheelESRpmBrightness = profile.WheelESRpmBrightness;
+                }
 
-            // Wheel RPM timing settings → _settings + _data + device
-            if (profile.RpmMode >= 0)
-            {
-                _settings.RpmMode = profile.RpmMode;
-                _data.WheelRpmMode = profile.RpmMode;
+                // Wheel RPM timing settings → _settings + _data + device
+                if (profile.RpmMode >= 0)
+                {
+                    _settings.RpmMode = profile.RpmMode;
+                    _data.WheelRpmMode = profile.RpmMode;
+                }
+                if (profile.RpmTimingsPercent != null)
+                {
+                    _settings.RpmTimingsPercent = (int[])profile.RpmTimingsPercent.Clone();
+                    for (int i = 0; i < 10; i++)
+                        _data.WheelRpmTimings[i] = (byte)profile.RpmTimingsPercent[i];
+                }
+                if (profile.RpmTimingsRpm != null)
+                {
+                    _settings.RpmTimingsRpm = (int[])profile.RpmTimingsRpm.Clone();
+                    for (int i = 0; i < 10; i++)
+                        _data.WheelRpmValues[i] = profile.RpmTimingsRpm[i];
+                }
+                if (profile.RpmBlinkInterval >= 0)
+                {
+                    _settings.RpmBlinkInterval = profile.RpmBlinkInterval;
+                    _data.WheelRpmInterval = profile.RpmBlinkInterval;
+                }
+                if (profile.WheelRpmRangeMin >= 0)
+                    _settings.WheelRpmRangeMin = profile.WheelRpmRangeMin;
+                if (profile.WheelRpmRangeMax >= 0)
+                    _settings.WheelRpmRangeMax = profile.WheelRpmRangeMax;
             }
-            if (profile.RpmTimingsPercent != null)
-            {
-                _settings.RpmTimingsPercent = (int[])profile.RpmTimingsPercent.Clone();
-                for (int i = 0; i < 10; i++)
-                    _data.WheelRpmTimings[i] = (byte)profile.RpmTimingsPercent[i];
-            }
-            if (profile.RpmTimingsRpm != null)
-            {
-                _settings.RpmTimingsRpm = (int[])profile.RpmTimingsRpm.Clone();
-                for (int i = 0; i < 10; i++)
-                    _data.WheelRpmValues[i] = profile.RpmTimingsRpm[i];
-            }
-            if (profile.RpmBlinkInterval >= 0)
-            {
-                _settings.RpmBlinkInterval = profile.RpmBlinkInterval;
-                _data.WheelRpmInterval = profile.RpmBlinkInterval;
-            }
-            if (profile.WheelRpmRangeMin >= 0)
-                _settings.WheelRpmRangeMin = profile.WheelRpmRangeMin;
-            if (profile.WheelRpmRangeMax >= 0)
-                _settings.WheelRpmRangeMax = profile.WheelRpmRangeMax;
 
             // Dashboard RPM timing settings → _settings + _data + device
             if (profile.DashRpmMode >= 0)
@@ -866,24 +845,27 @@ namespace MozaPlugin
             ApplyCurveIfSet(profile.PedalsClutchCurve, _data.PedalsClutchCurve, "pedals-clutch-y", _pedalsDetected);
 
             // --- Colors → _data ---
-            MozaProfile.UnpackColorsInto(profile.WheelRpmColors, _data.WheelRpmColors);
-            MozaProfile.UnpackColorsInto(profile.WheelRpmBlinkColors, _data.WheelRpmBlinkColors);
-            MozaProfile.UnpackColorsInto(profile.WheelButtonColors, _data.WheelButtonColors);
-            MozaProfile.UnpackColorsInto(profile.WheelFlagColors, _data.WheelFlagColors);
-            if (profile.WheelIdleColor != null && profile.WheelIdleColor.Length > 0)
+            if (!DeviceExtensionActive)
             {
-                var rgb = MozaProfile.UnpackColor(profile.WheelIdleColor[0]);
-                _data.WheelIdleColor[0] = rgb[0];
-                _data.WheelIdleColor[1] = rgb[1];
-                _data.WheelIdleColor[2] = rgb[2];
+                MozaProfile.UnpackColorsInto(profile.WheelRpmColors, _data.WheelRpmColors);
+                MozaProfile.UnpackColorsInto(profile.WheelRpmBlinkColors, _data.WheelRpmBlinkColors);
+                MozaProfile.UnpackColorsInto(profile.WheelButtonColors, _data.WheelButtonColors);
+                MozaProfile.UnpackColorsInto(profile.WheelFlagColors, _data.WheelFlagColors);
+                if (profile.WheelIdleColor != null && profile.WheelIdleColor.Length > 0)
+                {
+                    var rgb = MozaProfile.UnpackColor(profile.WheelIdleColor[0]);
+                    _data.WheelIdleColor[0] = rgb[0];
+                    _data.WheelIdleColor[1] = rgb[1];
+                    _data.WheelIdleColor[2] = rgb[2];
+                }
+                MozaProfile.UnpackColorsInto(profile.WheelESRpmColors, _data.WheelESRpmColors);
+                _settings.WheelRpmBlinkColors = profile.WheelRpmBlinkColors;
             }
-            MozaProfile.UnpackColorsInto(profile.WheelESRpmColors, _data.WheelESRpmColors);
             MozaProfile.UnpackColorsInto(profile.DashRpmColors, _data.DashRpmColors);
             MozaProfile.UnpackColorsInto(profile.DashRpmBlinkColors, _data.DashRpmBlinkColors);
             MozaProfile.UnpackColorsInto(profile.DashFlagColors, _data.DashFlagColors);
 
-            // Persist blink colors to settings (write-only, not polled from device)
-            _settings.WheelRpmBlinkColors = profile.WheelRpmBlinkColors;
+            // Persist dash blink colors to settings (write-only, not polled from device)
             _settings.DashRpmBlinkColors = profile.DashRpmBlinkColors;
 
             // --- Write to device if connected ---
@@ -941,35 +923,39 @@ namespace MozaPlugin
 
         private void WriteProfileWheelSettingsToDevice(MozaProfile profile)
         {
-            // New wheel settings
-            if (_newWheelDetected)
+            // When device extension is active, it owns wheel LED settings
+            if (!DeviceExtensionActive)
             {
-                if (profile.WheelTelemetryMode >= 0)
-                    _deviceManager.WriteSetting("wheel-telemetry-mode", profile.WheelTelemetryMode);
-                if (profile.WheelIdleEffect >= 0)
-                    _deviceManager.WriteSetting("wheel-telemetry-idle-effect", profile.WheelIdleEffect);
-                if (profile.WheelButtonsIdleEffect >= 0)
-                    _deviceManager.WriteSetting("wheel-buttons-idle-effect", profile.WheelButtonsIdleEffect);
-                if (profile.WheelRpmBrightness >= 0)
-                    _deviceManager.WriteSetting("wheel-rpm-brightness", profile.WheelRpmBrightness);
-                if (profile.WheelButtonsBrightness >= 0)
-                    _deviceManager.WriteSetting("wheel-buttons-brightness", profile.WheelButtonsBrightness);
-                if (profile.WheelFlagsBrightness >= 0)
-                    _deviceManager.WriteSetting("wheel-flags-brightness", profile.WheelFlagsBrightness);
+                // New wheel settings
+                if (_newWheelDetected)
+                {
+                    if (profile.WheelTelemetryMode >= 0)
+                        _deviceManager.WriteSetting("wheel-telemetry-mode", profile.WheelTelemetryMode);
+                    if (profile.WheelIdleEffect >= 0)
+                        _deviceManager.WriteSetting("wheel-telemetry-idle-effect", profile.WheelIdleEffect);
+                    if (profile.WheelButtonsIdleEffect >= 0)
+                        _deviceManager.WriteSetting("wheel-buttons-idle-effect", profile.WheelButtonsIdleEffect);
+                    if (profile.WheelRpmBrightness >= 0)
+                        _deviceManager.WriteSetting("wheel-rpm-brightness", profile.WheelRpmBrightness);
+                    if (profile.WheelButtonsBrightness >= 0)
+                        _deviceManager.WriteSetting("wheel-buttons-brightness", profile.WheelButtonsBrightness);
+                    if (profile.WheelFlagsBrightness >= 0)
+                        _deviceManager.WriteSetting("wheel-flags-brightness", profile.WheelFlagsBrightness);
+                }
+
+                // ES/Old wheel settings
+                if (_oldWheelDetected)
+                {
+                    if (profile.WheelRpmIndicatorMode >= 0)
+                        _deviceManager.WriteSetting("wheel-rpm-indicator-mode", profile.WheelRpmIndicatorMode + 1); // display→raw
+                    if (profile.WheelRpmDisplayMode >= 0)
+                        _deviceManager.WriteSetting("wheel-set-rpm-display-mode", profile.WheelRpmDisplayMode);
+                    if (profile.WheelESRpmBrightness >= 0)
+                        _deviceManager.WriteSetting("wheel-old-rpm-brightness", profile.WheelESRpmBrightness);
+                }
             }
 
-            // ES/Old wheel settings
-            if (_oldWheelDetected)
-            {
-                if (profile.WheelRpmIndicatorMode >= 0)
-                    _deviceManager.WriteSetting("wheel-rpm-indicator-mode", profile.WheelRpmIndicatorMode + 1); // display→raw
-                if (profile.WheelRpmDisplayMode >= 0)
-                    _deviceManager.WriteSetting("wheel-set-rpm-display-mode", profile.WheelRpmDisplayMode);
-                if (profile.WheelESRpmBrightness >= 0)
-                    _deviceManager.WriteSetting("wheel-old-rpm-brightness", profile.WheelESRpmBrightness);
-            }
-
-            // Dashboard brightness
+            // Dashboard brightness (always applied — not owned by device extension)
             if (_dashDetected)
             {
                 if (profile.DashRpmBrightness >= 0)
@@ -981,51 +967,51 @@ namespace MozaPlugin
 
         private void WriteProfileColorsToDevice(MozaProfile profile)
         {
-            // Wheel RPM colors
-            WriteColorArray(profile.WheelRpmColors, "wheel-rpm-color", 10);
-            // Wheel RPM blink colors
-            WriteColorArray(profile.WheelRpmBlinkColors, "wheel-rpm-blink-color", 10);
-            // Wheel button colors
-            WriteColorArray(profile.WheelButtonColors, "wheel-button-color", 14);
-            // Wheel flag colors
-            WriteColorArray(profile.WheelFlagColors, "wheel-flag-color", 6);
-            // Wheel idle color
-            if (profile.WheelIdleColor != null && profile.WheelIdleColor.Length > 0)
+            // Wheel colors (skip when device extension owns wheel settings)
+            if (!DeviceExtensionActive)
             {
-                var rgb = MozaProfile.UnpackColor(profile.WheelIdleColor[0]);
-                _deviceManager.WriteColor("wheel-idle-color", rgb[0], rgb[1], rgb[2]);
+                WriteColorArray(profile.WheelRpmColors, "wheel-rpm-color", 10);
+                WriteColorArray(profile.WheelRpmBlinkColors, "wheel-rpm-blink-color", 10);
+                WriteColorArray(profile.WheelButtonColors, "wheel-button-color", 14);
+                WriteColorArray(profile.WheelFlagColors, "wheel-flag-color", 6);
+                if (profile.WheelIdleColor != null && profile.WheelIdleColor.Length > 0)
+                {
+                    var rgb = MozaProfile.UnpackColor(profile.WheelIdleColor[0]);
+                    _deviceManager.WriteColor("wheel-idle-color", rgb[0], rgb[1], rgb[2]);
+                }
+                WriteColorArray(profile.WheelESRpmColors, "wheel-old-rpm-color", 10);
             }
-            // ES wheel RPM colors
-            WriteColorArray(profile.WheelESRpmColors, "wheel-old-rpm-color", 10);
-            // Dash RPM colors
+
+            // Dash colors (always applied)
             WriteColorArray(profile.DashRpmColors, "dash-rpm-color", 10);
-            // Dash RPM blink colors
             WriteColorArray(profile.DashRpmBlinkColors, "dash-rpm-blink-color", 10);
-            // Dash flag colors
             WriteColorArray(profile.DashFlagColors, "dash-flag-color", 6);
         }
 
         private void WriteProfileTimingsToDevice(MozaProfile profile)
         {
-            // Wheel timings
-            if (profile.RpmMode >= 0)
-                _deviceManager.WriteSetting("wheel-rpm-mode", profile.RpmMode);
-            if (profile.RpmTimingsPercent != null)
+            // Wheel timings (skip when device extension owns wheel settings)
+            if (!DeviceExtensionActive)
             {
-                var timings = new byte[10];
-                for (int i = 0; i < 10; i++)
-                    timings[i] = (byte)profile.RpmTimingsPercent[i];
-                _deviceManager.WriteArray("wheel-rpm-timings", timings);
+                if (profile.RpmMode >= 0)
+                    _deviceManager.WriteSetting("wheel-rpm-mode", profile.RpmMode);
+                if (profile.RpmTimingsPercent != null)
+                {
+                    var timings = new byte[10];
+                    for (int i = 0; i < 10; i++)
+                        timings[i] = (byte)profile.RpmTimingsPercent[i];
+                    _deviceManager.WriteArray("wheel-rpm-timings", timings);
+                }
+                if (profile.RpmTimingsRpm != null)
+                {
+                    for (int i = 0; i < 10; i++)
+                        _deviceManager.WriteSetting($"wheel-rpm-value{i + 1}", profile.RpmTimingsRpm[i]);
+                }
+                if (profile.RpmBlinkInterval >= 0)
+                    _deviceManager.WriteSetting("wheel-rpm-interval", profile.RpmBlinkInterval);
             }
-            if (profile.RpmTimingsRpm != null)
-            {
-                for (int i = 0; i < 10; i++)
-                    _deviceManager.WriteSetting($"wheel-rpm-value{i + 1}", profile.RpmTimingsRpm[i]);
-            }
-            if (profile.RpmBlinkInterval >= 0)
-                _deviceManager.WriteSetting("wheel-rpm-interval", profile.RpmBlinkInterval);
 
-            // Dashboard timings
+            // Dashboard timings (always applied)
             if (profile.DashRpmMode >= 0)
                 _deviceManager.WriteSetting("dash-rpm-mode", profile.DashRpmMode);
             if (profile.DashRpmTimingsPercent != null)
@@ -1102,6 +1088,7 @@ namespace MozaPlugin
                 // Colors
                 WriteColorArray(extSettings.WheelRpmColors, "wheel-rpm-color", 10);
                 WriteColorArray(extSettings.WheelRpmBlinkColors, "wheel-rpm-blink-color", 10);
+                WriteColorArray(extSettings.WheelButtonColors, "wheel-button-color", 14);
                 WriteColorArray(extSettings.WheelFlagColors, "wheel-flag-color", 6);
                 if (extSettings.WheelIdleColor != null && extSettings.WheelIdleColor.Length > 0)
                 {

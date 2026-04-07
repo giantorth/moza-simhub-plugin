@@ -19,13 +19,15 @@ namespace MozaPlugin.Devices
     {
         private Color[]? _lastLeds;
         private Color[]? _lastButtons;
-        private LedDeviceState? _lastState;
+        private LedDeviceState _lastState = new LedDeviceState(
+            Array.Empty<Color>(), Array.Empty<Color>(), Array.Empty<Color>(),
+            Array.Empty<Color>(), Array.Empty<Color>(), 1.0, 1.0, 1.0, 1.0);
         private double _lastBrightness = -1;
         private double _lastButtonsBrightness = -1;
 
         public LedModuleSettings LedModuleSettings { get; set; } = null!;
 
-        public LedDeviceState LastState => _lastState!;
+        public LedDeviceState LastState => _lastState;
 
         public event EventHandler? BeforeDisplay;
         public event EventHandler? AfterDisplay;
@@ -98,7 +100,7 @@ namespace MozaPlugin.Devices
                 if (!isNewWheel && !isOldWheel)
                     return;
 
-                int count = Math.Min(ledColors.Length, 10);
+                int count = Math.Min(ledColors.Length, MozaDeviceConstants.RpmLedCount);
 
                 // Build bitmask: bit i set if LED i has any color
                 int bitmask = 0;
@@ -110,25 +112,7 @@ namespace MozaPlugin.Devices
 
                 if (isNewWheel)
                 {
-                    // Send colors via bulk telemetry command (2 chunks of 20 bytes)
-                    var colorData = new byte[40];
-                    for (int i = 0; i < count; i++)
-                    {
-                        int offset = i * 4;
-                        colorData[offset] = (byte)i;
-                        colorData[offset + 1] = ledColors[i].R;
-                        colorData[offset + 2] = ledColors[i].G;
-                        colorData[offset + 3] = ledColors[i].B;
-                    }
-
-                    var chunk1 = new byte[20];
-                    var chunk2 = new byte[20];
-                    Array.Copy(colorData, 0, chunk1, 0, 20);
-                    Array.Copy(colorData, 20, chunk2, 0, 20);
-                    plugin.DeviceManager.WriteArray("wheel-telemetry-rpm-colors", chunk1);
-                    plugin.DeviceManager.WriteArray("wheel-telemetry-rpm-colors", chunk2);
-
-                    // Send bitmask to turn LEDs on
+                    SendColorChunks(plugin, ledColors, count, "wheel-telemetry-rpm-colors");
                     plugin.DeviceManager.WriteArray("wheel-send-rpm-telemetry",
                         new byte[] { (byte)(bitmask & 0xFF), (byte)((bitmask >> 8) & 0xFF) });
                 }
@@ -145,9 +129,8 @@ namespace MozaPlugin.Devices
                     {
                         _lastButtons = (Color[])buttonColors.Clone();
 
-                        int buttonCount = Math.Min(buttonColors.Length, 14);
+                        int buttonCount = Math.Min(buttonColors.Length, MozaDeviceConstants.ButtonLedCount);
 
-                        // Build bitmask for buttons
                         int buttonBitmask = 0;
                         for (int i = 0; i < buttonCount; i++)
                         {
@@ -155,27 +138,7 @@ namespace MozaPlugin.Devices
                                 buttonBitmask |= (1 << i);
                         }
 
-                        // Send colors via bulk telemetry command (3 chunks of 20 bytes)
-                        var colorData = new byte[60];
-                        for (int i = 0; i < buttonCount; i++)
-                        {
-                            int offset = i * 4;
-                            colorData[offset] = (byte)i;
-                            colorData[offset + 1] = buttonColors[i].R;
-                            colorData[offset + 2] = buttonColors[i].G;
-                            colorData[offset + 3] = buttonColors[i].B;
-                        }
-
-                        var chunk1 = new byte[20];
-                        var chunk2 = new byte[20];
-                        var chunk3 = new byte[20];
-                        Array.Copy(colorData, 0, chunk1, 0, 20);
-                        Array.Copy(colorData, 20, chunk2, 0, 20);
-                        Array.Copy(colorData, 40, chunk3, 0, 20);
-                        plugin.DeviceManager.WriteArray("wheel-telemetry-button-colors", chunk1);
-                        plugin.DeviceManager.WriteArray("wheel-telemetry-button-colors", chunk2);
-                        plugin.DeviceManager.WriteArray("wheel-telemetry-button-colors", chunk3);
-
+                        SendColorChunks(plugin, buttonColors, buttonCount, "wheel-telemetry-button-colors");
                         plugin.DeviceManager.WriteArray("wheel-send-buttons-telemetry",
                             new byte[] { (byte)(buttonBitmask & 0xFF), (byte)((buttonBitmask >> 8) & 0xFF) });
                     }
@@ -200,6 +163,33 @@ namespace MozaPlugin.Devices
             finally
             {
                 AfterDisplay?.Invoke(this, EventArgs.Empty);
+            }
+        }
+
+        /// <summary>
+        /// Pack colors into 4-byte-per-LED format and send in 20-byte chunks.
+        /// </summary>
+        private static void SendColorChunks(MozaPlugin plugin, Color[] colors, int count, string command)
+        {
+            int dataLen = count * 4;
+            // Round up to next multiple of 20 for chunk alignment
+            int bufferLen = ((dataLen + 19) / 20) * 20;
+            var colorData = new byte[bufferLen];
+
+            for (int i = 0; i < count; i++)
+            {
+                int offset = i * 4;
+                colorData[offset] = (byte)i;
+                colorData[offset + 1] = colors[i].R;
+                colorData[offset + 2] = colors[i].G;
+                colorData[offset + 3] = colors[i].B;
+            }
+
+            for (int pos = 0; pos < bufferLen; pos += 20)
+            {
+                var chunk = new byte[20];
+                Array.Copy(colorData, pos, chunk, 0, 20);
+                plugin.DeviceManager.WriteArray(command, chunk);
             }
         }
     }
