@@ -28,13 +28,37 @@ namespace MozaPlugin.Devices
 
         public LedDeviceState LastState => _lastState;
 
+        private bool _wasConnected;
+
         public event EventHandler? BeforeDisplay;
         public event EventHandler? AfterDisplay;
-#pragma warning disable CS0067 // Required by ILedDeviceManager interface
         public event EventHandler? OnConnect;
+#pragma warning disable CS0067 // Required by ILedDeviceManager interface
         public event EventHandler? OnError;
-        public event EventHandler? OnDisconnect;
 #pragma warning restore CS0067
+        public event EventHandler? OnDisconnect;
+
+        /// <summary>
+        /// Check current detection state and fire OnConnect/OnDisconnect if it changed.
+        /// Called from device extension's DataUpdate() every frame.
+        /// </summary>
+        internal void UpdateConnectionState()
+        {
+            bool connected = IsConnected();
+            if (connected == _wasConnected) return;
+            _wasConnected = connected;
+
+            if (connected)
+            {
+                OnConnect?.Invoke(this, EventArgs.Empty);
+            }
+            else
+            {
+                _lastBitmask = -1;
+                _lastBrightness = -1;
+                OnDisconnect?.Invoke(this, EventArgs.Empty);
+            }
+        }
 
         public bool IsConnected() => MozaPlugin.Instance?.IsDashDetected ?? false;
 

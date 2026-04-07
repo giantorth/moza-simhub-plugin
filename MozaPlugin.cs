@@ -243,6 +243,7 @@ namespace MozaPlugin
                 _oldWheelDetected = false;
                 _handbrakeDetected = false;
                 _pedalsDetected = false;
+                _deviceManager.ResetWheelDetection();
                 SimHub.Logging.Current.Info("[Moza] Connection disabled");
             }
         }

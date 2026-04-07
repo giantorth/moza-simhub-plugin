@@ -20,6 +20,7 @@ namespace MozaPlugin.Devices
     internal class MozaWheelDeviceExtension : DeviceExtension
     {
         private MozaWheelExtensionSettings _settings = new MozaWheelExtensionSettings();
+        private MozaLedDeviceManager? _ledDriver;
         private bool _driverInjected;
         private bool _buttonsCountSet;
 
@@ -51,8 +52,8 @@ namespace MozaPlugin.Devices
                 {
                     if (instance is LedModuleDevice lmd && lmd.ledModuleSettings != null)
                     {
-                        var mozaDriver = new MozaLedDeviceManager();
-                        mozaDriver.LedModuleSettings = lmd.ledModuleSettings;
+                        _ledDriver = new MozaLedDeviceManager();
+                        _ledDriver.LedModuleSettings = lmd.ledModuleSettings;
 
                         // DeviceDriver setter is protected — use reflection
                         var prop = typeof(LedModuleSettings).GetProperty(
@@ -61,7 +62,7 @@ namespace MozaPlugin.Devices
 
                         if (prop?.GetSetMethod(nonPublic: true) != null)
                         {
-                            prop.GetSetMethod(nonPublic: true)!.Invoke(lmd.ledModuleSettings, new object[] { mozaDriver });
+                            prop.GetSetMethod(nonPublic: true)!.Invoke(lmd.ledModuleSettings, new object[] { _ledDriver });
                             _driverInjected = true;
 
                             // Expose button LEDs for new-protocol wheels
@@ -113,6 +114,9 @@ namespace MozaPlugin.Devices
             // Try injection again if it failed during Init (timing issue).
             if (!_driverInjected)
                 InjectLedDriver();
+
+            // Notify SimHub when detection state changes so it resumes/pauses Display() calls
+            _ledDriver?.UpdateConnectionState();
 
             // Set ButtonsCount once wheel detection completes (may happen after injection)
             if (_driverInjected && !_buttonsCountSet && MozaPlugin.Instance?.IsNewWheelDetected == true)

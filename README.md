@@ -1,45 +1,51 @@
 # MOZA Plugin for SimHub
 
-A SimHub plugin that communicates directly with MOZA Racing hardware over serial, providing telemetry: it sends in-game RPM data to your wheel/dashboard LEDs **and** lets you configure your wheelbase, wheel LEDs, and dashboard from within SimHub.
+A SimHub plugin that communicates directly with MOZA Racing hardware over serial, providing full hardware configuration and LED control through SimHub's native device and effects system.
 
-Built using the amazing work of the [boxflat](https://github.com/Lawstorant/boxflat) project that reverse-engineered the [MOZA serial protocol](../moza-protocol.md).
+Built using the amazing work of [Boxflat](https://github.com/Lawstorant/boxflat) that reverse-engineered the [MOZA serial protocol](../moza-protocol.md).
 
 ![MOZA Plugin Settings](docs/Screenshot.png)
 
 > [!WARNING]
 > **USE AT YOUR OWN RISK.** This software communicates directly with force feedback hardware capable of producing high torque output that can cause serious injury or property damage. This plugin is provided "as is", without warranty of any kind, express or implied. The authors accept no responsibility or liability for any damage to hardware, injury to persons, or any other loss arising from the use of this software. By using this plugin, you acknowledge the inherent risks of controlling force feedback devices via third-party software and accept full responsibility for any consequences.
 
+## Installation
+
+Download the latest `MozaPlugin_v*.zip` from the [Releases](https://github.com/giantorth/moza-simhub-plugin/releases) page and extract into your SimHub installation directory:
+
+- `MozaPlugin.dll` — copy to the SimHub root directory
+- `MozaRacingWheel.shdevicetemplate` — copy to `DevicesDefaults/StandardDevicesTemplatesUser/` (create the folder if it doesn't exist)
+- `MozaRacingDash.shdevicetemplate` — copy to `DevicesDefaults/StandardDevicesTemplatesUser/`
+
+Restart SimHub — the plugin appears under Settings > Plugins as "MOZA Control". To use SimHub's LED effects system, go to Devices and add the "MOZA Racing Wheel" and/or "MOZA Racing Dash" devices.
+
 ## Features
 
-### Game Telemetry Output (RPM LEDs)
+### SimHub Device Integration
 
-Sends real-time RPM data from any SimHub-supported game to your MOZA wheel and dashboard LEDs:
+MOZA wheels and dashboards register as native SimHub devices, appearing in SimHub's **Devices** section. This enables full control of your LEDs through SimHub's effects pipeline — no separate telemetry mode needed.
 
-- **10-LED RPM bar** lights up progressively as RPM climbs
-- **Blink at redline** (95%+ RPM range, or when SimHub's car redline is reached in SimHub mode)
-- **Three RPM modes**: Percent (% of max RPM), RPM (absolute thresholds), or SimHub (uses SimHub's Car Settings shift light zones)
-- **Automatic idle-to-max scaling** using the game's reported RPM range
-- **Keepalive** sends at least once per second to prevent LED timeout
-- **LED clear** on game exit and plugin shutdown
+![Device Panel](docs/Device.png)
+
+- **LED Effects System** — Use SimHub's full effects configuration UI (RPM indicators, flags, speed limiter animations, scripted effects, etc.) to control your wheel and dashboard LEDs
+- **Per-Game Device Profiles** — SimHub's device profile system saves and restores LED effect configurations per game
+- **Auto-Detection** — MOZA devices are automatically detected by USB VID/PID when adding a new device
+- **Separate Wheel & Dashboard Devices** — Each registers independently with its own profile and LED configuration
+
+![LED Effects Configuration](docs/Leds.png)
+
+The plugin injects virtual LED drivers so SimHub's effects UI shows each device as connected, even though MOZA uses a proprietary serial protocol. The computed LED colors are forwarded to the hardware each frame.
 
 Tested:
 - Old-protocol wheels (ES series)
 - R5 Base
 - Moza handbrake (directly attached)
 
-Untested:
-- Dashboard (**testers needed**)
+Preliminary Support:
 - New-protocol wheels (GS/FSR/CS/RS/TSW) (**testers needed**)
 
-### SimHub Device Integration
-
-MOZA wheels register as native SimHub devices, appearing in SimHub's **Devices** section. This enables:
-
-- **LED Effects System** — Use SimHub's full effects configuration UI (RPM indicators, flags, speed limiter animations, scripted effects, etc.) to control your wheel LEDs instead of the plugin's built-in RPM modes
-- **Per-Game Device Profiles** — SimHub's device profile system saves and restores LED effect configurations per game
-- **Auto-Detection** — MOZA devices are automatically detected by USB VID/PID when adding a new device
-
-The plugin injects a virtual LED driver so SimHub's effects UI shows the device as connected, even though MOZA uses a proprietary serial protocol. The computed LED colors are forwarded to the wheel hardware each frame.
+Untested:
+- Dashboard (**testers needed**)
 
 ### Per-Game Profiles
 
@@ -169,15 +175,6 @@ The Wheel tab auto-detects which wheel is connected and shows the appropriate se
 | RPM Display Mode | Mode 1 / Mode 2 | |
 | RPM Brightness | 0-15 | |
 
-#### Shared RPM Timing Settings (Both Wheel Types)
-
-| Setting | Range | Notes |
-|---------|-------|-------|
-| RPM Mode | Percent / RPM / SimHub | SimHub mode uses Car Settings shift light zones |
-| RPM Thresholds (Percent) | 10 sliders, 0-99% | Presets: Linear, Early, Normal, Late |
-| RPM Thresholds (RPM) | 10 sliders, 2000-20000 | Presets: Early, Normal, Late |
-| Blink Interval | 0-1000 ms | |
-
 ### Dashboard LED Configuration (Dashboard Tab)
 
 > Auto-detected — tab is hidden if no dashboard is connected.
@@ -186,10 +183,8 @@ The Wheel tab auto-detects which wheel is connected and shows the appropriate se
 |---------|-------|-------|
 | RPM Indicator Mode | Off / RPM / On | |
 | RPM Display Mode | Mode 1 / Mode 2 | |
-| RPM Mode | Percent / RPM / SimHub | SimHub mode uses Car Settings shift light zones |
 | RPM LED Colors | 10 RGB color pickers | |
 | RPM Brightness | 0-15 | |
-| Blink Interval | 0-1000 ms | |
 | Flags Mode | Off / Flags / On | |
 | Flag LED Colors | 6 RGB color pickers | |
 | Flags Brightness | 0-15 | |
@@ -229,6 +224,10 @@ Brake has an additional **Sensor Ratio** slider (0-100%) to blend between angle 
 | Setting | Description |
 |---------|-------------|
 | Apply profile settings on launch | Automatically apply the saved profile when a game starts |
+| Limit wheel updates | Only send LED updates when data changes (fixes flickering on some wheels) |
+| Wheel keepalive | Resend LED state every ~1 second (keeps ES wheels in telemetry mode) |
+| Always resend bitmask | Resend bitmask with every color update (fixes wheels that miss color changes) |
+| Connection enabled | Toggle serial connection to MOZA hardware |
 | Clear All Settings & Profiles | Reset all plugin settings and profiles to defaults |
 
 ### SimHub Properties
@@ -244,15 +243,6 @@ The plugin exposes these properties for use in SimHub dashboards and overlays:
 | `Moza.BaseState` | int | Wheelbase state |
 | `Moza.FfbStrength` | int | FFB strength (%) |
 | `Moza.MaxAngle` | int | Max steering angle (degrees) |
-
-## Installation
-
-Download the latest `MozaPlugin_v*.zip` from the [Releases](https://github.com/giantorth/moza-simhub-plugin/releases) page and extract into your SimHub installation directory:
-
-- `MozaPlugin.dll` — copy to the SimHub root directory
-- `MozaRacingWheel.shdevicetemplate` — copy to `DevicesDefaults/StandardDevicesTemplatesUser/` (create the folder if it doesn't exist)
-
-Restart SimHub — the plugin appears under Settings > Plugins as "MOZA Control". To use SimHub's LED effects system, go to Devices and add the "MOZA Wheel" device.
 
 ## Building from Source
 
@@ -363,18 +353,14 @@ The plugin communicates with MOZA hardware over USB serial (CDC/ACM) at 115200 b
 - **Background threads**: Separate read and write threads prevent blocking
 - **Checksum**: `(13 + sum_of_all_bytes) % 256`
 
-### RPM Telemetry Flow
+### LED Pipeline
 
-On every SimHub frame (~60fps):
+The plugin registers MOZA wheel and dashboard as native SimHub LED devices by injecting virtual LED drivers (`MozaLedDeviceManager` / `MozaDashLedDeviceManager`). SimHub's effects pipeline computes LED colors each frame (RPM indicators, flags, animations, scripted effects, etc.) and calls `Display()` on the virtual driver, which converts the colors to MOZA's bitmask/color protocol and sends them to hardware over serial.
 
-1. Read current RPM, max RPM, and idle RPM from `GameData`
-2. Calculate RPM as percentage of usable range: `(rpm - idle) / (max - idle) * 100`
-3. Map to 10-bit LED bitmask using the configured RPM mode:
-   - **Percent**: user-configured % thresholds per LED
-   - **RPM**: user-configured absolute RPM thresholds per LED
-   - **SimHub**: uses SimHub's Car Settings shift light zones (3 LEDs per zone: shift 1 / shift 2 / redline)
-4. When all 10 LEDs are lit (or redline reached in SimHub mode), blink LEDs on/off at the configured blink interval (independent per wheel and dashboard)
-5. Send bitmask to dashboard (`write group 65, cmd [253, 222]`) and/or wheel (`write group 63, cmd [26, 0]`)
+- **Wheel**: RPM bitmask (10 LEDs) + button bitmask (14 LEDs) sent as separate commands
+- **Dashboard**: Combined bitmask (10 RPM + 6 flag LEDs) sent as a single 16-bit value
+- **Brightness**: Forwarded from SimHub's per-device brightness setting
+- **Keepalive**: Periodic resend (~1s) to prevent LED timeout on some hardware
 
 ### Settings Read/Write Flow
 
@@ -397,14 +383,19 @@ Protocol/
 Telemetry/
   MozaData.cs                      Thread-safe data model for all device values
 Devices/
-  MozaDeviceExtensionFilter.cs     Attaches extension to MOZA devices in SimHub's device system
-  MozaWheelDeviceExtension.cs      Device extension — settings tab, profiles, LED driver injection
-  MozaLedDeviceManager.cs          Virtual LED driver — spoofs connection, forwards LED colors
+  MozaDeviceExtensionFilter.cs     Attaches extensions to MOZA devices in SimHub's device system
+  MozaDeviceConstants.cs           Shared device type IDs and LED counts
+  MozaWheelDeviceExtension.cs      Wheel device extension — profiles, LED driver injection
   MozaWheelExtensionSettings.cs    Wheel settings for SimHub device profiles
-  MozaWheelSettingsControl.xaml(.cs) Status panel for the device extension tab
-  MozaDeviceConstants.cs           Shared device type ID constant
+  MozaWheelSettingsControl.xaml(.cs) Status panel for the wheel device extension tab
+  MozaLedDeviceManager.cs          Virtual wheel LED driver — spoofs connection, forwards LED colors
+  MozaDashDeviceExtension.cs       Dashboard device extension — profiles, LED driver injection
+  MozaDashExtensionSettings.cs     Dashboard settings for SimHub device profiles
+  MozaDashSettingsControl.xaml(.cs) Status panel for the dashboard device extension tab
+  MozaDashLedDeviceManager.cs      Virtual dashboard LED driver — spoofs connection, forwards bitmask
 DeviceTemplates/
-  MozaWheel/                       Source files for .shdevicetemplate (zipped at build time)
+  MozaWheel/                       Source files for wheel .shdevicetemplate (zipped at build time)
+  MozaDash/                        Source files for dashboard .shdevicetemplate (zipped at build time)
 UI/
   SettingsControl.xaml(.cs)        WPF settings UI (Base, Wheel, Dashboard*, Handbrake*, Pedals*, Options tabs; *autodetected)
   ColorPickerDialog.xaml(.cs)      RGB color picker dialog

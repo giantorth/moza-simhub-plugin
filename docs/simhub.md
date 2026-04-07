@@ -535,6 +535,8 @@ foreach (var instance in LinkedDevice.GetInstances())
 
 After injection, SimHub's LEDs tab shows "Connected" and the full effects configuration UI is available. SimHub calls `Display()` every frame with the computed `Func<Color[]>` callbacks, which the virtual driver evaluates and forwards.
 
+**Dynamic connection state:** `IsConnected()` can return a dynamic value (e.g. based on hardware detection) instead of always `true`. When the state changes, fire the `OnConnect` or `OnDisconnect` event so SimHub updates the LED pipeline. Without firing these events, SimHub may not notice the transition and will not resume `Display()` calls after a reconnection. The events should be fired from the device extension's `DataUpdate()` (called every frame regardless of connection state), not from `Display()` itself (which stops being called when disconnected). Internal state (cached bitmasks, brightness, wake-up flags) should be reset on disconnect so the device re-initializes cleanly on reconnect.
+
 **`LedModuleSettings.Display()` internals:**
 ```csharp
 DeviceDriver.Display(

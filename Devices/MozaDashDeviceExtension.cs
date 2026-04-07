@@ -19,6 +19,7 @@ namespace MozaPlugin.Devices
     internal class MozaDashDeviceExtension : DeviceExtension
     {
         private MozaDashExtensionSettings _settings = new MozaDashExtensionSettings();
+        private MozaDashLedDeviceManager? _ledDriver;
         private bool _driverInjected;
 
         public override string ExtentionTabTitle => "MOZA Dashboard";
@@ -51,8 +52,8 @@ namespace MozaPlugin.Devices
                 {
                     if (instance is LedModuleDevice lmd && lmd.ledModuleSettings != null)
                     {
-                        var mozaDriver = new MozaDashLedDeviceManager();
-                        mozaDriver.LedModuleSettings = lmd.ledModuleSettings;
+                        _ledDriver = new MozaDashLedDeviceManager();
+                        _ledDriver.LedModuleSettings = lmd.ledModuleSettings;
 
                         var prop = typeof(LedModuleSettings).GetProperty(
                             "DeviceDriver",
@@ -60,7 +61,7 @@ namespace MozaPlugin.Devices
 
                         if (prop?.GetSetMethod(nonPublic: true) != null)
                         {
-                            prop.GetSetMethod(nonPublic: true)!.Invoke(lmd.ledModuleSettings, new object[] { mozaDriver });
+                            prop.GetSetMethod(nonPublic: true)!.Invoke(lmd.ledModuleSettings, new object[] { _ledDriver });
                             _driverInjected = true;
                             SimHub.Logging.Current.Info("[Moza] Injected virtual LED driver for dashboard");
                         }
@@ -98,6 +99,9 @@ namespace MozaPlugin.Devices
             // Retry injection if it failed during Init (timing issue)
             if (!_driverInjected)
                 InjectLedDriver();
+
+            // Notify SimHub when detection state changes so it resumes/pauses Display() calls
+            _ledDriver?.UpdateConnectionState();
         }
 
         public override void LoadDefaultSettings()

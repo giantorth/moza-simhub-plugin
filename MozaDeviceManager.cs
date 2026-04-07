@@ -19,6 +19,16 @@ namespace MozaPlugin
 
         public byte WheelDeviceId => _wheelDeviceId;
 
+        /// <summary>
+        /// Reset wheel detection state so ProbeWheelDetection() will probe again.
+        /// Call when the serial connection is intentionally disconnected.
+        /// </summary>
+        public void ResetWheelDetection()
+        {
+            _wheelDetected = false;
+            _wheelDeviceId = MozaProtocol.DeviceWheel;
+        }
+
         public MozaDeviceManager(MozaSerialConnection connection)
         {
             _connection = connection;

@@ -29,7 +29,7 @@ The project targets .NET Framework 4.8 (x86) and uses the `Microsoft.NETFramewor
 - `MozaResponseParser` — Decodes responses using bit-7 toggle, nibble swap, and wildcard matching
 - `MozaProtocol` — Constants (start byte `0x7E`, device IDs, checksum formula: `(13 + sum) % 256`)
 
-**Device Management** (`MozaDeviceManager.cs`) — High-level read/write API. Handles wheel device ID cycling (IDs 23→21→19) since ES wheels respond on different IDs.
+**Device Management** (`MozaDeviceManager.cs`) — High-level read/write API. Handles wheel device ID cycling (IDs 23→21→19) since ES wheels respond on different IDs. `ResetWheelDetection()` must be called on disconnect so detection probes are re-sent on reconnect.
 
 **Data Model** (`Telemetry/MozaData.cs`) — Thread-safe storage (~60 volatile fields) for all device values. `UpdateFromCommand()` maps parsed responses to fields; `UpdateFromArray()` handles color/timing byte arrays.
 
@@ -37,14 +37,27 @@ The project targets .NET Framework 4.8 (x86) and uses the `Microsoft.NETFramewor
 
 **Profile System** (`UI/MozaProfile.cs`, `UI/MozaProfileStore.cs`) — Per-game configuration snapshots using SimHub's `ProfileBase`. Uses -1 sentinel to mark settings not included in a profile.
 
-**Device Extension System** (`Devices/`) — Registers MOZA wheels as SimHub devices so they appear in SimHub's Devices section with native LED effects support:
-- `MozaDeviceExtensionFilter` — `IDeviceExtensionFilter` that attaches the extension to MOZA devices
-- `MozaWheelDeviceExtension` — `DeviceExtension` subclass providing a settings tab and per-game device profiles via `GetSettings()`/`SetSettings()`
-- `MozaLedDeviceManager` — Virtual `ILedDeviceManager` injected via reflection into the device's LED module. Reports as always-connected (enabling SimHub's effects UI) and forwards computed `Color[]` to MOZA hardware in `Display()`
-- `MozaWheelExtensionSettings` — Wheel-specific settings serialized to SimHub device profiles
-- `MozaWheelSettingsControl` — Lightweight status panel for the device tab
+**Device Extension System** (`Devices/`) — Registers MOZA devices as SimHub devices so they appear in SimHub's Devices section with native LED effects support. Each device type (wheel, dashboard) has its own extension, LED manager, settings class, and settings control:
 
-**Device Template** (`DeviceTemplates/MozaWheel/`) — `.shdevicetemplate` ZIP (built automatically) containing `device.json`, `defaults.json`, and `picture.png`. Deployed to SimHub's `StandardDevicesTemplatesUser/` directory. SimHub deletes this file when the user removes the device, so the plugin should re-deploy it.
+*Shared:*
+- `MozaDeviceExtensionFilter` — `IDeviceExtensionFilter` that routes devices by `StandardDeviceId` to the correct extension (`MozaRacingWheel` → wheel, `MozaRacingDash` → dash)
+- `MozaDeviceConstants` — `StandardDeviceId` strings and LED count constants for each device type
+
+*Wheel:*
+- `MozaWheelDeviceExtension` — `DeviceExtension` subclass providing a settings tab and per-game device profiles via `GetSettings()`/`SetSettings()`
+- `MozaLedDeviceManager` — Virtual `ILedDeviceManager` injected via reflection into the device's LED module. Reports connected when the wheel is detected (via `OnConnect`/`OnDisconnect` events fired from `UpdateConnectionState()`). Forwards computed `Color[]` to MOZA hardware as per-frame color chunks + bitmask in `Display()`
+- `MozaWheelExtensionSettings` — Wheel-specific settings serialized to SimHub device profiles
+- `MozaWheelSettingsControl` — Status panel with indicator modes, brightness, color swatches, and paddle settings
+
+*Dashboard:*
+- `MozaDashDeviceExtension` — Dashboard device extension, same pattern as wheel
+- `MozaDashLedDeviceManager` — Virtual `ILedDeviceManager` for the dashboard. Reports connected when the dash is detected. Converts SimHub LED colors to a 16-bit bitmask (bits 0-9 = RPM, bits 10-15 = flags) sent via `dash-send-telemetry`. Unlike the wheel, no per-frame colors are sent — the dash firmware uses stored colors and only receives the on/off bitmask
+- `MozaDashExtensionSettings` — Dashboard-specific settings (brightness, indicator modes, colors)
+- `MozaDashSettingsControl` — Status panel with indicator modes, brightness, and color swatches (RPM, blink, flags)
+
+**Device Templates** (`DeviceTemplates/`) — `.shdevicetemplate` ZIPs (built automatically) containing `device.json`, `defaults.json`, and `picture.png`. Deployed to SimHub's `StandardDevicesTemplatesUser/` directory. SimHub deletes these files when the user removes the device, so the plugin should re-deploy them.
+- `MozaWheel/` → `MozaRacingWheel.shdevicetemplate` (10 RPM LEDs, optional 14 button LEDs)
+- `MozaDash/` → `MozaRacingDash.shdevicetemplate` (16 LEDs: 10 RPM + 6 flag as single strip)
 
 ### Adding New Device Settings
 
