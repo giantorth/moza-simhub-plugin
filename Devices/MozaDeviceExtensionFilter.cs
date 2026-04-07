@@ -21,6 +21,12 @@ namespace MozaPlugin.Devices
             {
                 yield return typeof(MozaWheelDeviceExtension);
             }
+
+            if (typeId == MozaDeviceConstants.DashStandardDeviceId
+                || typeId.StartsWith(MozaDeviceConstants.DashStandardDeviceId + "_", StringComparison.OrdinalIgnoreCase))
+            {
+                yield return typeof(MozaDashDeviceExtension);
+            }
         }
     }
 }

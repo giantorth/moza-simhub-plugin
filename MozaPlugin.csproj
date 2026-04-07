@@ -78,4 +78,21 @@
           DestinationFolder="$(SIMHUB_PATH)/DevicesDefaults/StandardDevicesTemplatesUser" />
   </Target>
 
+  <!-- Build .shdevicetemplate ZIP from DeviceTemplates/MozaDash/ -->
+  <Target Name="BuildDashDeviceTemplate" AfterTargets="Build">
+    <PropertyGroup>
+      <DashTemplateDir>$(MSBuildProjectDirectory)/DeviceTemplates/MozaDash</DashTemplateDir>
+      <DashTemplateOutput>$(OutputPath)MozaRacingDash.shdevicetemplate</DashTemplateOutput>
+    </PropertyGroup>
+    <Delete Files="$(DashTemplateOutput)" Condition="Exists('$(DashTemplateOutput)')" />
+    <ZipDirectory SourceDirectory="$(DashTemplateDir)" DestinationFile="$(DashTemplateOutput)" />
+  </Target>
+
+  <!-- Copy dash device template to SimHub on deploy -->
+  <Target Name="DeployDashDeviceTemplate" AfterTargets="BuildDashDeviceTemplate" Condition="'$(SIMHUB_PATH)' != ''">
+    <MakeDir Directories="$(SIMHUB_PATH)/DevicesDefaults/StandardDevicesTemplatesUser" />
+    <Copy SourceFiles="$(OutputPath)MozaRacingDash.shdevicetemplate"
+          DestinationFolder="$(SIMHUB_PATH)/DevicesDefaults/StandardDevicesTemplatesUser" />
+  </Target>
+
 </Project>

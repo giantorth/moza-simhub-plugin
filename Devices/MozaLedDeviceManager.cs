@@ -48,7 +48,8 @@ namespace MozaPlugin.Devices
         public event EventHandler? OnDisconnect;
 #pragma warning restore CS0067
 
-        public bool IsConnected() => true;
+        public bool IsConnected() =>
+            MozaPlugin.Instance is { } p && (p.IsNewWheelDetected || p.IsOldWheelDetected);
 
         public string GetSerialNumber() => "MOZA-VIRTUAL";
 
@@ -115,6 +116,7 @@ namespace MozaPlugin.Devices
                 }
 
                 bool limitUpdates = plugin.Settings.LimitWheelUpdates;
+                bool alwaysResendBitmask = plugin.Settings.AlwaysResendBitmask;
                 bool anySent = false;
 
                 // --- RPM LEDs ---
@@ -139,7 +141,7 @@ namespace MozaPlugin.Devices
                     {
                         SendColorChunks(plugin, ledColors, count, "wheel-telemetry-rpm-colors");
 
-                        if (bitmask != _lastRpmBitmask)
+                        if (alwaysResendBitmask || bitmask != _lastRpmBitmask)
                         {
                             _lastRpmBitmask = bitmask;
                             plugin.DeviceManager.WriteArray("wheel-send-rpm-telemetry",
@@ -150,7 +152,7 @@ namespace MozaPlugin.Devices
                     else if (isOldWheel)
                     {
                         // ES wheels: can't set colors per-frame, just send bitmask
-                        if (bitmask != _lastRpmBitmask)
+                        if (alwaysResendBitmask || bitmask != _lastRpmBitmask)
                         {
                             _lastRpmBitmask = bitmask;
                             plugin.DeviceManager.WriteSetting("wheel-old-send-telemetry", bitmask);
@@ -180,7 +182,7 @@ namespace MozaPlugin.Devices
 
                         SendColorChunks(plugin, buttonColors, buttonCount, "wheel-telemetry-button-colors");
 
-                        if (buttonBitmask != _lastButtonBitmask)
+                        if (alwaysResendBitmask || buttonBitmask != _lastButtonBitmask)
                         {
                             _lastButtonBitmask = buttonBitmask;
                             plugin.DeviceManager.WriteArray("wheel-send-buttons-telemetry",

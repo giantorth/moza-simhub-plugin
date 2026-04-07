@@ -1,0 +1,143 @@
+using System;
+using System.Collections.Generic;
+using System.Reflection;
+using System.Windows.Controls;
+using GameReaderCommon;
+using Newtonsoft.Json.Linq;
+using SimHub.Plugins;
+using SimHub.Plugins.Devices;
+using SimHub.Plugins.Devices.DeviceExtensions;
+using SimHub.Plugins.OutputPlugins.GraphicalDash.LedModules;
+
+namespace MozaPlugin.Devices
+{
+    /// <summary>
+    /// SimHub device extension for MOZA Dashboard.
+    /// Injects a virtual LED driver so SimHub's effects UI works for the dash,
+    /// then bridges computed LED colors to MOZA hardware via bitmask telemetry.
+    /// </summary>
+    internal class MozaDashDeviceExtension : DeviceExtension
+    {
+        private MozaDashExtensionSettings _settings = new MozaDashExtensionSettings();
+        private bool _driverInjected;
+
+        public override string ExtentionTabTitle => "MOZA Dashboard";
+
+        public override void Init(PluginManager pluginManager)
+        {
+            InjectLedDriver();
+
+            pluginManager.AttachDelegate(
+                LinkedDevice.DeviceDescriptor.Name + "_MozaDashActive",
+                this.GetType(),
+                () => MozaPlugin.Instance?.IsDashDetected ?? false);
+
+            var plugin = MozaPlugin.Instance;
+            if (plugin != null)
+                plugin.DashDeviceExtensionActive = true;
+        }
+
+        /// <summary>
+        /// Find the LedModuleDevice sub-device and replace its DeviceDriver
+        /// with our MozaDashLedDeviceManager that always reports connected.
+        /// </summary>
+        private void InjectLedDriver()
+        {
+            if (_driverInjected) return;
+
+            try
+            {
+                foreach (var instance in LinkedDevice.GetInstances())
+                {
+                    if (instance is LedModuleDevice lmd && lmd.ledModuleSettings != null)
+                    {
+                        var mozaDriver = new MozaDashLedDeviceManager();
+                        mozaDriver.LedModuleSettings = lmd.ledModuleSettings;
+
+                        var prop = typeof(LedModuleSettings).GetProperty(
+                            "DeviceDriver",
+                            BindingFlags.Public | BindingFlags.Instance);
+
+                        if (prop?.GetSetMethod(nonPublic: true) != null)
+                        {
+                            prop.GetSetMethod(nonPublic: true)!.Invoke(lmd.ledModuleSettings, new object[] { mozaDriver });
+                            _driverInjected = true;
+                            SimHub.Logging.Current.Info("[Moza] Injected virtual LED driver for dashboard");
+                        }
+                        else
+                        {
+                            SimHub.Logging.Current.Warn("[Moza] Could not find DeviceDriver setter on LedModuleSettings (dash)");
+                        }
+                        return;
+                    }
+                }
+                SimHub.Logging.Current.Info("[Moza] No LedModuleDevice found on dash device instance");
+            }
+            catch (Exception ex)
+            {
+                SimHub.Logging.Current.Error($"[Moza] Error injecting dash LED driver: {ex.Message}");
+            }
+        }
+
+        public override void End(PluginManager pluginManager)
+        {
+            pluginManager.DetachDelegate(
+                LinkedDevice.DeviceDescriptor.Name + "_MozaDashActive",
+                this.GetType());
+
+            var plugin = MozaPlugin.Instance;
+            if (plugin != null)
+            {
+                plugin.DashDeviceExtensionActive = false;
+                SimHub.Logging.Current.Info("[Moza] Dash device extension ended");
+            }
+        }
+
+        public override void DataUpdate(PluginManager pluginManager, ref GameData data)
+        {
+            // Retry injection if it failed during Init (timing issue)
+            if (!_driverInjected)
+                InjectLedDriver();
+        }
+
+        public override void LoadDefaultSettings()
+        {
+            _settings = new MozaDashExtensionSettings();
+
+            var plugin = MozaPlugin.Instance;
+            if (plugin != null)
+                _settings.CaptureFromCurrent(plugin.Settings, plugin.Data);
+        }
+
+        public override JToken GetSettings()
+        {
+            var plugin = MozaPlugin.Instance;
+            if (plugin != null)
+                _settings.CaptureFromCurrent(plugin.Settings, plugin.Data);
+
+            return JToken.FromObject(_settings);
+        }
+
+        public override void SetSettings(JToken settings, bool isDefault)
+        {
+            _settings = settings.ToObject<MozaDashExtensionSettings>() ?? new MozaDashExtensionSettings();
+
+            if (!isDefault)
+            {
+                var plugin = MozaPlugin.Instance;
+                if (plugin != null)
+                    plugin.ApplyDashExtensionSettings(_settings);
+            }
+        }
+
+        public override Control CreateSettingControl()
+        {
+            return new MozaDashSettingsControl();
+        }
+
+        public override IEnumerable<DynamicButtonAction> GetDynamicButtonActions()
+        {
+            yield break;
+        }
+    }
+}

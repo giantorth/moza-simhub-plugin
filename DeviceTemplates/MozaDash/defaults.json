@@ -1,0 +1,14 @@
+{
+  "InstanceId": null,
+  "DeviceTypeID": "MozaRacingDash",
+  "Settings": {
+    "ledModuleSettings": {
+      "VID": 13422,
+      "PID": 4,
+      "Ledcount": 16,
+      "ButtonsCount": 0,
+      "IsEnabled": true,
+      "_LEDsBrightness": 100.0
+    }
+  }
+}

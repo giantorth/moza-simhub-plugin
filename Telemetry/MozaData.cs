@@ -70,8 +70,6 @@ namespace MozaPlugin
         public volatile int WheelRpmBrightness;
         public volatile int WheelButtonsBrightness;
         public volatile int WheelFlagsBrightness;
-        public volatile int WheelRpmMode;           // 0=Percent, 1=RPM
-        public volatile int WheelRpmInterval;       // Blink interval ms
         public volatile int WheelIdleMode;
         public volatile int WheelIdleTimeout;
         public volatile int WheelIdleSpeed;
@@ -80,9 +78,6 @@ namespace MozaPlugin
         public volatile int WheelKnobMode;
         public volatile int WheelStickMode;
         public volatile int WheelRpmDisplayMode;
-
-        // Wheel RPM threshold values (10 LEDs)
-        public readonly int[] WheelRpmValues = new int[10];
 
         // Wheel RPM colors (10 LEDs, [R, G, B] each)
         public readonly byte[][] WheelRpmColors = InitRpmColorArray();
@@ -100,19 +95,12 @@ namespace MozaPlugin
         public volatile int DashRpmIndicatorMode;
         public volatile int DashFlagsIndicatorMode;
         public volatile int DashRpmDisplayMode;
-        public volatile int DashRpmMode;            // 0=Percent, 1=RPM
         public volatile int DashRpmBrightness;
         public volatile int DashFlagsBrightness;
-        public volatile int DashRpmInterval;
 
-        public readonly int[] DashRpmValues = new int[10];
         public readonly byte[][] DashRpmColors = InitRpmColorArray();
         public readonly byte[][] DashRpmBlinkColors = InitRpmColorArray();
         public readonly byte[][] DashFlagColors = InitFlagColorArray();
-
-        // RPM timings array (percent mode, 10 values)
-        public readonly byte[] WheelRpmTimings = new byte[10];
-        public readonly byte[] DashRpmTimings = new byte[10];
 
         // ===== FFB Equalizer (6 bands: 10/15/25/40/60/100 Hz, 0-400% where 100% = flat) =====
         public volatile int Equalizer1 = 100;
@@ -252,8 +240,6 @@ namespace MozaPlugin
                 case "wheel-rpm-brightness":         WheelRpmBrightness = value; break;
                 case "wheel-buttons-brightness":     WheelButtonsBrightness = value; break;
                 case "wheel-flags-brightness":       WheelFlagsBrightness = value; break;
-                case "wheel-rpm-mode":               WheelRpmMode = value; break;
-                case "wheel-rpm-interval":           WheelRpmInterval = value; break;
                 case "wheel-idle-mode":              WheelIdleMode = value; break;
                 case "wheel-idle-timeout":           WheelIdleTimeout = value; break;
                 case "wheel-idle-speed":             WheelIdleSpeed = value; break;
@@ -269,10 +255,8 @@ namespace MozaPlugin
                 case "dash-rpm-indicator-mode":  DashRpmIndicatorMode = value; break;
                 case "dash-flags-indicator-mode": DashFlagsIndicatorMode = value; break;
                 case "dash-rpm-display-mode":    DashRpmDisplayMode = value; break;
-                case "dash-rpm-mode":            DashRpmMode = value; break;
                 case "dash-rpm-brightness":      DashRpmBrightness = value; break;
                 case "dash-flags-brightness":    DashFlagsBrightness = value; break;
-                case "dash-rpm-interval":        DashRpmInterval = value; break;
 
                 // FFB Equalizer
                 case "base-equalizer1": Equalizer1 = value; break;
@@ -333,20 +317,6 @@ namespace MozaPlugin
                 case "handbrake-y5": HandbrakeCurve[4] = value; break;
             }
 
-            // Wheel RPM values
-            if (commandName.StartsWith("wheel-rpm-value") && commandName.Length == 16)
-            {
-                int idx = commandName[15] - '1';
-                if (commandName.Length == 17) idx = 9; // value10
-                else idx = commandName[15] - '1';
-                if (idx >= 0 && idx < 10) WheelRpmValues[idx] = value;
-            }
-            // Dash RPM values
-            else if (commandName.StartsWith("dash-rpm-value") && commandName.Length >= 15)
-            {
-                if (int.TryParse(commandName.Substring(14), out int num) && num >= 1 && num <= 10)
-                    DashRpmValues[num - 1] = value;
-            }
         }
 
         /// <summary>
@@ -402,16 +372,6 @@ namespace MozaPlugin
                 int idx = ParseTrailingIndex(commandName, "dash-flag-color");
                 if (idx >= 0 && idx < 6)
                     SetColor(DashFlagColors[idx], data);
-            }
-            // Wheel RPM timings (10-byte array)
-            else if (commandName == "wheel-rpm-timings" && data.Length >= 10)
-            {
-                Array.Copy(data, WheelRpmTimings, 10);
-            }
-            // Dash RPM timings (10-byte array)
-            else if (commandName == "dash-rpm-timings" && data.Length >= 10)
-            {
-                Array.Copy(data, DashRpmTimings, 10);
             }
         }
 

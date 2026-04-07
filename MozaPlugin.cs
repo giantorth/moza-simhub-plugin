@@ -59,10 +59,8 @@ namespace MozaPlugin
             "wheel-telemetry-mode", "wheel-telemetry-idle-effect",
             "wheel-buttons-idle-effect",
             "wheel-rpm-brightness", "wheel-buttons-brightness", "wheel-flags-brightness",
-            "wheel-rpm-mode", "wheel-rpm-interval",
             "wheel-idle-mode", "wheel-idle-timeout", "wheel-idle-speed",
             "wheel-idle-color",
-            "wheel-rpm-timings",
             // Wheel paddle settings
             "wheel-paddles-mode", "wheel-clutch-point", "wheel-knob-mode", "wheel-stick-mode",
             // Wheel RPM colors
@@ -70,11 +68,6 @@ namespace MozaPlugin
             "wheel-rpm-color4", "wheel-rpm-color5", "wheel-rpm-color6",
             "wheel-rpm-color7", "wheel-rpm-color8", "wheel-rpm-color9",
             "wheel-rpm-color10",
-            // Wheel RPM values
-            "wheel-rpm-value1", "wheel-rpm-value2", "wheel-rpm-value3",
-            "wheel-rpm-value4", "wheel-rpm-value5", "wheel-rpm-value6",
-            "wheel-rpm-value7", "wheel-rpm-value8", "wheel-rpm-value9",
-            "wheel-rpm-value10",
             // ES Wheel specific
             "wheel-rpm-indicator-mode", "wheel-get-rpm-display-mode",
             "wheel-old-rpm-brightness",
@@ -84,9 +77,8 @@ namespace MozaPlugin
             "wheel-old-rpm-color10",
             // Dash LED
             "dash-rpm-indicator-mode", "dash-flags-indicator-mode",
-            "dash-rpm-display-mode", "dash-rpm-mode",
+            "dash-rpm-display-mode",
             "dash-rpm-brightness", "dash-flags-brightness",
-            "dash-rpm-interval", "dash-rpm-timings",
             // Dash RPM colors
             "dash-rpm-color1", "dash-rpm-color2", "dash-rpm-color3",
             "dash-rpm-color4", "dash-rpm-color5", "dash-rpm-color6",
@@ -95,11 +87,6 @@ namespace MozaPlugin
             // Dash flag colors
             "dash-flag-color1", "dash-flag-color2", "dash-flag-color3",
             "dash-flag-color4", "dash-flag-color5", "dash-flag-color6",
-            // Dash RPM values
-            "dash-rpm-value1", "dash-rpm-value2", "dash-rpm-value3",
-            "dash-rpm-value4", "dash-rpm-value5", "dash-rpm-value6",
-            "dash-rpm-value7", "dash-rpm-value8", "dash-rpm-value9",
-            "dash-rpm-value10",
             // Handbrake
             "handbrake-direction", "handbrake-min", "handbrake-max",
             "handbrake-mode", "handbrake-button-threshold",
@@ -134,6 +121,14 @@ namespace MozaPlugin
             get => _deviceExtensionActive;
             set => _deviceExtensionActive = value;
         }
+
+        private volatile bool _dashDeviceExtensionActive;
+        internal bool DashDeviceExtensionActive
+        {
+            get => _dashDeviceExtensionActive;
+            set => _dashDeviceExtensionActive = value;
+        }
+
         internal bool IsDashDetected => _dashDetected;
         internal bool IsHandbrakeDetected => _handbrakeDetected;
         internal bool IsPedalsDetected => _pedalsDetected;
@@ -292,6 +287,7 @@ namespace MozaPlugin
             _deviceManager.WriteArray("wheel-send-rpm-telemetry", new byte[] { 0, 0 });
             _deviceManager.WriteArray("wheel-send-buttons-telemetry", new byte[] { 0, 0 });
             _deviceManager.WriteSetting("wheel-old-send-telemetry", 0);
+            _deviceManager.WriteSetting("dash-send-telemetry", 0);
         }
 
         private void TryConnect()
@@ -447,13 +443,6 @@ namespace MozaPlugin
             _data.WheelButtonsBrightness = _settings.WheelButtonsBrightness;
             _data.WheelFlagsBrightness = _settings.WheelFlagsBrightness;
             _data.WheelESRpmBrightness = _settings.WheelESRpmBrightness;
-            _data.WheelRpmMode = _settings.RpmMode;
-            _data.WheelRpmInterval = _settings.RpmBlinkInterval;
-            for (int i = 0; i < 10; i++)
-            {
-                _data.WheelRpmTimings[i] = (byte)_settings.RpmTimingsPercent[i];
-                _data.WheelRpmValues[i] = _settings.RpmTimingsRpm[i];
-            }
 
             // LED mode (only if previously saved)
             if (_settings.WheelTelemetryMode >= 0)
@@ -468,22 +457,6 @@ namespace MozaPlugin
                 _deviceManager.WriteSetting("wheel-rpm-indicator-mode", _settings.WheelRpmIndicatorMode + 1); // display→raw
             if (_settings.WheelRpmDisplayMode >= 0)
                 _deviceManager.WriteSetting("wheel-set-rpm-display-mode", _settings.WheelRpmDisplayMode);
-
-            // RPM mode
-            _deviceManager.WriteSetting("wheel-rpm-mode", _settings.RpmMode);
-
-            // Percent timings (sent as 10-byte array)
-            var timings = new byte[10];
-            for (int i = 0; i < 10; i++)
-                timings[i] = (byte)_settings.RpmTimingsPercent[i];
-            _deviceManager.WriteArray("wheel-rpm-timings", timings);
-
-            // Absolute RPM values (sent individually)
-            for (int i = 0; i < 10; i++)
-                _deviceManager.WriteSetting($"wheel-rpm-value{i + 1}", _settings.RpmTimingsRpm[i]);
-
-            // Blink interval
-            _deviceManager.WriteSetting("wheel-rpm-interval", _settings.RpmBlinkInterval);
 
             // Brightness
             _deviceManager.WriteSetting("wheel-rpm-brightness", _settings.WheelRpmBrightness);
@@ -502,29 +475,6 @@ namespace MozaPlugin
             // Pre-populate _data from saved settings so the UI shows correct values
             _data.DashRpmBrightness = _settings.DashRpmBrightness;
             _data.DashFlagsBrightness = _settings.DashFlagsBrightness;
-            _data.DashRpmMode = _settings.DashRpmMode;
-            _data.DashRpmInterval = _settings.DashRpmBlinkInterval;
-            for (int i = 0; i < 10; i++)
-            {
-                _data.DashRpmTimings[i] = (byte)_settings.DashRpmTimingsPercent[i];
-                _data.DashRpmValues[i] = _settings.DashRpmTimingsRpm[i];
-            }
-
-            // RPM mode
-            _deviceManager.WriteSetting("dash-rpm-mode", _settings.DashRpmMode);
-
-            // Percent timings (sent as 10-byte array)
-            var timings = new byte[10];
-            for (int i = 0; i < 10; i++)
-                timings[i] = (byte)_settings.DashRpmTimingsPercent[i];
-            _deviceManager.WriteArray("dash-rpm-timings", timings);
-
-            // Absolute RPM values (sent individually)
-            for (int i = 0; i < 10; i++)
-                _deviceManager.WriteSetting($"dash-rpm-value{i + 1}", _settings.DashRpmTimingsRpm[i]);
-
-            // Blink interval
-            _deviceManager.WriteSetting("dash-rpm-interval", _settings.DashRpmBlinkInterval);
 
             // Brightness
             _deviceManager.WriteSetting("dash-rpm-brightness", _settings.DashRpmBrightness);
@@ -645,8 +595,6 @@ namespace MozaPlugin
                     _settings.WheelFlagsBrightness = profile.WheelFlagsBrightness;
                     _data.WheelFlagsBrightness = profile.WheelFlagsBrightness;
                 }
-                if (profile.ButtonTelemetryMode >= 0)
-                    _settings.ButtonTelemetryMode = profile.ButtonTelemetryMode;
                 if (profile.WheelRpmIndicatorMode >= 0)
                 {
                     _settings.WheelRpmIndicatorMode = profile.WheelRpmIndicatorMode;
@@ -663,62 +611,7 @@ namespace MozaPlugin
                     _data.WheelESRpmBrightness = profile.WheelESRpmBrightness;
                 }
 
-                // Wheel RPM timing settings → _settings + _data + device
-                if (profile.RpmMode >= 0)
-                {
-                    _settings.RpmMode = profile.RpmMode;
-                    _data.WheelRpmMode = profile.RpmMode;
-                }
-                if (profile.RpmTimingsPercent != null)
-                {
-                    _settings.RpmTimingsPercent = (int[])profile.RpmTimingsPercent.Clone();
-                    for (int i = 0; i < 10; i++)
-                        _data.WheelRpmTimings[i] = (byte)profile.RpmTimingsPercent[i];
-                }
-                if (profile.RpmTimingsRpm != null)
-                {
-                    _settings.RpmTimingsRpm = (int[])profile.RpmTimingsRpm.Clone();
-                    for (int i = 0; i < 10; i++)
-                        _data.WheelRpmValues[i] = profile.RpmTimingsRpm[i];
-                }
-                if (profile.RpmBlinkInterval >= 0)
-                {
-                    _settings.RpmBlinkInterval = profile.RpmBlinkInterval;
-                    _data.WheelRpmInterval = profile.RpmBlinkInterval;
-                }
-                if (profile.WheelRpmRangeMin >= 0)
-                    _settings.WheelRpmRangeMin = profile.WheelRpmRangeMin;
-                if (profile.WheelRpmRangeMax >= 0)
-                    _settings.WheelRpmRangeMax = profile.WheelRpmRangeMax;
             }
-
-            // Dashboard RPM timing settings → _settings + _data + device
-            if (profile.DashRpmMode >= 0)
-            {
-                _settings.DashRpmMode = profile.DashRpmMode;
-                _data.DashRpmMode = profile.DashRpmMode;
-            }
-            if (profile.DashRpmTimingsPercent != null)
-            {
-                _settings.DashRpmTimingsPercent = (int[])profile.DashRpmTimingsPercent.Clone();
-                for (int i = 0; i < 10; i++)
-                    _data.DashRpmTimings[i] = (byte)profile.DashRpmTimingsPercent[i];
-            }
-            if (profile.DashRpmTimingsRpm != null)
-            {
-                _settings.DashRpmTimingsRpm = (int[])profile.DashRpmTimingsRpm.Clone();
-                for (int i = 0; i < 10; i++)
-                    _data.DashRpmValues[i] = profile.DashRpmTimingsRpm[i];
-            }
-            if (profile.DashRpmBlinkInterval >= 0)
-            {
-                _settings.DashRpmBlinkInterval = profile.DashRpmBlinkInterval;
-                _data.DashRpmInterval = profile.DashRpmBlinkInterval;
-            }
-            if (profile.DashRpmRangeMin >= 0)
-                _settings.DashRpmRangeMin = profile.DashRpmRangeMin;
-            if (profile.DashRpmRangeMax >= 0)
-                _settings.DashRpmRangeMax = profile.DashRpmRangeMax;
 
             // Dashboard brightness
             if (profile.DashRpmBrightness >= 0)
@@ -806,19 +699,21 @@ namespace MozaPlugin
                 MozaProfile.UnpackColorsInto(profile.WheelESRpmColors, _data.WheelESRpmColors);
                 _settings.WheelRpmBlinkColors = profile.WheelRpmBlinkColors;
             }
-            MozaProfile.UnpackColorsInto(profile.DashRpmColors, _data.DashRpmColors);
-            MozaProfile.UnpackColorsInto(profile.DashRpmBlinkColors, _data.DashRpmBlinkColors);
-            MozaProfile.UnpackColorsInto(profile.DashFlagColors, _data.DashFlagColors);
+            if (!DashDeviceExtensionActive)
+            {
+                MozaProfile.UnpackColorsInto(profile.DashRpmColors, _data.DashRpmColors);
+                MozaProfile.UnpackColorsInto(profile.DashRpmBlinkColors, _data.DashRpmBlinkColors);
+                MozaProfile.UnpackColorsInto(profile.DashFlagColors, _data.DashFlagColors);
 
-            // Persist dash blink colors to settings (write-only, not polled from device)
-            _settings.DashRpmBlinkColors = profile.DashRpmBlinkColors;
+                // Persist dash blink colors to settings (write-only, not polled from device)
+                _settings.DashRpmBlinkColors = profile.DashRpmBlinkColors;
+            }
 
             // --- Write to device if connected ---
             if (_data.IsBaseConnected)
             {
                 WriteProfileWheelSettingsToDevice(profile);
                 WriteProfileColorsToDevice(profile);
-                WriteProfileTimingsToDevice(profile);
             }
 
             // Persist _settings without re-capturing _data into the profile.
@@ -900,8 +795,8 @@ namespace MozaPlugin
                 }
             }
 
-            // Dashboard brightness (always applied — not owned by device extension)
-            if (_dashDetected)
+            // Dashboard brightness (skip when dash device extension owns settings)
+            if (!DashDeviceExtensionActive && _dashDetected)
             {
                 if (profile.DashRpmBrightness >= 0)
                     _deviceManager.WriteSetting("dash-rpm-brightness", profile.DashRpmBrightness);
@@ -927,52 +822,13 @@ namespace MozaPlugin
                 WriteColorArray(profile.WheelESRpmColors, "wheel-old-rpm-color", 10);
             }
 
-            // Dash colors (always applied)
-            WriteColorArray(profile.DashRpmColors, "dash-rpm-color", 10);
-            WriteColorArray(profile.DashRpmBlinkColors, "dash-rpm-blink-color", 10);
-            WriteColorArray(profile.DashFlagColors, "dash-flag-color", 6);
-        }
-
-        private void WriteProfileTimingsToDevice(MozaProfile profile)
-        {
-            // Wheel timings (skip when device extension owns wheel settings)
-            if (!DeviceExtensionActive)
+            // Dash colors (skip when dash device extension owns settings)
+            if (!DashDeviceExtensionActive)
             {
-                if (profile.RpmMode >= 0)
-                    _deviceManager.WriteSetting("wheel-rpm-mode", profile.RpmMode);
-                if (profile.RpmTimingsPercent != null)
-                {
-                    var timings = new byte[10];
-                    for (int i = 0; i < 10; i++)
-                        timings[i] = (byte)profile.RpmTimingsPercent[i];
-                    _deviceManager.WriteArray("wheel-rpm-timings", timings);
-                }
-                if (profile.RpmTimingsRpm != null)
-                {
-                    for (int i = 0; i < 10; i++)
-                        _deviceManager.WriteSetting($"wheel-rpm-value{i + 1}", profile.RpmTimingsRpm[i]);
-                }
-                if (profile.RpmBlinkInterval >= 0)
-                    _deviceManager.WriteSetting("wheel-rpm-interval", profile.RpmBlinkInterval);
+                WriteColorArray(profile.DashRpmColors, "dash-rpm-color", 10);
+                WriteColorArray(profile.DashRpmBlinkColors, "dash-rpm-blink-color", 10);
+                WriteColorArray(profile.DashFlagColors, "dash-flag-color", 6);
             }
-
-            // Dashboard timings (always applied)
-            if (profile.DashRpmMode >= 0)
-                _deviceManager.WriteSetting("dash-rpm-mode", profile.DashRpmMode);
-            if (profile.DashRpmTimingsPercent != null)
-            {
-                var timings = new byte[10];
-                for (int i = 0; i < 10; i++)
-                    timings[i] = (byte)profile.DashRpmTimingsPercent[i];
-                _deviceManager.WriteArray("dash-rpm-timings", timings);
-            }
-            if (profile.DashRpmTimingsRpm != null)
-            {
-                for (int i = 0; i < 10; i++)
-                    _deviceManager.WriteSetting($"dash-rpm-value{i + 1}", profile.DashRpmTimingsRpm[i]);
-            }
-            if (profile.DashRpmBlinkInterval >= 0)
-                _deviceManager.WriteSetting("dash-rpm-interval", profile.DashRpmBlinkInterval);
         }
 
         private void WriteColorArray(int[]? packedColors, string commandPrefix, int count)
@@ -1041,24 +897,43 @@ namespace MozaPlugin
                     _deviceManager.WriteColor("wheel-idle-color", rgb[0], rgb[1], rgb[2]);
                 }
                 WriteColorArray(extSettings.WheelESRpmColors, "wheel-old-rpm-color", 10);
+            }
 
-                // Timings
-                if (extSettings.RpmMode >= 0)
-                    _deviceManager.WriteSetting("wheel-rpm-mode", extSettings.RpmMode);
-                if (extSettings.RpmTimingsPercent != null)
-                {
-                    var timings = new byte[10];
-                    for (int i = 0; i < 10; i++)
-                        timings[i] = (byte)extSettings.RpmTimingsPercent[i];
-                    _deviceManager.WriteArray("wheel-rpm-timings", timings);
-                }
-                if (extSettings.RpmTimingsRpm != null)
-                {
-                    for (int i = 0; i < 10; i++)
-                        _deviceManager.WriteSetting($"wheel-rpm-value{i + 1}", extSettings.RpmTimingsRpm[i]);
-                }
-                if (extSettings.RpmBlinkInterval >= 0)
-                    _deviceManager.WriteSetting("wheel-rpm-interval", extSettings.RpmBlinkInterval);
+            PersistSettings();
+        }
+
+        /// <summary>
+        /// Apply dash settings from the SimHub device extension profile system.
+        /// Updates _settings, _data, and writes to hardware if connected.
+        /// </summary>
+        internal void ApplyDashExtensionSettings(MozaDashExtensionSettings extSettings)
+        {
+            SimHub.Logging.Current.Info("[Moza] Applying dash device extension settings");
+
+            // Update _settings and _data in-memory
+            extSettings.ApplyTo(_settings, _data);
+
+            // Persist blink colors
+            _settings.DashRpmBlinkColors = extSettings.DashRpmBlinkColors;
+
+            // Write to hardware if connected
+            if (_data.IsBaseConnected && _dashDetected)
+            {
+                if (extSettings.DashRpmBrightness >= 0)
+                    _deviceManager.WriteSetting("dash-rpm-brightness", extSettings.DashRpmBrightness);
+                if (extSettings.DashFlagsBrightness >= 0)
+                    _deviceManager.WriteSetting("dash-flags-brightness", extSettings.DashFlagsBrightness);
+                if (extSettings.DashRpmIndicatorMode >= 0)
+                    _deviceManager.WriteSetting("dash-rpm-indicator-mode", extSettings.DashRpmIndicatorMode);
+                if (extSettings.DashFlagsIndicatorMode >= 0)
+                    _deviceManager.WriteSetting("dash-flags-indicator-mode", extSettings.DashFlagsIndicatorMode);
+                if (extSettings.DashRpmDisplayMode >= 0)
+                    _deviceManager.WriteSetting("dash-rpm-display-mode", extSettings.DashRpmDisplayMode);
+
+                // Colors
+                WriteColorArray(extSettings.DashRpmColors, "dash-rpm-color", 10);
+                WriteColorArray(extSettings.DashRpmBlinkColors, "dash-rpm-blink-color", 10);
+                WriteColorArray(extSettings.DashFlagColors, "dash-flag-color", 6);
             }
 
             PersistSettings();

@@ -1,0 +1,16 @@
+{
+  "Brand": "MOZA",
+  "Name": "Dashboard",
+  "DetectionDescriptor": {
+    "IsValid": true,
+    "iVID": 13422,
+    "iPID": 4,
+    "IgnoreForArduino": true
+  },
+  "StandardDeviceId": "MozaRacingDash",
+  "InheritedFrom": "D8415EF5-1052-451F-916F-B286531AD0FE",
+  "IsDeprecated": false,
+  "MaximumInstances": 1,
+  "MinimumSimHubVersion": "9.5.0",
+  "TemplateVersion": 4
+}

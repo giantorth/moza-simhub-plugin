@@ -25,25 +25,6 @@ namespace MozaPlugin.Devices
         public int WheelRpmIndicatorMode { get; set; } = -1;
         public int WheelRpmDisplayMode { get; set; } = -1;
 
-        // RPM timing mode (0=Percent, 1=RPM, 2=SimHub)
-        public int RpmMode { get; set; }
-
-        // RPM thresholds (percent mode, 10 values 0-99)
-        public int[] RpmTimingsPercent { get; set; } = { 65, 69, 72, 75, 78, 80, 83, 85, 88, 91 };
-
-        // RPM thresholds (absolute RPM mode, 10 values)
-        public int[] RpmTimingsRpm { get; set; } = { 5400, 5700, 6000, 6300, 6500, 6700, 6900, 7100, 7300, 7600 };
-
-        // Blink interval in ms
-        public int RpmBlinkInterval { get; set; } = 250;
-
-        // RPM slider range (absolute RPM mode)
-        public int WheelRpmRangeMin { get; set; } = 500;
-        public int WheelRpmRangeMax { get; set; } = 20000;
-
-        // Button telemetry mode (0=Static, 1=Flags)
-        public int ButtonTelemetryMode { get; set; }
-
         // Color arrays (packed as R<<16 | G<<8 | B)
         public int[]? WheelRpmColors { get; set; }
         public int[]? WheelRpmBlinkColors { get; set; }
@@ -66,14 +47,6 @@ namespace MozaPlugin.Devices
             WheelESRpmBrightness = settings.WheelESRpmBrightness;
             WheelRpmIndicatorMode = settings.WheelRpmIndicatorMode;
             WheelRpmDisplayMode = settings.WheelRpmDisplayMode;
-            ButtonTelemetryMode = settings.ButtonTelemetryMode;
-
-            RpmMode = settings.RpmMode;
-            RpmTimingsPercent = (int[])settings.RpmTimingsPercent.Clone();
-            RpmTimingsRpm = (int[])settings.RpmTimingsRpm.Clone();
-            RpmBlinkInterval = settings.RpmBlinkInterval;
-            WheelRpmRangeMin = settings.WheelRpmRangeMin;
-            WheelRpmRangeMax = settings.WheelRpmRangeMax;
 
             WheelRpmColors = MozaProfile.PackColors(data.WheelRpmColors);
             WheelRpmBlinkColors = MozaProfile.PackColors(data.WheelRpmBlinkColors);
@@ -98,14 +71,6 @@ namespace MozaPlugin.Devices
             if (WheelESRpmBrightness >= 0) settings.WheelESRpmBrightness = WheelESRpmBrightness;
             if (WheelRpmIndicatorMode >= 0) settings.WheelRpmIndicatorMode = WheelRpmIndicatorMode;
             if (WheelRpmDisplayMode >= 0) settings.WheelRpmDisplayMode = WheelRpmDisplayMode;
-            if (ButtonTelemetryMode >= 0) settings.ButtonTelemetryMode = ButtonTelemetryMode;
-
-            settings.RpmMode = RpmMode;
-            if (RpmTimingsPercent != null) settings.RpmTimingsPercent = (int[])RpmTimingsPercent.Clone();
-            if (RpmTimingsRpm != null) settings.RpmTimingsRpm = (int[])RpmTimingsRpm.Clone();
-            settings.RpmBlinkInterval = RpmBlinkInterval;
-            settings.WheelRpmRangeMin = WheelRpmRangeMin;
-            settings.WheelRpmRangeMax = WheelRpmRangeMax;
 
             MozaProfile.UnpackColorsInto(WheelRpmColors, data.WheelRpmColors);
             MozaProfile.UnpackColorsInto(WheelRpmBlinkColors, data.WheelRpmBlinkColors);

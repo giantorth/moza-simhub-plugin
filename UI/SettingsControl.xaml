@@ -322,56 +322,6 @@
                                 <ComboBoxItem Content="Mode 2"/>
                             </ComboBox>
                         </StackPanel>
-                        <StackPanel Orientation="Horizontal" Margin="0,4">
-                            <TextBlock Text="RPM Mode" Style="{StaticResource SliderLabel}"/>
-                            <ComboBox x:Name="DashRpmModeCombo" Width="140" SelectionChanged="DashRpmModeCombo_Changed">
-                                <ComboBoxItem Content="Percent"/>
-                                <ComboBoxItem Content="RPM"/>
-                                <ComboBoxItem Content="SimHub"/>
-                            </ComboBox>
-                        </StackPanel>
-
-                        <!-- SimHub Mode info -->
-                        <StackPanel x:Name="DashTimingsSimHubPanel" Visibility="Collapsed" Margin="0,6,0,0">
-                            <TextBlock TextWrapping="Wrap" Foreground="Gray" FontSize="11"
-                                       Text="Shift light thresholds are taken from SimHub's car settings. Configure them in SimHub's Car Settings panel."/>
-                        </StackPanel>
-
-                        <!-- Percent Mode (10 sliders, 0-99%) -->
-                        <StackPanel x:Name="DashTimingsPercentPanel">
-                            <TextBlock Text="RPM Thresholds (Percent)" Style="{StaticResource SectionHeader}"/>
-                            <TextBlock Text="Each slider sets the RPM % at which that LED turns on" Foreground="Gray" FontSize="11" Margin="0,0,0,6"/>
-                            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-                                <Button Content="Linear" Padding="8,3" Margin="0,0,6,0" Click="DashTimingsPreset_Linear"/>
-                                <Button Content="Early" Padding="8,3" Margin="0,0,6,0" Click="DashTimingsPreset_Early"/>
-                                <Button Content="Normal" Padding="8,3" Margin="0,0,6,0" Click="DashTimingsPreset_Normal"/>
-                                <Button Content="Late" Padding="8,3" Margin="0,0,6,0" Click="DashTimingsPreset_Late"/>
-                            </StackPanel>
-                            <StackPanel x:Name="DashTimingsPercentSliders"/>
-                        </StackPanel>
-
-                        <!-- RPM Mode (10 sliders, configurable range) -->
-                        <StackPanel x:Name="DashTimingsRpmPanel" Visibility="Collapsed">
-                            <TextBlock Text="RPM Thresholds (Absolute)" Style="{StaticResource SectionHeader}"/>
-                            <TextBlock Text="Each slider sets the absolute RPM at which that LED turns on" Foreground="Gray" FontSize="11" Margin="0,0,0,6"/>
-                            <StackPanel Orientation="Horizontal" Margin="0,4">
-                                <TextBlock Text="Range Min" Style="{StaticResource SliderLabel}"/>
-                                <Slider x:Name="DashRpmRangeMinSlider" Style="{StaticResource SettingSlider}" Minimum="500" Maximum="20000" TickFrequency="500" ValueChanged="DashRpmRangeMinSlider_ValueChanged"/>
-                                <TextBlock x:Name="DashRpmRangeMinValue" Style="{StaticResource SliderValue}" Text="500 RPM"/>
-                            </StackPanel>
-                            <StackPanel Orientation="Horizontal" Margin="0,4,0,8">
-                                <TextBlock Text="Range Max" Style="{StaticResource SliderLabel}"/>
-                                <Slider x:Name="DashRpmRangeMaxSlider" Style="{StaticResource SettingSlider}" Minimum="500" Maximum="20000" TickFrequency="500" ValueChanged="DashRpmRangeMaxSlider_ValueChanged"/>
-                                <TextBlock x:Name="DashRpmRangeMaxValue" Style="{StaticResource SliderValue}" Text="20000 RPM"/>
-                            </StackPanel>
-                            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-                                <Button Content="Early" Padding="8,3" Margin="0,0,6,0" Click="DashRpmPreset_Early"/>
-                                <Button Content="Normal" Padding="8,3" Margin="0,0,6,0" Click="DashRpmPreset_Normal"/>
-                                <Button Content="Late" Padding="8,3" Margin="0,0,6,0" Click="DashRpmPreset_Late"/>
-                            </StackPanel>
-                            <StackPanel x:Name="DashTimingsRpmSliders"/>
-                        </StackPanel>
-
                         <TextBlock Text="RPM LED Colors" Style="{StaticResource SectionHeader}"/>
                         <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
                             <TextBlock Style="{StaticResource LedIndex}" Text="1"/>
@@ -392,12 +342,6 @@
                             <Slider x:Name="DashRpmBrightnessSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="15" TickFrequency="1" ValueChanged="DashRpmBrightnessSlider_ValueChanged"/>
                             <TextBlock x:Name="DashRpmBrightnessValue" Style="{StaticResource SliderValue}" Text="15"/>
                         </StackPanel>
-                        <StackPanel Orientation="Horizontal" Margin="0,4">
-                            <TextBlock Text="Blink Interval" Style="{StaticResource SliderLabel}"/>
-                            <Slider x:Name="DashRpmIntervalSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="1000" TickFrequency="50" ValueChanged="DashRpmIntervalSlider_ValueChanged"/>
-                            <TextBlock x:Name="DashRpmIntervalValue" Style="{StaticResource SliderValue}" Text="250 ms"/>
-                        </StackPanel>
-
                         <TextBlock Text="RPM Blink Colors" Style="{StaticResource SectionHeader}"/>
                         <TextBlock Text="Colors shown when LEDs blink at redline" Foreground="Gray" FontSize="11" Margin="0,0,0,6"/>
                         <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
@@ -723,6 +667,13 @@
                                       Checked="WheelKeepaliveCheck_Changed" Unchecked="WheelKeepaliveCheck_Changed"/>
                         </StackPanel>
                         <TextBlock Text="Resend LED state every second. Some ES wheels need this to stay in telemetry mode. Disable if you see flickering."
+                                   Foreground="Gray" FontSize="11" Margin="0,4,0,0" TextWrapping="Wrap"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,8">
+                            <TextBlock Text="Always resend bitmask" Style="{StaticResource SliderLabel}"/>
+                            <CheckBox x:Name="AlwaysResendBitmaskCheck" VerticalAlignment="Center"
+                                      Checked="AlwaysResendBitmaskCheck_Changed" Unchecked="AlwaysResendBitmaskCheck_Changed"/>
+                        </StackPanel>
+                        <TextBlock Text="Always send the LED bitmask with color updates, even if unchanged. Enable if your wheel ignores color changes when the same LEDs stay lit."
                                    Foreground="Gray" FontSize="11" Margin="0,4,0,0" TextWrapping="Wrap"/>
 
                         <TextBlock Text="Reset" Style="{StaticResource SectionHeader}"/>

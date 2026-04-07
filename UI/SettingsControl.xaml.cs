@@ -21,26 +21,6 @@ namespace MozaPlugin
         private readonly Border[] _dashRpmBlinkColorSwatches = new Border[10];
         private readonly Border[] _dashFlagColorSwatches = new Border[6];
 
-        // RPM timing sliders (10 per mode) — dashboard
-        private readonly Slider[] _dashPercentSliders = new Slider[10];
-        private readonly TextBlock[] _dashPercentLabels = new TextBlock[10];
-        private readonly Slider[] _dashRpmSliders = new Slider[10];
-        private readonly TextBlock[] _dashRpmLabels = new TextBlock[10];
-
-        // Presets
-        private static readonly int[][] EsPercentPresets = {
-            new[] { 10, 20, 30, 40, 50, 60, 70, 80, 90, 99 }, // Linear
-            new[] { 65, 69, 72, 75, 78, 80, 83, 85, 88, 91 }, // Early
-            new[] { 75, 79, 82, 85, 87, 88, 89, 90, 92, 94 }, // Normal
-            new[] { 80, 83, 86, 89, 91, 92, 93, 94, 96, 97 }, // Late
-        };
-        // RPM presets as fractions (0.0-1.0) of the current range — same distribution as percent presets
-        private static readonly double[][] RpmPresetFractions = {
-            new[] { 0.65, 0.69, 0.72, 0.75, 0.78, 0.80, 0.83, 0.85, 0.88, 0.91 }, // Early
-            new[] { 0.75, 0.79, 0.82, 0.85, 0.87, 0.88, 0.89, 0.90, 0.92, 0.94 }, // Normal
-            new[] { 0.80, 0.83, 0.86, 0.89, 0.91, 0.92, 0.93, 0.94, 0.96, 0.97 }, // Late
-        };
-
         public SettingsControl(MozaPlugin plugin)
         {
             _plugin = plugin;
@@ -53,10 +33,10 @@ namespace MozaPlugin
             AutoApplyProfileCheck.IsChecked = plugin.Settings.AutoApplyProfileOnLaunch;
             LimitWheelUpdatesCheck.IsChecked = plugin.Settings.LimitWheelUpdates;
             WheelKeepaliveCheck.IsChecked = plugin.Settings.WheelKeepalive;
+            AlwaysResendBitmaskCheck.IsChecked = plugin.Settings.AlwaysResendBitmask;
             _suppressEvents = false;
 
             BuildColorSwatches();
-            BuildTimingSliders();
             InitProfilesTab();
 
             _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
@@ -99,59 +79,6 @@ namespace MozaPlugin
         }
 
         // ===== Timing sliders =====
-
-        private static int RpmTick(int min, int max) => (max - min) <= 2000 ? 50 : 100;
-
-        private void BuildTimingSliders()
-        {
-            BuildTimingSliderRow(DashTimingsPercentSliders, _dashPercentSliders, _dashPercentLabels,
-                10, 0, 99, 1, "%", DashPercentSlider_ValueChanged);
-            BuildTimingSliderRow(DashTimingsRpmSliders, _dashRpmSliders, _dashRpmLabels,
-                10, _settings.DashRpmRangeMin, _settings.DashRpmRangeMax,
-                RpmTick(_settings.DashRpmRangeMin, _settings.DashRpmRangeMax), " RPM", DashRpmSlider_ValueChanged);
-        }
-
-        private void BuildTimingSliderRow(StackPanel panel, Slider[] sliders, TextBlock[] labels,
-            int count, int min, int max, int tick, string suffix,
-            RoutedPropertyChangedEventHandler<double> handler)
-        {
-            for (int i = 0; i < count; i++)
-            {
-                var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 2) };
-
-                var lbl = new TextBlock
-                {
-                    Text = $"LED {i + 1}",
-                    Width = 50, VerticalAlignment = VerticalAlignment.Center,
-                    Foreground = Brushes.Gray, FontSize = 11
-                };
-
-                var slider = new Slider
-                {
-                    Width = 260, Minimum = min, Maximum = max,
-                    TickFrequency = tick, IsSnapToTickEnabled = true,
-                    VerticalAlignment = VerticalAlignment.Center
-                };
-                slider.Tag = i;
-                slider.ValueChanged += handler;
-
-                var val = new TextBlock
-                {
-                    Width = 70, TextAlignment = TextAlignment.Right,
-                    VerticalAlignment = VerticalAlignment.Center,
-                    FontFamily = new FontFamily("Consolas"),
-                    Margin = new Thickness(6, 0, 0, 0),
-                    Text = $"{min}{suffix}"
-                };
-
-                row.Children.Add(lbl);
-                row.Children.Add(slider);
-                row.Children.Add(val);
-                panel.Children.Add(row);
-                sliders[i] = slider;
-                labels[i] = val;
-            }
-        }
 
         private MozaPluginSettings _settings => _plugin.Settings;
 
@@ -306,33 +233,12 @@ namespace MozaPlugin
 
             SetComboSafe(DashRpmIndicatorCombo, _data.DashRpmIndicatorMode);
             SetComboSafe(DashRpmDisplayCombo, _data.DashRpmDisplayMode);
-            SetComboSafe(DashRpmModeCombo, _data.DashRpmMode);
             SetComboSafe(DashFlagsIndicatorCombo, _data.DashFlagsIndicatorMode);
-
-            DashTimingsSimHubPanel.Visibility = _data.DashRpmMode == 2 ? Visibility.Visible : Visibility.Collapsed;
-            DashTimingsPercentPanel.Visibility = _data.DashRpmMode == 0 ? Visibility.Visible : Visibility.Collapsed;
-            DashTimingsRpmPanel.Visibility = _data.DashRpmMode == 1 ? Visibility.Visible : Visibility.Collapsed;
-
-            for (int i = 0; i < 10; i++)
-            {
-                _dashPercentSliders[i].Value = Clamp(_data.DashRpmTimings[i], 0, 99);
-                _dashPercentLabels[i].Text = $"{_data.DashRpmTimings[i]}%";
-                _dashRpmSliders[i].Value = Clamp(_data.DashRpmValues[i], _settings.DashRpmRangeMin, _settings.DashRpmRangeMax);
-                _dashRpmLabels[i].Text = $"{_data.DashRpmValues[i]} RPM";
-            }
-
-            DashRpmRangeMinSlider.Value = Clamp(_settings.DashRpmRangeMin, 500, 20000);
-            DashRpmRangeMinValue.Text = $"{_settings.DashRpmRangeMin} RPM";
-            DashRpmRangeMaxSlider.Value = Clamp(_settings.DashRpmRangeMax, 500, 20000);
-            DashRpmRangeMaxValue.Text = $"{_settings.DashRpmRangeMax} RPM";
 
             DashRpmBrightnessSlider.Value = Clamp(_data.DashRpmBrightness, 0, 15);
             DashRpmBrightnessValue.Text = $"{_data.DashRpmBrightness}";
             DashFlagsBrightnessSlider.Value = Clamp(_data.DashFlagsBrightness, 0, 15);
             DashFlagsBrightnessValue.Text = $"{_data.DashFlagsBrightness}";
-
-            DashRpmIntervalSlider.Value = Clamp(_data.DashRpmInterval, 0, 1000);
-            DashRpmIntervalValue.Text = $"{_data.DashRpmInterval} ms";
 
             UpdateSwatches(_dashRpmColorSwatches, _data.DashRpmColors, 10);
             UpdateSwatches(_dashRpmBlinkColorSwatches, _data.DashRpmBlinkColors, 10);
@@ -576,69 +482,6 @@ namespace MozaPlugin
 
         // ===== RPM range slider handlers =====
 
-        private void RebuildRpmSliders(StackPanel panel, Slider[] sliders, TextBlock[] labels,
-            int newMin, int newMax, int[] currentValues,
-            RoutedPropertyChangedEventHandler<double> handler)
-        {
-            panel.Children.Clear();
-            BuildTimingSliderRow(panel, sliders, labels, 10, newMin, newMax,
-                RpmTick(newMin, newMax), " RPM", handler);
-            _suppressEvents = true;
-            for (int i = 0; i < 10; i++)
-            {
-                int clamped = (int)Clamp(currentValues[i], newMin, newMax);
-                sliders[i].Value = clamped;
-                labels[i].Text = $"{clamped} RPM";
-            }
-            _suppressEvents = false;
-        }
-
-        private void DashRpmRangeMinSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-        {
-            if (_suppressEvents) return;
-            int val = (int)Math.Round(e.NewValue);
-            if (val > _settings.DashRpmRangeMax)
-            {
-                val = _settings.DashRpmRangeMax;
-                _suppressEvents = true; DashRpmRangeMinSlider.Value = val; _suppressEvents = false;
-            }
-            DashRpmRangeMinValue.Text = $"{val} RPM";
-            _settings.DashRpmRangeMin = val;
-            RebuildRpmSliders(DashTimingsRpmSliders, _dashRpmSliders, _dashRpmLabels,
-                val, _settings.DashRpmRangeMax, _settings.DashRpmTimingsRpm, DashRpmSlider_ValueChanged);
-            for (int i = 0; i < 10; i++)
-            {
-                int clamped = (int)_dashRpmSliders[i].Value;
-                _settings.DashRpmTimingsRpm[i] = clamped;
-                _data.DashRpmValues[i] = clamped;
-                _device.WriteSetting($"dash-rpm-value{i + 1}", clamped);
-            }
-            _plugin.SaveSettings();
-        }
-
-        private void DashRpmRangeMaxSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-        {
-            if (_suppressEvents) return;
-            int val = (int)Math.Round(e.NewValue);
-            if (val < _settings.DashRpmRangeMin)
-            {
-                val = _settings.DashRpmRangeMin;
-                _suppressEvents = true; DashRpmRangeMaxSlider.Value = val; _suppressEvents = false;
-            }
-            DashRpmRangeMaxValue.Text = $"{val} RPM";
-            _settings.DashRpmRangeMax = val;
-            RebuildRpmSliders(DashTimingsRpmSliders, _dashRpmSliders, _dashRpmLabels,
-                _settings.DashRpmRangeMin, val, _settings.DashRpmTimingsRpm, DashRpmSlider_ValueChanged);
-            for (int i = 0; i < 10; i++)
-            {
-                int clamped = (int)_dashRpmSliders[i].Value;
-                _settings.DashRpmTimingsRpm[i] = clamped;
-                _data.DashRpmValues[i] = clamped;
-                _device.WriteSetting($"dash-rpm-value{i + 1}", clamped);
-            }
-            _plugin.SaveSettings();
-        }
-
         // ===== Dash tab handlers =====
 
         private void DashRpmIndicatorCombo_Changed(object sender, SelectionChangedEventArgs e)
@@ -658,93 +501,6 @@ namespace MozaPlugin
             _device.WriteSetting("dash-rpm-display-mode", val);
             _plugin.SaveSettings();
         }
-
-        private void DashRpmModeCombo_Changed(object sender, SelectionChangedEventArgs e)
-        {
-            if (_suppressEvents) return;
-            int val = DashRpmModeCombo.SelectedIndex;
-            _data.DashRpmMode = val;
-            _settings.DashRpmMode = val;
-            DashTimingsSimHubPanel.Visibility = val == 2 ? Visibility.Visible : Visibility.Collapsed;
-            DashTimingsPercentPanel.Visibility = val == 0 ? Visibility.Visible : Visibility.Collapsed;
-            DashTimingsRpmPanel.Visibility = val == 1 ? Visibility.Visible : Visibility.Collapsed;
-            if (val < 2)
-                _device.WriteSetting("dash-rpm-mode", val);
-            _plugin.SaveSettings();
-        }
-
-        private void DashPercentSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-        {
-            if (_suppressEvents) return;
-            var slider = (Slider)sender;
-            int idx = (int)slider.Tag;
-            int val = (int)Math.Round(e.NewValue);
-            _dashPercentLabels[idx].Text = $"{val}%";
-
-            var timings = new byte[10];
-            for (int i = 0; i < 10; i++)
-                timings[i] = (byte)Math.Round(_dashPercentSliders[i].Value);
-            _data.DashRpmTimings[idx] = timings[idx];
-            _settings.DashRpmTimingsPercent[idx] = val;
-            _device.WriteArray("dash-rpm-timings", timings);
-            _plugin.SaveSettings();
-        }
-
-        private void DashRpmSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-        {
-            if (_suppressEvents) return;
-            var slider = (Slider)sender;
-            int idx = (int)slider.Tag;
-            int val = (int)Math.Round(e.NewValue);
-            _dashRpmLabels[idx].Text = $"{val} RPM";
-            _data.DashRpmValues[idx] = val;
-            _settings.DashRpmTimingsRpm[idx] = val;
-            _device.WriteSetting($"dash-rpm-value{idx + 1}", val);
-            _plugin.SaveSettings();
-        }
-
-        private void ApplyDashPercentPreset(int[] values)
-        {
-            _suppressEvents = true;
-            for (int i = 0; i < 10; i++)
-            {
-                _dashPercentSliders[i].Value = values[i];
-                _dashPercentLabels[i].Text = $"{values[i]}%";
-                _data.DashRpmTimings[i] = (byte)values[i];
-                _settings.DashRpmTimingsPercent[i] = values[i];
-            }
-            _suppressEvents = false;
-            _device.WriteArray("dash-rpm-timings", _data.DashRpmTimings);
-            _plugin.SaveSettings();
-        }
-
-        private void ApplyDashRpmPreset(double[] fractions)
-        {
-            int min = _settings.DashRpmRangeMin, max = _settings.DashRpmRangeMax;
-            _suppressEvents = true;
-            for (int i = 0; i < 10; i++)
-            {
-                int val = min + (int)Math.Round(fractions[i] * (max - min));
-                _dashRpmSliders[i].Value = val;
-                int clamped = (int)_dashRpmSliders[i].Value;
-                _dashRpmLabels[i].Text = $"{clamped} RPM";
-                _data.DashRpmValues[i] = clamped;
-                _settings.DashRpmTimingsRpm[i] = clamped;
-            }
-            _suppressEvents = false;
-            for (int i = 0; i < 10; i++)
-                _device.WriteSetting($"dash-rpm-value{i + 1}", _data.DashRpmValues[i]);
-            _plugin.SaveSettings();
-        }
-
-        private void DashTimingsPreset_Linear(object s, RoutedEventArgs e) => ApplyDashPercentPreset(EsPercentPresets[0]);
-        private void DashTimingsPreset_Early(object s, RoutedEventArgs e) => ApplyDashPercentPreset(EsPercentPresets[1]);
-        private void DashTimingsPreset_Normal(object s, RoutedEventArgs e) => ApplyDashPercentPreset(EsPercentPresets[2]);
-        private void DashTimingsPreset_Late(object s, RoutedEventArgs e) => ApplyDashPercentPreset(EsPercentPresets[3]);
-
-        private void DashRpmPreset_Early(object s, RoutedEventArgs e) => ApplyDashRpmPreset(RpmPresetFractions[0]);
-        private void DashRpmPreset_Normal(object s, RoutedEventArgs e) => ApplyDashRpmPreset(RpmPresetFractions[1]);
-        private void DashRpmPreset_Late(object s, RoutedEventArgs e) => ApplyDashRpmPreset(RpmPresetFractions[2]);
 
         private void DashFlagsIndicatorCombo_Changed(object sender, SelectionChangedEventArgs e)
         {
@@ -774,17 +530,6 @@ namespace MozaPlugin
             _data.DashFlagsBrightness = val;
             _settings.DashFlagsBrightness = val;
             _device.WriteSetting("dash-flags-brightness", val);
-            _plugin.SaveSettings();
-        }
-
-        private void DashRpmIntervalSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-        {
-            if (_suppressEvents) return;
-            int val = (int)Math.Round(e.NewValue);
-            DashRpmIntervalValue.Text = $"{val} ms";
-            _data.DashRpmInterval = val;
-            _settings.DashRpmBlinkInterval = val;
-            _device.WriteSetting("dash-rpm-interval", val);
             _plugin.SaveSettings();
         }
 
@@ -1180,6 +925,13 @@ namespace MozaPlugin
         {
             if (_suppressEvents) return;
             _plugin.Settings.WheelKeepalive = WheelKeepaliveCheck.IsChecked == true;
+            _plugin.SaveSettings();
+        }
+
+        private void AlwaysResendBitmaskCheck_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_suppressEvents) return;
+            _plugin.Settings.AlwaysResendBitmask = AlwaysResendBitmaskCheck.IsChecked == true;
             _plugin.SaveSettings();
         }
 
