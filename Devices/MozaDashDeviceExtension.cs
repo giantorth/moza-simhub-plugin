@@ -26,7 +26,8 @@ namespace MozaPlugin.Devices
 
         public override void Init(PluginManager pluginManager)
         {
-            InjectLedDriver();
+            // Injection is deferred to DataUpdate() — calling it here would run before
+            // LedModuleDevice.SetSettings(), causing a KeyNotFoundException in that call.
 
             pluginManager.AttachDelegate(
                 LinkedDevice.DeviceDescriptor.Name + "_MozaDashActive",
@@ -96,7 +97,7 @@ namespace MozaPlugin.Devices
 
         public override void DataUpdate(PluginManager pluginManager, ref GameData data)
         {
-            // Retry injection if it failed during Init (timing issue)
+            // Inject here (not Init) so LedModuleDevice.SetSettings() has already run.
             if (!_driverInjected)
                 InjectLedDriver();
 

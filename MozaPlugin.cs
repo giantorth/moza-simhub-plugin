@@ -237,6 +237,7 @@ namespace MozaPlugin
                 ClearLedsOnHardware();
                 _connection?.Disconnect();
                 _data.IsBaseConnected = false;
+                _data.ClearWheelIdentity();
                 _baseDetected = false;
                 _dashDetected = false;
                 _newWheelDetected = false;
@@ -388,9 +389,27 @@ namespace MozaPlugin
                     {
                         _newWheelDetected = true;
                         _deviceManager.LockWheelId(deviceId);
+                        _deviceManager.ReadSetting("wheel-model-name");
+                        _deviceManager.ReadSetting("wheel-sw-version");
+                        _deviceManager.ReadSetting("wheel-hw-version");
+                        _deviceManager.ReadSetting("wheel-serial-a");
+                        _deviceManager.ReadSetting("wheel-serial-b");
                         ApplySavedWheelSettings();
-                        SimHub.Logging.Current.Info($"[Moza] New-protocol wheel detected on ID {deviceId} (GS/FSR/CS/RS/TSW)");
+                        SimHub.Logging.Current.Info($"[Moza] New-protocol wheel detected on ID {deviceId}");
                     }
+                    break;
+
+                case "wheel-model-name":
+                    SimHub.Logging.Current.Info($"[Moza] Wheel model: {_data.WheelModelName}");
+                    break;
+
+                case "wheel-sw-version":
+                    SimHub.Logging.Current.Info($"[Moza] Wheel FW: {_data.WheelSwVersion}");
+                    break;
+
+                case "wheel-serial-b":
+                    if (!string.IsNullOrEmpty(_data.WheelSerialNumber))
+                        SimHub.Logging.Current.Info($"[Moza] Wheel serial: {_data.WheelSerialNumber}");
                     break;
 
                 case "wheel-rpm-value1":
@@ -398,8 +417,13 @@ namespace MozaPlugin
                     {
                         _oldWheelDetected = true;
                         _deviceManager.LockWheelId(deviceId);
+                        _deviceManager.ReadSetting("wheel-model-name");
+                        _deviceManager.ReadSetting("wheel-sw-version");
+                        _deviceManager.ReadSetting("wheel-hw-version");
+                        _deviceManager.ReadSetting("wheel-serial-a");
+                        _deviceManager.ReadSetting("wheel-serial-b");
                         ApplySavedWheelSettings();
-                        SimHub.Logging.Current.Info($"[Moza] Old-protocol wheel detected on ID {deviceId} (ES series)");
+                        SimHub.Logging.Current.Info($"[Moza] Old-protocol wheel detected on ID {deviceId}");
                     }
                     break;
 

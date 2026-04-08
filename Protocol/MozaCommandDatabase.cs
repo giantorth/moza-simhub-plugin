@@ -141,6 +141,13 @@ namespace MozaPlugin.Protocol
             AddCommand("wheel-telemetry-button-colors", "wheel", 0xFF, 63, new byte[] { 25, 1 },   20, "array");
             AddCommand("wheel-old-send-telemetry",      "wheel", 0xFF, 65, new byte[] { 253, 222 }, 4, "int");
 
+            // ===== WHEEL IDENTITY (read-only, bytes=0 → request sends cmd ID only) =====
+            AddCommand("wheel-model-name",  "wheel",  7, 0xFF, new byte[] { 1 }, 0, "array");
+            AddCommand("wheel-sw-version",  "wheel", 15, 0xFF, new byte[] { 1 }, 0, "array");
+            AddCommand("wheel-hw-version",  "wheel",  8, 0xFF, new byte[] { 1 }, 0, "array");
+            AddCommand("wheel-serial-a",    "wheel", 16, 0xFF, new byte[] { 0 }, 0, "array");
+            AddCommand("wheel-serial-b",    "wheel", 16, 0xFF, new byte[] { 1 }, 0, "array");
+
             // ===== WHEEL SETTINGS (read group 64, write group 63) =====
             AddCommand("wheel-brightness",         "wheel", 64, 63, new byte[] { 1 },          1, "int");
             AddCommand("wheel-rpm-timings",        "wheel", 64, 63, new byte[] { 2 },         10, "array");

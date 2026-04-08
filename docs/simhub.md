@@ -248,28 +248,104 @@ Key fields:
 - `StandardDeviceId` — String identifier used as `DeviceTypeID`. At runtime, may be suffixed with `_UserProject` or `_Embedded`.
 
 **`defaults.json` schema:**
+
+The correct structure depends on the `InheritedFrom` base type. **`DeviceTypeID` must be the base template GUID** (not the device's own `StandardDeviceId`) — using the device's own string ID causes `LedModuleDevice.SetSettings()` to throw `KeyNotFoundException` on every startup when a saved device instance exists.
+
+For **D8415EF5** (simple LED wheel/bar devices):
 ```json
 {
-  "InstanceId": null,
-  "DeviceTypeID": "UniqueDeviceId",
+  "InstanceId": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+  "DeviceTypeID": "D8415EF5-1052-451F-916F-B286531AD0FE",
   "Settings": {
-    "LEDS": {
-      "ledModuleSettings": {
-        "VID": 13422,
-        "PID": 4,
-        "Ledcount": 10,
-        "ButtonsCount": 0,
-        "IsEnabled": true,
-        "_LEDsBrightness": 100.0
-      }
+    "ledModuleSettings": {
+      "VID": 13422,
+      "PID": 4,
+      "Ledcount": 10,
+      "ButtonsCount": 0,
+      "IsEnabled": true,
+      "_LEDsBrightness": 100.0
+    },
+    "leds": { },
+    "buttons": { },
+    "encoders": { },
+    "matrix": { },
+    "raw": { }
+  }
+}
+```
+
+For **4D631FFA** (dashboard/DDU devices):
+```json
+{
+  "InstanceId": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+  "DeviceTypeID": "4D631FFA-B696-4F4A-BF7C-A1F35621529D",
+  "Settings": {
+    "LCD": { },
+    "LEDS": { }
+  }
+}
+```
+
+Key fields:
+- `InstanceId` — A fixed GUID unique to this device type (generate once, embed in the template). Using `null` lets SimHub assign one, but a fixed GUID ensures stable identity across installs.
+- `DeviceTypeID` — **Must be the base template GUID** (e.g. `D8415EF5-...`), NOT the `StandardDeviceId` string. Using the device's own string causes `LedModuleDevice.SetSettings()` to fail loading saved instances.
+- `ledModuleSettings` — Hardware-level LED config. `VID`/`PID` identify the physical serial driver. For virtual devices with no real driver, omit `VID`/`PID`.
+- `leds`, `buttons`, etc. — Empty objects in defaults; SimHub populates these when the user configures effects. They must be present as keys for `LedModuleDevice.SetSettings()` to resolve them correctly.
+
+SimHub caches template metadata in `PluginsData/DevicesDesccriptorCache.json`. Delete the cache entry to force re-read after template changes.
+
+### Device Builder Format (`.shdd` / `.shdp`)
+
+SimHub 9.11+ includes a Device Builder that produces a newer format, distinct from `.shdevicetemplate`. The editable file is `.shdd`; the distributable (end-user installable) export is `.shdp`. Both are ZIP files containing a single `DeviceName/device.json`.
+
+This format **does not use `InheritedFrom`** or `defaults.json` — it directly declares features, avoiding the `LedModuleDevice.SetSettings()` registry issue entirely.
+
+**`device.json` schema:**
+```json
+{
+  "DescriptorUniqueId": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+  "SchemaVersion": 1,
+  "MinimumSimHubVersion": "9.11.8",
+  "DeviceDescription": {
+    "BrandName": "Manufacturer",
+    "ProductName": "Device Name"
+  },
+  "LedsFeature": {
+    "IsIndividualLedsSectionEnabled": true,
+    "PhysicalLedsMappings": {
+      "Items": [
+        { "SourceRole": 1, "SourceIndex": 0, "RepeatCount": 10, "RepeatMode": 1 },
+        {}, {}, {}, {}, {}, {}, {}, {}, {},
+        { "SourceRole": 2, "SourceIndex": 0, "RepeatCount": 13, "RepeatMode": 1 },
+        {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}
+      ]
+    },
+    "LogicalTelemetryLeds": { "LedCount": 10, "Segments": [], "IsEnabled": true },
+    "LogicalButtonsSection": {
+      "IsButtonEditorEnabled": false,
+      "Items": [ ... ],
+      "IsEnabled": true
+    },
+    "IsEnabled": true
+  },
+  "HardwareInterface": {
+    "HardwareInterface": {
+      "TypeName": "LedsStandardHIDProtocol",
+      "HIDUsagePage": "0xFF00",
+      "HIDUsage": "0x77",
+      "HIDReportId": "0x68",
+      "HIDReportSize": 64,
+      "DeviceDetection": { "Vid": "0x346E", "Pid": "0x0004" }
     }
   }
 }
 ```
 
-`DeviceTypeID` must match `StandardDeviceId` from `device.json`.
-
-SimHub caches template metadata in `PluginsData/DevicesDesccriptorCache.json`. Delete the cache entry to force re-read after template changes.
+Key fields:
+- `DescriptorUniqueId` — Replaces `StandardDeviceId`. Used to match in `IDeviceExtensionFilter` (check `DeviceTypeID` for this GUID, possibly with `_UserProject` or `_Embedded` suffix).
+- `SourceRole` in `PhysicalLedsMappings` — `1` = telemetry/RPM LEDs, `2` = button LEDs. Empty `{}` items fill the remaining slots in a repeated group.
+- `TypeName` — Hardware communication protocol. `"LedsStandardHIDProtocol"` sends LED colors over HID reports. For virtual devices with no real HID hardware, use a placeholder `Vid`/`Pid` (e.g. `0x9999`) that won't match any real device; the HID path then stays idle while the virtual `ILedDeviceManager` injection handles the LED pipeline.
+- `.shdp` files are installed via SimHub's device import UI (not copied to `StandardDevicesTemplatesUser/`).
 
 ### IDeviceExtensionFilter
 
@@ -565,6 +641,10 @@ DeviceDriver.Display(
 | `DevicesLogos/` | Device images by GUID (PNG files) | — |
 
 ### Gotchas and Practical Notes
+
+**`LedModuleDevice.SetSettings()` KeyNotFoundException:** If a saved device instance exists in `PluginsData/Common/Devices/index.json` and SimHub throws `KeyNotFoundException` inside `LedModuleDevice.SetSettings()` on startup, the root cause is almost always `DeviceTypeID` in `defaults.json` being set to the device's own `StandardDeviceId` string instead of the base template GUID (e.g. `D8415EF5-1052-451F-916F-B286531AD0FE`). `LedModuleDevice.SetSettings()` uses that GUID to resolve handlers in an internal registry; an unrecognized string fails silently in loading but throws on the dictionary lookup inside `SetSettings()`. The error is non-fatal (device still connects) but LED effect profiles saved by the user fail to reload. Fix by using the base GUID as `DeviceTypeID`.
+
+**Virtual driver injection timing:** Do not inject the `ILedDeviceManager` virtual driver in `DeviceExtension.Init()`. SimHub calls `Init()` before calling `LedModuleDevice.SetSettings()` during `LoadDevices()`. Injecting the driver first replaces the `DeviceDriver` reference that `SetSettings()` may need to resolve saved effect state. Defer injection to the first `DataUpdate()` call instead — by that point, `SetSettings()` has already run and the LED pipeline is ready to receive the virtual driver.
 
 **Template deletion:** SimHub deletes the `.shdevicetemplate` file from `StandardDevicesTemplatesUser/` when a user removes the device. Plugins should re-deploy the template on startup or the device won't be available to re-add.
 

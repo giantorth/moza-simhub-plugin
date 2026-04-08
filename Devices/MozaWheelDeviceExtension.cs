@@ -28,7 +28,12 @@ namespace MozaPlugin.Devices
 
         public override void Init(PluginManager pluginManager)
         {
-            InjectLedDriver();
+            // Injection is deferred to DataUpdate() — calling it here would run before
+            // LedModuleDevice.SetSettings(), causing a KeyNotFoundException in that call.
+
+            var plugin = MozaPlugin.Instance;
+            if (plugin != null)
+                plugin.DeviceExtensionActive = true;
 
             // Always register — the delegate handles null Instance safely via ?.
             pluginManager.AttachDelegate(
@@ -111,7 +116,7 @@ namespace MozaPlugin.Devices
         {
             // LED forwarding happens in MozaLedDeviceManager.Display() —
             // SimHub calls it directly as part of its LED pipeline.
-            // Try injection again if it failed during Init (timing issue).
+            // Inject here (not Init) so LedModuleDevice.SetSettings() has already run.
             if (!_driverInjected)
                 InjectLedDriver();
 

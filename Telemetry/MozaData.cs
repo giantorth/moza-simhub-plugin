@@ -10,6 +10,14 @@ namespace MozaPlugin
         // Connection status
         public volatile bool IsBaseConnected;
 
+        // Wheel identity (populated after wheel detection, cleared on disconnect)
+        public string WheelModelName = "";
+        public string WheelSerialNumber = "";
+        public string WheelSwVersion = "";
+        public string WheelHwVersion = "";
+        private string _serialPartA = "";
+        private string _serialPartB = "";
+
         // Temperatures (raw / 100 = degrees C from device)
         public volatile int McuTemp;
         public volatile int MosfetTemp;
@@ -373,6 +381,45 @@ namespace MozaPlugin
                 if (idx >= 0 && idx < 6)
                     SetColor(DashFlagColors[idx], data);
             }
+            // Wheel identity strings
+            else if (commandName == "wheel-model-name")
+            {
+                WheelModelName = ParseNullTerminatedString(data);
+            }
+            else if (commandName == "wheel-sw-version")
+            {
+                WheelSwVersion = ParseNullTerminatedString(data);
+            }
+            else if (commandName == "wheel-hw-version")
+            {
+                WheelHwVersion = ParseNullTerminatedString(data);
+            }
+            else if (commandName == "wheel-serial-a")
+            {
+                _serialPartA = ParseNullTerminatedString(data);
+                WheelSerialNumber = _serialPartA + _serialPartB;
+            }
+            else if (commandName == "wheel-serial-b")
+            {
+                _serialPartB = ParseNullTerminatedString(data);
+                WheelSerialNumber = _serialPartA + _serialPartB;
+            }
+        }
+
+        public void ClearWheelIdentity()
+        {
+            WheelModelName = "";
+            WheelSerialNumber = "";
+            WheelSwVersion = "";
+            WheelHwVersion = "";
+            _serialPartA = "";
+            _serialPartB = "";
+        }
+
+        private static string ParseNullTerminatedString(byte[] data)
+        {
+            int end = Array.IndexOf(data, (byte)0);
+            return System.Text.Encoding.ASCII.GetString(data, 0, end < 0 ? data.Length : end).Trim();
         }
 
         private static int ParseTrailingIndex(string commandName, string prefix)

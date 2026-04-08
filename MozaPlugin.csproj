@@ -9,7 +9,7 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
-    <Version>0.2.0</Version>
+    <Version>0.0.0</Version>
     <AssemblyTitle>MozaPlugin</AssemblyTitle>
     <Description>SimHub plugin for MOZA Racing hardware</Description>
     <Product>MozaPlugin</Product>

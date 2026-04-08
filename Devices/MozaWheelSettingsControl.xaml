@@ -42,7 +42,8 @@
                 <TextBlock x:Name="StatusText" VerticalAlignment="Center" FontSize="14"/>
             </StackPanel>
 
-            <TextBlock x:Name="WheelTypeText" Margin="0,4,0,8" Foreground="Gray"/>
+            <TextBlock x:Name="WheelTypeText" Margin="0,4,0,2" Foreground="Gray"/>
+            <TextBlock x:Name="WheelFwText" Margin="0,0,0,8" Foreground="Gray" FontSize="11"/>
 
             <!-- Detection status -->
             <StackPanel x:Name="WheelNotDetectedPanel">

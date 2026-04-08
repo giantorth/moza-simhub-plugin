@@ -125,6 +125,7 @@ namespace MozaPlugin.Devices
                 StatusDot.Fill = Brushes.Gray;
                 StatusText.Text = "Plugin not loaded";
                 WheelTypeText.Text = "";
+                WheelFwText.Text = "";
                 WheelNotDetectedPanel.Visibility = Visibility.Visible;
                 NewWheelPanel.Visibility = Visibility.Collapsed;
                 EsWheelPanel.Visibility = Visibility.Collapsed;
@@ -142,12 +143,23 @@ namespace MozaPlugin.Devices
             bool newWheel = _plugin!.IsNewWheelDetected;
             bool oldWheel = _plugin.IsOldWheelDetected;
 
-            if (newWheel)
-                WheelTypeText.Text = "Wheel type: New protocol (GS/FSR/CS/RS/TSW)";
-            else if (oldWheel)
-                WheelTypeText.Text = "Wheel type: ES series";
+            string modelName = _data!.WheelModelName;
+            string swVersion = _data.WheelSwVersion;
+            string hwVersion = _data.WheelHwVersion;
+
+            if (newWheel || oldWheel)
+            {
+                WheelTypeText.Text = string.IsNullOrEmpty(modelName) ? "Detecting wheel..." : modelName;
+                var fwParts = new System.Collections.Generic.List<string>();
+                if (!string.IsNullOrEmpty(swVersion)) fwParts.Add($"FW: {swVersion}");
+                if (!string.IsNullOrEmpty(hwVersion)) fwParts.Add($"HW: {hwVersion}");
+                WheelFwText.Text = string.Join("  |  ", fwParts);
+            }
             else
-                WheelTypeText.Text = connected ? "Wheel type: Detecting..." : "Wheel type: Unknown";
+            {
+                WheelTypeText.Text = connected ? "Detecting..." : "";
+                WheelFwText.Text = "";
+            }
 
             _suppressEvents = true;
             try

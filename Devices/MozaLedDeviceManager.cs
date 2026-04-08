@@ -83,7 +83,8 @@ namespace MozaPlugin.Devices
 
         public string GetSerialNumber() => "MOZA-VIRTUAL";
 
-        public string GetFirmwareVersion() => "1.0";
+        public string GetFirmwareVersion() =>
+            System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.0.0";
 
         public object GetDriverInstance() => this;
 

@@ -1150,6 +1150,43 @@ commands:
 
 # Steering wheel
   wheel:
+    # Identity queries — read-only, bytes=0 means request sends cmd ID only;
+    # device returns 16 null-padded bytes regardless.
+    model-name:
+      read: 7
+      write: -1
+      id: [1]
+      bytes: 0
+      type: array
+
+    sw-version:
+      read: 15
+      write: -1
+      id: [1]
+      bytes: 0
+      type: array
+
+    hw-version:
+      read: 8
+      write: -1
+      id: [1]
+      bytes: 0
+      type: array
+
+    serial-a:
+      read: 16
+      write: -1
+      id: [0]
+      bytes: 0
+      type: array
+
+    serial-b:
+      read: 16
+      write: -1
+      id: [1]
+      bytes: 0
+      type: array
+
     colors:
       read: -1 # 64
       write: 63
