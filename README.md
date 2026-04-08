@@ -6,6 +6,12 @@ Built using the amazing work of [Boxflat](https://github.com/Lawstorant/boxflat)
 
 ![MOZA Plugin Settings](docs/Screenshot.png)
 
+> [!NOTE]
+> MOZA is a registered trademark of Gudsen Technology Co., Ltd. This project is not affiliated with, endorsed by, or sponsored by MOZA or Gudsen Technology. All trademarks are the property of their respective owners.
+
+> [!IMPORTANT]
+> **Close Pithouse before using this plugin.** Both applications communicate with MOZA hardware over the same serial port and cannot be open simultaneously. Pithouse must be fully closed (not just minimized) before SimHub can connect.
+
 > [!WARNING]
 > **USE AT YOUR OWN RISK.** This software communicates directly with force feedback hardware capable of producing high torque output that can cause serious injury or property damage. This plugin is provided "as is", without warranty of any kind, express or implied. The authors accept no responsibility or liability for any damage to hardware, injury to persons, or any other loss arising from the use of this software. By using this plugin, you acknowledge the inherent risks of controlling force feedback devices via third-party software and accept full responsibility for any consequences.
 
@@ -27,7 +33,7 @@ MOZA wheels and dashboards register as native SimHub devices, appearing in SimHu
 
 ![Device Panel](docs/Device.png)
 
-- **LED Effects System** — Use SimHub's full effects configuration UI (RPM indicators, flags, speed limiter animations, scripted effects, etc.) to control your wheel and dashboard LEDs
+- **LED Effects System** — Use SimHub's full Button and Telemetry effects configuration UI (RPM indicators, flags, speed limiter animations, scripted effects, etc.) to control your wheel and dashboard LEDs
 - **Per-Game Device Profiles** — SimHub's device profile system saves and restores LED effect configurations per game
 - **Auto-Detection** — MOZA devices are automatically detected by USB VID/PID when adding a new device
 - **Separate Wheel & Dashboard Devices** — Each registers independently with its own profile and LED configuration
@@ -40,12 +46,20 @@ Tested:
 - Old-protocol wheels (ES series)
 - R5 Base
 - Moza handbrake (directly attached)
+- New-protocol wheels (Vision GS/CS V2P/TSW)
 
-Preliminary Support:
-- New-protocol wheels (GS/FSR/CS/RS/TSW) (**testers needed**)
+TBD:
+- Other New-Protocol wheels (FSR/RS) (**testers needed**)
 
 Untested:
 - Dashboard (**testers needed**)
+
+
+### Known Issues
+
+- Gaps in LEDs for CS V2P: 6 buttons map across LEDs # 1,2,4,7,9,10
+- Dashboards to LCDs in wheels not supported
+- Only one wheel device in Simhub is possible currently, even with multiple wheels. Wheel identification is pending.
 
 ### Per-Game Profiles
 

@@ -18,3 +18,5 @@ Desktop.ini
 .DS_Store
 
 settings.local.json
+
+usb-capture/
