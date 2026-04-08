@@ -15,6 +15,14 @@ Built using the amazing work of [Boxflat](https://github.com/Lawstorant/boxflat)
 > [!WARNING]
 > **USE AT YOUR OWN RISK.** This software communicates directly with force feedback hardware capable of producing high torque output that can cause serious injury or property damage. This plugin is provided "as is", without warranty of any kind, express or implied. The authors accept no responsibility or liability for any damage to hardware, injury to persons, or any other loss arising from the use of this software. By using this plugin, you acknowledge the inherent risks of controlling force feedback devices via third-party software and accept full responsibility for any consequences.
 
+## Custom Effects managed by Simhub
+
+https://github.com/user-attachments/assets/94ad3e6a-9ae0-46a2-8e2f-4f4343326414
+
+_Thank you to a gracious tester who provided this custom Engine Start and Pit Limiter effects video._
+
+**_Screen updates not currently supported._**
+
 ## Installation
 
 Download the latest `MozaPlugin_v*.zip` from the [Releases](https://github.com/giantorth/moza-simhub-plugin/releases) page and extract into your SimHub installation directory:
