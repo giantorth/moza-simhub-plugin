@@ -2,7 +2,7 @@
 
 A SimHub plugin that communicates directly with MOZA Racing hardware over serial, providing full hardware configuration and LED control through SimHub's native device and effects system.
 
-Built using the amazing work of [Boxflat](https://github.com/Lawstorant/boxflat) that reverse-engineered the [MOZA serial protocol](../moza-protocol.md).
+Built using the amazing work of [Boxflat](https://github.com/Lawstorant/boxflat) that reverse-engineered the [MOZA serial protocol](docs/moza-protocol.md).
 
 ![MOZA Plugin Settings](docs/Screenshot.png)
 
@@ -268,6 +268,8 @@ The plugin exposes these properties for use in SimHub dashboards and overlays:
 
 ## Building from Source
 
+See [DEVELOPMENT.md](docs/DEVELOPMENT.md) for a full project overview and build reference.
+
 ### Building on Windows
 
 #### Prerequisites
@@ -364,7 +366,7 @@ You can build the plugin entirely on Linux. The .NET SDK can target .NET Framewo
 
 ### Serial Protocol
 
-The plugin communicates with MOZA hardware over USB serial (CDC/ACM) at 115200 baud using the MOZA binary protocol:
+The plugin communicates with MOZA hardware over USB serial (CDC/ACM) at 115200 baud using the [MOZA binary protocol](docs/moza-protocol.md):
 
 ```
 [0x7E] [payload_length] [request_group] [device_id] [command_id...] [payload...] [checksum]
@@ -377,12 +379,18 @@ The plugin communicates with MOZA hardware over USB serial (CDC/ACM) at 115200 b
 
 ### LED Pipeline
 
+See [SimHub Plugin API Reference](docs/simhub.md) for notes on the plugin interfaces used.
+
 The plugin registers MOZA wheel and dashboard as native SimHub LED devices by injecting virtual LED drivers (`MozaLedDeviceManager` / `MozaDashLedDeviceManager`). SimHub's effects pipeline computes LED colors each frame (RPM indicators, flags, animations, scripted effects, etc.) and calls `Display()` on the virtual driver, which converts the colors to MOZA's bitmask/color protocol and sends them to hardware over serial.
 
 - **Wheel**: RPM bitmask (10 LEDs) + button bitmask (14 LEDs) sent as separate commands
 - **Dashboard**: Combined bitmask (10 RPM + 6 flag LEDs) sent as a single 16-bit value
 - **Brightness**: Forwarded from SimHub's per-device brightness setting
 - **Keepalive**: Periodic resend (~1s) to prevent LED timeout on some hardware
+
+### Debugging / Contributing
+
+To capture USB traffic between your MOZA device and PC for diagnosing issues or reverse-engineering new commands, see [USB Traffic Capture](docs/usb-capture.md).
 
 ### Settings Read/Write Flow
 

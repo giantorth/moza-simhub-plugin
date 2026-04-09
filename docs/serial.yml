@@ -7,7 +7,7 @@ device-ids:
   main      : 18 # base id for devices connected through usb
   base      : 19
   dash      : 20
-  wheel     : 23 # this ID can vary but most wheels are available at ID 23 now.
+  wheel     : 23 # this ID can vary but most wheels are favailable at ID 23 now.
   pedals    : 25
   hpattern  : 26
   sequential: 26
@@ -821,6 +821,16 @@ commands:
       write: -1
       id: [68, 1]
       bytes: 1
+      type: int
+
+    # Observed in USB capture — purpose unclear, sent ~50x/sec to base during driving
+    # 4-byte payload where the last byte monotonically increments each send.
+    # May be a sequence counter or heartbeat. Group 45 not otherwise documented.
+    sequence-counter:
+      read: -1
+      write: 45
+      id: [245, 49]
+      bytes: 4
       type: int
 
 # Dashboard
@@ -1753,6 +1763,26 @@ commands:
       id: [8]
       bytes: 1
       type: int
+
+    # Live telemetry block — observed in USB capture, payload not fully decoded
+    # Sent ~17-20x/sec. 22-byte payload contains RPM, speed, and other live values.
+    # All live data goes to the wheel (device 23); the dash display is driven internally
+    # by the wheel firmware, not addressed directly by Pithouse.
+    send-live-telemetry:
+      read: -1
+      write: 67
+      id: [125, 35]
+      bytes: 22
+      type: array
+
+    # Observed in USB capture — purpose unclear, sent ~once/sec
+    # Appears to be a periodic config or state push; 3-byte payload, third byte increments
+    send-telemetry-state:
+      read: -1
+      write: 67
+      id: [252, 0]
+      bytes: 3
+      type: array
 
     # telemetry stuff
     send-rpm-telemetry:
