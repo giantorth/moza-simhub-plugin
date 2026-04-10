@@ -722,22 +722,6 @@
                                        FontSize="11" VerticalAlignment="Center"/>
                         </StackPanel>
 
-                        <!-- Send rate -->
-                        <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
-                            <TextBlock Text="Send rate (Hz):" Width="160" VerticalAlignment="Center"/>
-                            <TextBox x:Name="TelemetrySendRateBox" Width="70" Margin="0,0,8,0"
-                                     TextChanged="TelemetrySendRateBox_TextChanged" VerticalAlignment="Center"/>
-                        </StackPanel>
-
-                        <!-- Byte limit override -->
-                        <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
-                            <TextBlock Text="Byte limit override:" Width="160" VerticalAlignment="Center"/>
-                            <TextBox x:Name="TelemetryByteLimitBox" Width="70" Margin="0,0,8,0"
-                                     TextChanged="TelemetryByteLimitBox_TextChanged" VerticalAlignment="Center"/>
-                            <TextBlock Text="(0 = auto from profile)" Foreground="Gray"
-                                       FontSize="11" VerticalAlignment="Center"/>
-                        </StackPanel>
-
                         <!-- Mode frame toggle -->
                         <CheckBox x:Name="TelemetrySendModeCheck" Content="Send mode frame (0x40/28:02) periodically"
                                   Margin="0,0,0,8" Click="TelemetrySendModeCheck_Click"/>

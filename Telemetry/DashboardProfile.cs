@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 
 namespace MozaPlugin.Telemetry
 {
@@ -21,6 +22,9 @@ namespace MozaPlugin.Telemetry
         /// One of the SimHubProperty enum values defined in DashboardProfileStore.
         /// </summary>
         public SimHubField SimHubField { get; set; } = SimHubField.Zero;
+
+        /// <summary>Telemetry tier (ms update interval, e.g. 30, 500, 2000).</summary>
+        public int PackageLevel { get; set; } = 30;
     }
 
     public class DashboardProfile
@@ -30,8 +34,32 @@ namespace MozaPlugin.Telemetry
         public int TotalBits { get; set; }
         public int TotalBytes { get; set; }
 
+        /// <summary>Telemetry tier this profile covers (ms interval).</summary>
+        public int PackageLevel { get; set; } = 30;
+
         public override string ToString() =>
             $"{Name} ({Channels.Count} channels, {TotalBytes} bytes)";
+    }
+
+    /// <summary>
+    /// Concurrent telemetry streams for one dashboard, split by package_level tier.
+    /// Tiers are sorted by package_level ascending; flag bytes are FlagByte + tier index.
+    /// </summary>
+    public class MultiStreamProfile
+    {
+        public string Name { get; set; } = "";
+
+        /// <summary>
+        /// Per-tier profiles, sorted by PackageLevel ascending.
+        /// Flag byte offset = index in this list (0, 1, 2, ...).
+        /// </summary>
+        public List<DashboardProfile> Tiers { get; set; } = new List<DashboardProfile>();
+
+        public override string ToString()
+        {
+            var parts = Tiers.Select(t => $"L{t.PackageLevel}:{t.Channels.Count}ch/{t.TotalBytes}B");
+            return $"{Name} ({string.Join(", ", parts)})";
+        }
     }
 
     /// <summary>

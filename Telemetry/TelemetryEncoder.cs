@@ -82,7 +82,9 @@ namespace MozaPlugin.Telemetry
                 case "int30":
                 case "uint30":
                 case "uint31":
-                    return Math.Min((uint)Math.Max(0, gameValue), 31u);
+                    if (gameValue < 0)
+                        return (uint)((int)gameValue & 0x1F); // -1 → 31 (5-bit two's complement; used for reverse gear)
+                    return Math.Min((uint)gameValue, 30u);
 
                 case "int8_t":
                 case "uint8_t":

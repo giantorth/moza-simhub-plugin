@@ -9,12 +9,12 @@ using Newtonsoft.Json.Linq;
 namespace MozaPlugin.Telemetry
 {
     /// <summary>
-    /// Builds and stores dashboard profiles from bundled data and .mzdash files.
+    /// Builds and stores multi-stream dashboard profiles from bundled data and .mzdash files.
     /// </summary>
     public class DashboardProfileStore
     {
         private Dictionary<string, TelemetryChannelInfo>? _telemetryMap;
-        private List<DashboardProfile>? _builtinProfiles;
+        private List<MultiStreamProfile>? _builtinProfiles;
 
         private static readonly Regex TelemetryGetRegex =
             new Regex(@"Telemetry\.get\([""'](v1/gameData/[^""']+)[""']\)",
@@ -42,7 +42,7 @@ namespace MozaPlugin.Telemetry
             ["TyreWearRearRight"]  = SimHubField.TyreWearRearRight,
         };
 
-        public IReadOnlyList<DashboardProfile> BuiltinProfiles
+        public IReadOnlyList<MultiStreamProfile> BuiltinProfiles
         {
             get
             {
@@ -54,11 +54,9 @@ namespace MozaPlugin.Telemetry
 
         private void LoadBuiltinProfiles()
         {
-            _builtinProfiles = new List<DashboardProfile>();
+            _builtinProfiles = new List<MultiStreamProfile>();
             var assembly = Assembly.GetExecutingAssembly();
 
-            // Each bundled .mzdash file is stored as an embedded resource
-            // under MozaPlugin.Data.Dashes.<name>.mzdash
             foreach (var resourceName in assembly.GetManifestResourceNames())
             {
                 if (!resourceName.EndsWith(".mzdash", StringComparison.OrdinalIgnoreCase))
@@ -71,8 +69,6 @@ namespace MozaPlugin.Telemetry
                     using var reader = new StreamReader(stream);
                     string content = reader.ReadToEnd();
 
-                    // Derive display name from resource name
-                    // e.g. MozaPlugin.Data.Dashes.Formula_1.mzdash → "Formula 1"
                     string displayName = resourceName
                         .Replace("MozaPlugin.Data.Dashes.", "")
                         .Replace(".mzdash", "")
@@ -90,15 +86,15 @@ namespace MozaPlugin.Telemetry
         }
 
         /// <summary>
-        /// Parse a .mzdash file from disk and build a profile.
+        /// Parse a .mzdash file from disk and build a multi-stream profile.
         /// </summary>
-        public DashboardProfile? ParseMzdash(string path, int byteLimitOverride = 0)
+        public MultiStreamProfile? ParseMzdash(string path)
         {
             try
             {
                 string content = File.ReadAllText(path);
                 string name = Path.GetFileNameWithoutExtension(path);
-                return ParseMzdashContent(name, content, byteLimitOverride);
+                return ParseMzdashContent(name, content);
             }
             catch (Exception ex)
             {
@@ -107,33 +103,30 @@ namespace MozaPlugin.Telemetry
             }
         }
 
-        private DashboardProfile? ParseMzdashContent(string name, string content, int byteLimitOverride = 0)
+        private MultiStreamProfile? ParseMzdashContent(string name, string content)
         {
-            var map = GetTelemetryMap();
-
-            // Extract all Telemetry.get() URLs, deduplicate, sort alphabetically
+            // Extract all Telemetry.get() URLs, deduplicate
             var urls = TelemetryGetRegex.Matches(content)
                 .Cast<Match>()
                 .Select(m => m.Groups[1].Value)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
-                .OrderBy(u => u, StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
             if (urls.Count == 0)
                 return null;
 
-            return BuildProfileFromUrls(name, urls, byteLimitOverride);
+            return BuildMultiStreamProfile(name, urls);
         }
 
         /// <summary>
-        /// Build a profile from a sorted list of channel URLs, applying the byte limit.
+        /// Build a MultiStreamProfile from a list of channel URLs.
+        /// Channels are grouped by package_level and sorted alphabetically within each tier.
+        /// Any package_level value found in Telemetry.json gets its own tier.
         /// </summary>
-        public DashboardProfile BuildProfileFromUrls(string name, IEnumerable<string> urls,
-            int byteLimitOverride = 0)
+        public MultiStreamProfile BuildMultiStreamProfile(string name, IEnumerable<string> urls)
         {
             var map = GetTelemetryMap();
-            var channels = new List<ChannelDefinition>();
-            int totalBits = 0;
+            var byLevel = new Dictionary<int, List<ChannelDefinition>>();
 
             foreach (var url in urls)
             {
@@ -143,35 +136,52 @@ namespace MozaPlugin.Telemetry
                 if (!TelemetryEncoder.BitWidths.TryGetValue(info.Compression, out int bits))
                     continue;
 
-                // Apply byte limit: skip if adding this channel would exceed the limit
-                if (byteLimitOverride > 0)
-                {
-                    int newBytes = (totalBits + bits + 7) / 8;
-                    if (newBytes > byteLimitOverride)
-                        continue;
-                }
-
                 string suffix = url.Contains('/') ? url.Substring(url.LastIndexOf('/') + 1) : url;
                 UrlFieldMap.TryGetValue(suffix, out SimHubField field);
 
-                channels.Add(new ChannelDefinition
+                int level = info.PackageLevel;
+                if (!byLevel.ContainsKey(level))
+                    byLevel[level] = new List<ChannelDefinition>();
+
+                byLevel[level].Add(new ChannelDefinition
                 {
-                    Name = info.Name,
-                    Url = url,
-                    Compression = info.Compression,
-                    BitWidth = bits,
-                    SimHubField = field,
+                    Name         = info.Name,
+                    Url          = url,
+                    Compression  = info.Compression,
+                    BitWidth     = bits,
+                    SimHubField  = field,
+                    PackageLevel = level,
                 });
-                totalBits += bits;
             }
 
-            int totalBytes = (totalBits + 7) / 8;
+            // Build tiers sorted by package_level ascending (flag offset = index)
+            var tiers = byLevel.Keys
+                .OrderBy(level => level)
+                .Select(level => BuildTierProfile(name, byLevel[level], level))
+                .ToList();
+
+            return new MultiStreamProfile
+            {
+                Name  = name,
+                Tiers = tiers,
+            };
+        }
+
+        private static DashboardProfile BuildTierProfile(string name, List<ChannelDefinition> channels, int level)
+        {
+            // Sort alphabetically by URL within the tier
+            var sorted = channels
+                .OrderBy(c => c.Url, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            int totalBits = sorted.Sum(c => c.BitWidth);
             return new DashboardProfile
             {
-                Name = name,
-                Channels = channels,
-                TotalBits = totalBits,
-                TotalBytes = totalBytes,
+                Name         = name,
+                Channels     = sorted,
+                TotalBits    = totalBits,
+                TotalBytes   = (totalBits + 7) / 8,
+                PackageLevel = level,
             };
         }
 
@@ -203,11 +213,13 @@ namespace MozaPlugin.Telemetry
 
                 foreach (var sector in sectors)
                 {
-                    string? url = sector["url"]?.ToString();
+                    string? url         = sector["url"]?.ToString();
                     string? compression = sector["compression"]?.ToString();
-                    string? name = sector["name"]?.ToString();
+                    string? name        = sector["name"]?.ToString();
+                    int packageLevel    = sector["package_level"]?.Value<int>() ?? 30;
+
                     if (url == null || compression == null) continue;
-                    result[url] = new TelemetryChannelInfo(name ?? url, compression);
+                    result[url] = new TelemetryChannelInfo(name ?? url, compression, packageLevel);
                 }
             }
             catch (Exception ex)
@@ -222,8 +234,14 @@ namespace MozaPlugin.Telemetry
         {
             public string Name;
             public string Compression;
-            public TelemetryChannelInfo(string name, string compression)
-            { Name = name; Compression = compression; }
+            public int    PackageLevel;
+
+            public TelemetryChannelInfo(string name, string compression, int packageLevel)
+            {
+                Name         = name;
+                Compression  = compression;
+                PackageLevel = packageLevel;
+            }
         }
     }
 }

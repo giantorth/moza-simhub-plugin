@@ -990,8 +990,6 @@ namespace MozaPlugin
                 var s = _plugin.Settings;
                 TelemetryEnabledCheck.IsChecked = s.TelemetryEnabled;
                 TelemetryFlagByteBox.Text = $"0x{s.TelemetryFlagByte:X2}";
-                TelemetrySendRateBox.Text = s.TelemetrySendRateHz.ToString();
-                TelemetryByteLimitBox.Text = s.TelemetryByteLimitOverride.ToString();
                 TelemetrySendModeCheck.IsChecked = s.TelemetrySendModeFrame;
 
                 // Populate profile dropdown
@@ -1038,7 +1036,7 @@ namespace MozaPlugin
             else if (testMode)
                 TelemetryStatusLabel.Text = $"Test pattern — {sender.FramesSent} frames sent";
             else
-                TelemetryStatusLabel.Text = $"Sending at {_plugin.Settings.TelemetrySendRateHz} Hz — {sender.FramesSent} frames sent";
+                TelemetryStatusLabel.Text = $"Sending — {sender.FramesSent} frames sent";
 
             var last = sender.LastFrameSent;
             TelemetryLastFrameLabel.Text = last != null
@@ -1052,9 +1050,15 @@ namespace MozaPlugin
         private void UpdateTelemetryProfileInfo()
         {
             var profile = _plugin.TelemetrySender?.Profile;
-            TelemetryProfileInfo.Text = profile != null
-                ? $"{profile.Channels.Count} channels — {profile.TotalBits} bits — {profile.TotalBytes} bytes"
-                : "—";
+            if (profile == null || profile.Tiers.Count == 0)
+            {
+                TelemetryProfileInfo.Text = "—";
+                return;
+            }
+            var parts = new System.Collections.Generic.List<string>();
+            foreach (var tier in profile.Tiers)
+                parts.Add($"L{tier.PackageLevel}: {tier.Channels.Count}ch/{tier.TotalBytes}B");
+            TelemetryProfileInfo.Text = string.Join("  ", parts);
         }
 
         private void TelemetryEnabledCheck_Click(object sender, RoutedEventArgs e)
@@ -1118,33 +1122,6 @@ namespace MozaPlugin
             }
         }
 
-        private void TelemetrySendRateBox_TextChanged(object sender, TextChangedEventArgs e)
-        {
-            if (_suppressEvents) return;
-            if (int.TryParse(TelemetrySendRateBox.Text, out int rate) && rate > 0 && rate <= 100)
-            {
-                _plugin.Settings.TelemetrySendRateHz = rate;
-                _plugin.ApplyTelemetrySettings();
-                if (_plugin.Settings.TelemetryEnabled)
-                {
-                    _plugin.TelemetrySender?.Stop();
-                    _plugin.TelemetrySender?.Start();
-                }
-                _plugin.SaveSettings();
-            }
-        }
-
-        private void TelemetryByteLimitBox_TextChanged(object sender, TextChangedEventArgs e)
-        {
-            if (_suppressEvents) return;
-            if (int.TryParse(TelemetryByteLimitBox.Text, out int limit) && limit >= 0)
-            {
-                _plugin.Settings.TelemetryByteLimitOverride = limit;
-                _plugin.ApplyTelemetrySettings();
-                _plugin.SaveSettings();
-                UpdateTelemetryProfileInfo();
-            }
-        }
 
         private void TelemetrySendModeCheck_Click(object sender, RoutedEventArgs e)
         {

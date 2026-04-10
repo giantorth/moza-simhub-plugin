@@ -316,16 +316,13 @@ namespace MozaPlugin
             var s = _settings;
 
             _telemetrySender.FlagByte          = s.TelemetryFlagByte;
-            _telemetrySender.SendRateHz        = s.TelemetrySendRateHz > 0 ? s.TelemetrySendRateHz : 20;
             _telemetrySender.SendTelemetryMode = s.TelemetrySendModeFrame;
 
-            // Resolve the active profile
-            DashboardProfile? profile = null;
+            // Resolve the active multi-stream profile
+            MultiStreamProfile? profile = null;
             if (!string.IsNullOrEmpty(s.TelemetryMzdashPath) && System.IO.File.Exists(s.TelemetryMzdashPath))
-            {
-                int limit = s.TelemetryByteLimitOverride;
-                profile = DashProfileStore.ParseMzdash(s.TelemetryMzdashPath, limit);
-            }
+                profile = DashProfileStore.ParseMzdash(s.TelemetryMzdashPath);
+
             if (profile == null)
             {
                 var builtins = DashProfileStore.BuiltinProfiles;
@@ -334,12 +331,6 @@ namespace MozaPlugin
                     if (!string.IsNullOrEmpty(s.TelemetryProfileName))
                         profile = FindProfile(builtins, s.TelemetryProfileName);
                     profile ??= builtins[0];
-
-                    if (s.TelemetryByteLimitOverride > 0 && profile != null)
-                        profile = DashProfileStore.BuildProfileFromUrls(
-                            profile.Name,
-                            System.Linq.Enumerable.Select(profile.Channels, c => c.Url),
-                            s.TelemetryByteLimitOverride);
                 }
             }
 
@@ -361,8 +352,8 @@ namespace MozaPlugin
             }
         }
 
-        private static DashboardProfile? FindProfile(
-            System.Collections.Generic.IReadOnlyList<DashboardProfile> profiles, string name)
+        private static MultiStreamProfile? FindProfile(
+            System.Collections.Generic.IReadOnlyList<MultiStreamProfile> profiles, string name)
         {
             foreach (var p in profiles)
                 if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase))

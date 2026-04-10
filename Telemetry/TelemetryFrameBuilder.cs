@@ -8,7 +8,7 @@ namespace MozaPlugin.Telemetry
     /// <summary>
     /// Assembles a complete Moza telemetry serial frame from game data.
     ///
-    /// Frame format (pithouse-re.md § 4):
+    /// Frame format (moza-protocol.md § Main real-time telemetry):
     ///   7E [N] 43 17 7D 23 32 00 23 32 [flag] 20 [data...] [checksum]
     /// </summary>
     public class TelemetryFrameBuilder
@@ -29,9 +29,11 @@ namespace MozaPlugin.Telemetry
         /// <summary>Build frame from a pre-populated snapshot (test patterns, etc.).</summary>
         public byte[] BuildFrameFromSnapshot(GameDataSnapshot snapshot, byte flagByte)
         {
+            if (_profile.TotalBytes == 0)
+                return BuildStubFrame(flagByte);
+
             // 1. Bit-pack channel values
-            int bufBytes = Math.Max(1, _profile.TotalBytes);
-            var writer = new TelemetryBitWriter(bufBytes);
+            var writer = new TelemetryBitWriter(_profile.TotalBytes);
 
             foreach (var ch in _profile.Channels)
             {
@@ -46,8 +48,18 @@ namespace MozaPlugin.Telemetry
             }
 
             byte[] data = writer.GetBuffer();
+            return BuildFrameWithData(flagByte, data);
+        }
 
-            // 2. Build frame
+        /// <summary>
+        /// Build a stub frame for a tier with no active channels.
+        /// Frame contains the full fixed header but no data bytes.
+        /// </summary>
+        public static byte[] BuildStubFrame(byte flagByte) =>
+            BuildFrameWithData(flagByte, Array.Empty<byte>());
+
+        private static byte[] BuildFrameWithData(byte flagByte, byte[] data)
+        {
             // payload = cmdId(2) + header(6) + data bytes
             int payloadLen = 2 + 6 + data.Length;
             var frame = new List<byte>(4 + payloadLen + 1)
@@ -58,7 +70,7 @@ namespace MozaPlugin.Telemetry
                 MozaProtocol.DeviceWheel,            // 17
                 0x7D, 0x23,                          // cmdId
                 0x32, 0x00, 0x23, 0x32,              // header prefix
-                flagByte,                            // flag (wheel ignores value)
+                flagByte,                            // flag (identifies which tier)
                 0x20,                                // hardcoded constant
             };
             frame.AddRange(data);

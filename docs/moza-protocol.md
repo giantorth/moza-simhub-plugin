@@ -60,7 +60,7 @@ See [serial.md](serial.md) for the full list of device IDs and commands.
 
 ### Authoritative source: rs21_parameter.db
 
-The Pit House installation contains `bin/rs21_parameter.db` — a SQLite database with 919 commands across 23 groups. This is the canonical reference for all RS21 (sim racing) device commands, including command names, descriptions, request/response group encoding, payload sizes, data types, valid ranges, and EEPROM addresses. The `request_group` field encodes as a JSON array: first element is the protocol group byte, remaining elements are command ID bytes. Example: `[40, 2]` → group 0x28, cmd 0x02. See [pithouse-re.md § rs21_parameter.db](pithouse-re.md#rs21_parameterdb--authoritative-command-database) for full schema and analysis.
+The Pit House installation contains `bin/rs21_parameter.db` — a SQLite database with 919 commands across 23 groups. This is the canonical reference for all RS21 (sim racing) device commands, including command names, descriptions, request/response group encoding, payload sizes, data types, valid ranges, and EEPROM addresses. The `request_group` field encodes as a JSON array: first element is the protocol group byte, remaining elements are command ID bytes. Example: `[40, 2]` → group 0x28, cmd 0x02.
 
 Commands NOT in the database (not in rs21_parameter.db; discovered via USB captures): identity queries (groups 7/8/15/16), music sub-commands (group 42), sequence counter (group 45), telemetry enable (group 65), and live telemetry stream (group 67/0x43).
 
@@ -146,31 +146,42 @@ Primary live data stream from Pithouse to wheel/dash. Sent ~17–20×/s.
 | 4 | varies | **Flag byte** — determines payload type (see below) |
 | 5 | `0x20` | Constant across all captures |
 
-### Flag byte and payload types
+### Flag byte, payload types, and multi-stream architecture
 
-Multiple flag values appear within a single session. The majority flag (>95% of packets) carries the main telemetry; minority flags carry different data with different byte counts.
+Pit House sends telemetry as **three concurrent streams** using different flag bytes, one per `package_level` tier defined in `GameConfigs/Telemetry.json`. Each stream carries the channels assigned to its tier, bit-packed alphabetically by URL suffix.
 
-| Majority flag | Minority flags | Live bytes | Content |
-|--------------|----------------|------------|---------|
-| `0x13` or `0x0a` (varies per session) | — | 16 | Main telemetry (bit-packed channels) |
-| — | `0x14` / `0x0b` | 2 | Unknown (e.g. `9a:01`) |
-| — | `0x15` / `0x0c` | 13 | Unknown (e.g. `00:00:00:00:00:00:00:00:dd:77:df:7d:f7`) |
+| Flag offset | `package_level` | Update rate | Content |
+|-------------|----------------|-------------|---------|
+| base (e.g. `0x0a`, `0x13`) | 30 | ~30 ms | Channels with `package_level: 30` |
+| base+1 | 500 | ~500 ms | Channels with `package_level: 500` |
+| base+2 | 2000 | ~2000 ms | Channels with `package_level: 2000` |
 
-**Only majority-flag packets should be decoded as main telemetry.**
+`package_level` is the authoritative routing key — a channel's tier is fixed in `Telemetry.json`, independent of which dashboard is active. If a tier has no active channels, the frame is sent as a 2-byte stub `[flag][0x20]`. The flag value is a monotonic counter assigned per connection; base+1 and base+2 are always exactly one and two above the base flag.
 
-### Payload size is dashboard-specific
+### Level-2000 frame (base+2)
 
-Pithouse packs channels **alphabetically by URL suffix** (e.g. `BestLapTime` before `Brake` before `CurrentLapTime`). The packing loop adds channels in this order until a per-dashboard byte limit is reached; remaining channels are **dropped**.
+Channels with `package_level: 2000` in `Telemetry.json`. Packed using the same bit-packing algorithm and alphabetical channel ordering as the base frame. Example layout with 6 level-2000 channels (104 bits = 13 bytes):
+
+| Bits | Channel | Compression | Width |
+|------|---------|-------------|-------|
+| 0–31 | BestLapTime | `float` | 32 |
+| 32–63 | LastLapTime | `float` | 32 |
+| 64–73 | TyreWearFrontLeft | `percent_1` | 10 |
+| 74–83 | TyreWearFrontRight | `percent_1` | 10 |
+| 84–93 | TyreWearRearLeft | `percent_1` | 10 |
+| 94–103 | TyreWearRearRight | `percent_1` | 10 |
+| *(total)* | | | **104 bits = 13 bytes exactly** |
+
+### Level-500 frame (base+1)
+
+Channels with `package_level: 500` in `Telemetry.json`. If a dashboard has no active level-500 channels, this frame is sent as a 2-byte stub `[flag][0x20]`.
+
+### Payload size
+
+Each stream's payload carries only the channels from that dashboard that belong to that `package_level` tier. Channels within each stream are packed **alphabetically by URL suffix**.
 
 Total payload bytes = `ceil(sum_of_channel_bit_widths / 8)`.
 
-| Dashboard | Channels in mzdash | Live data bytes | Notes |
-|-----------|--------------------|-----------------|-------|
-| `m Formula 1.mzdash` | 16 | 16 | 8 channels fit (see verified layout below) |
-| Core (default) | 6 | varies | Channels sorted alphabetically, packed until limit |
-| `rpm-only.mzdash` | 1 | 2 | Single uint16_t RPM value |
-
-With 1 channel: 2 live bytes = **LE uint16 raw RPM value**.
 Multi-channel payloads are **bit-packed** using per-channel compression types.
 
 ### Bit-packed encoding
@@ -209,49 +220,26 @@ Factory ID 20 (`uint3`, `uint8`, `uint15`) maps through abstract `IsUnsignedInte
 
 #### Channel ordering
 
-Channels are packed **alphabetically by URL suffix** (the part after `v1/gameData/`). Internally, `TelemetryServer::updateTelemetry` iterates a `std::map<QString, ...>` keyed by channel URL, which yields channels in sorted order. The `TelemetryBitFormat::assemble` function packs them sequentially into the bit stream starting at bit 0.
+Channels are first grouped by **`package_level`** (30 → base frame, 500 → base+1, 2000 → base+2), then within each frame packed **alphabetically by URL suffix** (the part after `v1/gameData/`). Channels are iterated in sorted order by URL and packed sequentially into the bit stream starting at bit 0.
 
 Bits are packed **LSB-first within each byte** (bit 0 = LSB of byte 0, bit 8 = LSB of byte 1, etc.). Multi-bit fields span byte boundaries when needed.
 
-#### F1 dashboard bit layout
+#### Example: F1 dashboard base frame (level-30 channels, alphabetical order)
 
-Two versions of the F1 dashboard exist in different Pit House installs. Both pack 8 channels into 16 bytes.
+Channels from the F1 dashboard with `package_level: 30`, sorted alphabetically by URL suffix, confirmed by capture (Gear at bit 79):
 
-**`m Formula 1.mzdash`** (older, used in USB captures):
-
-Channels sorted alphabetically by URL suffix (F < G-A < G-e): FuelRemainder comes before GAP which comes before Gear.
-
-| Bits | Channel | URL suffix | Compression | Width | Notes |
-|------|---------|------------|-------------|-------|-------|
-| 0–31 | BestLapTime | `BestLapTime` | `float` | 32 | IEEE float; 0 before first lap |
-| 32–41 | Brake | `Brake` | `float_001` | 10 | ~26% at rest, up to 87% braking |
-| 42–73 | CurrentLapTime | `CurrentLapTime` | `float` | 32 | IEEE float; monotonic within laps |
-| 74 | DrsState | `DrsState` | `bool` | 1 | 0 in AC practice |
-| 75–78 | ErsState | `ErsState` | `uint3` | 4 | 0 in AC practice |
-| 79–88 | FuelRemainder | `FuelRemainder` | `percent_1` | 10 | Fuel % × 10 |
-| 89–120 | GAP | `GAP` | `float` | 32 | Delta to session best; 0 in practice |
-| 121–125 | Gear | `Gear` | `int30` | 5 | {0,1,2,3,4,5,6} = N + gears 1–6 |
-| 126–127 | *(padding)* | | | 2 | |
-
-Dropped: LastLapTime, Rpm, SpeedKmh, Throttle, TyreWear×4 (all alphabetically after Gear, exceed 16-byte limit after adding Gear).
-
-**`Formula 1.mzdash`** (current Pit House, no `m ` prefix):
-
-Has 15 channels (no FuelRemainder; adds Rpm, SpeedKmh, Throttle, TyreWear×4). With 16-byte inclusive limit, 8 channels pack to exactly 16 bytes:
-
-| Bits | Channel | URL suffix | Compression | Width |
-|------|---------|------------|-------------|-------|
-| 0–31 | BestLapTime | `BestLapTime` | `float` | 32 |
-| 32–41 | Brake | `Brake` | `float_001` | 10 |
-| 42–73 | CurrentLapTime | `CurrentLapTime` | `float` | 32 |
-| 74 | DrsState | `DrsState` | `bool` | 1 |
-| 75–78 | ErsState | `ErsState` | `uint3` | 4 |
-| 79–110 | GAP | `GAP` | `float` | 32 |
-| 111–115 | Gear | `Gear` | `int30` | 5 |
-| 116–125 | Throttle | `Throttle` | `float_001` | 10 |
-| 126–127 | *(padding)* | | | 2 |
-
-Dropped: LastLapTime, Rpm, SpeedKmh, TyreWear×4 (would each push total above 16 bytes).
+| Bits | Channel | Compression | Width |
+|------|---------|-------------|-------|
+| 0–9 | Brake | `float_001` | 10 |
+| 10–41 | CurrentLapTime | `float` | 32 |
+| 42 | DrsState | `bool` | 1 |
+| 43–46 | ErsState | `uint3` | 4 |
+| 47–78 | GAP | `float` | 32 |
+| 79–83 | Gear | `int30` | 5 |
+| 84–99 | Rpm | `uint16_t` | 16 |
+| 100–115 | SpeedKmh | `float_6000_1` | 16 |
+| 116–125 | Throttle | `float_001` | 10 |
+| 126–127 | *(padding)* | | 2 |
 
 ---
 
@@ -331,8 +319,10 @@ Cmd `[0xF5, 0x31]`. Data: `00 00 00 XX` where XX increments by 1 each send. Sequ
 
 | Cmd ID | Data | Frequency | Notes |
 |--------|------|-----------|-------|
-| `[0xFC, 0x00]` | 3 bytes | ~once per 5s | Periodic status/config write |
-| `[0x7C, 0x00]` | 25 bytes | ~once per 60s | Possibly settings block |
+| `[0xFC, 0x00]` | 3 bytes | varies | Session acknowledgment (`session + ack_seq`) |
+| `[0x7C, 0x00]` | varies | varies | Session-based file transfer / RPC (see Dashboard upload protocol) |
+| `[0x7C, 0x27]` | 4–8 bytes | ~1/s | Periodic display config push |
+| `[0x7C, 0x23]` | 8 bytes | once | Dashboard activation notification |
 
 ### Group 0x43 broadcast (devices 0x14, 0x15)
 
@@ -340,9 +330,101 @@ Short (length=2) packets to dash (device 20) and device 21 every ~5s. Heartbeat/
 
 ---
 
-## Telemetry encode/decode formulas
+## Dashboard upload protocol (group 0x43, cmd `7c:00`)
 
-See [pithouse-re.md § Value encoding details](pithouse-re.md#9-value-encoding-details) for full details.
+Pit House transfers dashboard files and configuration to the wheel using a session-based chunked protocol over `0x43/7c:00`. The `fc:00` command is used for acknowledgments.
+
+### Chunk format
+
+Each `7c:00` data field contains one chunk:
+
+```
+session(1)  type(1)  seq_lo(1)  seq_hi(1)  payload(≤58)
+```
+
+| Field | Size | Description |
+|-------|------|-------------|
+| session | 1 | Session ID (multiple concurrent sessions possible) |
+| type | 1 | `0x01` = data, `0x00` = control/end, `0x81` = seen in device responses |
+| seq | 2 LE | Sequence number (monotonic within session, shared across both directions) |
+| payload | ≤58 | Net data per chunk; **non-last data chunks have a 4-byte CRC trailer** |
+
+Net payload per full data chunk: **54 bytes** (58 minus 4-byte CRC). The last chunk in a transfer has no CRC trailer.
+
+Acknowledgment packets use `fc:00` with 3 bytes: `session(1) + ack_seq(2 LE)`.
+
+### Compressed transfer format
+
+Zlib-compressed transfers (RPC messages, file contents) prepend a 9-byte header to the first data chunk's payload:
+
+```
+flags(1)  comp_sz(4 LE)  uncomp_sz(4 LE)  [zlib data...]
+```
+
+The zlib stream uses standard deflate (`78 9c` magic). Reassembly: strip the 9-byte header from the first chunk, strip 4-byte CRC from each non-last chunk, concatenate, and decompress the first `comp_sz` bytes.
+
+### File transfer sequence (observed in `dash-upload.ndjson`)
+
+The upload of a dashboard file involves multiple sessions and a post-transfer configuration burst:
+
+**1. File path exchange (session 4, type 0x01 data chunks)**
+
+The host sends two UTF-16LE file paths (Windows temp paths) with a 10-byte header, and the device responds with its local Linux path:
+
+```
+header(10)  path_len(2 LE)  path(UTF-16LE, null-terminated)  ...
+            path_len(2 LE)  path(UTF-16LE, null-terminated)  ...
+            md5_len(1=16)   md5(16 bytes)
+            metadata        [zlib-compressed file content]
+```
+
+Host paths: `C:/Users/.../AppData/Local/Temp/_moza_filetransfer_tmp_{timestamp}`
+Device paths: `/home/root/_moza_filetransfer_md5_{hash}` or `/home/moza/resource/dashes/{name}/{name}.mzdash`
+
+The file content (mzdash JSON) is zlib-compressed and embedded after the path metadata.
+
+**2. Dashboard config RPC (session 9, compressed transfer)**
+
+Host sends a `configJson()` message listing all dashboards:
+```json
+{"configJson()":{"dashboards":["Formula 1","GT V01",...,"rpm-only"],
+  "fontRootDir":"","fonts":[],"sortTags":0},"id":11}
+```
+
+Device responds with dashboard management state:
+```json
+{"TitleId":4,"disabledManager":{"deletedDashboards":[],
+  "updateDashboards":[{"createTime":"...","dirName":"rpm-only",
+  "hash":"..."}]}}
+```
+
+**3. Channel configuration burst (group 0x40, after file transfer)**
+
+After the file is transferred, Pit House sends a burst of `0x40` commands to configure the wheel's channel layout:
+
+| Cmd | Data | Purpose |
+|-----|------|---------|
+| `09:00` | (none) | Begin/reset channel config |
+| `1e:01` | `CC 00 00` | Enable channel CC on page 1 |
+| `1e:00` | `CC 00 00` | Enable channel CC on page 0 |
+| `1c:00`/`1c:01` | `00` | Page configuration |
+| `1d:00`/`1d:01` | `00` | Page configuration |
+| `28:02` | `01 00` | Set multi-channel telemetry mode |
+| various | — | Display settings (`0a`, `0b`, `05`, `1b`, `20`, `21`, `24`, etc.) |
+
+**4. Periodic display config (group 0x43, cmd `7c:27`)**
+
+Sent ~1/s after the dashboard is active. Two payloads per cycle: `0f 80 05 00 03 00 fe 01` (8 bytes) and `0f 00 06 00` (4 bytes). Likely RPM bar or display parameters.
+
+A one-shot `7c:23` command is sent when a dashboard is first activated, with 8 bytes of display parameters.
+
+### Wheel configuration persistence (assumed)
+
+In the `dash-upload.ndjson` capture, the wheel responded with `01 00` to `28:02` polls before any upload occurred — it was already in multi-channel mode from its previous configuration. This suggests the wheel retains its channel layout and telemetry mode across USB sessions. **However, no capture of a full cold-start connection-to-game-start flow exists to confirm this.**
+
+---
+
+## Telemetry encode/decode formulas
 
 ### Complete encode reference (game value → raw bits)
 
@@ -419,7 +501,7 @@ Low-level EEPROM read/write protocol, sending to any device. Bypasses the named 
 | `[00, 0B]` | 4 | W | Write float at selected table+address |
 | `[00, 0C]` | 4 | R | Read float at selected table+address |
 
-EEPROM tables: 2=Base (38 params), 3=Motor (76 params, PID/encoder/field-weakening), 4=Wheel (123 params), 5=Pedals (45 params), 11=Unknown (8 params). See [pithouse-re.md § EEPROM tables](pithouse-re.md#eeprom-tables) for full parameter listing.
+EEPROM tables: 2=Base (38 params), 3=Motor (76 params, PID/encoder/field-weakening), 4=Wheel (123 params), 5=Pedals (45 params), 11=Unknown (8 params).
 
 ---
 
@@ -544,18 +626,16 @@ Common topology (single-controller bases):
 
 D11 (R21/R25/R27 Ultra) omits bus 5; S09 CM2 dash connects as bus 19 directly off bus 2.
 
-See [pithouse-re.md § Device tree topology](pithouse-re.md#device-tree-topology-monitorjson) for full per-model trees and performance tuning parameters.
-
 ---
 
 ## Open questions
 
-- ~~Value scaling for specialized types~~ — **RESOLVED**: All conversion formulas determined. See [pithouse-re.md § Value encoding details](pithouse-re.md#9-value-encoding-details). Key insight: the `percent_1` scale factor is exactly 10.0 (not 10.22 as previously estimated from capture data)
+- ~~Value scaling for specialized types~~ — **RESOLVED**: All conversion formulas determined. Key insight: the `percent_1` scale factor is exactly 10.0 (not 10.22 as previously estimated from capture data)
 - **Dashboard byte limit configuration** — stored at config object offset `+0x30`, set during dashboard upload (group 0x40). Exact mechanism for setting this limit not yet traced
-- **2-byte and 13-byte flag-variant payloads** — these use flag values base+1 and base+2, each a separate entry in the client connection map; content unknown
-- ~~Flag byte origin~~ — **RESOLVED**: The flag is a Pit House-internal monotonic counter, incremented each time a new client connects (`readReady` command type 0x04). It is NOT communicated to the wheel during connection setup — `newConnectionRequest` does not send the flag value over serial. The flag serves only as a Pit House-side map key for client multiplexing. **The wheel firmware almost certainly does not validate the flag byte.** Any fixed value (e.g., `0x01`) should work for sending telemetry. See [pithouse-re.md § Flag byte](pithouse-re.md#5-flag-byte)
+- **Cold-start initialization** — no capture of a full power-on to game-start flow exists; unclear if the wheel needs re-initialization after power cycle or if stored config persists
+- ~~Flag byte origin~~ — **RESOLVED**: The flag is a monotonic counter, incremented each time a new client connects. It is NOT communicated to the wheel during connection setup. The flag serves only as a host-side map key for client multiplexing. **The wheel firmware almost certainly does not validate the flag byte.** Any fixed value (e.g., `0x01`) should work for sending telemetry.
 - **MDD (standalone dash)** — no captures of telemetry sent to device 0x14; protocol may differ
-- **Gear encoding for reverse** — captures only show 0=N, 1-6=gears; reverse (-1) encoding not observed (may be stored as 31 in 5-bit unsigned, or with sign bit)
+- ~~Gear encoding for reverse~~ — **RESOLVED**: `int30` is a signed 5-bit value: -1=R, 0=N, 1–12=gears. Reverse is stored as 31 (two's complement -1 in 5 bits).
 - **EEPROM direct access** — group 10 protocol found in rs21_parameter.db but never observed in USB captures; needs live verification
 - **Base ambient LEDs** — groups 32/34 commands found in rs21_parameter.db; not captured in USB traces (requires base with LED strips)
 - **Wheel LED groups 2-4** — Single, Rotary, and Ambient groups found in rs21_parameter.db with up to 56 LEDs; only groups 0 (Shift/RPM) and 1 (Button) confirmed in captures so far

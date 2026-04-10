@@ -36,8 +36,8 @@ namespace MozaPlugin.Telemetry
                 SpeedKmh               = data.SpeedKmh,
                 Rpms                   = data.Rpms,
                 Gear                   = ParseGear(data.Gear),
-                Throttle               = data.Throttle,
-                Brake                  = data.Brake,
+                Throttle               = data.Throttle / 100.0,  // SimHub 0–100 → float_001 expects 0.0–1.0
+                Brake                  = data.Brake    / 100.0,  // SimHub 0–100 → float_001 expects 0.0–1.0
                 BestLapTimeSeconds     = data.BestLapTime.TotalSeconds,
                 CurrentLapTimeSeconds  = data.CurrentLapTime.TotalSeconds,
                 LastLapTimeSeconds     = data.LastLapTime.TotalSeconds,
@@ -55,7 +55,7 @@ namespace MozaPlugin.Telemetry
         private static double ParseGear(string? gear)
         {
             if (gear == null || gear.Length == 0) return 0;
-            if (gear == "R") return 0; // reverse encoding unknown — send 0
+            if (gear == "R") return -1.0; // int30: -1 encodes as raw=31 (5-bit two's complement)
             if (gear == "N") return 0;
             if (int.TryParse(gear, out int n)) return n;
             return 0;
