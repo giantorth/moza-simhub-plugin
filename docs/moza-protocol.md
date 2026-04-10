@@ -281,13 +281,17 @@ The enable signal (`0x41`) runs from t=0.022 — **0.65 seconds before** the fir
 
 ### Minimum viable sender (hypothesis)
 
-Once a dashboard has been configured on the wheel by Pit House, the wheel is pre-configured to listen for telemetry with a specific channel layout. The RPM LEDs work the same way — the wheel just processes whatever `0x3F/1A:00` data arrives with zero preamble. By analogy, **the minimum viable telemetry sender is likely just the `0x43/7D:23` frames themselves**.
+The `cs-to-vgs-wheel.ndjson` capture shows that Pit House sends the `0x40` channel configuration burst on every wheel connection, even without a dashboard upload. This suggests the wheel may require channel declarations before accepting telemetry.
 
-The `dash.ndjson` capture was taken during an AC pause, so the 0.65s gap before telemetry frames appear is Pit House not sending data while paused, not a startup sequence. The `0x41/FD:DE` enable signal and `0x40/28:02` mode polling are likely Pit House housekeeping (internal state management, UI sync) rather than wheel firmware requirements.
+**Recommended startup sequence:**
 
-**Recommended approach:** Start with just `0x43/7D:23` frames at ~20-30 Hz. If the wheel doesn't respond, add the enable signal (`0x41`). If still nothing, add the telemetry mode set (`0x40/28:02 data=01:00`).
+1. **Channel configuration** (`0x40`): send `1e:00`/`1e:01` for each channel in the dashboard, plus `09:00`, page config (`1c`, `1d`), and `28:02 data=0100`
+2. **Live telemetry** (`0x43/7D:23`): bit-packed frames at ~20-30 Hz
+3. **Optional**: `0x41/FD:DE` enable signal (~50 Hz) and `0x40/28:02 data=01:00` polling (~3 Hz)
 
-**Note:** Requires user testing to confirm. The critical prerequisite is that Pit House has already uploaded a dashboard to the wheel — this configures the channel layout the wheel expects to decode.
+The RPM LEDs work with zero preamble — `0x3F/1A:00` data is accepted immediately. By analogy, `7D:23` frames alone *might* work if the wheel already has valid channel config in EEPROM from a prior Pit House session. But the safest approach is to send the channel config burst first.
+
+**Note:** Requires user testing to confirm. The critical prerequisite is that Pit House has already uploaded a dashboard to the wheel.
 
 ---
 
@@ -418,9 +422,27 @@ Sent ~1/s after the dashboard is active. Two payloads per cycle: `0f 80 05 00 03
 
 A one-shot `7c:23` command is sent when a dashboard is first activated, with 8 bytes of display parameters.
 
-### Wheel configuration persistence (assumed)
+### Wheel connection initialization (from `cs-to-vgs-wheel.ndjson`)
 
-In the `dash-upload.ndjson` capture, the wheel responded with `01 00` to `28:02` polls before any upload occurred — it was already in multi-channel mode from its previous configuration. This suggests the wheel retains its channel layout and telemetry mode across USB sessions. **However, no capture of a full cold-start connection-to-game-start flow exists to confirm this.**
+When a wheel connects (or is swapped), Pit House runs the full identity probe followed by a channel configuration burst — even without a dashboard upload. This was captured during a CS → VGS wheel swap:
+
+1. **Identity probe** (groups 0x02–0x11): model name, HW/FW version, serial
+2. **LED config** (`0x3f`): sleep color, sleep mode
+3. **Channel configuration burst** (`0x40`): same commands as the post-upload burst:
+   - `1e:01`/`1e:00 data=CC0000` — declare channel CC for page 0/1; wheel responds with `CC XXXX` (stored value, e.g. `01f4`=500, `03e8`=1000, `0bb8`=3000). These configure the telemetry stream, not the display — the CS V2.1 (no screen, RPM LEDs and buttons only) receives the same channel config as the VGS (built-in screen). Channel indices and response values are dashboard-specific
+   - `1c`, `1d` — page config
+   - `09:00` — config mode (response `09:28`)
+   - `1b:00`/`1b:01` — brightness per page
+   - `28:02 data=0100` — set multi-channel telemetry mode
+   - `1f:00`/`1f:01` — LED color writes per index
+4. **`0x0e` parameter polling**: reads wheel EEPROM registers (indices 0x01–0x14, then 0x2c+)
+5. **`28:02 data=0100`** continues polling ~every 300ms after the burst
+
+The wheel's `0x0e` debug log confirms channel config commands write to EEPROM: `"Table 2, Param 47 Written: 7614374"`.
+
+**No `7c:00` file transfer or `configJson()` RPC occurs** — Pit House does not ask the wheel which dashboard it has active. It pushes the channel layout from its own internal state. The `0xc0/13:00` response `00 ff ff` during setup may indicate "no active dashboard" or a default state.
+
+**Implication for SimHub plugin**: the channel configuration burst appears to be required on each wheel connection before telemetry frames will be accepted. Simply sending `7d:23` frames to a freshly connected wheel may not work without first sending the `0x40` channel enables and `28:02 data=0100`.
 
 ---
 

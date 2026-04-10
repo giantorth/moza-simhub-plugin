@@ -82,6 +82,9 @@ namespace MozaPlugin.Telemetry
             _modeCounter = 0;
             _testFrameCounter = 0;
             _framesSent = 0;
+
+            SendChannelConfig();
+
             double intervalMs = _baseTickMs;
             _sendTimer = new Timer(intervalMs) { AutoReset = true };
             _sendTimer.Elapsed += OnTimerElapsed;
@@ -150,6 +153,72 @@ namespace MozaPlugin.Telemetry
             {
                 SimHub.Logging.Current.Warn($"[Moza] Telemetry send error: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// Send the channel configuration burst observed in Pit House captures.
+        /// Declares which channel groups are active on each page, then sets
+        /// multi-channel telemetry mode. Pit House sends this on every wheel
+        /// connection before telemetry frames flow.
+        ///
+        /// From captures: indices 2-5 are sent on pages 0 and 1 with data CC 00 00.
+        /// The wheel responds with stored interval values (500, 1000, 3000) confirming
+        /// it knows those channels from its stored dashboard config.
+        /// </summary>
+        private void SendChannelConfig()
+        {
+            if (!_connection.IsConnected)
+                return;
+
+            var profile = _profile;
+            if (profile == null || profile.Tiers.Count == 0)
+                return;
+
+            // 1e:page data=CC0000 — enable stream group CC on each page.
+            // All captures show fixed values 2-5 regardless of dashboard or wheel type.
+            // The m Formula 1 dashboard has 2 tiers (9ch + 6ch) but CC=2,3,4,5 are
+            // always sent — these appear to be fixed stream slot identifiers.
+            for (int page = 0; page <= 1; page++)
+            {
+                for (byte cc = 2; cc <= 5; cc++)
+                    _connection.Send(BuildChannelEnableFrame((byte)page, cc));
+            }
+
+            // 09:00 — config mode
+            _connection.Send(BuildGroup40Frame(0x09, 0x00));
+
+            // 28:02 01 00 — set multi-channel telemetry mode
+            _connection.Send(BuildTelemetryModeFrame());
+        }
+
+        private byte[] BuildChannelEnableFrame(byte page, byte channelIndex)
+        {
+            // 7E 05 40 17 1E [page] [channel] 00 00 [checksum]
+            var frame = new System.Collections.Generic.List<byte>
+            {
+                MozaProtocol.MessageStart,       // 7E
+                5,                               // N = cmd(2) + data(3)
+                MozaProtocol.TelemetryModeGroup, // 40
+                MozaProtocol.DeviceWheel,        // 17
+                0x1E, page,                      // cmd: channel enable on page
+                channelIndex, 0x00, 0x00,        // data: channel index + zeros
+            };
+            frame.Add(MozaProtocol.CalculateChecksum(frame.ToArray()));
+            return frame.ToArray();
+        }
+
+        private byte[] BuildGroup40Frame(byte cmd1, byte cmd2)
+        {
+            var frame = new System.Collections.Generic.List<byte>
+            {
+                MozaProtocol.MessageStart,       // 7E
+                2,                               // N = cmd only
+                MozaProtocol.TelemetryModeGroup, // 40
+                MozaProtocol.DeviceWheel,        // 17
+                cmd1, cmd2,
+            };
+            frame.Add(MozaProtocol.CalculateChecksum(frame.ToArray()));
+            return frame.ToArray();
         }
 
         private byte[] BuildTelemetryModeFrame()
