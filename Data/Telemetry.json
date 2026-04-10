@@ -1,0 +1,1691 @@
+{
+  "meta": "B_telemetry_json",
+  "version": "1.0",
+  "sectors": [
+    {
+      "name": "MaxRpm",
+      "url": "v1/gameData/MaxRpm",
+      "compression": "uint16_t"
+    },
+    {
+      "name": "LapCount",
+      "url": "v1/gameData/CurrentLapCount",
+      "compression": "uint8_t"
+    },
+    {
+      "name": "CarCount",
+      "url": "v1/gameData/CurrentCarCount",
+      "compression": "uint8_t"
+    },
+    {
+      "name": "Lap",
+      "url": "v1/gameData/CurrentLap",
+      "compression": "uint8_t"
+    },
+    {
+      "name": "Pos",
+      "url": "v1/gameData/CurrentPos",
+      "compression": "uint8_t"
+    },
+    {
+      "name": "Gap",
+      "url": "v1/gameData/GAP",
+      "compression": "float"
+    },
+    {
+      "name": "EstimatedLapTime",
+      "url": "v1/gameData/EstimatedLapTime",
+      "compression": "float"
+    },
+    {
+      "name": "LastLapTime",
+      "url": "v1/gameData/LastLapTime",
+      "compression": "float"
+    },
+    {
+      "name": "BestLapTime",
+      "url": "v1/gameData/BestLapTime",
+      "compression": "float"
+    },
+    {
+      "name": "CurrentLapTime",
+      "url": "v1/gameData/CurrentLapTime",
+      "compression": "float"
+    },
+    {
+      "name": "SpeedMph",
+      "url": "v1/gameData/SpeedMph",
+      "compression": "float_6000_1"
+    },
+    {
+      "name": "SpeedKmh",
+      "url": "v1/gameData/SpeedKmh",
+      "compression": "float_6000_1"
+    },
+    {
+      "name": "SpeedMs",
+      "url": "v1/gameData/SpeedMs",
+      "compression": "float_600_2"
+    },
+    {
+      "name": "Rpm",
+      "url": "v1/gameData/Rpm",
+      "compression": "uint16_t"
+    },
+    {
+      "name": "Gear",
+      "url": "v1/gameData/Gear",
+      "compression": "int30"
+    },
+    {
+      "name": "Throttle",
+      "url": "v1/gameData/Throttle",
+      "compression": "float_001"
+    },
+    {
+      "name": "Brake",
+      "url": "v1/gameData/Brake",
+      "compression": "float_001"
+    },
+    {
+      "name": "Clutch",
+      "url": "v1/gameData/Clutch",
+      "compression": "float_001"
+    },
+    {
+      "name": "Drs",
+      "url": "v1/gameData/DrsState",
+      "compression": "bool"
+    },
+    {
+      "name": "ABS",
+      "url": "v1/gameData/ABSActive",
+      "compression": "bool"
+    },
+    {
+      "name": "TC",
+      "url": "v1/gameData/TCActive",
+      "compression": "bool"
+    },
+    {
+      "name": "ABSLevel",
+      "url": "v1/gameData/ABSLevel",
+      "compression": "uint30"
+    },
+    {
+      "name": "TCLevel",
+      "url": "v1/gameData/TCLevel",
+      "compression": "uint30"
+    },
+    {
+      "name": "ECUMap",
+      "url": "v1/gameData/ECUMap",
+      "compression": "uint8"
+    },
+    {
+      "name": "BrakeBias",
+      "url": "v1/gameData/BrakeBias",
+      "compression": "float"
+    },
+    {
+      "name": "Boost",
+      "url": "v1/gameData/Boost",
+      "compression": "percent_1"
+    },
+    {
+      "name": "FuelRemain",
+      "url": "v1/gameData/FuelRemainder",
+      "compression": "percent_1"
+    },
+    {
+      "name": "FuelRemainLaps",
+      "url": "v1/gameData/FuelLaps",
+      "compression": "uint8_t"
+    },
+    {
+      "name": "FuelSurplusLaps",
+      "url": "v1/gameData/FuelSurplusLaps",
+      "compression": "uint8_t"
+    },
+    {
+      "name": "FuelClass",
+      "url": "v1/gameData/FuelConsumptionClass",
+      "compression": "uint15"
+    },
+    {
+      "name": "EnergyRemain",
+      "url": "v1/gameData/ErsStoreEnergy",
+      "compression": "percent_1"
+    },
+    {
+      "name": "EnergyDeployed",
+      "url": "v1/gameData/ErsDeployedThisLap",
+      "compression": "percent_1"
+    },
+    {
+      "name": "EnergyHarvested",
+      "url": "v1/gameData/ErsHarvestedThisLap",
+      "compression": "percent_1"
+    },
+    {
+      "name": "Ers",
+      "url": "v1/gameData/ErsState",
+      "compression": "uint3"
+    },
+    {
+      "name": "ERSPercent",
+      "url": "v1/gameData/ERSPercent",
+      "compression": "percent_1"
+    },
+    {
+      "name": "ERSStored",
+      "url": "v1/gameData/ERSStored",
+      "compression": "bool"
+    },
+    {
+      "name": "TyreTempFL",
+      "url": "v1/gameData/TyreTempFrontLeft",
+      "compression": "tyre_temp_1"
+    },
+    {
+      "name": "TyreTempFR",
+      "url": "v1/gameData/TyreTempFrontRight",
+      "compression": "tyre_temp_1"
+    },
+    {
+      "name": "TyreTempRL",
+      "url": "v1/gameData/TyreTempRearLeft",
+      "compression": "tyre_temp_1"
+    },
+    {
+      "name": "TyreTempRR",
+      "url": "v1/gameData/TyreTempRearRight",
+      "compression": "tyre_temp_1"
+    },
+    {
+      "name": "TyreTempFLI",
+      "url": "v1/gameData/TyreTempFrontLeftInner",
+      "compression": "tyre_temp_1"
+    },
+    {
+      "name": "TyreTempFRI",
+      "url": "v1/gameData/TyreTempFrontRightInner",
+      "compression": "tyre_temp_1"
+    },
+    {
+      "name": "TyreTempRLI",
+      "url": "v1/gameData/TyreTempRearLeftInner",
+      "compression": "tyre_temp_1"
+    },
+    {
+      "name": "TyreTempRRI",
+      "url": "v1/gameData/TyreTempRearRightInner",
+      "compression": "tyre_temp_1"
+    },
+    {
+      "name": "TyreTempFLM",
+      "url": "v1/gameData/TyreTempFrontLeftMiddle",
+      "compression": "tyre_temp_1"
+    },
+    {
+      "name": "TyreTempFRM",
+      "url": "v1/gameData/TyreTempFrontRightMiddle",
+      "compression": "tyre_temp_1"
+    },
+    {
+      "name": "TyreTempRLM",
+      "url": "v1/gameData/TyreTempRearLeftMiddle",
+      "compression": "tyre_temp_1"
+    },
+    {
+      "name": "TyreTempFLM&F",
+      "url": "v1/gameData/TyreTempFrontLeftMiddle&unit=F",
+      "compression": "tyre_temp_1"
+    },
+    {
+      "name": "TyreTempFRM&F",
+      "url": "v1/gameData/TyreTempFrontRightMiddle&unit=F",
+      "compression": "tyre_temp_1"
+    },
+    {
+      "name": "TyreTempRLM&F",
+      "url": "v1/gameData/TyreTempRearLeftMiddle&unit=F",
+      "compression": "tyre_temp_1"
+    },
+    {
+      "name": "TyreTempRRM&F",
+      "url": "v1/gameData/TyreTempRearRightMiddle&unit=F",
+      "compression": "tyre_temp_1"
+    },
+    {
+      "name": "TyreTempRRM",
+      "url": "v1/gameData/TyreTempRearRightMiddle",
+      "compression": "tyre_temp_1"
+    },
+    {
+      "name": "TyreTempFL&F",
+      "url": "v1/gameData/TyreTempFrontLeft&unit=F",
+      "compression": "tyre_temp_1"
+    },
+    {
+      "name": "TyreTempFLI&F",
+      "url": "v1/gameData/TyreTempFrontLeftInner&unit=F",
+      "compression": "tyre_temp_1"
+    },
+    {
+      "name": "TyreTempFLO&F",
+      "url": "v1/gameData/TyreTempFrontLeftOuter&unit=F",
+      "compression": "tyre_temp_1"
+    },
+    {
+      "name": "TyreTempFR&F",
+      "url": "v1/gameData/TyreTempFrontRight&unit=F",
+      "compression": "tyre_temp_1"
+    },
+    {
+      "name": "TyreTempFRI&F",
+      "url": "v1/gameData/TyreTempFrontRightInner&unit=F",
+      "compression": "tyre_temp_1"
+    },
+    {
+      "name": "TyreTempFRO&F",
+      "url": "v1/gameData/TyreTempFrontRightOuter&unit=F",
+      "compression": "tyre_temp_1"
+    },
+    {
+      "name": "TyreTempRL&F",
+      "url": "v1/gameData/TyreTempRearLeft&unit=F",
+      "compression": "tyre_temp_1"
+    },
+    {
+      "name": "TyreTempRLI&F",
+      "url": "v1/gameData/TyreTempRearLeftInner&unit=F",
+      "compression": "tyre_temp_1"
+    },
+    {
+      "name": "TyreTempRLO&F",
+      "url": "v1/gameData/TyreTempRearLeftOuter&unit=F",
+      "compression": "tyre_temp_1"
+    },
+    {
+      "name": "TyreTempRR&F",
+      "url": "v1/gameData/TyreTempRearRight&unit=F",
+      "compression": "tyre_temp_1"
+    },
+    {
+      "name": "TyreTempRRI&F",
+      "url": "v1/gameData/TyreTempRearRightInner&unit=F",
+      "compression": "tyre_temp_1"
+    },
+    {
+      "name": "TyreTempRRO&F",
+      "url": "v1/gameData/TyreTempRearRightOuter&unit=F",
+      "compression": "tyre_temp_1"
+    },
+    {
+      "name": "BrakeTempFL",
+      "url": "v1/gameData/BrakeTempFrontLeft",
+      "compression": "brake_temp_1"
+    },
+    {
+      "name": "BrakeTempFR",
+      "url": "v1/gameData/BrakeTempFrontRight",
+      "compression": "brake_temp_1"
+    },
+    {
+      "name": "BrakeTempRL",
+      "url": "v1/gameData/BrakeTempRearLeft",
+      "compression": "brake_temp_1"
+    },
+    {
+      "name": "BrakeTempRR",
+      "url": "v1/gameData/BrakeTempRearRight",
+      "compression": "brake_temp_1"
+    },
+    {
+      "name": "BrakeTempFL&F",
+      "url": "v1/gameData/BrakeTempFrontLeft&unit=F",
+      "compression": "brake_temp_1"
+    },
+    {
+      "name": "BrakeTempFR&F",
+      "url": "v1/gameData/BrakeTempFrontRight&unit=F",
+      "compression": "brake_temp_1"
+    },
+    {
+      "name": "BrakeTempRL&F",
+      "url": "v1/gameData/BrakeTempRearLeft&unit=F",
+      "compression": "brake_temp_1"
+    },
+    {
+      "name": "BrakeTempRR&F",
+      "url": "v1/gameData/BrakeTempRearRight&unit=F",
+      "compression": "brake_temp_1"
+    },
+    {
+      "name": "TrackTemp",
+      "url": "v1/gameData/TrackTemp",
+      "compression": "track_temp_1"
+    },
+    {
+      "name": "AirTemp",
+      "url": "v1/gameData/AirTemp",
+      "compression": "track_temp_1"
+    },
+    {
+      "name": "TrackTemp&F",
+      "url": "v1/gameData/TrackTemp&unit=F",
+      "compression": "track_temp_1"
+    },
+    {
+      "name": "AirTemp&F",
+      "url": "v1/gameData/AirTemp&unit=F",
+      "compression": "track_temp_1"
+    },
+    {
+      "name": "FuelTemp",
+      "url": "v1/gameData/FuelTemp",
+      "compression": "track_temp_1"
+    },
+    {
+      "name": "TyreWearFL",
+      "url": "v1/gameData/TyreWearFrontLeft",
+      "compression": "percent_1"
+    },
+    {
+      "name": "TyreWearFR",
+      "url": "v1/gameData/TyreWearFrontRight",
+      "compression": "percent_1"
+    },
+    {
+      "name": "TyreWearRL",
+      "url": "v1/gameData/TyreWearRearLeft",
+      "compression": "percent_1"
+    },
+    {
+      "name": "TyreWearRR",
+      "url": "v1/gameData/TyreWearRearRight",
+      "compression": "percent_1"
+    },
+    {
+      "name": "WingWearFL",
+      "url": "v1/gameData/FrontLeftWingDamage",
+      "compression": "percent_1"
+    },
+    {
+      "name": "WingWearFR",
+      "url": "v1/gameData/FrontRightWingDamage",
+      "compression": "percent_1"
+    },
+    {
+      "name": "WingWearR",
+      "url": "v1/gameData/RearWingDamage",
+      "compression": "percent_1"
+    },
+    {
+      "name": "EngineWear",
+      "url": "v1/gameData/EngineDamage",
+      "compression": "percent_1"
+    },
+    {
+      "name": "GearBoxWear",
+      "url": "v1/gameData/GearBoxDamage",
+      "compression": "percent_1"
+    },
+    {
+      "name": "FuelCapacity",
+      "url": "v1/gameData/FuelCapacity",
+      "compression": "uint8_t"
+    },
+    {
+      "name": "IsInPit",
+      "url": "v1/gameData/IsInPit",
+      "compression": "bool"
+    },
+    {
+      "name": "EngineIgnition",
+      "url": "v1/gameData/EngineIgnition",
+      "compression": "bool"
+    },
+    {
+      "name": "ReverseLight",
+      "url": "v1/gameData/ReverseLight",
+      "compression": "bool"
+    },
+    {
+      "name": "Pitlane",
+      "url": "v1/gameData/PitLane",
+      "compression": "bool"
+    },
+    {
+      "name": "PitLimiter",
+      "url": "v1/gameData/PitLimiter",
+      "compression": "bool"
+    },
+    {
+      "name": "DRSAllowed",
+      "url": "v1/gameData/DRSAllowed",
+      "compression": "bool"
+    },
+    {
+      "name": "YellowFlag",
+      "url": "v1/gameData/YellowFlag",
+      "compression": "bool"
+    },
+    {
+      "name": "BlueFlag",
+      "url": "v1/gameData/BlueFlag",
+      "compression": "bool"
+    },
+    {
+      "name": "GreenFlag",
+      "url": "v1/gameData/GreenFlag",
+      "compression": "bool"
+    },
+    {
+      "name": "WhiteFlag",
+      "url": "v1/gameData/WhiteFlag",
+      "compression": "bool"
+    },
+    {
+      "name": "RedFlag",
+      "url": "v1/gameData/RedFlag",
+      "compression": "bool"
+    },
+    {
+      "name": "SectorIndex",
+      "url": "v1/gameData/SectorIndex",
+      "compression": "uint31"
+    },
+    {
+      "name": "SectorlTime",
+      "url": "v1/gameData/Sector1Time",
+      "compression": "float"
+    },
+    {
+      "name": "Sector2Time",
+      "url": "v1/gameData/Sector2Time",
+      "compression": "float"
+    },
+    {
+      "name": "SessionTimeLeft",
+      "url": "v1/gameData/SessionTimeLeft",
+      "compression": "float"
+    },
+    {
+      "name": "AccX",
+      "url": "v1/gameData/AccelerationX",
+      "compression": "float_600_2"
+    },
+    {
+      "name": "AccY",
+      "url": "v1/gameData/AccelerationY",
+      "compression": "float_600_2"
+    },
+    {
+      "name": "AccZ",
+      "url": "v1/gameData/AccelerationZ",
+      "compression": "float_600_2"
+    },
+    {
+      "name": "Heading",
+      "url": "v1/gameData/Heading",
+      "compression": "float_600_2"
+    },
+    {
+      "name": "Pitch",
+      "url": "v1/gameData/Pitch",
+      "compression": "float_600_2"
+    },
+    {
+      "name": "Ro11",
+      "url": "v1/gameData/Roll",
+      "compression": "float_600_2"
+    },
+    {
+      "name": "TyreTempFLO",
+      "url": "v1/gameData/TyreTempFrontLeftOuter",
+      "compression": "tyre_temp_1"
+    },
+    {
+      "name": "TyreTempFRO",
+      "url": "v1/gameData/TyreTempFrontRightOuter",
+      "compression": "tyre_temp_1"
+    },
+    {
+      "name": "TyreTempRLO",
+      "url": "v1/gameData/TyreTempRearLeftOuter",
+      "compression": "tyre_temp_1"
+    },
+    {
+      "name": "TyreTempRRO",
+      "url": "v1/gameData/TyreTempRearRightOuter",
+      "compression": "tyre_temp_1"
+    },
+    {
+      "name": "WaterTemperature",
+      "url": "v1/gameData/WaterTemp",
+      "compression": "tyre_temp_1"
+    },
+    {
+      "name": "TyrePressureFL",
+      "url": "v1/gameData/TyrePressureFrontLeft",
+      "compression": "tyre_pressure_1"
+    },
+    {
+      "name": "TyrePressureFR",
+      "url": "v1/gameData/TyrePressureFrontRight",
+      "compression": "tyre_pressure_1"
+    },
+    {
+      "name": "TyrePressureRL",
+      "url": "v1/gameData/TyrePressureRearLeft",
+      "compression": "tyre_pressure_1"
+    },
+    {
+      "name": "TyrePressureRR",
+      "url": "v1/gameData/TyrePressureRearRight",
+      "compression": "tyre_pressure_1"
+    },
+    {
+      "name": "OilPressure",
+      "url": "v1/gameData/OilPressure",
+      "compression": "oil_pressure_1"
+    },
+    {
+      "name": "MapName",
+      "url": "v1/gameData/patch/TrackName",
+      "compression": "string"
+    },
+    {
+      "name": "DisplayMapName",
+      "url": "v1/gameData/patch/DisplayTrackName",
+      "compression": "string"
+    },
+    {
+      "name": "Fuel",
+      "url": "v1/gameData/Fuel",
+      "compression": "float"
+    },
+    {
+      "name": "CarId",
+      "url": "v1/gameData/CarId",
+      "compression": "string"
+    },
+    {
+      "name": "CompletedLaps",
+      "url": "v1/gameData/CompletedLaps",
+      "compression": "uint8_t"
+    },
+    {
+      "name": "CarCoordinates01",
+      "url": "v1/gameData/CarCoordinates01",
+      "compression": "float"
+    },
+    {
+      "name": "CarCoordinates02",
+      "url": "v1/gameData/CarCoordinates02",
+      "compression": "float"
+    },
+    {
+      "name": "CarCoordinates03",
+      "url": "v1/gameData/CarCoordinates03",
+      "compression": "float"
+    },
+    {
+      "name": "DRSAvailable",
+      "url": "v1/gameData/DRSAvailable",
+      "compression": "bool"
+    },
+    {
+      "name": "TrackLength",
+      "url": "v1/gameData/TrackLength",
+      "compression": "float"
+    },
+    {
+      "name": "CarSettings_MaxGears",
+      "url": "v1/gameData/CarSettings_MaxGears",
+      "compression": "uint8_t"
+    },
+    {
+      "name": "LapInvalidated",
+      "url": "v1/gameData/LapInvalidated",
+      "compression": "bool"
+    },
+    {
+      "name": "SessionTypeName",
+      "url": "v1/gameData/SessionTypeName",
+      "compression": "string"
+    },
+    {
+      "name": "TrackId",
+      "url": "v1/gameData/TrackId",
+      "compression": "string"
+    },
+    {
+      "name": "SectorsCount",
+      "url": "v1/gameData/SectorsCount",
+      "compression": "uint8_t"
+    },
+    {
+      "name": "Flag_Black",
+      "url": "v1/gameData/Flag_Black",
+      "compression": "bool"
+    },
+    {
+      "name": "Spectating",
+      "url": "v1/gameData/Spectating",
+      "compression": "uint32_t"
+    },
+    {
+      "name": "EngineStarted",
+      "url": "v1/gameData/EngineStarted",
+      "compression": "bool"
+    },
+    {
+      "name": "PlayerName",
+      "url": "v1/gameData/PlayerName",
+      "compression": "string"
+    },
+    {
+      "name": "CarModel",
+      "url": "v1/gameData/CarModel",
+      "compression": "string"
+    },
+    {
+      "name": "GlobalAccelerationG",
+      "url": "v1/gameData/GlobalAccelerationG",
+      "compression": "float"
+    },
+    {
+      "name": "ERSMax",
+      "url": "v1/gameData/ERSMax",
+      "compression": "float"
+    },
+    {
+      "name": "ReplayMode",
+      "url": "v1/gameData/ReplayMode",
+      "compression": "string"
+    },
+    {
+      "name": "CarSettings_CurrentDisplayedRPMPercent",
+      "url": "v1/gameData/CarSettings_CurrentDisplayedRPMPercent",
+      "compression": "percent_1"
+    },
+    {
+      "name": "WheelSpin",
+      "url": "v1/gameData/WheelSpin",
+      "compression": "bool"
+    },
+    {
+      "name": "FuelAverageConsumptionLap",
+      "url": "v1/gameData/FuelConsumeLap",
+      "compression": "float"
+    },
+    {
+      "name": "Gamename",
+      "url": "v1/gameData/patch/GameName",
+      "compression": "string"
+    },
+    {
+      "name": "Ontrack",
+      "url": "v1/gameData/patch/OnTrack",
+      "compression": "bool"
+    },
+    {
+      "name": "TrackPositionPercent",
+      "url": "v1/gameData/patch/currentlapprogress",
+      "compression": "percent_1"
+    },
+    {
+      "name": "Location",
+      "url": "v1/gameData/patch/Location",
+      "compression": "location_t"
+    },
+    {
+      "name": "PlayerIndex",
+      "url": "v1/gameData/patch/PlayerIndex",
+      "compression": "uint8_t"
+    },
+    {
+      "name": "OpponentCount",
+      "url": "v1/gameData/patch/OpponentCount",
+      "compression": "uint8_t"
+    },
+    {
+      "name": "Location_0",
+      "url": "v1/gameData/patch/Location_0",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_1",
+      "url": "v1/gameData/patch/Location_1",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_2",
+      "url": "v1/gameData/patch/Location_2",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_3",
+      "url": "v1/gameData/patch/Location_3",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_4",
+      "url": "v1/gameData/patch/Location_4",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_5",
+      "url": "v1/gameData/patch/Location_5",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_6",
+      "url": "v1/gameData/patch/Location_6",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_7",
+      "url": "v1/gameData/patch/Location_7",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_8",
+      "url": "v1/gameData/patch/Location_8",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_9",
+      "url": "v1/gameData/patch/Location_9",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_10",
+      "url": "v1/gameData/patch/Location_10",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_11",
+      "url": "v1/gameData/patch/Location_11",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_12",
+      "url": "v1/gameData/patch/Location_12",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_13",
+      "url": "v1/gameData/patch/Location_13",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_14",
+      "url": "v1/gameData/patch/Location_14",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_15",
+      "url": "v1/gameData/patch/Location_15",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_16",
+      "url": "v1/gameData/patch/Location_16",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_17",
+      "url": "v1/gameData/patch/Location_17",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_18",
+      "url": "v1/gameData/patch/Location_18",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_19",
+      "url": "v1/gameData/patch/Location_19",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_20",
+      "url": "v1/gameData/patch/Location_20",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_21",
+      "url": "v1/gameData/patch/Location_21",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_22",
+      "url": "v1/gameData/patch/Location_22",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_23",
+      "url": "v1/gameData/patch/Location_23",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_24",
+      "url": "v1/gameData/patch/Location_24",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_25",
+      "url": "v1/gameData/patch/Location_25",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_26",
+      "url": "v1/gameData/patch/Location_26",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_27",
+      "url": "v1/gameData/patch/Location_27",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_28",
+      "url": "v1/gameData/patch/Location_28",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_29",
+      "url": "v1/gameData/patch/Location_29",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_30",
+      "url": "v1/gameData/patch/Location_30",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_31",
+      "url": "v1/gameData/patch/Location_31",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_32",
+      "url": "v1/gameData/patch/Location_32",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_33",
+      "url": "v1/gameData/patch/Location_33",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_34",
+      "url": "v1/gameData/patch/Location_34",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_35",
+      "url": "v1/gameData/patch/Location_35",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_36",
+      "url": "v1/gameData/patch/Location_36",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_37",
+      "url": "v1/gameData/patch/Location_37",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_38",
+      "url": "v1/gameData/patch/Location_38",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_39",
+      "url": "v1/gameData/patch/Location_39",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_40",
+      "url": "v1/gameData/patch/Location_40",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_41",
+      "url": "v1/gameData/patch/Location_41",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_42",
+      "url": "v1/gameData/patch/Location_42",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_43",
+      "url": "v1/gameData/patch/Location_43",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_44",
+      "url": "v1/gameData/patch/Location_44",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_45",
+      "url": "v1/gameData/patch/Location_45",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_46",
+      "url": "v1/gameData/patch/Location_46",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_47",
+      "url": "v1/gameData/patch/Location_47",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_48",
+      "url": "v1/gameData/patch/Location_48",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_49",
+      "url": "v1/gameData/patch/Location_49",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_50",
+      "url": "v1/gameData/patch/Location_50",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_51",
+      "url": "v1/gameData/patch/Location_51",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_52",
+      "url": "v1/gameData/patch/Location_52",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_53",
+      "url": "v1/gameData/patch/Location_53",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_54",
+      "url": "v1/gameData/patch/Location_54",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_55",
+      "url": "v1/gameData/patch/Location_55",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_56",
+      "url": "v1/gameData/patch/Location_56",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_57",
+      "url": "v1/gameData/patch/Location_57",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_58",
+      "url": "v1/gameData/patch/Location_58",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_59",
+      "url": "v1/gameData/patch/Location_59",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_60",
+      "url": "v1/gameData/patch/Location_60",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_61",
+      "url": "v1/gameData/patch/Location_61",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_62",
+      "url": "v1/gameData/patch/Location_62",
+      "compression": "location_t"
+    },
+    {
+      "name": "Location_63",
+      "url": "v1/gameData/patch/Location_63",
+      "compression": "location_t"
+    },
+    {
+      "name": "FuelUsed",
+      "url": "v1/gameData/FuelUsed",
+      "compression": "float_600_2"
+    },
+    {
+      "name": "TCCut",
+      "url": "v1/gameData/TCCut",
+      "compression": "uint8"
+    },
+    {
+      "name": "TyreType",
+      "url": "v1/gameData/TyreType",
+      "compression": "uint8"
+    },
+    {
+      "name": "EngineEnabled",
+      "url": "v1/gameData/EngineEnabled",
+      "compression": "bool"
+    },
+    {
+      "name": "Wipers",
+      "url": "v1/gameData/Wipers",
+      "compression": "bool"
+    },
+    {
+      "name": "RainLight",
+      "url": "v1/gameData/RainLight",
+      "compression": "bool"
+    },
+    {
+      "name": "HighBeamLight",
+      "url": "v1/gameData/HighBeamLight",
+      "compression": "bool"
+    },
+    {
+      "name": "LowBeamLight",
+      "url": "v1/gameData/LowBeamLight",
+      "compression": "bool"
+    },
+    {
+      "name": "WiperClass",
+      "url": "v1/gameData/WiperClass",
+      "compression": "uint8"
+    },
+    {
+      "name": "LeftBlinker",
+      "url": "v1/gameData/LBlinker",
+      "compression": "bool"
+    },
+    {
+      "name": "RightBlinker",
+      "url": "v1/gameData/RBlinker",
+      "compression": "bool"
+    },
+    {
+      "name": "HazardWarning",
+      "url": "v1/gameData/HazardWarning",
+      "compression": "bool"
+    },
+    {
+      "name": "EngineBrake",
+      "url": "v1/gameData/EngineBrake",
+      "compression": "bool"
+    },
+    {
+      "name": "BatteryVoltageWarning",
+      "url": "v1/gameData/BatteryWarningVolt",
+      "compression": "bool"
+    },
+    {
+      "name": "ParkingLight",
+      "url": "v1/gameData/ParkingLight",
+      "compression": "bool"
+    },
+    {
+      "name": "CruiseControl",
+      "url": "v1/gameData/CruiseControl",
+      "compression": "bool"
+    },
+    {
+      "name": "FrontAuxLight",
+      "url": "v1/gameData/FrontAuxLight",
+      "compression": "bool"
+    },
+    {
+      "name": "RoofAuxLight",
+      "url": "v1/gameData/RoofAuxLight",
+      "compression": "bool"
+    },
+    {
+      "name": "NavigationSpeedLimit",
+      "url": "v1/gameData/NavigationSpeedLimit",
+      "compression": "float_600_2"
+    },
+    {
+      "name": "RetarderLevel",
+      "url": "v1/gameData/RetarderLevel",
+      "compression": "uint8"
+    },
+    {
+      "name": "AirPressureWarning",
+      "url": "v1/gameData/AirPressWarning",
+      "compression": "bool"
+    },
+    {
+      "name": "ParkingBrake",
+      "url": "v1/gameData/ParkingBrake",
+      "compression": "bool"
+    },
+    {
+      "name": "FuelRemains",
+      "url": "v1/gameData/FuelRemains",
+      "compression": "float_6000_1"
+    },
+    {
+      "name": "WaterTemperatureWarning",
+      "url": "v1/gameData/WaterTempWarning",
+      "compression": "bool"
+    },
+    {
+      "name": "TimeAbsolute",
+      "url": "v1/gameData/TimeAbsolute",
+      "compression": "int32_t"
+    },
+    {
+      "name": "AirPressure",
+      "url": "v1/gameData/AirPressure",
+      "compression": "float"
+    },
+    {
+      "name": "BeaconLight",
+      "url": "v1/gameData/BeaconLight",
+      "compression": "bool"
+    },
+    {
+      "name": "FuelRange",
+      "url": "v1/gameData/FuelRange",
+      "compression": "float"
+    },
+    {
+      "name": "AirPressureEmergency",
+      "url": "v1/gameData/AirPressEmergency",
+      "compression": "bool"
+    },
+    {
+      "name": "JobSpeedLimitValue",
+      "url": "v1/gameData/JobSpeedLimitValue",
+      "compression": "float"
+    },
+    {
+      "name": "Odometer",
+      "url": "v1/gameData/Odometer",
+      "compression": "float"
+    },
+    {
+      "name": "WaterPress",
+      "url": "v1/gameData/WaterPress",
+      "compression": "float"
+    },
+    {
+      "name": "TyrePressureFL&B",
+      "url": "v1/gameData/TyrePressureFL&B",
+      "compression": "tyre_pressure_1"
+    },
+    {
+      "name": "TyrePressureFR&B",
+      "url": "v1/gameData/TyrePressureFR&B",
+      "compression": "tyre_pressure_1"
+    },
+    {
+      "name": "TyrePressureRL&B",
+      "url": "v1/gameData/TyrePressureRL&B",
+      "compression": "tyre_pressure_1"
+    },
+    {
+      "name": "TyrePressureRR&B",
+      "url": "v1/gameData/TyrePressureRR&B",
+      "compression": "tyre_pressure_1"
+    },
+    {
+      "name": "CurrentTorque",
+      "url": "v1/preset/CurrentTorque",
+      "compression": "tyre_temp_1"
+    },
+    {
+      "name": "AllTimeBest",
+      "url": "v1/gameData/AllTimeBest",
+      "compression": "float"
+    },
+    {
+      "name": "BrakesTemperatureAvg",
+      "url": "v1/gameData/BrakesTemperatureAvg",
+      "compression": "brake_temp_1"
+    },
+    {
+      "name": "BrakesTemperatureMax",
+      "url": "v1/gameData/BrakesTemperatureMax",
+      "compression": "brake_temp_1"
+    },
+    {
+      "name": "BrakesTemperatureMin",
+      "url": "v1/gameData/BrakesTemperatureMin",
+      "compression": "brake_temp_1"
+    },
+    {
+      "name": "BrakesTemperatureAvg&F",
+      "url": "v1/gameData/BrakesTemperatureAvg&F",
+      "compression": "brake_temp_1"
+    },
+    {
+      "name": "BrakesTemperatureMax&F",
+      "url": "v1/gameData/BrakesTemperatureMax&F",
+      "compression": "brake_temp_1"
+    },
+    {
+      "name": "BrakesTemperatureMin&F",
+      "url": "v1/gameData/BrakesTemperatureMin&F",
+      "compression": "brake_temp_1"
+    },
+    {
+      "name": "CarClass",
+      "url": "v1/gameData/CarClass",
+      "compression": "string"
+    },
+    {
+      "name": "CarDamage1",
+      "url": "v1/gameData/CarDamage1",
+      "compression": "float"
+    },
+    {
+      "name": "CarDamage2",
+      "url": "v1/gameData/CarDamage2",
+      "compression": "float"
+    },
+    {
+      "name": "CarDamage3",
+      "url": "v1/gameData/CarDamage3",
+      "compression": "float"
+    },
+    {
+      "name": "CarDamage4",
+      "url": "v1/gameData/CarDamage4",
+      "compression": "float"
+    },
+    {
+      "name": "CarDamage5",
+      "url": "v1/gameData/CarDamage5",
+      "compression": "float"
+    },
+    {
+      "name": "CarDamagesAvg",
+      "url": "v1/gameData/CarDamagesAvg",
+      "compression": "float"
+    },
+    {
+      "name": "CarDamagesMax",
+      "url": "v1/gameData/CarDamagesMax",
+      "compression": "float"
+    },
+    {
+      "name": "CarDamagesMin",
+      "url": "v1/gameData/CarDamagesMin",
+      "compression": "float"
+    },
+    {
+      "name": "EngineTorque",
+      "url": "v1/gameData/EngineTorque",
+      "compression": "float"
+    },
+    {
+      "name": "Flag_Checkered",
+      "url": "v1/gameData/Flag_Checkered",
+      "compression": "bool"
+    },
+    {
+      "name": "Flag_Name",
+      "url": "v1/gameData/Flag_Name",
+      "compression": "string"
+    },
+    {
+      "name": "Flag_Orange",
+      "url": "v1/gameData/Flag_Orange",
+      "compression": "bool"
+    },
+    {
+      "name": "Handbrake",
+      "url": "v1/gameData/Handbrake",
+      "compression": "bool"
+    },
+    {
+      "name": "InstantConsumption_L100KM",
+      "url": "v1/gameData/InstantConsumption_L100KM",
+      "compression": "float_600_2"
+    },
+    {
+      "name": "InstantConsumption_MPG_UK",
+      "url": "v1/gameData/InstantConsumption_MPG_UK",
+      "compression": "float_600_2"
+    },
+    {
+      "name": "InstantConsumption_MPG_US",
+      "url": "v1/gameData/InstantConsumption_MPG_US",
+      "compression": "float_600_2"
+    },
+    {
+      "name": "IsInPitSince",
+      "url": "v1/gameData/IsInPitSince",
+      "compression": "bool"
+    },
+    {
+      "name": "IsSessionRestart",
+      "url": "v1/gameData/IsSessionRestart",
+      "compression": "bool"
+    },
+    {
+      "name": "LastPitStopDuration",
+      "url": "v1/gameData/LastPitStopDuration",
+      "compression": "float"
+    },
+    {
+      "name": "LastSectorTime",
+      "url": "v1/gameData/LastSectorTime",
+      "compression": "float"
+    },
+    {
+      "name": "MapAllowed",
+      "url": "v1/gameData/MapAllowed",
+      "compression": "bool"
+    },
+    {
+      "name": "MaxEngineTorque",
+      "url": "v1/gameData/MaxEngineTorque",
+      "compression": "float"
+    },
+    {
+      "name": "MaxSpeedKmh",
+      "url": "v1/gameData/MaxSpeedKmh",
+      "compression": "float_600_2"
+    },
+    {
+      "name": "MaxSpeedMph",
+      "url": "v1/gameData/MaxSpeedMph",
+      "compression": "float_600_2"
+    },
+    {
+      "name": "MaxTurbo",
+      "url": "v1/gameData/MaxTurbo",
+      "compression": "float"
+    },
+    {
+      "name": "OrientationPitchAcceleration",
+      "url": "v1/gameData/OrientationPitchAcceleration",
+      "compression": "float_600_2"
+    },
+    {
+      "name": "OrientationRollAcceleration",
+      "url": "v1/gameData/OrientationRollAcceleration",
+      "compression": "float_600_2"
+    },
+    {
+      "name": "OrientationYawAcceleration",
+      "url": "v1/gameData/OrientationYawAcceleration",
+      "compression": "float_600_2"
+    },
+    {
+      "name": "OrientationYawVelocity",
+      "url": "v1/gameData/OrientationYawVelocity",
+      "compression": "float_600_2"
+    },
+    {
+      "name": "PacketTime",
+      "url": "v1/gameData/PacketTime",
+      "compression": "string"
+    },
+    {
+      "name": "PlayerClassOpponentsCount",
+      "url": "v1/gameData/PlayerClassOpponentsCount",
+      "compression": "uint8_t"
+    },
+    {
+      "name": "PushToPassActive",
+      "url": "v1/gameData/PushToPassActive",
+      "compression": "bool"
+    },
+    {
+      "name": "Sector1BestLapTime",
+      "url": "v1/gameData/Sector1BestLapTime",
+      "compression": "float"
+    },
+    {
+      "name": "Sector1BestTime",
+      "url": "v1/gameData/Sector1BestTime",
+      "compression": "float"
+    },
+    {
+      "name": "Sector1LastLapTime",
+      "url": "v1/gameData/Sector1LastLapTime",
+      "compression": "float"
+    },
+    {
+      "name": "Sector2BestLapTime",
+      "url": "v1/gameData/Sector2BestLapTime",
+      "compression": "float"
+    },
+    {
+      "name": "Sector2BestTime",
+      "url": "v1/gameData/Sector2BestTime",
+      "compression": "float"
+    },
+    {
+      "name": "Sector2LastLapTime",
+      "url": "v1/gameData/Sector2LastLapTime",
+      "compression": "float"
+    },
+    {
+      "name": "Sector3BestLapTime",
+      "url": "v1/gameData/Sector3BestLapTime",
+      "compression": "float"
+    },
+    {
+      "name": "Sector3BestTime",
+      "url": "v1/gameData/Sector3BestTime",
+      "compression": "float"
+    },
+    {
+      "name": "Sector3LastLapTime",
+      "url": "v1/gameData/Sector3LastLapTime",
+      "compression": "float"
+    },
+    {
+      "name": "SessionOdo",
+      "url": "v1/gameData/SessionOdo",
+      "compression": "float"
+    },
+    {
+      "name": "SessionOdo&M",
+      "url": "v1/gameData/SessionOdo&M",
+      "compression": "float"
+    },
+    {
+      "name": "StintOdo",
+      "url": "v1/gameData/StintOdo",
+      "compression": "float"
+    },
+    {
+      "name": "StintOdo&M",
+      "url": "v1/gameData/StintOdo&M",
+      "compression": "float"
+    },
+    {
+      "name": "TrackCode",
+      "url": "v1/gameData/TrackCode",
+      "compression": "string"
+    },
+    {
+      "name": "TrackConfig",
+      "url": "v1/gameData/TrackConfig",
+      "compression": "string"
+    },
+    {
+      "name": "TrackPositionMeters",
+      "url": "v1/gameData/TrackPositionMeters",
+      "compression": "float"
+    },
+    {
+      "name": "TurboPercent",
+      "url": "v1/gameData/TurboPercent",
+      "compression": "percent_1"
+    },
+    {
+      "name": "TyreDirtFrontLeft",
+      "url": "v1/gameData/TyreDirtFrontLeft",
+      "compression": "float"
+    },
+    {
+      "name": "TyreDirtFrontRight",
+      "url": "v1/gameData/TyreDirtFrontRight",
+      "compression": "float"
+    },
+    {
+      "name": "TyreDirtRearLeft",
+      "url": "v1/gameData/TyreDirtRearLeft",
+      "compression": "float"
+    },
+    {
+      "name": "TyreDirtRearRight",
+      "url": "v1/gameData/TyreDirtRearRight",
+      "compression": "float"
+    },
+    {
+      "name": "TyresDirtyLevelAvg",
+      "url": "v1/gameData/TyresDirtyLevelAvg",
+      "compression": "float"
+    },
+    {
+      "name": "TyresDirtyLevelMax",
+      "url": "v1/gameData/TyresDirtyLevelMax",
+      "compression": "float"
+    },
+    {
+      "name": "TyresDirtyLevelMin",
+      "url": "v1/gameData/TyresDirtyLevelMin",
+      "compression": "float"
+    },
+    {
+      "name": "TyresTemperatureAvg",
+      "url": "v1/gameData/TyresTemperatureAvg",
+      "compression": "tyre_temp_1"
+    },
+    {
+      "name": "TyresTemperatureMax",
+      "url": "v1/gameData/TyresTemperatureMax",
+      "compression": "tyre_temp_1"
+    },
+    {
+      "name": "TyresTemperatureMin",
+      "url": "v1/gameData/TyresTemperatureMin",
+      "compression": "tyre_temp_1"
+    },
+    {
+      "name": "TyresTemperatureAvg&F",
+      "url": "v1/gameData/TyresTemperatureAvg&F",
+      "compression": "tyre_temp_1"
+    },
+    {
+      "name": "TyresTemperatureMax&F",
+      "url": "v1/gameData/TyresTemperatureMax&F",
+      "compression": "tyre_temp_1"
+    },
+    {
+      "name": "TyresTemperatureMin&F",
+      "url": "v1/gameData/TyresTemperatureMin&F",
+      "compression": "tyre_temp_1"
+    },
+    {
+      "name": "TyresWearAvg",
+      "url": "v1/gameData/TyresWearAvg",
+      "compression": "float"
+    },
+    {
+      "name": "TyresWearMax",
+      "url": "v1/gameData/TyresWearMax",
+      "compression": "float"
+    },
+    {
+      "name": "TyresWearMin",
+      "url": "v1/gameData/TyresWearMin",
+      "compression": "float"
+    },
+    {
+      "name": "TyrePressureFL&kpa",
+      "url": "v1/gameData/TyrePressureFL&kpa",
+      "compression": "tyre_pressure_1"
+    },
+    {
+      "name": "TyrePressureFR&kpa",
+      "url": "v1/gameData/TyrePressureFR&kpa",
+      "compression": "tyre_pressure_1"
+    },
+    {
+      "name": "TyrePressureRL&kpa",
+      "url": "v1/gameData/TyrePressureRL&kpa",
+      "compression": "tyre_pressure_1"
+    },
+    {
+      "name": "TyrePressureRR&kpa",
+      "url": "v1/gameData/TyrePressureRR&kpa",
+      "compression": "tyre_pressure_1"
+    },
+    {
+      "name": "LastSectorTimeAnyLap",
+      "url": "v1/gameData/LastSectorTimeAnyLap",
+      "compression": "float"
+    },
+    {
+      "name": "BrakeLockupFrontLeft",
+      "url": "v1/gameData/BrakeLockupFrontLeft",
+      "compression": "bool"
+    },
+    {
+      "name": "BrakeLockupFrontRight",
+      "url": "v1/gameData/BrakeLockupFrontRight",
+      "compression": "bool"
+    },
+    {
+      "name": "BrakeLockupRearLeft",
+      "url": "v1/gameData/BrakeLockupRearLeft",
+      "compression": "bool"
+    },
+    {
+      "name": "BrakeLockupRearRight",
+      "url": "v1/gameData/BrakeLockupRearRight",
+      "compression": "bool"
+    },
+    {
+      "name": "DestinationCity",
+      "url": "v1/gameData/DestinationCity",
+      "compression": "string"
+    },
+    {
+      "name": "NextRestStop",
+      "url": "v1/gameData/NextRestStop",
+      "compression": "int32_t"
+    },
+    {
+      "name": "CargoDamage",
+      "url": "v1/gameData/CargoDamage",
+      "compression": "float"
+    },
+    {
+      "name": "InCome",
+      "url": "v1/gameData/InCome",
+      "compression": "int32_t"
+    }
+  ]
+}

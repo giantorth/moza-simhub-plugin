@@ -3,7 +3,7 @@ using System.Collections.Generic;
 namespace MozaPlugin.Protocol
 {
     /// <summary>
-    /// Pre-built command definitions from data/serial.yml.
+    /// Pre-built command definitions from docs/serial.md.
     /// </summary>
     public static class MozaCommandDatabase
     {

@@ -1,7 +1,7 @@
 namespace MozaPlugin.Protocol
 {
     /// <summary>
-    /// Constants from the MOZA Racing serial protocol (data/serial.yml).
+    /// Constants from the MOZA Racing serial protocol (docs/serial.md).
     /// </summary>
     public static class MozaProtocol
     {
@@ -40,6 +40,10 @@ namespace MozaPlugin.Protocol
         public const byte WheelWrite = 63;
         public const byte DashWrite = 50;
         public const byte HandbrakeWrite = 92;
+
+        // Dashboard telemetry (pithouse-re.md § 4)
+        public const byte TelemetrySendGroup = 0x43;  // Group for telemetry data frames
+        public const byte TelemetryModeGroup = 0x40;  // Group for telemetry mode config (28:02)
 
         public static byte CalculateChecksum(byte[] data)
         {

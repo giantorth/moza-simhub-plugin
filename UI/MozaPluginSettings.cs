@@ -48,5 +48,26 @@ namespace MozaPlugin
 
         // ===== Profile system (SimHub native) =====
         public MozaProfileStore ProfileStore { get; set; } = new MozaProfileStore();
+
+        // ===== Dashboard Telemetry =====
+        public bool TelemetryEnabled { get; set; } = false;
+
+        // Name of the active dashboard profile (empty = use first available)
+        public string TelemetryProfileName { get; set; } = "";
+
+        // User-loaded .mzdash file path (empty = use builtin profile)
+        public string TelemetryMzdashPath { get; set; } = "";
+
+        // Byte limit override (0 = auto from profile)
+        public int TelemetryByteLimitOverride { get; set; } = 0;
+
+        // Flag byte sent in telemetry frame header (wheel doesn't validate)
+        public byte TelemetryFlagByte { get; set; } = 0x01;
+
+        // Telemetry send rate in Hz
+        public int TelemetrySendRateHz { get; set; } = 20;
+
+        // Whether to send the 0x40/28:02 telemetry mode frame periodically
+        public bool TelemetrySendModeFrame { get; set; } = true;
     }
 }

@@ -5,6 +5,7 @@ using GameReaderCommon;
 using SimHub.Plugins;
 using MozaPlugin.Devices;
 using MozaPlugin.Protocol;
+using MozaPlugin.Telemetry;
 
 namespace MozaPlugin
 {
@@ -22,6 +23,8 @@ namespace MozaPlugin
         private Timer _pollTimer = null!;
         private Timer _reconnectTimer = null!;
         private PluginManager _pluginManager = null!;
+        private TelemetrySender _telemetrySender = null!;
+        internal DashboardProfileStore DashProfileStore { get; } = new DashboardProfileStore();
 
         // Device detection state
         private bool _baseDetected;
@@ -184,9 +187,17 @@ namespace MozaPlugin
             _reconnectTimer.AutoReset = true;
             if (_settings.ConnectionEnabled)
                 _reconnectTimer.Start();
+
+            _telemetrySender = new TelemetrySender(_connection);
+            ApplyTelemetrySettings();
+            if (_settings.TelemetryEnabled)
+                _telemetrySender.Start();
         }
 
-        public void DataUpdate(PluginManager pluginManager, ref GameData data) { }
+        public void DataUpdate(PluginManager pluginManager, ref GameData data)
+        {
+            _telemetrySender?.UpdateGameData(data.NewData);
+        }
 
         public void End(PluginManager pluginManager)
         {
@@ -194,6 +205,8 @@ namespace MozaPlugin
             SimHub.Logging.Current.Info("[Moza] Shutting down plugin");
             this.SaveCommonSettings("MozaPluginSettings", _settings);
             ClearLedsOnHardware();
+            _telemetrySender?.Stop();
+            _telemetrySender?.Dispose();
             _pollTimer?.Stop();
             _pollTimer?.Dispose();
             _reconnectTimer?.Stop();
@@ -290,6 +303,71 @@ namespace MozaPlugin
             _deviceManager.WriteArray("wheel-send-buttons-telemetry", new byte[] { 0, 0 });
             _deviceManager.WriteSetting("wheel-old-send-telemetry", 0);
             _deviceManager.WriteSetting("dash-send-telemetry", 0);
+        }
+
+        // ===== Telemetry =====
+
+        internal TelemetrySender TelemetrySender => _telemetrySender;
+
+        /// <summary>Apply settings from MozaPluginSettings to the TelemetrySender.</summary>
+        internal void ApplyTelemetrySettings()
+        {
+            if (_telemetrySender == null) return;
+            var s = _settings;
+
+            _telemetrySender.FlagByte          = s.TelemetryFlagByte;
+            _telemetrySender.SendRateHz        = s.TelemetrySendRateHz > 0 ? s.TelemetrySendRateHz : 20;
+            _telemetrySender.SendTelemetryMode = s.TelemetrySendModeFrame;
+
+            // Resolve the active profile
+            DashboardProfile? profile = null;
+            if (!string.IsNullOrEmpty(s.TelemetryMzdashPath) && System.IO.File.Exists(s.TelemetryMzdashPath))
+            {
+                int limit = s.TelemetryByteLimitOverride;
+                profile = DashProfileStore.ParseMzdash(s.TelemetryMzdashPath, limit);
+            }
+            if (profile == null)
+            {
+                var builtins = DashProfileStore.BuiltinProfiles;
+                if (builtins.Count > 0)
+                {
+                    if (!string.IsNullOrEmpty(s.TelemetryProfileName))
+                        profile = FindProfile(builtins, s.TelemetryProfileName);
+                    profile ??= builtins[0];
+
+                    if (s.TelemetryByteLimitOverride > 0 && profile != null)
+                        profile = DashProfileStore.BuildProfileFromUrls(
+                            profile.Name,
+                            System.Linq.Enumerable.Select(profile.Channels, c => c.Url),
+                            s.TelemetryByteLimitOverride);
+                }
+            }
+
+            _telemetrySender.Profile = profile;
+        }
+
+        internal void SetTelemetryEnabled(bool enabled)
+        {
+            _settings.TelemetryEnabled = enabled;
+            SaveSettings();
+            if (enabled)
+            {
+                ApplyTelemetrySettings();
+                _telemetrySender?.Start();
+            }
+            else
+            {
+                _telemetrySender?.Stop();
+            }
+        }
+
+        private static DashboardProfile? FindProfile(
+            System.Collections.Generic.IReadOnlyList<DashboardProfile> profiles, string name)
+        {
+            foreach (var p in profiles)
+                if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase))
+                    return p;
+            return null;
         }
 
         private void TryConnect()

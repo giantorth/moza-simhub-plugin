@@ -407,7 +407,7 @@ MozaDeviceManager.cs               Read/write API for device settings
 Protocol/
   MozaProtocol.cs                  Protocol constants (start byte, device IDs, checksums)
   MozaCommand.cs                   Message builder (read/write/int/array)
-  MozaCommandDatabase.cs           150+ command definitions from serial.yml
+  MozaCommandDatabase.cs           150+ command definitions from serial.md
   MozaResponseParser.cs            Response decoder (bit 7 toggle, nibble swap, wildcard matching)
   MozaSerialConnection.cs          Serial port I/O with auto-discovery and background threads
 Telemetry/
