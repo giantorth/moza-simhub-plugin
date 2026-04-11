@@ -143,6 +143,8 @@ namespace MozaPlugin
                 RefreshDashTab();
                 RefreshHandbrakeTab();
                 RefreshPedalsTab();
+                InitTelemetryTab();
+                RefreshTelemetryStatus();
             }
             finally
             {
@@ -971,6 +973,210 @@ namespace MozaPlugin
         private void InitProfilesTab()
         {
             ProfileListControl.DataContext = ProfileStore;
+        }
+
+        // ===== Telemetry tab =====
+
+        private bool _telemetryUIInitialized;
+
+        private void InitTelemetryTab()
+        {
+            if (_telemetryUIInitialized) return;
+            _telemetryUIInitialized = true;
+
+            _suppressEvents = true;
+            try
+            {
+                var s = _plugin.Settings;
+                TelemetryEnabledCheck.IsChecked = s.TelemetryEnabled;
+                TelemetryFlagByteBox.Text = $"0x{s.TelemetryFlagByte:X2}";
+                TelemetrySendModeCheck.IsChecked = s.TelemetrySendModeFrame;
+                TelemetrySeqCounterCheck.IsChecked = s.TelemetrySendSequenceCounter;
+
+                // Populate profile dropdown
+                TelemetryProfileCombo.Items.Clear();
+                foreach (var profile in _plugin.DashProfileStore.BuiltinProfiles)
+                    TelemetryProfileCombo.Items.Add(profile.Name);
+                if (!string.IsNullOrEmpty(s.TelemetryMzdashPath))
+                    TelemetryProfileCombo.Items.Add("[Custom: " + System.IO.Path.GetFileName(s.TelemetryMzdashPath) + "]");
+
+                // Select current profile
+                string selectedName = s.TelemetryProfileName;
+                if (!string.IsNullOrEmpty(selectedName))
+                {
+                    for (int i = 0; i < TelemetryProfileCombo.Items.Count; i++)
+                    {
+                        if (TelemetryProfileCombo.Items[i]?.ToString() == selectedName)
+                        {
+                            TelemetryProfileCombo.SelectedIndex = i;
+                            break;
+                        }
+                    }
+                }
+                if (TelemetryProfileCombo.SelectedIndex < 0 && TelemetryProfileCombo.Items.Count > 0)
+                    TelemetryProfileCombo.SelectedIndex = 0;
+
+                UpdateTelemetryProfileInfo();
+            }
+            finally
+            {
+                _suppressEvents = false;
+            }
+        }
+
+        private void RefreshTelemetryStatus()
+        {
+            var sender = _plugin.TelemetrySender;
+            if (sender == null) return;
+
+            bool enabled = _plugin.Settings.TelemetryEnabled;
+            bool testMode = sender.TestMode;
+
+            if (!enabled)
+                TelemetryStatusLabel.Text = "Disabled";
+            else if (testMode)
+                TelemetryStatusLabel.Text = $"Test pattern — {sender.FramesSent} frames sent";
+            else
+                TelemetryStatusLabel.Text = $"Sending — {sender.FramesSent} frames sent";
+
+            var last = sender.LastFrameSent;
+            TelemetryLastFrameLabel.Text = last != null
+                ? BitConverter.ToString(last).Replace("-", " ").ToLowerInvariant()
+                : "—";
+
+            TelemetryTestStopBtn.IsEnabled = testMode;
+            TelemetryTestStartBtn.IsEnabled = !testMode;
+        }
+
+        private void UpdateTelemetryProfileInfo()
+        {
+            var profile = _plugin.TelemetrySender?.Profile;
+            if (profile == null || profile.Tiers.Count == 0)
+            {
+                TelemetryProfileInfo.Text = "—";
+                return;
+            }
+            var parts = new System.Collections.Generic.List<string>();
+            foreach (var tier in profile.Tiers)
+                parts.Add($"L{tier.PackageLevel}: {tier.Channels.Count}ch/{tier.TotalBytes}B");
+            TelemetryProfileInfo.Text = string.Join("  ", parts);
+        }
+
+        private void TelemetryEnabledCheck_Click(object sender, RoutedEventArgs e)
+        {
+            if (_suppressEvents) return;
+            _plugin.SetTelemetryEnabled(TelemetryEnabledCheck.IsChecked == true);
+            UpdateTelemetryProfileInfo();
+        }
+
+        private void TelemetryProfileCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_suppressEvents) return;
+            var selected = TelemetryProfileCombo.SelectedItem?.ToString();
+            if (selected != null && !selected.StartsWith("[Custom:"))
+            {
+                _plugin.Settings.TelemetryProfileName = selected;
+                _plugin.Settings.TelemetryMzdashPath = "";
+                _plugin.ApplyTelemetrySettings();
+                _plugin.SaveSettings();
+                UpdateTelemetryProfileInfo();
+            }
+        }
+
+        private void TelemetryLoadMzdash_Click(object sender, RoutedEventArgs e)
+        {
+            var dlg = new Microsoft.Win32.OpenFileDialog
+            {
+                Title = "Open .mzdash dashboard file",
+                Filter = "MOZA Dashboard|*.mzdash|All Files|*.*",
+                DefaultExt = ".mzdash"
+            };
+            if (dlg.ShowDialog() != true) return;
+
+            _plugin.Settings.TelemetryMzdashPath = dlg.FileName;
+            _plugin.Settings.TelemetryProfileName = "";
+            _plugin.ApplyTelemetrySettings();
+            _plugin.SaveSettings();
+
+            _suppressEvents = true;
+            string label = "[Custom: " + System.IO.Path.GetFileName(dlg.FileName) + "]";
+            // Remove previous custom entry
+            for (int i = TelemetryProfileCombo.Items.Count - 1; i >= 0; i--)
+                if (TelemetryProfileCombo.Items[i]?.ToString()?.StartsWith("[Custom:") == true)
+                    TelemetryProfileCombo.Items.RemoveAt(i);
+            TelemetryProfileCombo.Items.Add(label);
+            TelemetryProfileCombo.SelectedIndex = TelemetryProfileCombo.Items.Count - 1;
+            _suppressEvents = false;
+
+            UpdateTelemetryProfileInfo();
+        }
+
+        private void TelemetryFlagByteBox_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            if (_suppressEvents) return;
+            string text = TelemetryFlagByteBox.Text.Trim().TrimStart('0', 'x', 'X');
+            if (byte.TryParse(text, System.Globalization.NumberStyles.HexNumber, null, out byte val))
+            {
+                _plugin.Settings.TelemetryFlagByte = val;
+                _plugin.ApplyTelemetrySettings();
+                _plugin.SaveSettings();
+            }
+        }
+
+
+        private void TelemetrySendModeCheck_Click(object sender, RoutedEventArgs e)
+        {
+            if (_suppressEvents) return;
+            _plugin.Settings.TelemetrySendModeFrame = TelemetrySendModeCheck.IsChecked == true;
+            _plugin.ApplyTelemetrySettings();
+            _plugin.SaveSettings();
+        }
+
+        private void TelemetrySeqCounterCheck_Click(object sender, RoutedEventArgs e)
+        {
+            if (_suppressEvents) return;
+            _plugin.Settings.TelemetrySendSequenceCounter = TelemetrySeqCounterCheck.IsChecked == true;
+            _plugin.ApplyTelemetrySettings();
+            _plugin.SaveSettings();
+        }
+
+        private void TelemetryTestStart_Click(object sender, RoutedEventArgs e)
+        {
+            var ts = _plugin.TelemetrySender;
+            if (ts == null) return;
+            ts.TestMode = true;
+            if (!_plugin.Settings.TelemetryEnabled)
+            {
+                _plugin.ApplyTelemetrySettings();
+                ts.Start();
+            }
+            TelemetryTestStartBtn.IsEnabled = false;
+            TelemetryTestStopBtn.IsEnabled = true;
+        }
+
+        private void TelemetryTestStop_Click(object sender, RoutedEventArgs e)
+        {
+            var ts = _plugin.TelemetrySender;
+            if (ts == null) return;
+            ts.TestMode = false;
+            if (!_plugin.Settings.TelemetryEnabled)
+                ts.Stop();
+            TelemetryTestStartBtn.IsEnabled = true;
+            TelemetryTestStopBtn.IsEnabled = false;
+        }
+
+        private void TelemetryExportLog_Click(object sender, RoutedEventArgs e)
+        {
+            var ts = _plugin.TelemetrySender;
+            if (ts == null) return;
+            var dlg = new Microsoft.Win32.SaveFileDialog
+            {
+                Title = "Save Frame Log",
+                Filter = "Text File|*.txt|All Files|*.*",
+                FileName = $"moza-telemetry-{DateTime.Now:yyyyMMdd-HHmmss}.txt"
+            };
+            if (dlg.ShowDialog() != true) return;
+            ts.Diagnostics.ExportLog(dlg.FileName);
         }
     }
 }

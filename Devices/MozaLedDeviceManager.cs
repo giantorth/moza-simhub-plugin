@@ -202,16 +202,20 @@ namespace MozaPlugin.Devices
                     {
                         _lastButtons = (Color[])buttonColors.Clone();
 
-                        int buttonCount = Math.Min(buttonColors.Length, MozaDeviceConstants.ButtonLedCount);
+                        var modelInfo = plugin.WheelModelInfo;
+                        int modelBtnCount = modelInfo?.ButtonLedCount ?? MozaDeviceConstants.ButtonLedCount;
+                        int buttonCount = Math.Min(buttonColors.Length, modelBtnCount);
+                        var buttonMap = modelInfo?.ButtonLedMap;
 
                         int buttonBitmask = 0;
                         for (int i = 0; i < buttonCount; i++)
                         {
+                            int protocolIndex = buttonMap != null ? buttonMap[i] : i;
                             if (buttonColors[i].R > 0 || buttonColors[i].G > 0 || buttonColors[i].B > 0)
-                                buttonBitmask |= (1 << i);
+                                buttonBitmask |= (1 << protocolIndex);
                         }
 
-                        SendColorChunks(plugin, buttonColors, buttonCount, "wheel-telemetry-button-colors");
+                        SendColorChunks(plugin, buttonColors, buttonCount, "wheel-telemetry-button-colors", buttonMap);
 
                         if (alwaysResendBitmask || buttonBitmask != _lastButtonBitmask)
                         {
@@ -287,8 +291,11 @@ namespace MozaPlugin.Devices
 
         /// <summary>
         /// Pack colors into 4-byte-per-LED format and send in 20-byte chunks.
+        /// When <paramref name="indexMap"/> is provided, each entry maps the source array
+        /// position to the protocol LED index (for non-contiguous button layouts).
         /// </summary>
-        private static void SendColorChunks(MozaPlugin plugin, Color[] colors, int count, string command)
+        private static void SendColorChunks(MozaPlugin plugin, Color[] colors, int count,
+            string command, int[]? indexMap = null)
         {
             int dataLen = count * 4;
             // Round up to next multiple of 20 for chunk alignment
@@ -298,7 +305,7 @@ namespace MozaPlugin.Devices
             for (int i = 0; i < count; i++)
             {
                 int offset = i * 4;
-                colorData[offset] = (byte)i;
+                colorData[offset] = (byte)(indexMap != null ? indexMap[i] : i);
                 colorData[offset + 1] = colors[i].R;
                 colorData[offset + 2] = colors[i].G;
                 colorData[offset + 3] = colors[i].B;

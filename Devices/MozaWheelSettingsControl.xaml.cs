@@ -181,6 +181,19 @@ namespace MozaPlugin.Devices
                     SetComboSafe(KnobModeCombo, _data.WheelKnobMode);
                     StickModeCheck.IsChecked = _data.WheelStickMode != 0;
 
+                    // Show/hide flag and button LED sections based on wheel model
+                    var modelInfo = _plugin!.WheelModelInfo;
+
+                    WheelFlagSection.Visibility = (modelInfo?.HasFlagLeds ?? false)
+                        ? Visibility.Visible : Visibility.Collapsed;
+
+                    for (int i = 0; i < 14; i++)
+                    {
+                        if (_wheelButtonColorSwatches[i] != null)
+                            _wheelButtonColorSwatches[i].Visibility = (modelInfo?.IsButtonActive(i) ?? true)
+                                ? Visibility.Visible : Visibility.Collapsed;
+                    }
+
                     WheelFlagsBrightnessSlider.Value = Clamp(_data.WheelFlagsBrightness, 0, 100);
                     WheelFlagsBrightnessValue.Text = $"{_data.WheelFlagsBrightness}";
 

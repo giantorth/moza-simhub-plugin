@@ -177,20 +177,54 @@ Inherits from `SimHub.Plugins.UI.SHDialogContentBase`.
 
 ## GameData Reference
 
-Available in `DataUpdate` via `data.NewData` (type `GameReaderCommon.StatusDataBase`):
+Available in `DataUpdate` via `data.NewData` (type `GameReaderCommon.StatusDataBase`).
+
+Check `data.GameRunning` and `data.NewData != null` before accessing.
+
+**Core motion/telemetry:**
 
 | Property | Type | Description |
 |----------|------|-------------|
 | `Rpms` | `double` | Current engine RPM |
-| `MaxRpm` | `double` | Max engine RPM |
-| `Flag_Checkered` | `int` | Nonzero when flag active |
-| `Flag_Black` | `int` | |
-| `Flag_Orange` | `int` | |
-| `Flag_Yellow` | `int` | |
-| `Flag_Blue` | `int` | |
-| `Flag_White` | `int` | |
-| `Flag_Green` | `int` | |
-Check `data.GameRunning` and `data.NewData != null` before accessing.
+| `FilteredRpms` | `double` | Smoothed RPM |
+| `SpeedKmh` | `double` | Speed in km/h |
+| `FilteredSpeedKmh` | `double` | Smoothed speed |
+| `Gear` | `string` | **String**, not int. Values: `"R"` (reverse), `"N"` (neutral), `"1"`–`"N"` (gears). Cast with `int.TryParse()`. |
+| `Throttle` | `double` | Throttle position 0–100 |
+| `Brake` | `double` | Brake position 0–100 |
+| `BestLapTime` | `TimeSpan` | Best lap time |
+| `CurrentLapTime` | `TimeSpan` | Current lap time elapsed |
+| `LastLapTime` | `TimeSpan` | Last completed lap time |
+| `DeltaToSessionBest` | `double?` | Gap to session best in seconds (nullable) |
+| `FuelPercent` | `double` | Fuel remaining 0–100% |
+| `DRSEnabled` | `int` | **Int, not bool.** Nonzero = DRS active. |
+| `ERSPercent` | `double` | ERS energy 0–100% |
+
+**Tyre wear:**
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `TyreWearFrontLeft` | `double` | Tyre wear 0–100% |
+| `TyreWearFrontRight` | `double` | |
+| `TyreWearRearLeft` | `double` | |
+| `TyreWearRearRight` | `double` | |
+
+**Flags (nonzero = active):**
+
+| Property | Type |
+|----------|------|
+| `Flag_Checkered` | `int` |
+| `Flag_Black` | `int` |
+| `Flag_Orange` | `int` |
+| `Flag_Yellow` | `int` |
+| `Flag_Blue` | `int` |
+| `Flag_White` | `int` |
+| `Flag_Green` | `int` |
+
+**Gotchas:**
+- `Gear` is a `string`, not `int`. `"R"` cannot be cast to int directly.
+- `DRSEnabled` is `int`, not `bool`. Check `!= 0`.
+- `DeltaToSessionBest` is nullable (`double?`). Use `?? 0.0`.
 
 ## PluginManager Properties
 

@@ -688,6 +688,80 @@
                 </ScrollViewer>
             </TabItem>
 
+            <TabItem Header="Telemetry">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="10,5">
+                        <TextBlock Text="Dashboard Telemetry" Style="{StaticResource SectionHeader}"/>
+
+                        <!-- Enable toggle -->
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                            <CheckBox x:Name="TelemetryEnabledCheck" Content="Enable dashboard telemetry"
+                                      VerticalAlignment="Center" Click="TelemetryEnabledCheck_Click"/>
+                        </StackPanel>
+
+                        <!-- Profile selection -->
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                            <TextBlock Text="Dashboard:" Width="120" VerticalAlignment="Center"/>
+                            <ComboBox x:Name="TelemetryProfileCombo" Width="200" Margin="0,0,8,0"
+                                      SelectionChanged="TelemetryProfileCombo_SelectionChanged"/>
+                            <Button Content="Load .mzdash…" Click="TelemetryLoadMzdash_Click" Padding="6,2"/>
+                        </StackPanel>
+                        <TextBlock x:Name="TelemetryProfileInfo" Foreground="Gray" FontSize="11"
+                                   Margin="120,0,0,8" Text="—"/>
+
+                        <!-- Separator -->
+                        <Separator Margin="0,4,0,8"/>
+                        <TextBlock Text="Diagnostic Options" FontWeight="SemiBold" Margin="0,0,0,6"/>
+
+                        <!-- Flag byte -->
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                            <TextBlock Text="Flag byte:" Width="160" VerticalAlignment="Center"/>
+                            <TextBox x:Name="TelemetryFlagByteBox" Width="70" Margin="0,0,8,0"
+                                     TextChanged="TelemetryFlagByteBox_TextChanged" VerticalAlignment="Center"/>
+                            <TextBlock Text="(wheel ignores this value)" Foreground="Gray"
+                                       FontSize="11" VerticalAlignment="Center"/>
+                        </StackPanel>
+
+                        <!-- Mode frame toggle -->
+                        <CheckBox x:Name="TelemetrySendModeCheck" Content="Send mode frame (0x40/28:02) periodically"
+                                  Margin="0,0,0,8" Click="TelemetrySendModeCheck_Click"/>
+
+                        <!-- Sequence counter toggle -->
+                        <CheckBox x:Name="TelemetrySeqCounterCheck" Content="Send sequence counter (0x2D) to base"
+                                  Margin="0,0,0,8" Click="TelemetrySeqCounterCheck_Click"/>
+
+                        <!-- Separator -->
+                        <Separator Margin="0,4,0,8"/>
+                        <TextBlock Text="Test Pattern" FontWeight="SemiBold" Margin="0,0,0,6"/>
+
+                        <!-- Test pattern controls -->
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                            <Button x:Name="TelemetryTestStartBtn" Content="▶ Send Test Pattern"
+                                    Padding="6,2" Margin="0,0,8,0" Click="TelemetryTestStart_Click"/>
+                            <Button x:Name="TelemetryTestStopBtn" Content="■ Stop"
+                                    Padding="6,2" Click="TelemetryTestStop_Click" IsEnabled="False"/>
+                        </StackPanel>
+                        <TextBlock Text="Cycles: Gear 1→6, Brake 0→100%, Speed 0→200 km/h" Foreground="Gray"
+                                   FontSize="11" Margin="0,0,0,8"/>
+
+                        <!-- Separator -->
+                        <Separator Margin="0,4,0,8"/>
+                        <TextBlock Text="Status" FontWeight="SemiBold" Margin="0,0,0,6"/>
+
+                        <!-- Frame log -->
+                        <Button Content="Export Frame Log…" Padding="6,2" Margin="0,0,0,8"
+                                Click="TelemetryExportLog_Click"/>
+                        <TextBlock Text="Last frame:" Margin="0,0,0,2"/>
+                        <TextBlock x:Name="TelemetryLastFrameLabel"
+                                   FontFamily="Consolas" FontSize="11" TextWrapping="Wrap"
+                                   Foreground="Gray" Text="—" Margin="0,0,0,4"/>
+                        <TextBlock x:Name="TelemetryStatusLabel" Foreground="Gray" FontSize="11"
+                                   Text="Disabled" Margin="0,0,0,8"/>
+
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
         </TabControl>
     </DockPanel>
 </UserControl>

@@ -63,9 +63,23 @@ Untested:
 - Dashboard (**testers needed**)
 
 
+### Per-Model LED Configuration
+
+The plugin detects the connected wheel model and automatically adjusts LED counts and button index mapping. This ensures SimHub's effects view matches the physical LED layout of your wheel.  Table is very much a work in progress and user feedback is required to complete this data.
+
+| Model | Buttons | Flags | Button Mapping |
+|-------|:-------:|:-----:|----------------|
+| GS V2P | 10 | No | Contiguous (5 left + 5 right) |
+| CS V2.1 | 6 | No | Non-contiguous: positions 1,2,4,7,9,10 |
+| CSP (CS Pro) | 14 | Yes | Contiguous |
+| KSP (KS Pro) | 14 | Yes | Contiguous |
+| FSR2 | 14 | Yes | Contiguous |
+| Unknown | 14 | No | Contiguous (safe default) |
+
+If your wheel shows incorrect LED counts in SimHub's Devices view, check the SimHub log for the `[Moza] Wheel model:` line and report the model name string so it can be added to the table.
+
 ### Known Issues
 
-- Gaps in LEDs for CS V2P: 6 buttons map across LEDs # 1,2,4,7,9,10
 - Dashboards to LCDs in wheels not supported
 - Only one wheel device in Simhub is possible currently, even with multiple wheels. Wheel identification is pending.
 
@@ -169,7 +183,7 @@ Read/write control of wheelbase settings:
 
 ### Wheel Configuration (Wheel Tab)
 
-The Wheel tab auto-detects which wheel is connected and shows the appropriate settings. A **Test LEDs** button is available for both wheel types.
+The Wheel tab auto-detects which wheel is connected and shows the appropriate settings.
 
 #### New-Protocol Wheels (GS/FSR/CS/RS/TSW)
 
@@ -179,9 +193,9 @@ The Wheel tab auto-detects which wheel is connected and shows the appropriate se
 | Idle Effect | Off / Constant / Breathing / Color Cycle / Rainbow / Sand Flow | |
 | RPM LED Colors | 10 RGB color pickers | Click swatch to open picker |
 | RPM Brightness | 0-100 | |
-| Flag LED Colors | 6 RGB color pickers | |
-| Flags Brightness | 0-100 | |
-| Button LED Colors | 14 RGB color pickers | Includes TSW buttons |
+| Flag LED Colors | 6 RGB color pickers | Only shown for models with flag LEDs (CSP, KSP, FSR2) |
+| Flags Brightness | 0-100 | Only shown for models with flag LEDs |
+| Button LED Colors | Per-model RGB color pickers | Count and mapping adapt to detected wheel model |
 | Buttons Brightness | 0-100 | |
 | Button Idle Effect | Off / Constant / Breathing / Color Cycle / Rainbow / Sand Flow | |
 | Paddles Mode | Buttons / Combined / Split | |
@@ -252,6 +266,23 @@ Brake has an additional **Sensor Ratio** slider (0-100%) to blend between angle 
 | Connection enabled | Toggle serial connection to MOZA hardware |
 | Clear All Settings & Profiles | Reset all plugin settings and profiles to defaults |
 
+### Telemetry Tab
+
+> [!WARNING]
+> **Dashboard telemetry streaming is a work in progress.** It may not work correctly with all wheel/dashboard combinations. If you'd like to help test and improve this feature, please open an issue with your hardware details and any observations.
+
+Streams game data (speed, RPM, gear, lap times, fuel, tyre wear, etc.) to the wheel's dashboard display using Moza's multi-tier binary telemetry protocol.
+
+| Setting | Description |
+|---------|-------------|
+| Enable dashboard telemetry | Toggle telemetry streaming to the dashboard |
+| Dashboard profile | Select a builtin profile or load a `.mzdash` file |
+| Flag byte | Diagnostic: override the tier flag byte sent in telemetry frames |
+| Send mode frame | Periodically send mode frame (0x40/28:02) to keep wheel in multi-channel mode |
+| Send sequence counter | Send sequence counter (0x2D) to base |
+| Test pattern | Send cycling test data (gear 1-6, brake 0-100%, speed 0-200 km/h) for verifying dashboard display |
+| Export frame log | Save recent telemetry frames to a file for debugging |
+
 ### SimHub Properties
 
 The plugin exposes these properties for use in SimHub dashboards and overlays:
@@ -268,99 +299,7 @@ The plugin exposes these properties for use in SimHub dashboards and overlays:
 
 ## Building from Source
 
-See [DEVELOPMENT.md](docs/DEVELOPMENT.md) for a full project overview and build reference.
-
-### Building on Windows
-
-#### Prerequisites
-
-- [VS Code](https://code.visualstudio.com/) with the [C# Dev Kit](https://marketplace.visualstudio.com/items?itemName=ms-dotnettools.csdevkit) extension
-- .NET SDK 8.0+ ([download](https://dotnet.microsoft.com/download))
-
-#### Steps
-
-1. **Open the project folder** in VS Code.
-
-2. **Build** from the VS Code terminal:
-
-   ```
-   dotnet build -c Release
-   ```
-
-3. **Copy the DLL** to your SimHub folder:
-
-   Copy `bin/x86/Release/MozaPlugin.dll` into your SimHub installation directory.
-
-   Or set the `SIMHUB_PATH` environment variable to have it copied automatically on build:
-
-   ```
-   set SIMHUB_PATH=C:\Program Files (x86)\SimHub
-   dotnet build -c Release
-   ```
-
-   PowerShell:
-   ```powershell
-   $env:SIMHUB_PATH = "C:\Program Files (x86)\SimHub"
-   dotnet build -c Release
-   ```
-
-4. **Restart SimHub.** The plugin appears under Settings > Plugins as "MOZA Control".
-
-### Cross-Compiling on Linux
-
-You can build the plugin entirely on Linux. The .NET SDK can target .NET Framework 4.8 using the `Microsoft.NETFramework.ReferenceAssemblies.net48` NuGet package (already included in the `.csproj`).
-
-#### Prerequisites
-
-- .NET SDK 8.0+ (`dotnet-sdk` package from your distro or [Microsoft repos](https://dotnet.microsoft.com/download))
-
-#### Steps
-
-1. **Install the .NET SDK** if you don't have it:
-
-   ```bash
-   # Arch Linux
-   sudo pacman -S dotnet-sdk
-
-   # Ubuntu/Debian
-   sudo apt install dotnet-sdk-8.0
-
-   # Fedora
-   sudo dnf install dotnet-sdk-8.0
-   ```
-
-2. **Build:**
-
-   ```bash
-   dotnet build -c Release
-   ```
-
-   The output DLL will be in `bin/x86/Release/MozaPlugin.dll`.
-
-3. **Copy the built DLL to your Windows SimHub installation:**
-
-   ```bash
-   # Example: copy to a Windows machine via scp
-   scp bin/x86/Release/MozaPlugin.dll user@windows-pc:"C:/Program Files (x86)/SimHub/"
-
-   # Or copy to a shared folder, USB drive, etc.
-   cp bin/x86/Release/MozaPlugin.dll /mnt/shared/SimHub/
-   ```
-
-4. **Restart SimHub** on Windows.
-
-#### Notes
-
-- The `Microsoft.NETFramework.ReferenceAssemblies.net48` NuGet package provides the .NET Framework 4.8 reference assemblies, so you do **not** need Mono or Windows installed.
-- The build produces a standard .NET Framework DLL that runs natively on Windows under SimHub.
-- SimHub DLLs in `libs/SimHub/` are reference-only (`Private=false`) and not copied to output.
-- The build produces a single output DLL with no additional runtime dependencies to deploy.
-
-### CI/CD
-
-- **Build**: Every push to `main` and every PR is built automatically via GitHub Actions.
-- **Release**: Pushing a `v*` tag (e.g., `v0.2.0`) builds a Release, generates a changelog, and publishes a GitHub Release with the zipped DLL.
-- **SimHub dependency updates**: A daily workflow checks for new SimHub releases and creates a PR to update `libs/SimHub/`.
+See [DEVELOPMENT.md](docs/DEVELOPMENT.md) for build instructions (Windows & Linux cross-compilation), CI/CD pipeline details, and full architecture reference.
 
 ## How It Works
 
@@ -383,7 +322,7 @@ See [SimHub Plugin API Reference](docs/simhub.md) for notes on the plugin interf
 
 The plugin registers MOZA wheel and dashboard as native SimHub LED devices by injecting virtual LED drivers (`MozaLedDeviceManager` / `MozaDashLedDeviceManager`). SimHub's effects pipeline computes LED colors each frame (RPM indicators, flags, animations, scripted effects, etc.) and calls `Display()` on the virtual driver, which converts the colors to MOZA's bitmask/color protocol and sends them to hardware over serial.
 
-- **Wheel**: RPM bitmask (10 LEDs) + button bitmask (14 LEDs) sent as separate commands
+- **Wheel**: RPM bitmask (10 LEDs) + button bitmask (per-model count, remapped for non-contiguous layouts) sent as separate commands
 - **Dashboard**: Combined bitmask (10 RPM + 6 flag LEDs) sent as a single 16-bit value
 - **Brightness**: Forwarded from SimHub's per-device brightness setting
 - **Keepalive**: Periodic resend (~1s) to prevent LED timeout on some hardware
@@ -407,14 +346,25 @@ MozaDeviceManager.cs               Read/write API for device settings
 Protocol/
   MozaProtocol.cs                  Protocol constants (start byte, device IDs, checksums)
   MozaCommand.cs                   Message builder (read/write/int/array)
-  MozaCommandDatabase.cs           150+ command definitions from serial.yml
+  MozaCommandDatabase.cs           150+ command definitions from serial.md
   MozaResponseParser.cs            Response decoder (bit 7 toggle, nibble swap, wildcard matching)
   MozaSerialConnection.cs          Serial port I/O with auto-discovery and background threads
 Telemetry/
   MozaData.cs                      Thread-safe data model for all device values
+  TelemetrySender.cs               Multi-tier game data streaming to dashboard display
+  TelemetryFrameBuilder.cs         Assembles bit-packed telemetry frames
+  TelemetryEncoder.cs              Encodes game values to compressed wire formats
+  TelemetryBitWriter.cs            LSB-first variable-width bit packer
+  GameDataSnapshot.cs              Flat snapshot of SimHub game data for frame building
+  DashboardProfile.cs              Channel definitions, tiers, and SimHubField enum
+  DashboardProfileStore.cs         Parses .mzdash files and maps channels to SimHub fields
+  TelemetryDiagnostics.cs          Frame logging and test pattern generation
+Data/
+  Telemetry.json                   150+ telemetry channel definitions (embedded resource)
 Devices/
   MozaDeviceExtensionFilter.cs     Attaches extensions to MOZA devices in SimHub's device system
-  MozaDeviceConstants.cs           Shared device type IDs and LED counts
+  MozaDeviceConstants.cs           Shared device type IDs and LED counts (protocol maximums)
+  WheelModelInfo.cs                Per-model LED layout — button count, flag presence, index remapping
   MozaWheelDeviceExtension.cs      Wheel device extension — profiles, LED driver injection
   MozaWheelExtensionSettings.cs    Wheel settings for SimHub device profiles
   MozaWheelSettingsControl.xaml(.cs) Status panel for the wheel device extension tab
@@ -427,7 +377,7 @@ DeviceTemplates/
   MozaWheel/                       Source files for wheel .shdevicetemplate (zipped at build time)
   MozaDash/                        Source files for dashboard .shdevicetemplate (zipped at build time)
 UI/
-  SettingsControl.xaml(.cs)        WPF settings UI (Base, Wheel, Dashboard*, Handbrake*, Pedals*, Options tabs; *autodetected)
+  SettingsControl.xaml(.cs)        WPF settings UI (Base, Wheel, Options, Telemetry tabs)
   ColorPickerDialog.xaml(.cs)      RGB color picker dialog
   MozaPluginSettings.cs            Persisted plugin settings (brightness, timings, colors)
   MozaProfile.cs                   Per-game configuration snapshot (80+ settings)

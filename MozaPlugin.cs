@@ -5,6 +5,7 @@ using GameReaderCommon;
 using SimHub.Plugins;
 using MozaPlugin.Devices;
 using MozaPlugin.Protocol;
+using MozaPlugin.Telemetry;
 
 namespace MozaPlugin
 {
@@ -22,6 +23,8 @@ namespace MozaPlugin
         private Timer _pollTimer = null!;
         private Timer _reconnectTimer = null!;
         private PluginManager _pluginManager = null!;
+        private TelemetrySender _telemetrySender = null!;
+        internal DashboardProfileStore DashProfileStore { get; } = new DashboardProfileStore();
 
         // Device detection state
         private bool _baseDetected;
@@ -111,6 +114,7 @@ namespace MozaPlugin
         internal MozaPluginSettings Settings => _settings;
         internal bool IsNewWheelDetected => _newWheelDetected;
         internal bool IsOldWheelDetected => _oldWheelDetected;
+        internal Devices.WheelModelInfo? WheelModelInfo { get; private set; }
         /// <summary>
         /// When true, the device extension owns wheel LED settings via its own profile system.
         /// Plugin profile application skips wheel settings to avoid conflicts.
@@ -184,9 +188,17 @@ namespace MozaPlugin
             _reconnectTimer.AutoReset = true;
             if (_settings.ConnectionEnabled)
                 _reconnectTimer.Start();
+
+            _telemetrySender = new TelemetrySender(_connection);
+            ApplyTelemetrySettings();
+            if (_settings.TelemetryEnabled)
+                _telemetrySender.Start();
         }
 
-        public void DataUpdate(PluginManager pluginManager, ref GameData data) { }
+        public void DataUpdate(PluginManager pluginManager, ref GameData data)
+        {
+            _telemetrySender?.UpdateGameData(data.NewData);
+        }
 
         public void End(PluginManager pluginManager)
         {
@@ -194,6 +206,8 @@ namespace MozaPlugin
             SimHub.Logging.Current.Info("[Moza] Shutting down plugin");
             this.SaveCommonSettings("MozaPluginSettings", _settings);
             ClearLedsOnHardware();
+            _telemetrySender?.Stop();
+            _telemetrySender?.Dispose();
             _pollTimer?.Stop();
             _pollTimer?.Dispose();
             _reconnectTimer?.Stop();
@@ -242,6 +256,7 @@ namespace MozaPlugin
                 _dashDetected = false;
                 _newWheelDetected = false;
                 _oldWheelDetected = false;
+                WheelModelInfo = null;
                 _handbrakeDetected = false;
                 _pedalsDetected = false;
                 _deviceManager.ResetWheelDetection();
@@ -290,6 +305,63 @@ namespace MozaPlugin
             _deviceManager.WriteArray("wheel-send-buttons-telemetry", new byte[] { 0, 0 });
             _deviceManager.WriteSetting("wheel-old-send-telemetry", 0);
             _deviceManager.WriteSetting("dash-send-telemetry", 0);
+        }
+
+        // ===== Telemetry =====
+
+        internal TelemetrySender TelemetrySender => _telemetrySender;
+
+        /// <summary>Apply settings from MozaPluginSettings to the TelemetrySender.</summary>
+        internal void ApplyTelemetrySettings()
+        {
+            if (_telemetrySender == null) return;
+            var s = _settings;
+
+            _telemetrySender.FlagByte            = s.TelemetryFlagByte;
+            _telemetrySender.SendTelemetryMode   = s.TelemetrySendModeFrame;
+            _telemetrySender.SendSequenceCounter = s.TelemetrySendSequenceCounter;
+
+            // Resolve the active multi-stream profile
+            MultiStreamProfile? profile = null;
+            if (!string.IsNullOrEmpty(s.TelemetryMzdashPath) && System.IO.File.Exists(s.TelemetryMzdashPath))
+                profile = DashProfileStore.ParseMzdash(s.TelemetryMzdashPath);
+
+            if (profile == null)
+            {
+                var builtins = DashProfileStore.BuiltinProfiles;
+                if (builtins.Count > 0)
+                {
+                    if (!string.IsNullOrEmpty(s.TelemetryProfileName))
+                        profile = FindProfile(builtins, s.TelemetryProfileName);
+                    profile ??= builtins[0];
+                }
+            }
+
+            _telemetrySender.Profile = profile;
+        }
+
+        internal void SetTelemetryEnabled(bool enabled)
+        {
+            _settings.TelemetryEnabled = enabled;
+            SaveSettings();
+            if (enabled)
+            {
+                ApplyTelemetrySettings();
+                _telemetrySender?.Start();
+            }
+            else
+            {
+                _telemetrySender?.Stop();
+            }
+        }
+
+        private static MultiStreamProfile? FindProfile(
+            System.Collections.Generic.IReadOnlyList<MultiStreamProfile> profiles, string name)
+        {
+            foreach (var p in profiles)
+                if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase))
+                    return p;
+            return null;
         }
 
         private void TryConnect()
@@ -400,7 +472,21 @@ namespace MozaPlugin
                     break;
 
                 case "wheel-model-name":
-                    SimHub.Logging.Current.Info($"[Moza] Wheel model: {_data.WheelModelName}");
+                    // Only resolve per-model LED config for new-protocol wheels.
+                    // ES wheels share device 0x13 with the base, so the model name
+                    // response is the base name, not the wheel name.
+                    if (_newWheelDetected)
+                    {
+                        WheelModelInfo = Devices.WheelModelInfo.FromModelName(_data.WheelModelName);
+                        SimHub.Logging.Current.Info(
+                            $"[Moza] Wheel model: {_data.WheelModelName} " +
+                            $"(buttons={WheelModelInfo.ButtonLedCount}, flags={WheelModelInfo.HasFlagLeds})");
+                    }
+                    else
+                    {
+                        SimHub.Logging.Current.Info(
+                            $"[Moza] Wheel model (ES/base): {_data.WheelModelName}");
+                    }
                     break;
 
                 case "wheel-sw-version":

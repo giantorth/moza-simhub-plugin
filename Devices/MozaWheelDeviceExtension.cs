@@ -70,11 +70,11 @@ namespace MozaPlugin.Devices
                             prop.GetSetMethod(nonPublic: true)!.Invoke(lmd.ledModuleSettings, new object[] { _ledDriver });
                             _driverInjected = true;
 
-                            // Expose button LEDs for new-protocol wheels
+                            // Expose button LEDs — count depends on wheel model (set later when model name arrives)
                             var plugin = MozaPlugin.Instance;
-                            if (plugin?.IsNewWheelDetected == true)
+                            if (plugin?.WheelModelInfo is { } modelInfo)
                             {
-                                lmd.ledModuleSettings.ButtonsCount = MozaDeviceConstants.ButtonLedCount;
+                                lmd.ledModuleSettings.ButtonsCount = modelInfo.ButtonLedCount;
                                 _buttonsCountSet = true;
                             }
 
@@ -123,16 +123,16 @@ namespace MozaPlugin.Devices
             // Notify SimHub when detection state changes so it resumes/pauses Display() calls
             _ledDriver?.UpdateConnectionState();
 
-            // Set ButtonsCount once wheel detection completes (may happen after injection)
-            if (_driverInjected && !_buttonsCountSet && MozaPlugin.Instance?.IsNewWheelDetected == true)
+            // Set ButtonsCount once wheel model is identified (may happen after injection)
+            if (_driverInjected && !_buttonsCountSet && MozaPlugin.Instance?.WheelModelInfo is { } modelInfo)
             {
                 foreach (var instance in LinkedDevice.GetInstances())
                 {
                     if (instance is LedModuleDevice lmd && lmd.ledModuleSettings != null)
                     {
-                        lmd.ledModuleSettings.ButtonsCount = MozaDeviceConstants.ButtonLedCount;
+                        lmd.ledModuleSettings.ButtonsCount = modelInfo.ButtonLedCount;
                         _buttonsCountSet = true;
-                        SimHub.Logging.Current.Info("[Moza] Set ButtonsCount=14 for new-protocol wheel");
+                        SimHub.Logging.Current.Info($"[Moza] Set ButtonsCount={modelInfo.ButtonLedCount} for {MozaPlugin.Instance!.Data.WheelModelName}");
                         break;
                     }
                 }
