@@ -114,6 +114,7 @@ namespace MozaPlugin
         internal MozaPluginSettings Settings => _settings;
         internal bool IsNewWheelDetected => _newWheelDetected;
         internal bool IsOldWheelDetected => _oldWheelDetected;
+        internal Devices.WheelModelInfo? WheelModelInfo { get; private set; }
         /// <summary>
         /// When true, the device extension owns wheel LED settings via its own profile system.
         /// Plugin profile application skips wheel settings to avoid conflicts.
@@ -255,6 +256,7 @@ namespace MozaPlugin
                 _dashDetected = false;
                 _newWheelDetected = false;
                 _oldWheelDetected = false;
+                WheelModelInfo = null;
                 _handbrakeDetected = false;
                 _pedalsDetected = false;
                 _deviceManager.ResetWheelDetection();
@@ -470,7 +472,21 @@ namespace MozaPlugin
                     break;
 
                 case "wheel-model-name":
-                    SimHub.Logging.Current.Info($"[Moza] Wheel model: {_data.WheelModelName}");
+                    // Only resolve per-model LED config for new-protocol wheels.
+                    // ES wheels share device 0x13 with the base, so the model name
+                    // response is the base name, not the wheel name.
+                    if (_newWheelDetected)
+                    {
+                        WheelModelInfo = Devices.WheelModelInfo.FromModelName(_data.WheelModelName);
+                        SimHub.Logging.Current.Info(
+                            $"[Moza] Wheel model: {_data.WheelModelName} " +
+                            $"(buttons={WheelModelInfo.ButtonLedCount}, flags={WheelModelInfo.HasFlagLeds})");
+                    }
+                    else
+                    {
+                        SimHub.Logging.Current.Info(
+                            $"[Moza] Wheel model (ES/base): {_data.WheelModelName}");
+                    }
                     break;
 
                 case "wheel-sw-version":

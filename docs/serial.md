@@ -38,6 +38,25 @@ When a command is truly read/write and uses the same ID in both directions, the 
 
 ---
 
+## EEPROM Direct Access (Group `0x0A` / 10 — any device)
+
+Low-level EEPROM read/write protocol, applicable to any device. Bypasses the named command interface. Found in rs21_parameter.db but not observed in USB captures. See [moza-protocol.md § EEPROM direct access](moza-protocol.md#eeprom-direct-access-group-0x0a--10).
+
+| Command | ID | Dir | Bytes | Type | Notes |
+|---------|----|-----|-------|------|-------|
+| select-table | `00 05` | W | 4 | int | Select EEPROM table ID |
+| read-table | `00 06` | R | 4 | int | Read selected table ID |
+| select-address | `00 07` | W | 4 | int | Select address within table |
+| read-address | `00 08` | R | 4 | int | Read selected address |
+| write-int | `00 09` | W | 4 | int | Write int at selected table+address |
+| read-int | `00 0A` | R | 4 | int | Read int at selected table+address |
+| write-float | `00 0B` | W | 4 | float | Write float at selected table+address |
+| read-float | `00 0C` | R | 4 | float | Read float at selected table+address |
+
+Known EEPROM tables: 2=Base (38 params), 3=Motor (76 params), 4=Wheel (123 params), 5=Pedals (45 params), 11=Unknown (8 params).
+
+---
+
 ## Main (Device `0x12` / 18)
 
 ### Group `0x1E` (30) — Output (read-only)
@@ -72,6 +91,25 @@ Note: get and set commands in this group use **different** command IDs (unlike m
 | set-inertia-gain | `4E 0A` | W | 1 | int | |
 | get-friction-gain | `4F 0B` | R | 1 | int | |
 | set-friction-gain | `4E 0B` | W | 1 | int | |
+
+### Group `0x20` / `0x22` (32 / 34) — Base Ambient LEDs
+
+Controls 2 LED strips (9 LEDs each) on the wheelbase body. Group 32 = write, group 34 = read. Found in rs21_parameter.db but not observed in USB captures. See [moza-protocol.md § base ambient LED control](moza-protocol.md#base-ambient-led-control-groups-0x200x22--3234).
+
+| Command | ID | Bytes | Type | Notes |
+|---------|----|-------|------|-------|
+| indicator-state | `1C` | 1 | int | On/off |
+| standby-mode | `1D` | 1 | int | 0=constant, 2=breath, 3=cycle, 4=rainbow, 5=flow |
+| standby-interval | `1E [mode]` | 2 | int | Interval for given mode |
+| brightness | `1F 02` | 1 | int | |
+| led-color | `20 [strip] [mode] [led]` | 3 | array | RGB. strip=0/1, mode=1(constant)/2(breath), led=0–8 |
+| sleep-mode | `21` | 1 | int | |
+| sleep-timeout | `22` | 2 | int | |
+| sleep-breath-interval | `23 01` | 2 | int | |
+| sleep-brightness | `24` | 1 | int | |
+| sleep-led-color | `25 [strip] 01 [led]` | 3 | array | Sleep breathing per-LED RGB |
+| startup-color | `26` | 3 | array | RGB |
+| shutdown-color | `27` | 3 | array | RGB |
 
 ---
 
@@ -203,7 +241,7 @@ Group 42 is used for both writes (calibration, music set) and reads (music get).
 
 ### Group `0x2D` (45) — Sequence Counter (write-only)
 
-Observed in USB capture at ~50×/sec during driving. Group 45 is not in the main command list — discovered by capture analysis. See [moza-protocol.md § sequence counter](moza-protocol.md#confirmed-sequence-counter-group-0x2d-device-0x13-id-0xf5-0x31).
+Observed in USB capture at ~50×/sec during driving. Group 45 is not in the main command list — discovered by capture analysis. See [moza-protocol.md § sequence counter](moza-protocol.md#group-0x2d-host--device-0x13-50-hz).
 
 | Command | ID | Bytes | Type | Notes |
 |---------|----|-------|------|-------|
@@ -277,7 +315,7 @@ Request payload is just the command ID byte with no value bytes. The device retu
 
 | Command | Read Group | ID | Notes |
 |---------|------------|----|-------|
-| model-name | `0x07` | `01` | e.g. `VGS`, `CS V2.1`, `R5 Black # MOT-1` |
+| model-name | `0x07` | `01` | e.g. `VGS`, `CS V2.1` (see [moza-protocol.md](moza-protocol.md#known-wheel-model-names)) |
 | hw-version | `0x08` | `01` | e.g. `RS21-W08-HW SM-C` |
 | hw-revision | `0x08` | `02` | e.g. `U-V12`, `U-V02` |
 | sw-version | `0x0F` | `01` | Firmware version string |
@@ -375,18 +413,18 @@ Full serial number = serial-a + serial-b (32 ASCII chars total).
 
 These use the same write group as configuration above. They send real-time data to the wheel's LED bar and button LEDs.
 
-See [moza-protocol.md § telemetry color chunks](moza-protocol.md#telemetry-color-chunks-wheel-led-effects) for the LED encoding (index, R, G, B per LED, 5 per 20-byte chunk). Use index `0xFF` for unused padding slots to prevent firmware from overwriting LED 0.
+See [moza-protocol.md § LED color commands](moza-protocol.md#led-color-commands) for the LED encoding (index, R, G, B per LED, 5 per 20-byte chunk). Use index `0xFF` for unused padding slots to prevent firmware from overwriting LED 0.
 
 | Command | ID | Bytes | Type | Notes |
 |---------|----|-------|------|-------|
-| send-rpm-telemetry | `1A 00` | 2 | array | Current RPM position on the LED bar; see [moza-protocol.md § wheel RPM LED](moza-protocol.md#confirmed-wheel-rpm-led-telemetry-group-0x3f-device-0x17-id-0x1a-0x00) |
+| send-rpm-telemetry | `1A 00` | 2 | array | Current RPM position on the LED bar; see [moza-protocol.md § RPM LED telemetry](moza-protocol.md#rpm-led-telemetry-group-0x3f-device-0x17-cmd-0x1a-0x00) |
 | send-buttons-telemetry | `1A 01` | 2 | array | |
 | telemetry-rpm-colors | `19 00` | 20 | array | 5 LEDs per chunk; 2 chunks needed for 10 RPM LEDs |
 | telemetry-button-colors | `19 01` | 20 | array | 3 chunks for 14 button LEDs; pad unused entries with index `0xFF` |
 
 ### Group `0x41` (65) — Telemetry Enable (write-only)
 
-Confirmed in USB capture: sent to device `0x17` at ~100×/sec with payload always `00 00 00 00`. Likely a mode/enable flag. See [moza-protocol.md § dash-send-telemetry](moza-protocol.md#confirmed-dash-send-telemetry-group-0x41-device-0x17-id-0xfdde).
+Confirmed in USB capture: sent to device `0x17` at ~100×/sec with payload always `00 00 00 00`. Likely a mode/enable flag. See [moza-protocol.md § dash telemetry enable](moza-protocol.md#dash-telemetry-enable-group-0x41-device-0x17-cmd-0xfd-0xde).
 
 | Command | ID | Bytes | Type | Notes |
 |---------|----|-------|------|-------|
@@ -395,12 +433,17 @@ Confirmed in USB capture: sent to device `0x17` at ~100×/sec with payload alway
 
 ### Group `0x43` (67) — Live Telemetry Stream (write-only)
 
-Main game telemetry sent at ~17–20×/sec. The 22-byte payload starts with 2 ID bytes + 6 bytes of fixed metadata, followed by 16 bytes of live channel data whose layout may depend on the active `.mzdash` dashboard profile. See [moza-protocol.md § main real-time telemetry](moza-protocol.md#confirmed-main-real-time-telemetry-group-0x43-device-0x17-id-0x7d-0x23) for full packet analysis and partial byte mapping.
+Main game telemetry sent at ~17–20×/sec. See [moza-protocol.md § main real-time telemetry](moza-protocol.md#main-real-time-telemetry-group-0x43-device-0x17-cmd-0x7d-0x23) for full packet analysis and bit-packing format.
+
+Payload = 2-byte cmd ID + 6-byte header + variable-length bit-packed channel data. Header bytes 0–3 are constant (`32 00 23 32`), byte 4 is a flag/stream selector, byte 5 is constant (`0x20`). Three concurrent streams use consecutive flag values for `package_level` tiers 30/500/2000. Channel data is bit-packed alphabetically by URL suffix per the active dashboard; payload size = `ceil(total_channel_bits / 8)`. Empty tiers send a 2-byte stub.
 
 | Command | ID | Bytes | Type | Notes |
 |---------|----|-------|------|-------|
-| send-live-telemetry | `7D 23` | 22 | array | 6-byte fixed header + 16 bytes live data |
-| send-telemetry-state | `FC 00` | 3 | array | ~1×/sec; third byte increments; possibly a mode/status push |
+| send-live-telemetry | `7D 23` | varies | array | 6-byte header + bit-packed channel data; size depends on dashboard |
+| send-telemetry-state | `FC 00` | 3 | array | Session acknowledgment (`session + ack_seq`) ~1×/sec |
+| dashboard-transfer | `7C 00` | varies | array | Session-based chunked file transfer / RPC; see [moza-protocol.md § dashboard upload](moza-protocol.md#dashboard-upload-protocol-group-0x43-cmd-7c00) |
+| display-config | `7C 27` | 4–8 | array | Periodic display config push (~1×/sec), page-cycled |
+| dashboard-activate | `7C 23` | 8 | array | One-shot dashboard activation notification |
 
 ### Old-Protocol Commands (Groups `0x3F` / `0x40`)
 
@@ -420,6 +463,44 @@ Used by older wheel firmware revisions. Observed in protocol captures and retain
 | old-rpm-color9 | `15 00 08` | 3 | array | |
 | old-rpm-color10 | `15 00 09` | 3 | array | |
 | old-rpm-brightness | `14 00` | 1 | int | |
+
+### Extended LED Group Architecture (Groups `0x3F` / `0x40`)
+
+Newer wheels organize LEDs into 5 independently controlled groups, extending beyond the RPM (Shift) and Button groups above. Found in rs21_parameter.db. See [moza-protocol.md § wheel LED group architecture](moza-protocol.md#wheel-led-group-architecture-groups-0x3f0x40--6364-extended).
+
+| Group ID | Name | Max LEDs | Purpose |
+|----------|------|----------|---------|
+| 0 | Shift | 25 | RPM indicator bar |
+| 1 | Button | 16 | Button backlights |
+| 2 | Single | 28 | Single-purpose status indicators |
+| 3 | Rotary | 56 | Rotary encoder ring LEDs |
+| 4 | Ambient | 12 | Ambient / underglow lighting |
+
+Per-group commands (G = group ID 0–4, N = LED index):
+
+| Command | ID | Bytes | Type | Notes |
+|---------|----|-------|------|-------|
+| group-brightness | `1B [G] FF` | 1 | int | |
+| group-normal-mode | `1C [G]` | 1 | int | Telemetry-active mode |
+| group-standby-mode | `1D [G]` | 1 | int | Idle mode |
+| group-standby-interval | `1E [G] [2..6]` | 2 | int | 2=breath, 3=circular, 4=rainbow, 5=drift sand, 6=breath color |
+| group-led-color | `1F [G] FF [N]` | 3 | array | LED N static RGB |
+
+Additional newer wheel commands:
+
+| Command | ID | Bytes | Type | Notes |
+|---------|----|-------|------|-------|
+| meter-auto-rotation | `10` | 1 | int | |
+| sleep-mode | `20` | 1 | int | |
+| sleep-timeout | `21` | 2 | int | |
+| sleep-breath-interval | `22 01` | 2 | int | |
+| sleep-breath-brightness | `23 [0/1]` | 1 | int | min (0) / max (1) |
+| sleep-breath-color | `24 FF 01 FF` | 3 | array | RGB |
+| startup-color | `25` | 3 | array | RGB |
+| paddle-thresholds | `26` | 24 | array | 12× 2-byte thresholds |
+| rotary-switch-color | `27 [N] [0/1]` | 3 | array | Switch N (0–4) foreground/background RGB |
+| multi-function-switch | `28 [0..2]` | 1 | int | Enable, count, left/right assignment |
+| rotary-signal-mode | `2A [N]` | 1 | int | Encoder N (0–4) signal mode |
 
 ---
 

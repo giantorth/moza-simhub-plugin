@@ -1,5 +1,7 @@
 # Moza Racing serial protocol
 
+> **Disclaimer:** This document is a work in progress. It may contain errors, inconsistencies, omissions, or factually incorrect information. Research into the telemetry packet structure is ongoing.
+
 ## Frame format
 
 ```
@@ -90,7 +92,7 @@ Observed probe order (from `connect-wheel-start-game.json`): 0x09, 0x04, 0x06, 0
 | 0x04 | `0x00` + 3 zero bytes | 4 bytes, per-model | VGS: `01 02 04 06`; Display sub-device: `01 02 08 06`. Byte 2 may encode device type (0x04=wheel, 0x08=display) |
 | 0x05 | `0x00` + 3 zero bytes | 4 bytes, per-model | Capability flags? VGS: `01 02 1f 01`; CS V2.1: `01 02 26 00`; Display: `01 02 00 00` |
 | 0x06 | — (n=0) | 12 bytes | Hardware identifier. VGS: `be 49 30 02 14 71 35 04 30 30 33 37` |
-| 0x07 | `0x01` | 16-byte string | **Model name** — `VGS`, `CS V2.1`, `R5 Black # MOT-1` |
+| 0x07 | `0x01` | 16-byte string | **Model name** — `VGS`, `CS V2.1` (see [known model names](#known-wheel-model-names)) |
 | 0x08 | `0x01` | 16-byte string | **HW version** — `RS21-W08-HW SM-C` |
 | 0x08 | `0x02` | 16-byte string | **HW revision** — `U-V12`, `U-V02` |
 | 0x0F | `0x01` | 16-byte string | **FW version** — `RS21-W08-MC SW` |
@@ -114,6 +116,28 @@ During dashboard upload, Pithouse runs the same identity probe sequence against 
 | Serial | (differs) | (differs) |
 
 The SM-C/SM-D suffix distinguishes the main controller from the display controller. The Display sub-device has no capability flags (`00 00` vs `1f 01`).
+
+### Known wheel model names
+
+Model names confirmed from USB captures and live serial queries:
+
+| Model name | Wheel | Source |
+|------------|-------|--------|
+| `VGS` | Vision GS | USB capture (`cs-to-vgs-wheel.ndjson`) |
+| `CS V2.1` | CS V2 | USB capture (`vgs-to-cs-wheel.ndjson`) |
+
+Model names assumed from device naming conventions (unverified):
+
+| Prefix | Wheel | Notes |
+|--------|-------|-------|
+| `GS V2P` | GS V2P | 10 button LEDs (5 per side), no flag LEDs |
+| `CSP` | CS Pro | Has flag LEDs |
+| `KSP` | KS Pro | Has flag LEDs |
+| `FSR2` | FSR V2 | Has flag LEDs |
+
+### ES wheel identity caveat
+
+ES (old-protocol) wheels share device ID `0x13` with the wheelbase. Identity queries (group `0x07` etc.) sent to `0x13` return the **base** identity, not the wheel identity. For example, an ES wheel on an R5 base returns model name `R5 Black # MOT-1` — this is the base, not the wheel. There is currently no known way to query the ES wheel's own model name through the serial protocol.
 
 ---
 
@@ -578,18 +602,7 @@ The `ServiceParameter` table in `rs21_parameter.db` documents how raw **device s
 
 ## EEPROM direct access (group 0x0A / 10)
 
-Low-level EEPROM read/write protocol, sending to any device. Bypasses the named command interface. Found in rs21_parameter.db but not observed in USB captures.
-
-| Cmd ID | Bytes | Dir | Purpose |
-|--------|-------|-----|---------|
-| `[00, 05]` | 4 | W | Select EEPROM table ID |
-| `[00, 06]` | 4 | R | Read selected table ID |
-| `[00, 07]` | 4 | W | Select address within table |
-| `[00, 08]` | 4 | R | Read selected address |
-| `[00, 09]` | 4 | W | Write int at selected table+address |
-| `[00, 0A]` | 4 | R | Read int at selected table+address |
-| `[00, 0B]` | 4 | W | Write float at selected table+address |
-| `[00, 0C]` | 4 | R | Read float at selected table+address |
+Low-level EEPROM read/write protocol, applicable to any device. Bypasses the named command interface. Found in rs21_parameter.db but not observed in USB captures. See [serial.md § EEPROM direct access](serial.md#eeprom-direct-access-group-0x0a--10--any-device) for the command table.
 
 EEPROM tables: 2=Base (38 params), 3=Motor (76 params, PID/encoder/field-weakening), 4=Wheel (123 params), 5=Pedals (45 params), 11=Unknown (8 params).
 
@@ -597,28 +610,13 @@ EEPROM tables: 2=Base (38 params), 3=Motor (76 params, PID/encoder/field-weakeni
 
 ## Base ambient LED control (groups 0x20/0x22 — 32/34)
 
-Controls 2 LED strips (9 LEDs each) on the wheelbase body. Group 32 = write, group 34 = read. Sent to the main device (0x12). Found in rs21_parameter.db but not observed in USB captures.
-
-| Cmd ID | Bytes | Purpose |
-|--------|-------|---------|
-| `[1C]` | 1 | Indicator group state (on/off) |
-| `[1D]` | 1 | Standby mode (0=constant, 2=breath, 3=cycle, 4=rainbow, 5=flow) |
-| `[1E, mode]` | 2 | Standby interval for mode |
-| `[1F, 02]` | 1 | Brightness level |
-| `[20, strip, mode, led]` | 3 | Per-LED RGB color. strip=0/1, mode=1(constant)/2(breath), led=0–8 |
-| `[21]` | 1 | Sleep mode enable |
-| `[22]` | 2 | Sleep timeout |
-| `[23, 01]` | 2 | Sleep breathing interval |
-| `[24]` | 1 | Sleep brightness |
-| `[25, strip, 1, led]` | 3 | Sleep breathing per-LED RGB color |
-| `[26]` | 3 | Startup LED color (RGB) |
-| `[27]` | 3 | Shutdown LED color (RGB) |
+Controls 2 LED strips (9 LEDs each) on the wheelbase body. Group 32 = write, group 34 = read. Sent to the main device (0x12). Found in rs21_parameter.db but not observed in USB captures. See [serial.md § base ambient LEDs](serial.md#group-0x20--0x22-32--34--base-ambient-leds) for the command table.
 
 ---
 
 ## Wheel LED group architecture (groups 0x3F/0x40 — 63/64, extended)
 
-The rs21_parameter.db reveals that newer wheels organize LEDs into **5 independently controlled groups**, extending beyond the RPM/button/flag groups documented in serial.md.
+The rs21_parameter.db reveals that newer wheels organize LEDs into **5 independently controlled groups**. See [serial.md § extended LED group architecture](serial.md#extended-led-group-architecture-groups-0x3f--0x40) for all per-group commands and additional newer wheel commands.
 
 | Group ID | Name | Max LEDs | Purpose |
 |----------|------|----------|---------|
@@ -627,32 +625,6 @@ The rs21_parameter.db reveals that newer wheels organize LEDs into **5 independe
 | 2 | Single | 28 | Single-purpose status indicators |
 | 3 | Rotary | 56 | Rotary encoder ring LEDs |
 | 4 | Ambient | 12 | Ambient / underglow lighting |
-
-Per-group commands (G = group ID 0–4, N = LED index):
-
-| Cmd ID | Bytes | Purpose |
-|--------|-------|---------|
-| `[1B, G, FF]` | 1 | Brightness |
-| `[1C, G]` | 1 | Normal (telemetry active) mode |
-| `[1D, G]` | 1 | Standby (idle) mode |
-| `[1E, G, 2..6]` | 2 | Standby animation interval (2=breath, 3=circular, 4=rainbow, 5=drift sand, 6=breath color) |
-| `[1F, G, FF, N]` | 3 | LED N static RGB color |
-
-Additional new wheel commands:
-
-| Cmd ID | Bytes | Purpose |
-|--------|-------|---------|
-| `[10]` | 1 | Meter auto-rotation |
-| `[20]` | 1 | Sleep mode enable |
-| `[21]` | 2 | Sleep timeout |
-| `[22, 01]` | 2 | Sleep breath cycle interval |
-| `[23, 0/1]` | 1 | Sleep breath brightness min/max |
-| `[24, FF, 01, FF]` | 3 | Sleep breath RGB color |
-| `[25]` | 3 | Startup RGB color |
-| `[26]` | 24 | Paddle thresholds (12× 2-byte) |
-| `[27, N, 0/1]` | 3 | Rotary switch N (0–4) foreground/background RGB |
-| `[28, 0..2]` | 1 | Multi-function switch (enable, count, left/right assignment) |
-| `[2A, N]` | 1 | Rotary encoder N (0–4) signal mode |
 
 ---
 
