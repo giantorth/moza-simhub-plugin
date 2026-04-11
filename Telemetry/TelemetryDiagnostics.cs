@@ -87,7 +87,7 @@ namespace MozaPlugin.Telemetry
 
         public TelemetryLogEntry(byte[] frame)
         {
-            Timestamp = DateTime.Now;
+            Timestamp = DateTime.UtcNow;
             Frame = frame;
         }
 

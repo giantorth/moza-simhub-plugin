@@ -268,6 +268,7 @@ namespace MozaPlugin
                 _handbrakeDetected = false;
                 _pedalsDetected = false;
                 _deviceManager.ResetWheelDetection();
+                _telemetrySender.DetectedDeviceMask = 0;
                 SimHub.Logging.Current.Info("[Moza] Connection disabled");
             }
         }
@@ -442,6 +443,10 @@ namespace MozaPlugin
         private void DetectDevices(string commandName, int value, byte deviceId)
         {
             if (value < 0) return; // No valid response
+
+            // Update telemetry sender's heartbeat mask so it only pings detected devices
+            if (deviceId >= 18 && deviceId <= 30)
+                _telemetrySender.DetectedDeviceMask |= (1 << (deviceId - 18));
 
             // Base detection: IsBaseConnected was just set to true by UpdateFromCommand.
             // Re-apply the profile so base settings (FFB, damper, limit, etc.) are written to device.

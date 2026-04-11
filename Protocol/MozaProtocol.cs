@@ -53,6 +53,18 @@ namespace MozaPlugin.Protocol
             return (byte)(sum % 256);
         }
 
+        /// <summary>
+        /// Calculate checksum over the first <paramref name="length"/> bytes of <paramref name="data"/>.
+        /// Useful for patching the checksum in a pre-allocated frame buffer.
+        /// </summary>
+        public static byte CalculateChecksum(byte[] data, int length)
+        {
+            int sum = MagicValue;
+            for (int i = 0; i < length; i++)
+                sum += data[i];
+            return (byte)(sum % 256);
+        }
+
         public static byte SwapNibbles(byte b)
         {
             return (byte)(((b & 0x0F) << 4) | ((b & 0xF0) >> 4));

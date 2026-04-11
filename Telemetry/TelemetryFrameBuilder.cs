@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using GameReaderCommon;
 using MozaPlugin.Protocol;
 
@@ -10,14 +9,43 @@ namespace MozaPlugin.Telemetry
     ///
     /// Frame format (moza-protocol.md § Main real-time telemetry):
     ///   7E [N] 43 17 7D 23 32 00 23 32 [flag] 20 [data...] [checksum]
+    ///
+    /// Header is 12 bytes fixed, followed by variable data, followed by 1 checksum byte.
     /// </summary>
     public class TelemetryFrameBuilder
     {
+        private const int HeaderLen = 12; // start(1) + N(1) + group(1) + dev(1) + cmdId(2) + prefix(4) + flag(1) + const(1)
+        private const int ChecksumLen = 1;
+
         private readonly DashboardProfile _profile;
+
+        // Pre-allocated buffers reused every frame to avoid GC pressure
+        private readonly byte[] _frameBuffer;
+        private readonly TelemetryBitWriter? _bitWriter;
 
         public TelemetryFrameBuilder(DashboardProfile profile)
         {
             _profile = profile;
+
+            int dataLen = profile.TotalBytes;
+            _frameBuffer = new byte[HeaderLen + dataLen + ChecksumLen];
+
+            // Write the static header bytes once
+            _frameBuffer[0] = MozaProtocol.MessageStart;       // 7E
+            _frameBuffer[1] = (byte)(2 + 6 + dataLen);         // N = cmdId(2) + header(6) + data
+            _frameBuffer[2] = MozaProtocol.TelemetrySendGroup;  // 43
+            _frameBuffer[3] = MozaProtocol.DeviceWheel;         // 17
+            _frameBuffer[4] = 0x7D;                             // cmdId[0]
+            _frameBuffer[5] = 0x23;                             // cmdId[1]
+            _frameBuffer[6] = 0x32;                             // header prefix
+            _frameBuffer[7] = 0x00;
+            _frameBuffer[8] = 0x23;
+            _frameBuffer[9] = 0x32;
+            // [10] = flagByte — patched per call
+            _frameBuffer[11] = 0x20;                            // hardcoded constant
+
+            if (dataLen > 0)
+                _bitWriter = new TelemetryBitWriter(_frameBuffer, HeaderLen, dataLen);
         }
 
         public DashboardProfile Profile => _profile;
@@ -29,54 +57,57 @@ namespace MozaPlugin.Telemetry
         /// <summary>Build frame from a pre-populated snapshot (test patterns, etc.).</summary>
         public byte[] BuildFrameFromSnapshot(GameDataSnapshot snapshot, byte flagByte)
         {
-            if (_profile.TotalBytes == 0)
-                return BuildStubFrame(flagByte);
+            _frameBuffer[10] = flagByte;
 
-            // 1. Bit-pack channel values
-            var writer = new TelemetryBitWriter(_profile.TotalBytes);
-
-            foreach (var ch in _profile.Channels)
+            if (_bitWriter != null)
             {
-                double value = snapshot.GetField(ch.SimHubField);
+                _bitWriter.Reset();
 
-                if (TelemetryEncoder.IsFloat(ch.Compression))
-                    writer.WriteFloat((float)value);
-                else if (TelemetryEncoder.IsDouble(ch.Compression))
-                    writer.WriteDouble(value);
-                else
-                    writer.WriteBits(TelemetryEncoder.Encode(ch.Compression, value), ch.BitWidth);
+                foreach (var ch in _profile.Channels)
+                {
+                    double value = snapshot.GetField(ch.SimHubField);
+
+                    if (TelemetryEncoder.IsFloat(ch.Compression))
+                        _bitWriter.WriteFloat((float)value);
+                    else if (TelemetryEncoder.IsDouble(ch.Compression))
+                        _bitWriter.WriteDouble(value);
+                    else
+                        _bitWriter.WriteBits(TelemetryEncoder.Encode(ch.Compression, value), ch.BitWidth);
+                }
             }
 
-            byte[] data = writer.GetBuffer();
-            return BuildFrameWithData(flagByte, data);
+            _frameBuffer[_frameBuffer.Length - 1] = MozaProtocol.CalculateChecksum(
+                _frameBuffer, _frameBuffer.Length - 1);
+
+            // Return a copy: the write queue holds a reference until the write thread drains it,
+            // and we reuse _frameBuffer on the next tick. One Array.Copy is still far cheaper
+            // than the old List<byte> + two ToArray() allocations.
+            var copy = new byte[_frameBuffer.Length];
+            Array.Copy(_frameBuffer, 0, copy, 0, copy.Length);
+            return copy;
         }
 
         /// <summary>
         /// Build a stub frame for a tier with no active channels.
         /// Frame contains the full fixed header but no data bytes.
         /// </summary>
-        public static byte[] BuildStubFrame(byte flagByte) =>
-            BuildFrameWithData(flagByte, Array.Empty<byte>());
-
-        private static byte[] BuildFrameWithData(byte flagByte, byte[] data)
+        public static byte[] BuildStubFrame(byte flagByte)
         {
-            // payload = cmdId(2) + header(6) + data bytes
-            int payloadLen = 2 + 6 + data.Length;
-            var frame = new List<byte>(4 + payloadLen + 1)
-            {
-                MozaProtocol.MessageStart,           // 7E
-                (byte)payloadLen,                    // N
-                MozaProtocol.TelemetrySendGroup,     // 43
-                MozaProtocol.DeviceWheel,            // 17
-                0x7D, 0x23,                          // cmdId
-                0x32, 0x00, 0x23, 0x32,              // header prefix
-                flagByte,                            // flag (identifies which tier)
-                0x20,                                // hardcoded constant
-            };
-            frame.AddRange(data);
-            frame.Add(MozaProtocol.CalculateChecksum(frame.ToArray()));
-
-            return frame.ToArray();
+            var frame = new byte[HeaderLen + ChecksumLen];
+            frame[0] = MozaProtocol.MessageStart;
+            frame[1] = (byte)(2 + 6);  // N with no data
+            frame[2] = MozaProtocol.TelemetrySendGroup;
+            frame[3] = MozaProtocol.DeviceWheel;
+            frame[4] = 0x7D;
+            frame[5] = 0x23;
+            frame[6] = 0x32;
+            frame[7] = 0x00;
+            frame[8] = 0x23;
+            frame[9] = 0x32;
+            frame[10] = flagByte;
+            frame[11] = 0x20;
+            frame[12] = MozaProtocol.CalculateChecksum(frame, 12);
+            return frame;
         }
     }
 }

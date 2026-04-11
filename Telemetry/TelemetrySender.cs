@@ -26,6 +26,12 @@ namespace MozaPlugin.Telemetry
         private byte _sequenceCounter;
         private int _displayConfigPage;
 
+        // Pre-cached frames (built once, reused every tick)
+        private byte[] _cachedEnableFrame = null!;
+        private byte[] _cachedModeFrame = null!;
+        private byte[] _cachedSequenceFrame = null!;
+        private byte[][] _cachedHeartbeatFrames = null!;
+
         // Settings
         public byte FlagByte { get; set; } = 0x01;
         public bool SendTelemetryMode { get; set; } = true;
@@ -90,6 +96,7 @@ namespace MozaPlugin.Telemetry
             _slowCounter = 0;
             _displayConfigPage = 0;
 
+            BuildCachedFrames();
             SendChannelConfig();
 
             double intervalMs = _baseTickMs;
@@ -152,7 +159,7 @@ namespace MozaPlugin.Telemetry
 
                 // Telemetry enable signal — Pithouse sends this at ~48 Hz the entire session.
                 // Without it the wheel may ignore 0x43/7D:23 data frames.
-                _connection.Send(BuildTelemetryEnableFrame());
+                _connection.Send(_cachedEnableFrame);
 
                 // Sequence counter to the base unit (~30 Hz, matching our tick rate)
                 if (SendSequenceCounter)
@@ -162,7 +169,7 @@ namespace MozaPlugin.Telemetry
 
                 // Periodically send telemetry mode frame to keep wheel in multi-channel mode
                 if (SendTelemetryMode && (_modeCounter++ % 10 == 0))
-                    _connection.Send(BuildTelemetryModeFrame());
+                    _connection.Send(_cachedModeFrame);
 
                 // ~1 Hz slow streams: heartbeat, keepalive, display config, status push
                 int slowInterval = Math.Max(1, 1000 / _baseTickMs);
@@ -213,7 +220,7 @@ namespace MozaPlugin.Telemetry
             _connection.Send(BuildGroup40Frame(0x09, 0x00));
 
             // 28:02 01 00 — set multi-channel telemetry mode
-            _connection.Send(BuildTelemetryModeFrame());
+            _connection.Send(_cachedModeFrame);
         }
 
         private byte[] BuildChannelEnableFrame(byte page, byte channelIndex)
@@ -246,68 +253,78 @@ namespace MozaPlugin.Telemetry
             return frame.ToArray();
         }
 
-        private byte[] BuildTelemetryModeFrame()
+        /// <summary>
+        /// Pre-build frames that are sent every tick. Called once from Start().
+        /// The enable and mode frames are fully static. The sequence counter frame
+        /// has its counter byte and checksum patched in-place each tick.
+        /// Heartbeat frames are static per device ID.
+        /// </summary>
+        private void BuildCachedFrames()
         {
-            // 7E 04 40 17 28 02 01 00 [checksum]
-            var frame = new System.Collections.Generic.List<byte>
+            _cachedModeFrame = BuildStaticFrame(new byte[] {
+                MozaProtocol.MessageStart, 4,
+                MozaProtocol.TelemetryModeGroup, MozaProtocol.DeviceWheel,
+                0x28, 0x02, 0x01, 0x00 });
+
+            _cachedEnableFrame = BuildStaticFrame(new byte[] {
+                MozaProtocol.MessageStart, 6,
+                MozaProtocol.BaseSendTelemetry, MozaProtocol.DeviceWheel,
+                0xFD, 0xDE, 0x00, 0x00, 0x00, 0x00 });
+
+            _cachedSequenceFrame = BuildStaticFrame(new byte[] {
+                MozaProtocol.MessageStart, 6,
+                0x2D, MozaProtocol.DeviceBase,
+                0xF5, 0x31, 0x00, 0x00, 0x00, 0x00 });
+
+            // Pre-build heartbeat frames for device IDs 18-30
+            _cachedHeartbeatFrames = new byte[13][];
+            for (int i = 0; i < 13; i++)
             {
-                MozaProtocol.MessageStart,       // 7E
-                4,                               // N
-                MozaProtocol.TelemetryModeGroup, // 40
-                MozaProtocol.DeviceWheel,        // 17
-                0x28, 0x02,                      // cmd: set telemetry mode
-                0x01, 0x00,                      // data: multi-channel mode
-            };
-            frame.Add(MozaProtocol.CalculateChecksum(frame.ToArray()));
-            return frame.ToArray();
+                byte dev = (byte)(18 + i);
+                var frame = new byte[] { MozaProtocol.MessageStart, 0x00, 0x00, dev, 0x00 };
+                frame[4] = MozaProtocol.CalculateChecksum(frame);
+                _cachedHeartbeatFrames[i] = frame;
+            }
         }
 
-        private byte[] BuildTelemetryEnableFrame()
+        private static byte[] BuildStaticFrame(byte[] body)
         {
-            // 7E 06 41 17 FD DE 00 00 00 00 [checksum]
-            // Pithouse sends this at ~48 Hz the entire telemetry session.
-            var frame = new System.Collections.Generic.List<byte>
-            {
-                MozaProtocol.MessageStart,        // 7E
-                6,                                // N = cmd(2) + data(4)
-                MozaProtocol.BaseSendTelemetry,   // 41
-                MozaProtocol.DeviceWheel,         // 17
-                0xFD, 0xDE,                       // cmd: dash telemetry enable
-                0x00, 0x00, 0x00, 0x00,           // data: always zero
-            };
-            frame.Add(MozaProtocol.CalculateChecksum(frame.ToArray()));
-            return frame.ToArray();
+            var frame = new byte[body.Length + 1];
+            Array.Copy(body, 0, frame, 0, body.Length);
+            frame[frame.Length - 1] = MozaProtocol.CalculateChecksum(body);
+            return frame;
         }
 
         private byte[] BuildSequenceCounterFrame()
         {
-            // 7E 06 2D 13 F5 31 00 00 00 XX [checksum]
-            // Pithouse sends this at ~47 Hz; XX increments each send.
+            // Patch the counter byte and recalculate checksum in-place
             byte seq = _sequenceCounter++;
-            var frame = new System.Collections.Generic.List<byte>
-            {
-                MozaProtocol.MessageStart,  // 7E
-                6,                          // N = cmd(2) + data(4)
-                0x2D,                       // group: sequence counter
-                MozaProtocol.DeviceBase,    // 13
-                0xF5, 0x31,                 // cmd ID
-                0x00, 0x00, 0x00, seq,      // data: counter in last byte
-            };
-            frame.Add(MozaProtocol.CalculateChecksum(frame.ToArray()));
-            return frame.ToArray();
+            _cachedSequenceFrame[9] = seq;
+            _cachedSequenceFrame[10] = MozaProtocol.CalculateChecksum(
+                _cachedSequenceFrame, _cachedSequenceFrame.Length - 1);
+            return _cachedSequenceFrame;
         }
 
         /// <summary>
-        /// Send heartbeat (group 0x00, n=0) to all device IDs 18–30.
+        /// Bitmask of device IDs (18–30) that have been detected.
+        /// Set bit (devId - 18) to send heartbeat to that device.
+        /// Updated by the plugin when devices are detected/disconnected.
+        /// When zero (default), heartbeats are sent to all IDs for discovery.
+        /// </summary>
+        public volatile int DetectedDeviceMask;
+
+        /// <summary>
+        /// Send heartbeat (group 0x00, n=0) to detected devices (or all if none detected yet).
         /// Pithouse does this ~once per second as a keep-alive/presence check.
         /// </summary>
         private void SendHeartbeat()
         {
-            for (byte dev = 18; dev <= 30; dev++)
+            int mask = DetectedDeviceMask;
+            for (int i = 0; i < _cachedHeartbeatFrames.Length; i++)
             {
-                var frame = new byte[] { MozaProtocol.MessageStart, 0x00, 0x00, dev, 0x00 };
-                frame[4] = MozaProtocol.CalculateChecksum(frame);
-                _connection.Send(frame);
+                // If no devices detected yet, send to all for discovery; otherwise only detected ones
+                if (mask == 0 || (mask & (1 << i)) != 0)
+                    _connection.Send(_cachedHeartbeatFrames[i]);
             }
         }
 

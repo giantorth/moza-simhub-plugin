@@ -12,7 +12,7 @@ namespace MozaPlugin.Protocol
 {
     public class MozaSerialConnection : IDisposable
     {
-        private SerialPort? _port;
+        private volatile SerialPort? _port;
         private Thread? _readThread;
         private Thread? _writeThread;
         private readonly ConcurrentQueue<byte[]> _writeQueue = new ConcurrentQueue<byte[]>();
@@ -144,8 +144,8 @@ namespace MozaPlugin.Protocol
                     if (payloadLength < 2 || payloadLength > 64)
                         continue;
 
-                    // Wait for remaining bytes: group + device_id + payload = payloadLength + 2
-                    int needed = payloadLength + 2;
+                    // Wait for remaining bytes: group + device_id + payload + checksum
+                    int needed = payloadLength + 3;
                     waitMs = 0;
                     while (port.BytesToRead < needed && waitMs < 200)
                     {
@@ -156,23 +156,43 @@ namespace MozaPlugin.Protocol
                     int available = port.BytesToRead;
                     if (available < needed) continue;
 
-                    var data = new byte[needed];
+                    var raw = new byte[needed];
                     int totalRead = 0;
-                    while (totalRead < data.Length)
+                    while (totalRead < raw.Length)
                     {
-                        int read = port.Read(data, totalRead, data.Length - totalRead);
+                        int read = port.Read(raw, totalRead, raw.Length - totalRead);
                         if (read <= 0) break;
                         totalRead += read;
                     }
 
-                    if (totalRead == data.Length)
+                    if (totalRead == raw.Length)
                     {
+                        // Validate checksum: rebuild the full wire frame for calculation
+                        // Wire frame = [start][payloadLength][group][dev][cmdPayload...]
+                        var wireFrame = new byte[2 + payloadLength + 2]; // start + N + group + dev + cmdPayload
+                        wireFrame[0] = MozaProtocol.MessageStart;
+                        wireFrame[1] = (byte)payloadLength;
+                        Array.Copy(raw, 0, wireFrame, 2, payloadLength + 2); // group + dev + cmdPayload
+                        byte expected = MozaProtocol.CalculateChecksum(wireFrame);
+                        byte actual = raw[raw.Length - 1];
+
+                        if (expected != actual)
+                        {
+                            SimHub.Logging.Current.Debug(
+                                $"[Moza] Checksum mismatch: expected=0x{expected:X2} actual=0x{actual:X2}, dropping message");
+                            continue;
+                        }
+
+                        // Strip the checksum byte before passing to the parser
+                        var data = new byte[needed - 1];
+                        Array.Copy(raw, 0, data, 0, data.Length);
+
                         messageCount++;
                         if (messageCount <= 5)
                         {
                             SimHub.Logging.Current.Info(
                                 $"[Moza] Received msg #{messageCount}: len={payloadLength} " +
-                                $"group=0x{data[0]:X2} dev=0x{data[1]:X2} ({totalRead} bytes)");
+                                $"group=0x{data[0]:X2} dev=0x{data[1]:X2} ({data.Length} bytes)");
                         }
                         MessageReceived?.Invoke(data);
                     }

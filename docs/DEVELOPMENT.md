@@ -95,7 +95,7 @@ You can build the plugin entirely on Linux. The .NET SDK can target .NET Framewo
 ### CI/CD
 
 - **Build**: Every push to `main` and every PR is built automatically via GitHub Actions.
-- **Release**: Pushing a `v*` tag (e.g., `v0.2.0`) builds a Release, generates a changelog, and publishes a GitHub Release with the zipped DLL.
+- **Release**: Pushing a `v*` tag (e.g., `v0.2.0`) builds a Release, generates a changelog, and publishes a GitHub Release with the DLL (device definitions are embedded in the DLL).
 - **SimHub dependency updates**: A daily workflow checks for new SimHub releases and creates a PR to update `libs/SimHub/`.
 
 ## Architecture
@@ -125,14 +125,14 @@ You can build the plugin entirely on Linux. The .NET SDK can target .NET Framewo
 - `DashboardProfileStore` — Parses `.mzdash` dashboard files (extracts `Telemetry.get()` URLs via regex), loads channel metadata from embedded `Data/Telemetry.json`, and maps URL suffixes to SimHub fields via a static `UrlFieldMap`
 - `TelemetryDiagnostics` — Frame logging and test pattern generation
 
-**UI** (`UI/`) — WPF settings with 4 tabs (Base, Wheel, Options, Telemetry). Uses `_suppressEvents` flag during 500ms refresh timer to prevent feedback loops. 30+ RGB color pickers via `ColorPickerDialog`. The Telemetry tab provides dashboard profile selection (builtin + load from `.mzdash`), diagnostic options (flag byte, mode frame, sequence counter toggles), test pattern controls, and frame log export.
+**UI** (`UI/`) — WPF plugin settings panel with tabs for Base, Handbrake, Pedals, Options, and Telemetry diagnostics. Dashboard LED settings and wheel LED settings live on their respective device pages (Devices section), not in the plugin panel. Uses `_suppressEvents` flag during 500ms refresh timer to prevent feedback loops. Shows a restart banner when new device definitions are deployed at runtime.
 
 **Profile System** (`UI/MozaProfile.cs`, `UI/MozaProfileStore.cs`) — Per-game configuration snapshots using SimHub's `ProfileBase`. Uses -1 sentinel to mark settings not included in a profile.
 
 **Device Extension System** (`Devices/`) — Registers MOZA devices as SimHub devices so they appear in SimHub's Devices section with native LED effects support. Each device type (wheel, dashboard) has its own extension, LED manager, settings class, and settings control:
 
 *Shared:*
-- `MozaDeviceExtensionFilter` — `IDeviceExtensionFilter` that routes devices by `DescriptorUniqueId` GUID to the correct extension. Uses `MozaDeviceConstants.GetWheelModelPrefix()` to match all known wheel GUIDs → `MozaWheelDeviceExtension`, and `DashStandardDeviceId` → `MozaDashDeviceExtension`
+- `MozaDeviceExtensionFilter` — `IDeviceExtensionFilter` that routes devices by `DescriptorUniqueId` GUID to the correct extension. Uses `MozaDeviceConstants.GetWheelModelPrefix()` to match all known wheel GUIDs → `MozaWheelDeviceExtension`, and `IsDashDevice()` to match the dashboard GUID → `MozaDashDeviceExtension`
 - `MozaDeviceConstants` — Per-model `DescriptorUniqueId` GUIDs, GUID-to-model-prefix mapping, and LED count constants. `GetWheelModelPrefix()` resolves a SimHub `DeviceTypeID` to the firmware model prefix the device expects
 - `WheelModelInfo` — Per-model LED layout descriptor (button count, flag presence, button index remapping). Resolved from the firmware model name string after wheel detection. Known models: GS V2P (10 buttons, no flags), CS V2.1 (6 non-contiguous buttons), CSP/KSP/FSR2 (14 buttons, flags). Unknown models default to 14 buttons, no flags
 
@@ -144,7 +144,7 @@ You can build the plugin entirely on Linux. The .NET SDK can target .NET Framewo
 
 *Dashboard:*
 - `MozaDashDeviceExtension` — Dashboard device extension, same pattern as wheel
-- `MozaDashLedDeviceManager` — Virtual `ILedDeviceManager` for the dashboard. Reports connected when the dash is detected. Converts SimHub LED colors to a 16-bit bitmask (bits 0-9 = RPM, bits 10-15 = flags) sent via `dash-send-telemetry`. Unlike the wheel, no per-frame colors are sent — the dash firmware uses stored colors and only receives the on/off bitmask. Separate from the telemetry data streaming (handled by `TelemetrySender`), which sends full game data for dashboard display widgets
+- `MozaDashLedDeviceManager` — Virtual `ILedDeviceManager` for the dashboard. Reports connected when the dash is detected. Combines RPM colors (from telemetry LEDs, bits 0-9) and flag colors (from button LEDs, bits 10-15) into a 16-bit bitmask sent via `dash-send-telemetry`. Unlike the wheel, no per-frame colors are sent — the dash firmware uses stored colors and only receives the on/off bitmask. Separate from the telemetry data streaming (handled by `TelemetrySender`), which sends full game data for dashboard display widgets
 - `MozaDashExtensionSettings` — Dashboard-specific settings (brightness, indicator modes, colors)
 - `MozaDashSettingsControl` — Status panel with indicator modes, brightness, and color swatches (RPM, blink, flags). Connection status driven by linked LED driver's `IsConnected()`
 
