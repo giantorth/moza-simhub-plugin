@@ -299,9 +299,9 @@ Observed in USB capture at ~50×/sec during driving. Group 45 is not in the main
 | rpm-value8 | `0E 07` | 4 | int | |
 | rpm-value9 | `0E 08` | 4 | int | |
 | rpm-value10 | `0E 09` | 4 | int | |
-| rpm-indicator-mode | `11 00` | 1 | int | |
+| rpm-indicator-mode | `11 00` | 1 | int | 0=Off, 1=RPM, 2=On |
 | rpm-interval | `0C` | 4 | int | |
-| flags-indicator-mode | `11 02` | 1 | int | |
+| flags-indicator-mode | `11 02` | 1 | int | 0=Off, 1=Flags, 2=On |
 
 ---
 
@@ -451,7 +451,7 @@ Used by older wheel firmware revisions. Observed in protocol captures and retain
 
 | Command | ID | Bytes | Type | Notes |
 |---------|----|-------|------|-------|
-| rpm-indicator-mode | `04` | 1 | int | |
+| rpm-indicator-mode | `04` | 1 | int | 1=RPM, 2=Off, 3=On (1-based) |
 | old-rpm-color1 | `15 00 00` | 3 | array | |
 | old-rpm-color2 | `15 00 01` | 3 | array | |
 | old-rpm-color3 | `15 00 02` | 3 | array | |

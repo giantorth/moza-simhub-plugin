@@ -29,8 +29,8 @@ namespace MozaPlugin.Devices
         private readonly Border[] _wheelFlagColorSwatches = new Border[6];
         private readonly Border[] _wheelButtonColorSwatches = new Border[14];
 
-        // ES indicator combo reorder: stored 0=SimHub, 1=Off, 2=On
-        // Display order: 0=SimHub Mode, 1=Always On, 2=Off
+        // ES wheel indicator: device 1=RPM, 2=Off, 3=On (1-based, -1 applied on read)
+        // UI combo: 0="SimHub Mode", 1="Always On", 2="Off"
         private static readonly int[] EsIndicatorToDisplay = { 0, 2, 1 };
         private static readonly int[] EsIndicatorToStored = { 0, 2, 1 };
 

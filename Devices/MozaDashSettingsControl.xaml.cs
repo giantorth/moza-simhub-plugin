@@ -29,10 +29,10 @@ namespace MozaPlugin.Devices
         private readonly Border[] _dashRpmBlinkColorSwatches = new Border[10];
         private readonly Border[] _dashFlagColorSwatches = new Border[6];
 
-        // Indicator combo reorder: stored 0=SimHub, 1=Off, 2=On
+        // Device values: 0=Off, 1=RPM (SimHub), 2=On
         // Display order: 0=SimHub Mode, 1=Always On, 2=Off
-        private static readonly int[] IndicatorToDisplay = { 0, 2, 1 };
-        private static readonly int[] IndicatorToStored = { 0, 2, 1 };
+        private static readonly int[] IndicatorToDisplay = { 2, 0, 1 }; // device 0→Off, 1→SimHub, 2→AlwaysOn
+        private static readonly int[] IndicatorToStored = { 1, 2, 0 };  // SimHub→1, AlwaysOn→2, Off→0
 
         public MozaDashSettingsControl()
         {

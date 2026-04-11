@@ -690,15 +690,26 @@ D11 (R21/R25/R27 Ultra) omits bus 5; S09 CM2 dash connects as bus 19 directly of
 
 ---
 
-## Wheel input setting value encoding (group 0x3F/0x40)
+## Setting value encoding notes
 
-Several wheel input configuration commands use non-obvious value encoding. These were confirmed by cross-referencing Pithouse USB captures with the boxflat source.
+Several configuration commands use non-obvious value encoding. Confirmed by cross-referencing Pithouse USB captures with the foxblat source.
+
+### Wheel settings (group 0x3F/0x40, device 0x17)
 
 | Command | ID | Raw values | Notes |
 |---------|-----|-----------|-------|
 | paddles-mode | `03` | 1=Buttons, 2=Combined, 3=Split | **1-based**, not 0-based. Sending 0 is invalid and causes the firmware to break all paddle input including shift paddles |
 | stick-mode | `05` | 0=Buttons, 256=D-Pad | 2-byte field; D-Pad mode sets the high byte (`0x0100`) |
-| rpm-indicator-mode | `04` | 1=RPM, 2=Off, 3=On | **1-based** |
+| rpm-indicator-mode | `04` | 1=RPM, 2=Off, 3=On | **1-based** (wheel only) |
+
+### Dashboard settings (group 0x32/0x33, device 0x14)
+
+| Command | ID | Raw values | Notes |
+|---------|-----|-----------|-------|
+| rpm-indicator-mode | `11 00` | 0=Off, 1=RPM, 2=On | **0-based** — different from wheel |
+| flags-indicator-mode | `11 02` | 0=Off, 1=Flags, 2=On | **0-based** |
+
+Note: the wheel and dashboard use different base indices for indicator modes (wheel is 1-based, dashboard is 0-based).
 
 See [serial.md](serial.md) and [serial.yml](serial.yml) for the full command tables.
 

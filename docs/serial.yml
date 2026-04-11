@@ -1135,6 +1135,7 @@ commands:
       id: [17, 0]
       bytes: 1
       type: int
+      # 0=Off, 1=RPM, 2=On (0-based, unlike wheel)
 
     rpm-interval:
       read: 51
@@ -1149,6 +1150,7 @@ commands:
       id: [17, 2]
       bytes: 1
       type: int
+      # 0=Off, 1=Flags, 2=On (0-based, unlike wheel)
 
     # telemetry stuff
     send-telemetry:
@@ -1821,6 +1823,7 @@ commands:
       write: 63
       id: [4]
       bytes: 1
+      # 1-based: 1=RPM, 2=Off, 3=On
       type: int
 
     old-rpm-color1:
