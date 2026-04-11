@@ -4,6 +4,12 @@ A SimHub plugin that communicates directly with MOZA Racing hardware over serial
 
 Built using the amazing work of [Boxflat](https://github.com/Lawstorant/boxflat) that reverse-engineered the [MOZA serial protocol](docs/moza-protocol.md).
 
+## Why This Exists
+
+MOZA makes excellent sim racing hardware, but their companion software — Pithouse — is Windows-only. Linux users have no official way to manage LED effects or stream telemetry to your wheel's dashboard. SimHub, on the other hand, runs on Linux (via Proton/Wine), opening the door for cross-platform hardware control with built-in telemetry support.
+
+The goal is to expand the functionality of MOZA devices to a wider audience by providing tools that work across multiple platforms.  
+
 ![MOZA Plugin Settings](docs/Screenshot.png)
 
 > [!NOTE]
@@ -28,10 +34,10 @@ _Thank you to a gracious tester who provided this custom Engine Start and Pit Li
 Download the latest `MozaPlugin_v*.zip` from the [Releases](https://github.com/giantorth/moza-simhub-plugin/releases) page and extract into your SimHub installation directory:
 
 - `MozaPlugin.dll` — copy to the SimHub root directory
-- `MozaRacingWheel.shdevicetemplate` — copy to `DevicesDefaults/StandardDevicesTemplatesUser/` (create the folder if it doesn't exist)
-- `MozaRacingDash.shdevicetemplate` — copy to `DevicesDefaults/StandardDevicesTemplatesUser/`
 
-Restart SimHub — the plugin appears under Settings > Plugins as "MOZA Control". To use SimHub's LED effects system, go to Devices and add the "MOZA Racing Wheel" and/or "MOZA Racing Dash" devices.
+Restart SimHub — the plugin appears under Settings > Plugins as "MOZA Control".
+
+**Device setup:** Connect your hardware and restart SimHub. The plugin auto-detects connected devices (wheel model, dashboard) and deploys matching device definitions. A banner in the plugin settings panel will prompt you to restart SimHub, after which the devices appear under Devices ready to add. Requires SimHub 9.11+.
 
 ## Features
 
@@ -41,14 +47,19 @@ MOZA wheels and dashboards register as native SimHub devices, appearing in SimHu
 
 ![Device Panel](docs/Device.png)
 
+- **Per-Model Device Definitions** — Each wheel model (CS Pro, KS Pro, FSR V2, GS V2 Pro, CS V2, etc.) has its own device definition with the correct LED layout baked in. Definitions are deployed automatically on first detection — just connect your hardware, restart SimHub, and add the device. Requires SimHub 9.11+
 - **LED Effects System** — Use SimHub's full Button and Telemetry effects configuration UI (RPM indicators, flags, speed limiter animations, scripted effects, etc.) to control your wheel and dashboard LEDs
 - **Per-Game Device Profiles** — SimHub's device profile system saves and restores LED effect configurations per game
-- **Auto-Detection** — MOZA devices are automatically detected by USB VID/PID when adding a new device
+- **Model-Aware Connection** — Only the device matching the currently connected wheel reports as connected. Swap wheels and the correct device activates automatically
 - **Separate Wheel & Dashboard Devices** — Each registers independently with its own profile and LED configuration
 
 ![LED Effects Configuration](docs/Leds.png)
 
 The plugin injects virtual LED drivers so SimHub's effects UI shows each device as connected, even though MOZA uses a proprietary serial protocol. The computed LED colors are forwarded to the hardware each frame.
+
+![Effects List](docs/Effects.png)
+
+SimHub contains many effects to choose from and this plugin supports any custom effects that target a device.
 
 Tested:
 - Old-protocol wheels (ES series)
@@ -65,29 +76,33 @@ Untested:
 
 ### Per-Model LED Configuration
 
-The plugin detects the connected wheel model and automatically adjusts LED counts and button index mapping. This ensures SimHub's effects view matches the physical LED layout of your wheel.  Table is very much a work in progress and user feedback is required to complete this data.
+Each wheel model has a dedicated SimHub device definition with the correct LED layout. The plugin detects the connected wheel model via firmware queries and deploys the matching definition on first detection.
 
-| Model | Buttons | Flags | Button Mapping |
-|-------|:-------:|:-----:|----------------|
-| GS V2P | 10 | No | Contiguous (5 left + 5 right) |
-| CS V2.1 | 6 | No | Non-contiguous: positions 1,2,4,7,9,10 |
-| CSP (CS Pro) | 14 | Yes | Contiguous |
-| KSP (KS Pro) | 14 | Yes | Contiguous |
-| FSR2 | 14 | Yes | Contiguous |
-| Unknown | 14 | No | Contiguous (safe default) |
+| Device Name | Model Prefix | RPM | Buttons | Flags | Button Mapping |
+|-------------|:------------:|:---:|:-------:|:-----:|----------------|
+| MOZA GS V2 Pro | GS V2P | 10 | 10 | No | Contiguous (5 left + 5 right) |
+| MOZA CS V2 | CS V2.1 | 10 | 6 | No | Non-contiguous: positions 1,2,4,7,9,10 |
+| MOZA CS Pro | CSP | 10 | 14 | Yes | Contiguous |
+| MOZA KS Pro | KSP | 10 | 14 | Yes | Contiguous |
+| MOZA FSR V2 | FSR2 | 10 | 14 | Yes | Contiguous |
+| MOZA Racing Wheel | *(generic)* | 10 | 14 | No | Contiguous (fallback for unknown models) |
+| MOZA Old Protocol Wheel | *(ES wheels)* | 10 | 0 | No | RPM LEDs only |
+| MOZA Dashboard | — | 10 | 0 | Yes | RPM + flag LEDs |
 
-If your wheel shows incorrect LED counts in SimHub's Devices view, check the SimHub log for the `[Moza] Wheel model:` line and report the model name string so it can be added to the table.
+If your wheel model isn't listed, the generic "MOZA Racing Wheel" definition is deployed. Check the SimHub log for the `[Moza] Wheel model:` line and report the model name string so a dedicated definition can be added.
 
 ### Known Issues
 
-- Dashboards to LCDs in wheels not supported
-- Only one wheel device in Simhub is possible currently, even with multiple wheels. Wheel identification is pending.
+- Dashboard LCD/screen updates are a work in progress and may or may not work
+- Flag LEDs are managed through the plugin's own settings (Wheel tab), not through SimHub's effects UI
 
 ### Per-Game Profiles
 
-All settings (base, wheel LEDs, dashboard, handbrake, pedals) are stored per-game using SimHub's built-in profile system. Profiles switch automatically when you launch a different game. A profile selector is shown at the top of the settings panel.
+All settings (base, wheel LEDs, dashboard telemetry, dashboard LEDs, handbrake, pedals) are stored per-game using SimHub's built-in profile system. Profiles switch automatically when you launch a different game. A profile selector is shown at the top of the settings panel.
 
-### Wheelbase Configuration (Base Tab)
+### Plugin Panel (Settings > Plugins > MOZA Control)
+
+#### Wheelbase Configuration (Base Tab)
 
 Read/write control of wheelbase settings:
 
@@ -181,37 +196,7 @@ Read/write control of wheelbase settings:
 - MOSFET Temperature
 - Motor Temperature
 
-### Wheel Configuration (Wheel Tab)
-
-The Wheel tab auto-detects which wheel is connected and shows the appropriate settings.
-
-#### New-Protocol Wheels (GS/FSR/CS/RS/TSW)
-
-| Setting | Range | Notes |
-|---------|-------|-------|
-| Telemetry Mode | Off / Telemetry / Static | |
-| Idle Effect | Off / Constant / Breathing / Color Cycle / Rainbow / Sand Flow | |
-| RPM LED Colors | 10 RGB color pickers | Click swatch to open picker |
-| RPM Brightness | 0-100 | |
-| Flag LED Colors | 6 RGB color pickers | Only shown for models with flag LEDs (CSP, KSP, FSR2) |
-| Flags Brightness | 0-100 | Only shown for models with flag LEDs |
-| Button LED Colors | Per-model RGB color pickers | Count and mapping adapt to detected wheel model |
-| Buttons Brightness | 0-100 | |
-| Button Idle Effect | Off / Constant / Breathing / Color Cycle / Rainbow / Sand Flow | |
-| Paddles Mode | Buttons / Combined / Split | |
-| Clutch Split Point | 0-100% | Only shown in Split mode |
-| Knob Mode | Mode 0-3 | |
-| Stick as D-Pad | On/Off | |
-
-#### ES Wheels (Old Protocol)
-
-| Setting | Range | Notes |
-|---------|-------|-------|
-| RPM Indicator Mode | RPM / Off / On | |
-| RPM Display Mode | Mode 1 / Mode 2 | |
-| RPM Brightness | 0-15 | |
-
-### Dashboard LED Configuration (Dashboard Tab)
+#### Dashboard LED Configuration (Dashboard Tab)
 
 > Auto-detected — tab is hidden if no dashboard is connected.
 
@@ -225,7 +210,7 @@ The Wheel tab auto-detects which wheel is connected and shows the appropriate se
 | Flag LED Colors | 6 RGB color pickers | |
 | Flags Brightness | 0-15 | |
 
-### Handbrake Configuration (Handbrake Tab)
+#### Handbrake Configuration (Handbrake Tab)
 
 > Auto-detected — tab is hidden if no handbrake is connected.
 
@@ -239,7 +224,7 @@ The Wheel tab auto-detects which wheel is connected and shows the appropriate se
 
 **Output Curve** — 5-point curve with presets (Linear, S Curve, Exponential, Parabolic), same format as the FFB output curve. Calibration start/stop buttons are also available.
 
-### Pedals Configuration (Pedals Tab)
+#### Pedals Configuration (Pedals Tab)
 
 > Auto-detected — tab is hidden if no pedals are connected.
 
@@ -255,7 +240,7 @@ Settings for **Throttle**, **Brake**, and **Clutch** (each configured independen
 
 Brake has an additional **Sensor Ratio** slider (0-100%) to blend between angle sensor (0%) and load cell (100%).
 
-### Options Tab
+#### Options Tab
 
 | Setting | Description |
 |---------|-------------|
@@ -266,10 +251,27 @@ Brake has an additional **Sensor Ratio** slider (0-100%) to blend between angle 
 | Connection enabled | Toggle serial connection to MOZA hardware |
 | Clear All Settings & Profiles | Reset all plugin settings and profiles to defaults |
 
-### Telemetry Tab
+#### Telemetry Diagnostics (Telemetry Tab)
 
-> [!WARNING]
-> **Dashboard telemetry streaming is a work in progress.** It may not work correctly with all wheel/dashboard combinations. If you'd like to help test and improve this feature, please open an issue with your hardware details and any observations.
+Diagnostic and protocol-level telemetry controls. The main telemetry settings (enable, profile selection) live on the Wheel device page and are saved per-wheel-profile.
+
+| Setting | Description |
+|---------|-------------|
+| Flag byte | Diagnostic: override the tier flag byte sent in telemetry frames |
+| Send mode frame | Periodically send mode frame (0x40/28:02) to keep wheel in multi-channel mode |
+| Send sequence counter | Send sequence counter (0x2D) to base |
+| Test pattern | Send cycling test data (gear 1-6, brake 0-100%, speed 0-200 km/h) for verifying dashboard display |
+| Export frame log | Save recent telemetry frames to a file for debugging |
+
+### Device Pages (Devices > MOZA Wheel / MOZA Dashboard)
+
+These settings live on each device's page in SimHub's Devices section. They are saved per-device-per-game, so different games can have different configurations per wheel.
+
+#### Wheel (MOZA Wheel tab)
+
+The wheel device page auto-detects which wheel is connected and shows the appropriate settings.
+
+**Dashboard Telemetry**
 
 Streams game data (speed, RPM, gear, lap times, fuel, tyre wear, etc.) to the wheel's dashboard display using Moza's multi-tier binary telemetry protocol.
 
@@ -277,11 +279,32 @@ Streams game data (speed, RPM, gear, lap times, fuel, tyre wear, etc.) to the wh
 |---------|-------------|
 | Enable dashboard telemetry | Toggle telemetry streaming to the dashboard |
 | Dashboard profile | Select a builtin profile or load a `.mzdash` file |
-| Flag byte | Diagnostic: override the tier flag byte sent in telemetry frames |
-| Send mode frame | Periodically send mode frame (0x40/28:02) to keep wheel in multi-channel mode |
-| Send sequence counter | Send sequence counter (0x2D) to base |
 | Test pattern | Send cycling test data (gear 1-6, brake 0-100%, speed 0-200 km/h) for verifying dashboard display |
-| Export frame log | Save recent telemetry frames to a file for debugging |
+
+> [!WARNING]
+> **Dashboard telemetry streaming is a work in progress.** It may not work correctly with all wheel/dashboard combinations. If you'd like to help test and improve this feature, please open an issue with your hardware details and any observations.
+
+**New-Protocol Wheels (GS/FSR/CS/RS/TSW)**
+
+| Setting | Range | Notes |
+|---------|-------|-------|
+| Telemetry Mode | Off / Telemetry / Static | |
+| Idle Effect | Off / Constant / Breathing / Color Cycle / Rainbow / Sand Flow | |
+| Flag LED Colors | 6 RGB color pickers | Only shown for models with flag LEDs (CSP, KSP, FSR2) |
+| Flags Brightness | 0-100 | Only shown for models with flag LEDs |
+| Button LED Colors | Per-model RGB color pickers | Count and mapping adapt to detected wheel model |
+| Button Idle Effect | Off / Constant / Breathing / Color Cycle / Rainbow / Sand Flow | |
+| Paddles Mode | Buttons / Combined / Split | |
+| Clutch Split Point | 0-100% | Only shown in Split mode |
+| Knob Mode | Mode 0-3 | |
+| Stick as D-Pad | On/Off | |
+
+**ES Wheels (Old Protocol)**
+
+| Setting | Range | Notes |
+|---------|-------|-------|
+| RPM Indicator Mode | RPM / Off / On | |
+| RPM Display Mode | Mode 1 / Mode 2 | |
 
 ### SimHub Properties
 
@@ -323,7 +346,7 @@ See [SimHub Plugin API Reference](docs/simhub.md) for notes on the plugin interf
 The plugin registers MOZA wheel and dashboard as native SimHub LED devices by injecting virtual LED drivers (`MozaLedDeviceManager` / `MozaDashLedDeviceManager`). SimHub's effects pipeline computes LED colors each frame (RPM indicators, flags, animations, scripted effects, etc.) and calls `Display()` on the virtual driver, which converts the colors to MOZA's bitmask/color protocol and sends them to hardware over serial.
 
 - **Wheel**: RPM bitmask (10 LEDs) + button bitmask (per-model count, remapped for non-contiguous layouts) sent as separate commands
-- **Dashboard**: Combined bitmask (10 RPM + 6 flag LEDs) sent as a single 16-bit value
+- **Dashboard**: RPM bitmask (bits 0-9) + flag bitmask (bits 10-15) combined into a single 16-bit value from separate telemetry and button LED channels
 - **Brightness**: Forwarded from SimHub's per-device brightness setting
 - **Keepalive**: Periodic resend (~1s) to prevent LED timeout on some hardware
 
@@ -363,21 +386,27 @@ Data/
   Telemetry.json                   150+ telemetry channel definitions (embedded resource)
 Devices/
   MozaDeviceExtensionFilter.cs     Attaches extensions to MOZA devices in SimHub's device system
-  MozaDeviceConstants.cs           Shared device type IDs and LED counts (protocol maximums)
+  MozaDeviceConstants.cs           Per-model GUIDs, GUID-to-model-prefix mapping, LED counts
   WheelModelInfo.cs                Per-model LED layout — button count, flag presence, index remapping
   MozaWheelDeviceExtension.cs      Wheel device extension — profiles, LED driver injection
-  MozaWheelExtensionSettings.cs    Wheel settings for SimHub device profiles
-  MozaWheelSettingsControl.xaml(.cs) Status panel for the wheel device extension tab
+  MozaWheelExtensionSettings.cs    Wheel settings for SimHub device profiles (includes telemetry)
+  MozaWheelSettingsControl.xaml(.cs) Wheel device tab — LED config, dashboard telemetry, paddle settings
   MozaLedDeviceManager.cs          Virtual wheel LED driver — spoofs connection, forwards LED colors
   MozaDashDeviceExtension.cs       Dashboard device extension — profiles, LED driver injection
   MozaDashExtensionSettings.cs     Dashboard settings for SimHub device profiles
   MozaDashSettingsControl.xaml(.cs) Status panel for the dashboard device extension tab
   MozaDashLedDeviceManager.cs      Virtual dashboard LED driver — spoofs connection, forwards bitmask
 DeviceTemplates/
-  MozaWheel/                       Source files for wheel .shdevicetemplate (zipped at build time)
-  MozaDash/                        Source files for dashboard .shdevicetemplate (zipped at build time)
+  MozaWheelCSP/                    Per-model .shdp definitions (deployed at runtime on detection)
+  MozaWheelKSP/                    Each contains a device.json with model-specific LED layout
+  MozaWheelFSR2/                   Built as .shdp ZIPs and embedded in the DLL
+  MozaWheelGSV2P/
+  MozaWheelCSV21/
+  MozaWheelGeneric/                Generic fallback for unknown new-protocol wheels
+  MozaWheelOldProto/               Old-protocol (ES) wheels — RPM LEDs only
+  MozaDashShdp/                    Dashboard definition (10 RPM + 6 flag LEDs)
 UI/
-  SettingsControl.xaml(.cs)        WPF settings UI (Base, Wheel, Options, Telemetry tabs)
+  SettingsControl.xaml(.cs)        WPF settings UI (Base, Wheel, Options, Telemetry Diagnostics tabs)
   ColorPickerDialog.xaml(.cs)      RGB color picker dialog
   MozaPluginSettings.cs            Persisted plugin settings (brightness, timings, colors)
   MozaProfile.cs                   Per-game configuration snapshot (80+ settings)

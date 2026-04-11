@@ -25,6 +25,12 @@ namespace MozaPlugin.Devices
         public int WheelRpmIndicatorMode { get; set; } = -1;
         public int WheelRpmDisplayMode { get; set; } = -1;
 
+        // Dashboard telemetry (per-wheel-profile)
+        public bool TelemetrySettingsPresent { get; set; } = false;
+        public bool TelemetryEnabled { get; set; } = false;
+        public string TelemetryProfileName { get; set; } = "";
+        public string TelemetryMzdashPath { get; set; } = "";
+
         // Color arrays (packed as R<<16 | G<<8 | B)
         public int[]? WheelRpmColors { get; set; }
         public int[]? WheelRpmBlinkColors { get; set; }
@@ -47,6 +53,11 @@ namespace MozaPlugin.Devices
             WheelESRpmBrightness = settings.WheelESRpmBrightness;
             WheelRpmIndicatorMode = settings.WheelRpmIndicatorMode;
             WheelRpmDisplayMode = settings.WheelRpmDisplayMode;
+
+            TelemetrySettingsPresent = true;
+            TelemetryEnabled = settings.TelemetryEnabled;
+            TelemetryProfileName = settings.TelemetryProfileName;
+            TelemetryMzdashPath = settings.TelemetryMzdashPath;
 
             WheelRpmColors = MozaProfile.PackColors(data.WheelRpmColors);
             WheelRpmBlinkColors = MozaProfile.PackColors(data.WheelRpmBlinkColors);
@@ -71,6 +82,13 @@ namespace MozaPlugin.Devices
             if (WheelESRpmBrightness >= 0) settings.WheelESRpmBrightness = WheelESRpmBrightness;
             if (WheelRpmIndicatorMode >= 0) settings.WheelRpmIndicatorMode = WheelRpmIndicatorMode;
             if (WheelRpmDisplayMode >= 0) settings.WheelRpmDisplayMode = WheelRpmDisplayMode;
+
+            if (TelemetrySettingsPresent)
+            {
+                settings.TelemetryEnabled = TelemetryEnabled;
+                settings.TelemetryProfileName = TelemetryProfileName;
+                settings.TelemetryMzdashPath = TelemetryMzdashPath;
+            }
 
             MozaProfile.UnpackColorsInto(WheelRpmColors, data.WheelRpmColors);
             MozaProfile.UnpackColorsInto(WheelRpmBlinkColors, data.WheelRpmBlinkColors);

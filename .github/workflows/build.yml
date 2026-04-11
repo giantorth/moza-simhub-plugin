@@ -9,6 +9,7 @@ on:
       - "**.sln"
       - "**.xaml"
       - "libs/**"
+      - "DeviceTemplates/**"
   pull_request:
     types: [opened, synchronize, reopened, labeled]
   workflow_dispatch:

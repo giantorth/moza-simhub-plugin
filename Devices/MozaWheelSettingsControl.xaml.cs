@@ -18,6 +18,13 @@ namespace MozaPlugin.Devices
 
         private readonly DispatcherTimer _refreshTimer;
 
+        /// <summary>
+        /// The virtual LED driver for the device instance this control belongs to.
+        /// When set, connection status is derived from the driver's model-aware IsConnected().
+        /// When null (legacy), falls back to global plugin state.
+        /// </summary>
+        internal MozaLedDeviceManager? LinkedLedDriver { get; set; }
+
         // Color swatch references
         private readonly Border[] _wheelFlagColorSwatches = new Border[6];
         private readonly Border[] _wheelButtonColorSwatches = new Border[14];
@@ -135,20 +142,23 @@ namespace MozaPlugin.Devices
             if (!_swatchesBuilt)
                 BuildColorSwatches();
 
-            // Status
-            bool connected = _data!.IsBaseConnected;
-            StatusDot.Fill = connected ? Brushes.LimeGreen : Brushes.Red;
-            StatusText.Text = connected ? "Connected" : "Disconnected";
+            InitTelemetryUI();
+            RefreshTelemetryStatus();
 
-            bool newWheel = _plugin!.IsNewWheelDetected;
-            bool oldWheel = _plugin.IsOldWheelDetected;
+            // Use the linked LED driver's model-aware connection check when available
+            bool wheelConnected = LinkedLedDriver?.IsConnected() ?? false;
+            StatusDot.Fill = wheelConnected ? Brushes.LimeGreen : Brushes.Red;
+            StatusText.Text = wheelConnected ? "Connected" : "Disconnected";
 
-            string modelName = _data!.WheelModelName;
-            string swVersion = _data.WheelSwVersion;
-            string hwVersion = _data.WheelHwVersion;
+            bool newWheel = wheelConnected && _plugin!.IsNewWheelDetected;
+            bool oldWheel = wheelConnected && _plugin!.IsOldWheelDetected;
 
-            if (newWheel || oldWheel)
+            if (wheelConnected)
             {
+                string modelName = _data!.WheelModelName;
+                string swVersion = _data.WheelSwVersion;
+                string hwVersion = _data.WheelHwVersion;
+
                 WheelTypeText.Text = string.IsNullOrEmpty(modelName) ? "Detecting wheel..." : modelName;
                 var fwParts = new System.Collections.Generic.List<string>();
                 if (!string.IsNullOrEmpty(swVersion)) fwParts.Add($"FW: {swVersion}");
@@ -157,7 +167,7 @@ namespace MozaPlugin.Devices
             }
             else
             {
-                WheelTypeText.Text = connected ? "Detecting..." : "";
+                WheelTypeText.Text = "";
                 WheelFwText.Text = "";
             }
 
@@ -171,7 +181,7 @@ namespace MozaPlugin.Devices
 
                 if (newWheel)
                 {
-                    SetComboSafe(WheelTelemetryModeCombo, _data.WheelTelemetryMode);
+                    SetComboSafe(WheelTelemetryModeCombo, _data!.WheelTelemetryMode);
                     SetComboSafe(WheelIdleEffectCombo, _data.WheelTelemetryIdleEffect);
                     SetComboSafe(WheelButtonIdleEffectCombo, _data.WheelButtonsIdleEffect);
                     SetComboSafe(PaddlesModeCombo, _data.WheelPaddlesMode);
@@ -203,7 +213,7 @@ namespace MozaPlugin.Devices
 
                 if (oldWheel)
                 {
-                    int storedIndicator = _data.WheelRpmIndicatorMode;
+                    int storedIndicator = _data!.WheelRpmIndicatorMode;
                     if (storedIndicator >= 0 && storedIndicator < EsIndicatorToDisplay.Length)
                         SetComboSafe(EsRpmIndicatorCombo, EsIndicatorToDisplay[storedIndicator]);
                     SetComboSafe(EsRpmDisplayCombo, _data.WheelRpmDisplayMode);
@@ -345,6 +355,161 @@ namespace MozaPlugin.Devices
             _data!.WheelStickMode = val;
             _device!.WriteSetting("wheel-stick-mode", val);
             _plugin.SaveSettings();
+        }
+
+        // ===== Dashboard Telemetry =====
+
+        private bool _telemetryUIInitialized;
+
+        private void InitTelemetryUI()
+        {
+            if (_telemetryUIInitialized || _plugin == null) return;
+            _telemetryUIInitialized = true;
+
+            _suppressEvents = true;
+            try
+            {
+                var s = _plugin.Settings;
+                TelemetryEnabledCheck.IsChecked = s.TelemetryEnabled;
+
+                TelemetryProfileCombo.Items.Clear();
+                foreach (var profile in _plugin.DashProfileStore.BuiltinProfiles)
+                    TelemetryProfileCombo.Items.Add(profile.Name);
+                if (!string.IsNullOrEmpty(s.TelemetryMzdashPath))
+                    TelemetryProfileCombo.Items.Add("[Custom: " + System.IO.Path.GetFileName(s.TelemetryMzdashPath) + "]");
+
+                string selectedName = s.TelemetryProfileName;
+                if (!string.IsNullOrEmpty(selectedName))
+                {
+                    for (int i = 0; i < TelemetryProfileCombo.Items.Count; i++)
+                    {
+                        if (TelemetryProfileCombo.Items[i]?.ToString() == selectedName)
+                        {
+                            TelemetryProfileCombo.SelectedIndex = i;
+                            break;
+                        }
+                    }
+                }
+                if (TelemetryProfileCombo.SelectedIndex < 0 && TelemetryProfileCombo.Items.Count > 0)
+                    TelemetryProfileCombo.SelectedIndex = 0;
+
+                UpdateTelemetryProfileInfo();
+            }
+            finally
+            {
+                _suppressEvents = false;
+            }
+        }
+
+        private void RefreshTelemetryStatus()
+        {
+            if (_plugin == null) return;
+            var sender = _plugin.TelemetrySender;
+            if (sender == null) return;
+
+            bool enabled = _plugin.Settings.TelemetryEnabled;
+            bool testMode = sender.TestMode;
+
+            if (!enabled)
+                TelemetryStatusLabel.Text = "Disabled";
+            else if (testMode)
+                TelemetryStatusLabel.Text = $"Test pattern — {sender.FramesSent} frames sent";
+            else
+                TelemetryStatusLabel.Text = $"Sending — {sender.FramesSent} frames sent";
+
+            TelemetryTestStopBtn.IsEnabled = testMode;
+            TelemetryTestStartBtn.IsEnabled = !testMode;
+        }
+
+        private void UpdateTelemetryProfileInfo()
+        {
+            if (_plugin == null) return;
+            var profile = _plugin.TelemetrySender?.Profile;
+            if (profile == null || profile.Tiers.Count == 0)
+            {
+                TelemetryProfileInfo.Text = "—";
+                return;
+            }
+            var parts = new System.Collections.Generic.List<string>();
+            foreach (var tier in profile.Tiers)
+                parts.Add($"L{tier.PackageLevel}: {tier.Channels.Count}ch/{tier.TotalBytes}B");
+            TelemetryProfileInfo.Text = string.Join("  ", parts);
+        }
+
+        private void TelemetryEnabledCheck_Click(object sender, RoutedEventArgs e)
+        {
+            if (_suppressEvents || _plugin == null) return;
+            _plugin.SetTelemetryEnabled(TelemetryEnabledCheck.IsChecked == true);
+            UpdateTelemetryProfileInfo();
+        }
+
+        private void TelemetryProfileCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_suppressEvents || _plugin == null) return;
+            var selected = TelemetryProfileCombo.SelectedItem?.ToString();
+            if (selected != null && !selected.StartsWith("[Custom:"))
+            {
+                _plugin.Settings.TelemetryProfileName = selected;
+                _plugin.Settings.TelemetryMzdashPath = "";
+                _plugin.ApplyTelemetrySettings();
+                _plugin.SaveSettings();
+                UpdateTelemetryProfileInfo();
+            }
+        }
+
+        private void TelemetryLoadMzdash_Click(object sender, RoutedEventArgs e)
+        {
+            if (_plugin == null) return;
+            var dlg = new Microsoft.Win32.OpenFileDialog
+            {
+                Title = "Open .mzdash dashboard file",
+                Filter = "MOZA Dashboard|*.mzdash|All Files|*.*",
+                DefaultExt = ".mzdash"
+            };
+            if (dlg.ShowDialog() != true) return;
+
+            _plugin.Settings.TelemetryMzdashPath = dlg.FileName;
+            _plugin.Settings.TelemetryProfileName = "";
+            _plugin.ApplyTelemetrySettings();
+            _plugin.SaveSettings();
+
+            _suppressEvents = true;
+            string label = "[Custom: " + System.IO.Path.GetFileName(dlg.FileName) + "]";
+            for (int i = TelemetryProfileCombo.Items.Count - 1; i >= 0; i--)
+                if (TelemetryProfileCombo.Items[i]?.ToString()?.StartsWith("[Custom:") == true)
+                    TelemetryProfileCombo.Items.RemoveAt(i);
+            TelemetryProfileCombo.Items.Add(label);
+            TelemetryProfileCombo.SelectedIndex = TelemetryProfileCombo.Items.Count - 1;
+            _suppressEvents = false;
+
+            UpdateTelemetryProfileInfo();
+        }
+
+        private void TelemetryTestStart_Click(object sender, RoutedEventArgs e)
+        {
+            if (_plugin == null) return;
+            var ts = _plugin.TelemetrySender;
+            if (ts == null) return;
+            ts.TestMode = true;
+            if (!_plugin.Settings.TelemetryEnabled)
+            {
+                _plugin.ApplyTelemetrySettings();
+                ts.Start();
+            }
+            TelemetryTestStartBtn.IsEnabled = false;
+            TelemetryTestStopBtn.IsEnabled = true;
+        }
+
+        private void TelemetryTestStop_Click(object sender, RoutedEventArgs e)
+        {
+            if (_plugin == null) return;
+            var ts = _plugin.TelemetrySender;
+            if (ts == null) return;
+            ts.TestMode = false;
+            if (!_plugin.Settings.TelemetryEnabled)
+                ts.Stop();
+            TelemetryTestStartBtn.IsEnabled = true;
+            TelemetryTestStopBtn.IsEnabled = false;
         }
     }
 }

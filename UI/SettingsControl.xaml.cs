@@ -1,7 +1,6 @@
 using System;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
 using System.Windows.Threading;
@@ -15,11 +14,6 @@ namespace MozaPlugin
         private readonly MozaData _data;
         private readonly DispatcherTimer _refreshTimer;
         private bool _suppressEvents;
-
-        // Color swatch references
-        private readonly Border[] _dashRpmColorSwatches = new Border[10];
-        private readonly Border[] _dashRpmBlinkColorSwatches = new Border[10];
-        private readonly Border[] _dashFlagColorSwatches = new Border[6];
 
         public SettingsControl(MozaPlugin plugin)
         {
@@ -36,7 +30,6 @@ namespace MozaPlugin
             AlwaysResendBitmaskCheck.IsChecked = plugin.Settings.AlwaysResendBitmask;
             _suppressEvents = false;
 
-            BuildColorSwatches();
             InitProfilesTab();
 
             _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
@@ -46,75 +39,7 @@ namespace MozaPlugin
             RequestAllSettings();
         }
 
-        // ===== Color swatches =====
-
-        private void BuildColorSwatches()
-        {
-            // Dash colors
-            BuildSwatchRow(DashRpmColorPanel, _dashRpmColorSwatches, 10, "dash-rpm-color", _data.DashRpmColors);
-            BuildSwatchRow(DashBlinkColorPanel, _dashRpmBlinkColorSwatches, 10, "dash-rpm-blink-color", _data.DashRpmBlinkColors);
-            BuildSwatchRow(DashFlagColorPanel, _dashFlagColorSwatches, 6, "dash-flag-color", _data.DashFlagColors);
-        }
-
-        private void BuildSwatchRow(StackPanel panel, Border[] swatches, int count,
-            string commandPrefix, byte[][] colorSource)
-        {
-            for (int i = 0; i < count; i++)
-            {
-                var border = new Border
-                {
-                    Width = 28, Height = 28,
-                    BorderBrush = new SolidColorBrush(Color.FromRgb(85, 85, 85)),
-                    BorderThickness = new Thickness(1),
-                    CornerRadius = new CornerRadius(3),
-                    Margin = new Thickness(2, 0, 2, 0),
-                    Cursor = Cursors.Hand,
-                    Background = Brushes.Black,
-                    Tag = new ColorSwatchInfo { CommandPrefix = commandPrefix, Index = i, ColorSource = colorSource }
-                };
-                border.MouseLeftButtonUp += ColorSwatch_Click;
-                panel.Children.Add(border);
-                swatches[i] = border;
-            }
-        }
-
-        // ===== Timing sliders =====
-
         private MozaPluginSettings _settings => _plugin.Settings;
-
-        private class ColorSwatchInfo
-        {
-            public string CommandPrefix = "";
-            public int Index;
-            public byte[][] ColorSource = Array.Empty<byte[]>();
-        }
-
-        private void ColorSwatch_Click(object sender, MouseButtonEventArgs e)
-        {
-            if (_suppressEvents) return;
-            var border = (Border)sender;
-            var info = (ColorSwatchInfo)border.Tag;
-            var current = info.ColorSource[info.Index];
-
-            var dialog = new ColorPickerDialog(current[0], current[1], current[2]);
-            dialog.Owner = Window.GetWindow(this);
-            if (dialog.ShowDialog() == true)
-            {
-                byte r = dialog.SelectedR, g = dialog.SelectedG, b = dialog.SelectedB;
-                string cmdName = $"{info.CommandPrefix}{info.Index + 1}";
-                _device.WriteColor(cmdName, r, g, b);
-                info.ColorSource[info.Index][0] = r;
-                info.ColorSource[info.Index][1] = g;
-                info.ColorSource[info.Index][2] = b;
-                border.Background = new SolidColorBrush(Color.FromRgb(r, g, b));
-
-                // Blink colors are write-only (can't be polled) — persist to settings
-                if (info.CommandPrefix == "dash-rpm-blink-color")
-                    _plugin.Settings.DashRpmBlinkColors = MozaProfile.PackColors(_data.DashRpmBlinkColors);
-
-                _plugin.SaveSettings();
-            }
-        }
 
         // ===== Refresh =====
 
@@ -136,11 +61,13 @@ namespace MozaPlugin
 
         private void RefreshDisplay(object sender, EventArgs e)
         {
+            RestartBanner.Visibility = _plugin.DeviceDefinitionDeployed
+                ? Visibility.Visible : Visibility.Collapsed;
+
             _suppressEvents = true;
             try
             {
                 RefreshBaseTab();
-                RefreshDashTab();
                 RefreshHandbrakeTab();
                 RefreshPedalsTab();
                 InitTelemetryTab();
@@ -224,37 +151,6 @@ namespace MozaPlugin
             SetSliderRaw(FfbCurveY3Slider, FfbCurveY3Value, _data.FfbCurveY3, 0, 100, "");
             SetSliderRaw(FfbCurveY4Slider, FfbCurveY4Value, _data.FfbCurveY4, 0, 100, "");
             SetSliderRaw(FfbCurveY5Slider, FfbCurveY5Value, _data.FfbCurveY5, 0, 100, "");
-        }
-
-        private void RefreshDashTab()
-        {
-            bool detected = _plugin.IsDashDetected;
-            DashTab.Visibility = detected ? Visibility.Visible : Visibility.Collapsed;
-
-            if (!detected) return;
-
-            SetComboSafe(DashRpmIndicatorCombo, _data.DashRpmIndicatorMode);
-            SetComboSafe(DashRpmDisplayCombo, _data.DashRpmDisplayMode);
-            SetComboSafe(DashFlagsIndicatorCombo, _data.DashFlagsIndicatorMode);
-
-            DashRpmBrightnessSlider.Value = Clamp(_data.DashRpmBrightness, 0, 15);
-            DashRpmBrightnessValue.Text = $"{_data.DashRpmBrightness}";
-            DashFlagsBrightnessSlider.Value = Clamp(_data.DashFlagsBrightness, 0, 15);
-            DashFlagsBrightnessValue.Text = $"{_data.DashFlagsBrightness}";
-
-            UpdateSwatches(_dashRpmColorSwatches, _data.DashRpmColors, 10);
-            UpdateSwatches(_dashRpmBlinkColorSwatches, _data.DashRpmBlinkColors, 10);
-            UpdateSwatches(_dashFlagColorSwatches, _data.DashFlagColors, 6);
-        }
-
-        private static void UpdateSwatches(Border[] swatches, byte[][] colors, int count)
-        {
-            for (int i = 0; i < count && i < swatches.Length; i++)
-            {
-                if (swatches[i] == null) continue;
-                var c = colors[i];
-                swatches[i].Background = new SolidColorBrush(Color.FromRgb(c[0], c[1], c[2]));
-            }
         }
 
         // ===== Base tab slider handlers =====
@@ -483,57 +379,6 @@ namespace MozaPlugin
         }
 
         // ===== RPM range slider handlers =====
-
-        // ===== Dash tab handlers =====
-
-        private void DashRpmIndicatorCombo_Changed(object sender, SelectionChangedEventArgs e)
-        {
-            if (_suppressEvents) return;
-            int val = DashRpmIndicatorCombo.SelectedIndex;
-            _data.DashRpmIndicatorMode = val;
-            _device.WriteSetting("dash-rpm-indicator-mode", val);
-            _plugin.SaveSettings();
-        }
-
-        private void DashRpmDisplayCombo_Changed(object sender, SelectionChangedEventArgs e)
-        {
-            if (_suppressEvents) return;
-            int val = DashRpmDisplayCombo.SelectedIndex;
-            _data.DashRpmDisplayMode = val;
-            _device.WriteSetting("dash-rpm-display-mode", val);
-            _plugin.SaveSettings();
-        }
-
-        private void DashFlagsIndicatorCombo_Changed(object sender, SelectionChangedEventArgs e)
-        {
-            if (_suppressEvents) return;
-            int val = DashFlagsIndicatorCombo.SelectedIndex;
-            _data.DashFlagsIndicatorMode = val;
-            _device.WriteSetting("dash-flags-indicator-mode", val);
-            _plugin.SaveSettings();
-        }
-
-        private void DashRpmBrightnessSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-        {
-            if (_suppressEvents) return;
-            int val = (int)Math.Round(e.NewValue);
-            DashRpmBrightnessValue.Text = $"{val}";
-            _data.DashRpmBrightness = val;
-            _settings.DashRpmBrightness = val;
-            _device.WriteSetting("dash-rpm-brightness", val);
-            _plugin.SaveSettings();
-        }
-
-        private void DashFlagsBrightnessSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-        {
-            if (_suppressEvents) return;
-            int val = (int)Math.Round(e.NewValue);
-            DashFlagsBrightnessValue.Text = $"{val}";
-            _data.DashFlagsBrightness = val;
-            _settings.DashFlagsBrightness = val;
-            _device.WriteSetting("dash-flags-brightness", val);
-            _plugin.SaveSettings();
-        }
 
         // ===== Handbrake tab =====
 
@@ -988,35 +833,9 @@ namespace MozaPlugin
             try
             {
                 var s = _plugin.Settings;
-                TelemetryEnabledCheck.IsChecked = s.TelemetryEnabled;
                 TelemetryFlagByteBox.Text = $"0x{s.TelemetryFlagByte:X2}";
                 TelemetrySendModeCheck.IsChecked = s.TelemetrySendModeFrame;
                 TelemetrySeqCounterCheck.IsChecked = s.TelemetrySendSequenceCounter;
-
-                // Populate profile dropdown
-                TelemetryProfileCombo.Items.Clear();
-                foreach (var profile in _plugin.DashProfileStore.BuiltinProfiles)
-                    TelemetryProfileCombo.Items.Add(profile.Name);
-                if (!string.IsNullOrEmpty(s.TelemetryMzdashPath))
-                    TelemetryProfileCombo.Items.Add("[Custom: " + System.IO.Path.GetFileName(s.TelemetryMzdashPath) + "]");
-
-                // Select current profile
-                string selectedName = s.TelemetryProfileName;
-                if (!string.IsNullOrEmpty(selectedName))
-                {
-                    for (int i = 0; i < TelemetryProfileCombo.Items.Count; i++)
-                    {
-                        if (TelemetryProfileCombo.Items[i]?.ToString() == selectedName)
-                        {
-                            TelemetryProfileCombo.SelectedIndex = i;
-                            break;
-                        }
-                    }
-                }
-                if (TelemetryProfileCombo.SelectedIndex < 0 && TelemetryProfileCombo.Items.Count > 0)
-                    TelemetryProfileCombo.SelectedIndex = 0;
-
-                UpdateTelemetryProfileInfo();
             }
             finally
             {
@@ -1046,69 +865,6 @@ namespace MozaPlugin
 
             TelemetryTestStopBtn.IsEnabled = testMode;
             TelemetryTestStartBtn.IsEnabled = !testMode;
-        }
-
-        private void UpdateTelemetryProfileInfo()
-        {
-            var profile = _plugin.TelemetrySender?.Profile;
-            if (profile == null || profile.Tiers.Count == 0)
-            {
-                TelemetryProfileInfo.Text = "—";
-                return;
-            }
-            var parts = new System.Collections.Generic.List<string>();
-            foreach (var tier in profile.Tiers)
-                parts.Add($"L{tier.PackageLevel}: {tier.Channels.Count}ch/{tier.TotalBytes}B");
-            TelemetryProfileInfo.Text = string.Join("  ", parts);
-        }
-
-        private void TelemetryEnabledCheck_Click(object sender, RoutedEventArgs e)
-        {
-            if (_suppressEvents) return;
-            _plugin.SetTelemetryEnabled(TelemetryEnabledCheck.IsChecked == true);
-            UpdateTelemetryProfileInfo();
-        }
-
-        private void TelemetryProfileCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
-        {
-            if (_suppressEvents) return;
-            var selected = TelemetryProfileCombo.SelectedItem?.ToString();
-            if (selected != null && !selected.StartsWith("[Custom:"))
-            {
-                _plugin.Settings.TelemetryProfileName = selected;
-                _plugin.Settings.TelemetryMzdashPath = "";
-                _plugin.ApplyTelemetrySettings();
-                _plugin.SaveSettings();
-                UpdateTelemetryProfileInfo();
-            }
-        }
-
-        private void TelemetryLoadMzdash_Click(object sender, RoutedEventArgs e)
-        {
-            var dlg = new Microsoft.Win32.OpenFileDialog
-            {
-                Title = "Open .mzdash dashboard file",
-                Filter = "MOZA Dashboard|*.mzdash|All Files|*.*",
-                DefaultExt = ".mzdash"
-            };
-            if (dlg.ShowDialog() != true) return;
-
-            _plugin.Settings.TelemetryMzdashPath = dlg.FileName;
-            _plugin.Settings.TelemetryProfileName = "";
-            _plugin.ApplyTelemetrySettings();
-            _plugin.SaveSettings();
-
-            _suppressEvents = true;
-            string label = "[Custom: " + System.IO.Path.GetFileName(dlg.FileName) + "]";
-            // Remove previous custom entry
-            for (int i = TelemetryProfileCombo.Items.Count - 1; i >= 0; i--)
-                if (TelemetryProfileCombo.Items[i]?.ToString()?.StartsWith("[Custom:") == true)
-                    TelemetryProfileCombo.Items.RemoveAt(i);
-            TelemetryProfileCombo.Items.Add(label);
-            TelemetryProfileCombo.SelectedIndex = TelemetryProfileCombo.Items.Count - 1;
-            _suppressEvents = false;
-
-            UpdateTelemetryProfileInfo();
         }
 
         private void TelemetryFlagByteBox_TextChanged(object sender, TextChangedEventArgs e)

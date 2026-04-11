@@ -12,7 +12,7 @@ namespace MozaPlugin.Protocol
 {
     public class MozaSerialConnection : IDisposable
     {
-        private SerialPort? _port;
+        private volatile SerialPort? _port;
         private Thread? _readThread;
         private Thread? _writeThread;
         private readonly ConcurrentQueue<byte[]> _writeQueue = new ConcurrentQueue<byte[]>();
@@ -23,6 +23,12 @@ namespace MozaPlugin.Protocol
         public event Action<byte[]>? MessageReceived;
         public bool IsConnected => _port?.IsOpen == true;
 
+        /// <summary>
+        /// The HID Product ID discovered from WMI during device enumeration.
+        /// Null if PID could not be determined (e.g. probe-based discovery under Wine).
+        /// </summary>
+        public string? DiscoveredPid { get; private set; }
+
         public bool Connect()
         {
             // Try the last known port first to avoid re-probing (which
@@ -30,9 +36,12 @@ namespace MozaPlugin.Protocol
             if (_lastPortName != null && TryOpen(_lastPortName))
                 return true;
 
-            var portName = FindMozaPort();
+            var (portName, pid) = FindMozaPort();
             if (portName == null)
                 return false;
+
+            if (pid != null)
+                DiscoveredPid = pid;
 
             return TryOpen(portName);
         }
@@ -80,7 +89,8 @@ namespace MozaPlugin.Protocol
             {
                 if (_port?.IsOpen == true)
                 {
-                    try { _port.Close(); } catch { }
+                    try { _port.Close(); }
+                    catch (Exception ex) { SimHub.Logging.Current.Debug($"[Moza] Port close: {ex.Message}"); }
                 }
                 _port = null!;
             }
@@ -101,66 +111,88 @@ namespace MozaPlugin.Protocol
             {
                 try
                 {
-                    if (_port == null || !_port.IsOpen)
+                    // Snapshot _port to avoid race with Disconnect() nullifying the field
+                    var port = _port;
+                    if (port == null || !port.IsOpen)
                     {
                         Thread.Sleep(100);
                         continue;
                     }
 
                     // Poll for available data (works better under Wine than blocking ReadByte)
-                    if (_port.BytesToRead == 0)
+                    if (port.BytesToRead == 0)
                     {
                         Thread.Sleep(2);
                         continue;
                     }
 
                     // Read until we find the start byte
-                    int b = _port.ReadByte();
+                    int b = port.ReadByte();
                     if (b != MozaProtocol.MessageStart)
                         continue;
 
                     // Wait for payload length byte
                     int waitMs = 0;
-                    while (_port.BytesToRead < 1 && waitMs < 200)
+                    while (port.BytesToRead < 1 && waitMs < 200)
                     {
                         Thread.Sleep(1);
                         waitMs++;
                     }
-                    if (_port.BytesToRead < 1) continue;
+                    if (port.BytesToRead < 1) continue;
 
-                    int payloadLength = _port.ReadByte();
+                    int payloadLength = port.ReadByte();
                     if (payloadLength < 2 || payloadLength > 64)
                         continue;
 
-                    // Wait for remaining bytes: group + device_id + payload = payloadLength + 2
-                    int needed = payloadLength + 2;
+                    // Wait for remaining bytes: group + device_id + payload + checksum
+                    int needed = payloadLength + 3;
                     waitMs = 0;
-                    while (_port.BytesToRead < needed && waitMs < 200)
+                    while (port.BytesToRead < needed && waitMs < 200)
                     {
                         Thread.Sleep(1);
                         waitMs++;
                     }
 
-                    int available = _port.BytesToRead;
+                    int available = port.BytesToRead;
                     if (available < needed) continue;
 
-                    var data = new byte[needed];
+                    var raw = new byte[needed];
                     int totalRead = 0;
-                    while (totalRead < data.Length)
+                    while (totalRead < raw.Length)
                     {
-                        int read = _port.Read(data, totalRead, data.Length - totalRead);
+                        int read = port.Read(raw, totalRead, raw.Length - totalRead);
                         if (read <= 0) break;
                         totalRead += read;
                     }
 
-                    if (totalRead == data.Length)
+                    if (totalRead == raw.Length)
                     {
+                        // Validate checksum: rebuild the full wire frame for calculation
+                        // Wire frame = [start][payloadLength][group][dev][cmdPayload...]
+                        var wireFrame = new byte[2 + payloadLength + 2]; // start + N + group + dev + cmdPayload
+                        wireFrame[0] = MozaProtocol.MessageStart;
+                        wireFrame[1] = (byte)payloadLength;
+                        Array.Copy(raw, 0, wireFrame, 2, payloadLength + 2); // group + dev + cmdPayload
+                        byte expected = MozaProtocol.CalculateChecksum(wireFrame);
+                        byte actual = raw[raw.Length - 1];
+
+                        if (expected != actual)
+                        {
+                            SimHub.Logging.Current.Debug(
+                                $"[Moza] Checksum mismatch: expected=0x{expected:X2} actual=0x{actual:X2}, dropping message");
+                            continue;
+                        }
+
+                        // Strip the checksum byte before passing to the parser
+                        var data = new byte[needed - 1];
+                        Array.Copy(raw, 0, data, 0, data.Length);
+
                         messageCount++;
                         if (messageCount <= 5)
                         {
                             SimHub.Logging.Current.Info(
                                 $"[Moza] Received msg #{messageCount}: len={payloadLength} " +
-                                $"group=0x{data[0]:X2} dev=0x{data[1]:X2} ({totalRead} bytes)");
+                                $"group=0x{data[0]:X2} dev=0x{data[1]:X2} ({data.Length} bytes)");
                         }
                         MessageReceived?.Invoke(data);
                     }
@@ -216,7 +248,7 @@ namespace MozaPlugin.Protocol
             }
         }
 
-        private static string? FindMozaPort()
+        private static (string? PortName, string? Pid) FindMozaPort()
         {
             // Try WMI-based discovery first (native Windows), loaded optionally via reflection
             try
@@ -244,8 +276,9 @@ namespace MozaPlugin.Protocol
                                 if (comEnd > comStart)
                                 {
                                     var portName = caption.Substring(comStart + 1, comEnd - comStart - 1);
-                                    SimHub.Logging.Current.Info($"[Moza] Found Moza device on {portName} (WMI)");
-                                    return portName;
+                                    var pid = ExtractPid(deviceId);
+                                    SimHub.Logging.Current.Info($"[Moza] Found Moza device on {portName} PID={pid ?? "unknown"} (WMI)");
+                                    return (portName, pid);
                                 }
                             }
                         }
@@ -273,12 +306,35 @@ namespace MozaPlugin.Protocol
                 if (ProbeMozaDevice(port))
                 {
                     SimHub.Logging.Current.Info($"[Moza] Found Moza device on {port} (probe)");
-                    return port;
+                    return (port, null);
                 }
             }
 
             SimHub.Logging.Current.Info("[Moza] No MOZA device found on any COM port");
-            return null;
+            return (null, null);
+        }
+
+        /// <summary>
+        /// Extract the PID from a WMI DeviceID string.
+        /// Format: USB\VID_346E&amp;PID_XXXX\...
+        /// Returns the PID as a hex string like "0x0006", or null if not found.
+        /// </summary>
+        private static string? ExtractPid(string deviceId)
+        {
+            int pidIndex = deviceId.IndexOf("PID_", StringComparison.OrdinalIgnoreCase);
+            if (pidIndex < 0 || pidIndex + 8 > deviceId.Length)
+                return null;
+
+            var pidHex = deviceId.Substring(pidIndex + 4, 4);
+
+            // Validate it's actually hex
+            foreach (char c in pidHex)
+            {
+                if (!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f')))
+                    return null;
+            }
+
+            return "0x" + pidHex.ToUpperInvariant();
         }
 
         /// <summary>
@@ -316,9 +372,9 @@ namespace MozaPlugin.Protocol
                     probe.Close();
                 }
             }
-            catch
+            catch (Exception ex)
             {
-                // Port busy, doesn't exist, or not a serial device - skip
+                SimHub.Logging.Current.Debug($"[Moza] Probe {portName}: {ex.GetType().Name}");
             }
             return false;
         }

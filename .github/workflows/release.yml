@@ -9,26 +9,6 @@ env:
   ReleaseFileName: MozaPlugin_${{ github.ref_name }}.zip
 
 jobs:
-  generate-changelog:
-    name: Generate changelog
-    runs-on: ubuntu-latest
-    outputs:
-      release_body: ${{ steps.git-cliff.outputs.content }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-
-      - name: Generate a changelog
-        uses: orhun/git-cliff-action@v4
-        id: git-cliff
-        with:
-          config: cliff.toml
-          args: -vv -l -s all
-        env:
-          OUTPUT: CHANGES.md
-
   build:
     runs-on: windows-latest
 
@@ -55,11 +35,8 @@ jobs:
       - name: Stage release files
         run: |
           $staging = "staging"
-          $templates = "$staging/DevicesDefaults/StandardDevicesTemplatesUser"
-          New-Item -ItemType Directory -Path $templates -Force
+          New-Item -ItemType Directory -Path $staging -Force
           Copy-Item ./bin/x86/Release/MozaPlugin.dll $staging/
-          Copy-Item ./bin/x86/Release/MozaRacingWheel.shdevicetemplate $templates/
-          Copy-Item ./bin/x86/Release/MozaRacingDash.shdevicetemplate $templates/
 
       - name: Zip release files
         run: Compress-Archive -Path ./staging/* -DestinationPath ./${{ env.ReleaseFileName }}
@@ -73,7 +50,6 @@ jobs:
   create-release:
     runs-on: ubuntu-latest
     needs:
-      - generate-changelog
       - build
     permissions:
       contents: write
@@ -86,6 +62,5 @@ jobs:
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          body: "${{ needs.generate-changelog.outputs.release_body }}"
           fail_on_unmatched_files: true
           files: ${{ env.ReleaseFileName }}

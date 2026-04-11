@@ -50,6 +50,31 @@
                 <TextBlock Text="Searching for wheel..." Foreground="Gray" FontStyle="Italic" Margin="0,10"/>
             </StackPanel>
 
+            <!-- ===== DASHBOARD TELEMETRY (visible for all wheel types) ===== -->
+            <StackPanel x:Name="TelemetrySection">
+                <TextBlock Text="Dashboard Telemetry" Style="{StaticResource SectionHeader}"/>
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                    <CheckBox x:Name="TelemetryEnabledCheck" Content="Enable dashboard telemetry"
+                              VerticalAlignment="Center" Click="TelemetryEnabledCheck_Click"/>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                    <TextBlock Text="Dashboard:" Width="180" VerticalAlignment="Center"/>
+                    <ComboBox x:Name="TelemetryProfileCombo" Width="200" Margin="0,0,8,0"
+                              SelectionChanged="TelemetryProfileCombo_SelectionChanged"/>
+                    <Button Content="Load .mzdash…" Click="TelemetryLoadMzdash_Click" Padding="6,2"/>
+                </StackPanel>
+                <TextBlock x:Name="TelemetryProfileInfo" Foreground="Gray" FontSize="11"
+                           Margin="180,0,0,8" Text="—"/>
+                <StackPanel Orientation="Horizontal" Margin="0,4,0,4">
+                    <Button x:Name="TelemetryTestStartBtn" Content="▶ Send Test Pattern"
+                            Padding="6,2" Margin="0,0,8,0" Click="TelemetryTestStart_Click"/>
+                    <Button x:Name="TelemetryTestStopBtn" Content="■ Stop"
+                            Padding="6,2" Click="TelemetryTestStop_Click" IsEnabled="False"/>
+                    <TextBlock x:Name="TelemetryStatusLabel" Foreground="Gray" FontSize="11"
+                               VerticalAlignment="Center" Margin="12,0,0,0" Text="Disabled"/>
+                </StackPanel>
+            </StackPanel>
+
             <!-- ===== NEW WHEEL (GS/FSR/CS/RS/TSW) ===== -->
             <StackPanel x:Name="NewWheelPanel" Visibility="Collapsed">
                 <TextBlock Text="Wheel (New Protocol)" FontSize="14" FontWeight="SemiBold" Foreground="CornflowerBlue" Margin="0,0,0,5"/>

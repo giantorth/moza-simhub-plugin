@@ -31,14 +31,6 @@
       <HintPath>libs\SimHub\SimHub.Logging.dll</HintPath>
       <Private>false</Private>
     </Reference>
-    <Reference Include="Newtonsoft.Json">
-      <HintPath>libs\SimHub\Newtonsoft.Json.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="log4net">
-      <HintPath>libs\SimHub\log4net.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
     <Reference Include="SerialDash">
       <HintPath>libs\SimHub\SerialDash.dll</HintPath>
       <Private>false</Private>
@@ -51,12 +43,26 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Data\Telemetry.json" LogicalName="MozaPlugin.Data.Telemetry.json" />
+    <EmbeddedResource Include="DeviceTemplates\MozaWheelGeneric\MOZA Racing Wheel\device.json" LogicalName="MozaPlugin.Devices.WheelGeneric.device.json" />
+    <EmbeddedResource Include="DeviceTemplates\MozaWheelOldProto\MOZA Old Protocol Wheel\device.json" LogicalName="MozaPlugin.Devices.WheelOldProto.device.json" />
+    <EmbeddedResource Include="DeviceTemplates\MozaWheelGSV2P\MOZA GS V2 Pro\device.json" LogicalName="MozaPlugin.Devices.WheelGSV2P.device.json" />
+    <EmbeddedResource Include="DeviceTemplates\MozaWheelCSV21\MOZA CS V2\device.json" LogicalName="MozaPlugin.Devices.WheelCSV21.device.json" />
+    <EmbeddedResource Include="DeviceTemplates\MozaWheelCSP\MOZA CS Pro\device.json" LogicalName="MozaPlugin.Devices.WheelCSP.device.json" />
+    <EmbeddedResource Include="DeviceTemplates\MozaWheelKSP\MOZA KS Pro\device.json" LogicalName="MozaPlugin.Devices.WheelKSP.device.json" />
+    <EmbeddedResource Include="DeviceTemplates\MozaWheelFSR2\MOZA FSR V2\device.json" LogicalName="MozaPlugin.Devices.WheelFSR2.device.json" />
+    <EmbeddedResource Include="DeviceTemplates\MozaDashShdp\MOZA Dashboard\device.json" LogicalName="MozaPlugin.Devices.Dash.device.json" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net48" Version="1.0.3">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3">
+      <Private>false</Private>
+    </PackageReference>
+    <PackageReference Include="log4net" Version="2.0.15">
+      <Private>false</Private>
     </PackageReference>
   </ItemGroup>
 
@@ -65,38 +71,22 @@
     <Copy SourceFiles="$(OutputPath)$(AssemblyName).dll" DestinationFolder="$(SIMHUB_PATH)" />
   </Target>
 
-  <!-- Build .shdevicetemplate ZIP from DeviceTemplates/MozaWheel/ -->
-  <Target Name="BuildDeviceTemplate" AfterTargets="Build">
-    <PropertyGroup>
-      <DeviceTemplateDir>$(MSBuildProjectDirectory)/DeviceTemplates/MozaWheel</DeviceTemplateDir>
-      <DeviceTemplateOutput>$(OutputPath)MozaRacingWheel.shdevicetemplate</DeviceTemplateOutput>
-    </PropertyGroup>
-    <Delete Files="$(DeviceTemplateOutput)" Condition="Exists('$(DeviceTemplateOutput)')" />
-    <ZipDirectory SourceDirectory="$(DeviceTemplateDir)" DestinationFile="$(DeviceTemplateOutput)" />
-  </Target>
+  <!-- Build .shdp ZIPs for all device definitions -->
+  <ItemGroup>
+    <DeviceShdp Include="MozaWheelGeneric"  OutputName="MozaRacingWheel" />
+    <DeviceShdp Include="MozaWheelOldProto" OutputName="MozaOldProtocolWheel" />
+    <DeviceShdp Include="MozaWheelGSV2P"   OutputName="MozaGSV2Pro" />
+    <DeviceShdp Include="MozaWheelCSV21"   OutputName="MozaCSV2" />
+    <DeviceShdp Include="MozaWheelCSP"     OutputName="MozaCSPro" />
+    <DeviceShdp Include="MozaWheelKSP"     OutputName="MozaKSPro" />
+    <DeviceShdp Include="MozaWheelFSR2"    OutputName="MozaFSRV2" />
+    <DeviceShdp Include="MozaDashShdp"     OutputName="MozaDashboard" />
+  </ItemGroup>
 
-  <!-- Copy device template to SimHub on deploy -->
-  <Target Name="DeployDeviceTemplate" AfterTargets="BuildDeviceTemplate" Condition="'$(SIMHUB_PATH)' != ''">
-    <MakeDir Directories="$(SIMHUB_PATH)/DevicesDefaults/StandardDevicesTemplatesUser" />
-    <Copy SourceFiles="$(OutputPath)MozaRacingWheel.shdevicetemplate"
-          DestinationFolder="$(SIMHUB_PATH)/DevicesDefaults/StandardDevicesTemplatesUser" />
-  </Target>
-
-  <!-- Build .shdevicetemplate ZIP from DeviceTemplates/MozaDash/ -->
-  <Target Name="BuildDashDeviceTemplate" AfterTargets="Build">
-    <PropertyGroup>
-      <DashTemplateDir>$(MSBuildProjectDirectory)/DeviceTemplates/MozaDash</DashTemplateDir>
-      <DashTemplateOutput>$(OutputPath)MozaRacingDash.shdevicetemplate</DashTemplateOutput>
-    </PropertyGroup>
-    <Delete Files="$(DashTemplateOutput)" Condition="Exists('$(DashTemplateOutput)')" />
-    <ZipDirectory SourceDirectory="$(DashTemplateDir)" DestinationFile="$(DashTemplateOutput)" />
-  </Target>
-
-  <!-- Copy dash device template to SimHub on deploy -->
-  <Target Name="DeployDashDeviceTemplate" AfterTargets="BuildDashDeviceTemplate" Condition="'$(SIMHUB_PATH)' != ''">
-    <MakeDir Directories="$(SIMHUB_PATH)/DevicesDefaults/StandardDevicesTemplatesUser" />
-    <Copy SourceFiles="$(OutputPath)MozaRacingDash.shdevicetemplate"
-          DestinationFolder="$(SIMHUB_PATH)/DevicesDefaults/StandardDevicesTemplatesUser" />
+  <Target Name="BuildShdpFiles" AfterTargets="Build">
+    <Delete Files="$(OutputPath)%(DeviceShdp.OutputName).shdp" Condition="Exists('$(OutputPath)%(DeviceShdp.OutputName).shdp')" />
+    <ZipDirectory SourceDirectory="$(MSBuildProjectDirectory)/DeviceTemplates/%(DeviceShdp.Identity)"
+                  DestinationFile="$(OutputPath)%(DeviceShdp.OutputName).shdp" />
   </Target>
 
 </Project>

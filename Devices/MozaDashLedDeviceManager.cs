@@ -105,7 +105,7 @@ namespace MozaPlugin.Devices
                     ledColors, buttonColors, encoderColors, matrixColors, rawColors,
                     rpmBrightness, buttonsBrightness, encodersBrightness, matrixBrightness);
 
-                if (ledColors.Length == 0)
+                if (ledColors.Length == 0 && buttonColors.Length == 0)
                     return;
 
                 var plugin = MozaPlugin.Instance;
@@ -114,13 +114,19 @@ namespace MozaPlugin.Devices
 
                 bool alwaysResendBitmask = plugin.Settings.AlwaysResendBitmask;
 
-                // Build bitmask: bits 0-9 = RPM LEDs, bits 10-15 = flag LEDs
-                int count = Math.Min(ledColors.Length, MozaDeviceConstants.DashLedCount);
+                // Build bitmask: bits 0-9 = RPM LEDs (from telemetry), bits 10-15 = flag LEDs (from buttons)
                 int bitmask = 0;
-                for (int i = 0; i < count; i++)
+                int rpmCount = Math.Min(ledColors.Length, MozaDeviceConstants.RpmLedCount);
+                for (int i = 0; i < rpmCount; i++)
                 {
                     if (ledColors[i].R > 0 || ledColors[i].G > 0 || ledColors[i].B > 0)
                         bitmask |= (1 << i);
+                }
+                int flagCount = Math.Min(buttonColors.Length, MozaDeviceConstants.FlagLedCount);
+                for (int i = 0; i < flagCount; i++)
+                {
+                    if (buttonColors[i].R > 0 || buttonColors[i].G > 0 || buttonColors[i].B > 0)
+                        bitmask |= (1 << (MozaDeviceConstants.RpmLedCount + i));
                 }
 
                 if (alwaysResendBitmask || bitmask != _lastBitmask)

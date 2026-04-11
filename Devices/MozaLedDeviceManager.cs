@@ -36,6 +36,13 @@ namespace MozaPlugin.Devices
         // ES wheel wake-up
         private bool _ledsAwake;
 
+        /// <summary>
+        /// Expected wheel model prefix for this device instance.
+        /// Null = unknown (don't connect). Empty string = generic fallback (any wheel).
+        /// Specific prefix (e.g. "CSP") = only connect when that model is detected.
+        /// </summary>
+        public string? ExpectedModelPrefix { get; set; }
+
         public LedModuleSettings LedModuleSettings { get; set; } = null!;
 
         public LedDeviceState LastState => _lastState;
@@ -78,8 +85,34 @@ namespace MozaPlugin.Devices
             }
         }
 
-        public bool IsConnected() =>
-            MozaPlugin.Instance is { } p && (p.IsNewWheelDetected || p.IsOldWheelDetected);
+        public bool IsConnected()
+        {
+            if (ExpectedModelPrefix == null)
+                return false;
+
+            var p = MozaPlugin.Instance;
+            if (p == null)
+                return false;
+
+            // Old-protocol device — only match old-protocol wheels
+            if (ExpectedModelPrefix == MozaDeviceConstants.OldProtocolMarker)
+                return p.IsOldWheelDetected;
+
+            // All other prefixes require a new-protocol wheel
+            if (!p.IsNewWheelDetected)
+                return false;
+
+            // Empty prefix = generic fallback, matches any new-protocol wheel
+            if (ExpectedModelPrefix.Length == 0)
+                return true;
+
+            // Specific model — match against detected wheel's firmware model name
+            var modelName = p.Data.WheelModelName;
+            if (string.IsNullOrEmpty(modelName))
+                return false;
+
+            return modelName.StartsWith(ExpectedModelPrefix, StringComparison.OrdinalIgnoreCase);
+        }
 
         public string GetSerialNumber() => "MOZA-VIRTUAL";
 

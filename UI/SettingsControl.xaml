@@ -56,6 +56,14 @@
     </UserControl.Resources>
 
     <DockPanel>
+        <!-- Restart notice (shown when new device definitions were deployed) -->
+        <Border x:Name="RestartBanner" DockPanel.Dock="Top" Visibility="Collapsed"
+                Background="#FFF3CD" BorderBrush="#FFCD39" BorderThickness="1"
+                CornerRadius="4" Margin="10,5,10,0" Padding="10,8">
+            <TextBlock Text="New device definitions were deployed. Restart SimHub to add them under Devices."
+                       Foreground="#664D03" TextWrapping="Wrap"/>
+        </Border>
+
         <!-- Header -->
         <StackPanel DockPanel.Dock="Top" Margin="10,5,10,5">
             <StackPanel Orientation="Horizontal">
@@ -299,88 +307,6 @@
                     <TextBlock TextWrapping="Wrap" Foreground="Gray" Margin="0,8,0,0"
                                Text="Go to Devices &#x203A; MOZA Racing Wheel &#x203A; MOZA Wheel tab to configure your wheel."/>
                 </StackPanel>
-            </TabItem>
-
-            <!-- ==================== DASH TAB ==================== -->
-            <TabItem x:Name="DashTab" Header="Dashboard" Visibility="Collapsed">
-                <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="10">
-                    <StackPanel Margin="5">
-
-                        <TextBlock Text="RPM Indicator" Style="{StaticResource SectionHeader}"/>
-                        <StackPanel Orientation="Horizontal" Margin="0,4">
-                            <TextBlock Text="RPM Indicator Mode" Style="{StaticResource SliderLabel}"/>
-                            <ComboBox x:Name="DashRpmIndicatorCombo" Width="140" SelectionChanged="DashRpmIndicatorCombo_Changed">
-                                <ComboBoxItem Content="Off"/>
-                                <ComboBoxItem Content="RPM"/>
-                                <ComboBoxItem Content="On"/>
-                            </ComboBox>
-                        </StackPanel>
-                        <StackPanel Orientation="Horizontal" Margin="0,4">
-                            <TextBlock Text="RPM Display Mode" Style="{StaticResource SliderLabel}"/>
-                            <ComboBox x:Name="DashRpmDisplayCombo" Width="140" SelectionChanged="DashRpmDisplayCombo_Changed">
-                                <ComboBoxItem Content="Mode 1"/>
-                                <ComboBoxItem Content="Mode 2"/>
-                            </ComboBox>
-                        </StackPanel>
-                        <TextBlock Text="RPM LED Colors" Style="{StaticResource SectionHeader}"/>
-                        <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
-                            <TextBlock Style="{StaticResource LedIndex}" Text="1"/>
-                            <TextBlock Style="{StaticResource LedIndex}" Text="2"/>
-                            <TextBlock Style="{StaticResource LedIndex}" Text="3"/>
-                            <TextBlock Style="{StaticResource LedIndex}" Text="4"/>
-                            <TextBlock Style="{StaticResource LedIndex}" Text="5"/>
-                            <TextBlock Style="{StaticResource LedIndex}" Text="6"/>
-                            <TextBlock Style="{StaticResource LedIndex}" Text="7"/>
-                            <TextBlock Style="{StaticResource LedIndex}" Text="8"/>
-                            <TextBlock Style="{StaticResource LedIndex}" Text="9"/>
-                            <TextBlock Style="{StaticResource LedIndex}" Text="10"/>
-                        </StackPanel>
-                        <StackPanel x:Name="DashRpmColorPanel" Orientation="Horizontal" Margin="0,0,0,10"/>
-
-                        <StackPanel Orientation="Horizontal" Margin="0,4">
-                            <TextBlock Text="RPM Brightness" Style="{StaticResource SliderLabel}"/>
-                            <Slider x:Name="DashRpmBrightnessSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="15" TickFrequency="1" ValueChanged="DashRpmBrightnessSlider_ValueChanged"/>
-                            <TextBlock x:Name="DashRpmBrightnessValue" Style="{StaticResource SliderValue}" Text="15"/>
-                        </StackPanel>
-                        <TextBlock Text="RPM Blink Colors" Style="{StaticResource SectionHeader}"/>
-                        <TextBlock Text="Colors shown when LEDs blink at redline" Foreground="Gray" FontSize="11" Margin="0,0,0,6"/>
-                        <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
-                            <TextBlock Style="{StaticResource LedIndex}" Text="1"/><TextBlock Style="{StaticResource LedIndex}" Text="2"/>
-                            <TextBlock Style="{StaticResource LedIndex}" Text="3"/><TextBlock Style="{StaticResource LedIndex}" Text="4"/>
-                            <TextBlock Style="{StaticResource LedIndex}" Text="5"/><TextBlock Style="{StaticResource LedIndex}" Text="6"/>
-                            <TextBlock Style="{StaticResource LedIndex}" Text="7"/><TextBlock Style="{StaticResource LedIndex}" Text="8"/>
-                            <TextBlock Style="{StaticResource LedIndex}" Text="9"/><TextBlock Style="{StaticResource LedIndex}" Text="10"/>
-                        </StackPanel>
-                        <StackPanel x:Name="DashBlinkColorPanel" Orientation="Horizontal" Margin="0,0,0,10"/>
-
-                        <TextBlock Text="Flags Indicator" Style="{StaticResource SectionHeader}"/>
-                        <StackPanel Orientation="Horizontal" Margin="0,4">
-                            <TextBlock Text="Flags Mode" Style="{StaticResource SliderLabel}"/>
-                            <ComboBox x:Name="DashFlagsIndicatorCombo" Width="140" SelectionChanged="DashFlagsIndicatorCombo_Changed">
-                                <ComboBoxItem Content="Off"/>
-                                <ComboBoxItem Content="Flags"/>
-                                <ComboBoxItem Content="On"/>
-                            </ComboBox>
-                        </StackPanel>
-
-                        <TextBlock Text="Flag LED Colors" Style="{StaticResource SectionHeader}"/>
-                        <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
-                            <TextBlock Style="{StaticResource LedIndex}" Text="1"/>
-                            <TextBlock Style="{StaticResource LedIndex}" Text="2"/>
-                            <TextBlock Style="{StaticResource LedIndex}" Text="3"/>
-                            <TextBlock Style="{StaticResource LedIndex}" Text="4"/>
-                            <TextBlock Style="{StaticResource LedIndex}" Text="5"/>
-                            <TextBlock Style="{StaticResource LedIndex}" Text="6"/>
-                        </StackPanel>
-                        <StackPanel x:Name="DashFlagColorPanel" Orientation="Horizontal" Margin="0,0,0,10"/>
-
-                        <StackPanel Orientation="Horizontal" Margin="0,4">
-                            <TextBlock Text="Flags Brightness" Style="{StaticResource SliderLabel}"/>
-                            <Slider x:Name="DashFlagsBrightnessSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="15" TickFrequency="1" ValueChanged="DashFlagsBrightnessSlider_ValueChanged"/>
-                            <TextBlock x:Name="DashFlagsBrightnessValue" Style="{StaticResource SliderValue}" Text="15"/>
-                        </StackPanel>
-                    </StackPanel>
-                </ScrollViewer>
             </TabItem>
 
             <!-- ==================== HANDBRAKE TAB ==================== -->
@@ -692,25 +618,11 @@
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="10,5">
                         <TextBlock Text="Dashboard Telemetry" Style="{StaticResource SectionHeader}"/>
-
-                        <!-- Enable toggle -->
-                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-                            <CheckBox x:Name="TelemetryEnabledCheck" Content="Enable dashboard telemetry"
-                                      VerticalAlignment="Center" Click="TelemetryEnabledCheck_Click"/>
-                        </StackPanel>
-
-                        <!-- Profile selection -->
-                        <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
-                            <TextBlock Text="Dashboard:" Width="120" VerticalAlignment="Center"/>
-                            <ComboBox x:Name="TelemetryProfileCombo" Width="200" Margin="0,0,8,0"
-                                      SelectionChanged="TelemetryProfileCombo_SelectionChanged"/>
-                            <Button Content="Load .mzdash…" Click="TelemetryLoadMzdash_Click" Padding="6,2"/>
-                        </StackPanel>
-                        <TextBlock x:Name="TelemetryProfileInfo" Foreground="Gray" FontSize="11"
-                                   Margin="120,0,0,8" Text="—"/>
+                        <TextBlock TextWrapping="Wrap" Foreground="Gray"
+                                   Text="Telemetry enable/disable and dashboard profile selection have moved to the MOZA Wheel device tab (Devices > your wheel > MOZA Wheel)."/>
 
                         <!-- Separator -->
-                        <Separator Margin="0,4,0,8"/>
+                        <Separator Margin="0,12,0,8"/>
                         <TextBlock Text="Diagnostic Options" FontWeight="SemiBold" Margin="0,0,0,6"/>
 
                         <!-- Flag byte -->
