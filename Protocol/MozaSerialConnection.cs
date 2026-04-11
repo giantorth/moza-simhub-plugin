@@ -80,7 +80,8 @@ namespace MozaPlugin.Protocol
             {
                 if (_port?.IsOpen == true)
                 {
-                    try { _port.Close(); } catch { }
+                    try { _port.Close(); }
+                    catch (Exception ex) { SimHub.Logging.Current.Debug($"[Moza] Port close: {ex.Message}"); }
                 }
                 _port = null!;
             }
@@ -101,54 +102,56 @@ namespace MozaPlugin.Protocol
             {
                 try
                 {
-                    if (_port == null || !_port.IsOpen)
+                    // Snapshot _port to avoid race with Disconnect() nullifying the field
+                    var port = _port;
+                    if (port == null || !port.IsOpen)
                     {
                         Thread.Sleep(100);
                         continue;
                     }
 
                     // Poll for available data (works better under Wine than blocking ReadByte)
-                    if (_port.BytesToRead == 0)
+                    if (port.BytesToRead == 0)
                     {
                         Thread.Sleep(2);
                         continue;
                     }
 
                     // Read until we find the start byte
-                    int b = _port.ReadByte();
+                    int b = port.ReadByte();
                     if (b != MozaProtocol.MessageStart)
                         continue;
 
                     // Wait for payload length byte
                     int waitMs = 0;
-                    while (_port.BytesToRead < 1 && waitMs < 200)
+                    while (port.BytesToRead < 1 && waitMs < 200)
                     {
                         Thread.Sleep(1);
                         waitMs++;
                     }
-                    if (_port.BytesToRead < 1) continue;
+                    if (port.BytesToRead < 1) continue;
 
-                    int payloadLength = _port.ReadByte();
+                    int payloadLength = port.ReadByte();
                     if (payloadLength < 2 || payloadLength > 64)
                         continue;
 
                     // Wait for remaining bytes: group + device_id + payload = payloadLength + 2
                     int needed = payloadLength + 2;
                     waitMs = 0;
-                    while (_port.BytesToRead < needed && waitMs < 200)
+                    while (port.BytesToRead < needed && waitMs < 200)
                     {
                         Thread.Sleep(1);
                         waitMs++;
                     }
 
-                    int available = _port.BytesToRead;
+                    int available = port.BytesToRead;
                     if (available < needed) continue;
 
                     var data = new byte[needed];
                     int totalRead = 0;
                     while (totalRead < data.Length)
                     {
-                        int read = _port.Read(data, totalRead, data.Length - totalRead);
+                        int read = port.Read(data, totalRead, data.Length - totalRead);
                         if (read <= 0) break;
                         totalRead += read;
                     }
@@ -316,9 +319,9 @@ namespace MozaPlugin.Protocol
                     probe.Close();
                 }
             }
-            catch
+            catch (Exception ex)
             {
-                // Port busy, doesn't exist, or not a serial device - skip
+                SimHub.Logging.Current.Debug($"[Moza] Probe {portName}: {ex.GetType().Name}");
             }
             return false;
         }

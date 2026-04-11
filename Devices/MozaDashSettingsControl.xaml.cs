@@ -18,6 +18,12 @@ namespace MozaPlugin.Devices
 
         private readonly DispatcherTimer _refreshTimer;
 
+        /// <summary>
+        /// The virtual LED driver for the device instance this control belongs to.
+        /// When set, connection status is derived from the driver's IsConnected().
+        /// </summary>
+        internal MozaDashLedDeviceManager? LinkedLedDriver { get; set; }
+
         // Color swatch references
         private readonly Border[] _dashRpmColorSwatches = new Border[10];
         private readonly Border[] _dashRpmBlinkColorSwatches = new Border[10];
@@ -204,11 +210,11 @@ namespace MozaPlugin.Devices
             if (!_swatchesBuilt)
                 BuildColorSwatches();
 
-            bool connected = _data!.IsBaseConnected;
-            StatusDot.Fill = connected ? Brushes.LimeGreen : Brushes.Red;
-            StatusText.Text = connected ? "Connected" : "Disconnected";
+            bool dashConnected = LinkedLedDriver?.IsConnected() ?? false;
+            StatusDot.Fill = dashConnected ? Brushes.LimeGreen : Brushes.Red;
+            StatusText.Text = dashConnected ? "Connected" : "Disconnected";
 
-            bool dashDetected = _plugin!.IsDashDetected;
+            bool dashDetected = dashConnected;
 
             _suppressEvents = true;
             try
@@ -218,7 +224,7 @@ namespace MozaPlugin.Devices
 
                 if (dashDetected)
                 {
-                    int storedRpmIndicator = _data.DashRpmIndicatorMode;
+                    int storedRpmIndicator = _data!.DashRpmIndicatorMode;
                     if (storedRpmIndicator >= 0 && storedRpmIndicator < IndicatorToDisplay.Length)
                         SetComboSafe(DashRpmIndicatorCombo, IndicatorToDisplay[storedRpmIndicator]);
                     SetComboSafe(DashRpmDisplayCombo, _data.DashRpmDisplayMode);

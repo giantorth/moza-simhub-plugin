@@ -24,10 +24,23 @@ namespace MozaPlugin.Devices
         private bool _driverInjected;
         private bool _buttonsCountSet;
 
+        /// <summary>
+        /// Expected wheel model prefix resolved from the DeviceTypeID.
+        /// Null = unknown device (won't connect). Empty = generic (any wheel).
+        /// </summary>
+        private string? _expectedModelPrefix;
+
         public override string ExtentionTabTitle => "MOZA Wheel";
 
         public override void Init(PluginManager pluginManager)
         {
+            // Resolve which wheel model this device instance represents
+            var typeId = LinkedDevice.DeviceDescriptor.DeviceTypeID ?? "";
+            _expectedModelPrefix = MozaDeviceConstants.GetWheelModelPrefix(typeId);
+
+            SimHub.Logging.Current.Info(
+                $"[Moza] WheelDeviceExtension Init — DeviceTypeID={typeId}, modelPrefix={_expectedModelPrefix ?? "(null)"}");
+
             // Injection is deferred to DataUpdate() — calling it here would run before
             // LedModuleDevice.SetSettings(), causing a KeyNotFoundException in that call.
 
@@ -35,11 +48,12 @@ namespace MozaPlugin.Devices
             if (plugin != null)
                 plugin.DeviceExtensionActive = true;
 
-            // Always register — the delegate handles null Instance safely via ?.
+            // Report active only when the matching wheel model is connected
+            var modelPrefix = _expectedModelPrefix;
             pluginManager.AttachDelegate(
                 LinkedDevice.DeviceDescriptor.Name + "_MozaWheelActive",
                 this.GetType(),
-                () => MozaPlugin.Instance?.Data?.IsBaseConnected ?? false);
+                () => _ledDriver?.IsConnected() ?? false);
         }
 
         /// <summary>
@@ -58,6 +72,7 @@ namespace MozaPlugin.Devices
                     if (instance is LedModuleDevice lmd && lmd.ledModuleSettings != null)
                     {
                         _ledDriver = new MozaLedDeviceManager();
+                        _ledDriver.ExpectedModelPrefix = _expectedModelPrefix;
                         _ledDriver.LedModuleSettings = lmd.ledModuleSettings;
 
                         // DeviceDriver setter is protected — use reflection
@@ -171,7 +186,7 @@ namespace MozaPlugin.Devices
 
         public override Control CreateSettingControl()
         {
-            return new MozaWheelSettingsControl();
+            return new MozaWheelSettingsControl { LinkedLedDriver = _ledDriver };
         }
 
         public override IEnumerable<DynamicButtonAction> GetDynamicButtonActions()

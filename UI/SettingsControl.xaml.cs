@@ -136,6 +136,9 @@ namespace MozaPlugin
 
         private void RefreshDisplay(object sender, EventArgs e)
         {
+            RestartBanner.Visibility = _plugin.DeviceDefinitionDeployed
+                ? Visibility.Visible : Visibility.Collapsed;
+
             _suppressEvents = true;
             try
             {
@@ -237,9 +240,9 @@ namespace MozaPlugin
             SetComboSafe(DashRpmDisplayCombo, _data.DashRpmDisplayMode);
             SetComboSafe(DashFlagsIndicatorCombo, _data.DashFlagsIndicatorMode);
 
-            DashRpmBrightnessSlider.Value = Clamp(_data.DashRpmBrightness, 0, 15);
+            DashRpmBrightnessSlider.Value = Clamp(_data.DashRpmBrightness, 0, 100);
             DashRpmBrightnessValue.Text = $"{_data.DashRpmBrightness}";
-            DashFlagsBrightnessSlider.Value = Clamp(_data.DashFlagsBrightness, 0, 15);
+            DashFlagsBrightnessSlider.Value = Clamp(_data.DashFlagsBrightness, 0, 100);
             DashFlagsBrightnessValue.Text = $"{_data.DashFlagsBrightness}";
 
             UpdateSwatches(_dashRpmColorSwatches, _data.DashRpmColors, 10);

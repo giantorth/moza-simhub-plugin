@@ -15,15 +15,15 @@ namespace MozaPlugin.Devices
         {
             var typeId = device.DeviceDescriptor.DeviceTypeID ?? "";
 
-            // Match by StandardDeviceId (direct or as prefix for suffixed IDs)
-            if (typeId == MozaDeviceConstants.WheelStandardDeviceId
-                || typeId.StartsWith(MozaDeviceConstants.WheelStandardDeviceId + "_", StringComparison.OrdinalIgnoreCase))
+            SimHub.Logging.Current.Info($"[Moza] ExtensionFilter checking DeviceTypeID: {typeId}");
+
+            // Any known wheel device ID (old template, new generic, old-protocol) → wheel extension
+            if (MozaDeviceConstants.GetWheelModelPrefix(typeId) != null)
             {
                 yield return typeof(MozaWheelDeviceExtension);
             }
 
-            if (typeId == MozaDeviceConstants.DashStandardDeviceId
-                || typeId.StartsWith(MozaDeviceConstants.DashStandardDeviceId + "_", StringComparison.OrdinalIgnoreCase))
+            if (MozaDeviceConstants.IsDashDevice(typeId))
             {
                 yield return typeof(MozaDashDeviceExtension);
             }

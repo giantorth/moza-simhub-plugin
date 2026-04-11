@@ -56,6 +56,14 @@
     </UserControl.Resources>
 
     <DockPanel>
+        <!-- Restart notice (shown when new device definitions were deployed) -->
+        <Border x:Name="RestartBanner" DockPanel.Dock="Top" Visibility="Collapsed"
+                Background="#FFF3CD" BorderBrush="#FFCD39" BorderThickness="1"
+                CornerRadius="4" Margin="10,5,10,0" Padding="10,8">
+            <TextBlock Text="New device definitions were deployed. Restart SimHub to add them under Devices."
+                       Foreground="#664D03" TextWrapping="Wrap"/>
+        </Border>
+
         <!-- Header -->
         <StackPanel DockPanel.Dock="Top" Margin="10,5,10,5">
             <StackPanel Orientation="Horizontal">
@@ -339,8 +347,8 @@
 
                         <StackPanel Orientation="Horizontal" Margin="0,4">
                             <TextBlock Text="RPM Brightness" Style="{StaticResource SliderLabel}"/>
-                            <Slider x:Name="DashRpmBrightnessSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="15" TickFrequency="1" ValueChanged="DashRpmBrightnessSlider_ValueChanged"/>
-                            <TextBlock x:Name="DashRpmBrightnessValue" Style="{StaticResource SliderValue}" Text="15"/>
+                            <Slider x:Name="DashRpmBrightnessSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="DashRpmBrightnessSlider_ValueChanged"/>
+                            <TextBlock x:Name="DashRpmBrightnessValue" Style="{StaticResource SliderValue}" Text="100"/>
                         </StackPanel>
                         <TextBlock Text="RPM Blink Colors" Style="{StaticResource SectionHeader}"/>
                         <TextBlock Text="Colors shown when LEDs blink at redline" Foreground="Gray" FontSize="11" Margin="0,0,0,6"/>
@@ -376,8 +384,8 @@
 
                         <StackPanel Orientation="Horizontal" Margin="0,4">
                             <TextBlock Text="Flags Brightness" Style="{StaticResource SliderLabel}"/>
-                            <Slider x:Name="DashFlagsBrightnessSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="15" TickFrequency="1" ValueChanged="DashFlagsBrightnessSlider_ValueChanged"/>
-                            <TextBlock x:Name="DashFlagsBrightnessValue" Style="{StaticResource SliderValue}" Text="15"/>
+                            <Slider x:Name="DashFlagsBrightnessSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="DashFlagsBrightnessSlider_ValueChanged"/>
+                            <TextBlock x:Name="DashFlagsBrightnessValue" Style="{StaticResource SliderValue}" Text="100"/>
                         </StackPanel>
                     </StackPanel>
                 </ScrollViewer>

@@ -132,25 +132,25 @@ You can build the plugin entirely on Linux. The .NET SDK can target .NET Framewo
 **Device Extension System** (`Devices/`) — Registers MOZA devices as SimHub devices so they appear in SimHub's Devices section with native LED effects support. Each device type (wheel, dashboard) has its own extension, LED manager, settings class, and settings control:
 
 *Shared:*
-- `MozaDeviceExtensionFilter` — `IDeviceExtensionFilter` that routes devices by `StandardDeviceId` to the correct extension (`MozaRacingWheel` → wheel, `MozaRacingDash` → dash)
-- `MozaDeviceConstants` — `StandardDeviceId` strings and LED count constants (protocol maximums) for each device type
+- `MozaDeviceExtensionFilter` — `IDeviceExtensionFilter` that routes devices by `DescriptorUniqueId` GUID to the correct extension. Uses `MozaDeviceConstants.GetWheelModelPrefix()` to match all known wheel GUIDs → `MozaWheelDeviceExtension`, and `DashStandardDeviceId` → `MozaDashDeviceExtension`
+- `MozaDeviceConstants` — Per-model `DescriptorUniqueId` GUIDs, GUID-to-model-prefix mapping, and LED count constants. `GetWheelModelPrefix()` resolves a SimHub `DeviceTypeID` to the firmware model prefix the device expects
 - `WheelModelInfo` — Per-model LED layout descriptor (button count, flag presence, button index remapping). Resolved from the firmware model name string after wheel detection. Known models: GS V2P (10 buttons, no flags), CS V2.1 (6 non-contiguous buttons), CSP/KSP/FSR2 (14 buttons, flags). Unknown models default to 14 buttons, no flags
 
 *Wheel:*
-- `MozaWheelDeviceExtension` — `DeviceExtension` subclass providing a settings tab and per-game device profiles via `GetSettings()`/`SetSettings()`
-- `MozaLedDeviceManager` — Virtual `ILedDeviceManager` injected via reflection into the device's LED module. Reports connected when the wheel is detected (via `OnConnect`/`OnDisconnect` events fired from `UpdateConnectionState()`). Forwards computed `Color[]` to MOZA hardware as per-frame color chunks + bitmask in `Display()`. Button LED count and index mapping are model-aware via `WheelModelInfo` — non-contiguous layouts (e.g. CS V2.1) are remapped from SimHub's contiguous indices to the correct protocol positions
+- `MozaWheelDeviceExtension` — `DeviceExtension` subclass providing a settings tab and per-game device profiles via `GetSettings()`/`SetSettings()`. Resolves the expected model prefix from `DeviceTypeID` in `Init()` and passes it to the LED driver for model-aware connection binding
+- `MozaLedDeviceManager` — Virtual `ILedDeviceManager` injected via reflection into the device's LED module. `IsConnected()` is model-aware: old-protocol devices match only `IsOldWheelDetected`, per-model devices match by firmware model name prefix, generic devices match any new-protocol wheel. Fires `OnConnect`/`OnDisconnect` events from `UpdateConnectionState()`. Forwards computed `Color[]` to MOZA hardware as per-frame color chunks + bitmask in `Display()`. Button LED count and index mapping are model-aware via `WheelModelInfo` — non-contiguous layouts (e.g. CS V2.1) are remapped from SimHub's contiguous indices to the correct protocol positions
 - `MozaWheelExtensionSettings` — Wheel-specific settings serialized to SimHub device profiles
-- `MozaWheelSettingsControl` — Status panel with indicator modes, brightness, color swatches, and paddle settings. Flag LED section and individual button swatches are shown/hidden based on `WheelModelInfo`
+- `MozaWheelSettingsControl` — Status panel with indicator modes, brightness, color swatches, and paddle settings. Connection status is driven by the linked LED driver's `IsConnected()`, not global plugin state. Flag LED section and individual button swatches are shown/hidden based on `WheelModelInfo`
 
 *Dashboard:*
 - `MozaDashDeviceExtension` — Dashboard device extension, same pattern as wheel
 - `MozaDashLedDeviceManager` — Virtual `ILedDeviceManager` for the dashboard. Reports connected when the dash is detected. Converts SimHub LED colors to a 16-bit bitmask (bits 0-9 = RPM, bits 10-15 = flags) sent via `dash-send-telemetry`. Unlike the wheel, no per-frame colors are sent — the dash firmware uses stored colors and only receives the on/off bitmask. Separate from the telemetry data streaming (handled by `TelemetrySender`), which sends full game data for dashboard display widgets
 - `MozaDashExtensionSettings` — Dashboard-specific settings (brightness, indicator modes, colors)
-- `MozaDashSettingsControl` — Status panel with indicator modes, brightness, and color swatches (RPM, blink, flags)
+- `MozaDashSettingsControl` — Status panel with indicator modes, brightness, and color swatches (RPM, blink, flags). Connection status driven by linked LED driver's `IsConnected()`
 
-**Device Templates** (`DeviceTemplates/`) — `.shdevicetemplate` ZIPs (built automatically) containing `device.json`, `defaults.json`, and `picture.png`. Deployed to SimHub's `StandardDevicesTemplatesUser/` directory. SimHub deletes these files when the user removes the device, so the plugin should re-deploy them.
-- `MozaWheel/` → `MozaRacingWheel.shdevicetemplate` (10 RPM LEDs, optional 14 button LEDs)
-- `MozaDash/` → `MozaRacingDash.shdevicetemplate` (16 LEDs: 10 RPM + 6 flag as single strip)
+**Device Definitions** (`DeviceTemplates/`) — Per-device `.shdp` definitions using SimHub 9.11+'s Device Builder format. Each directory contains a `device.json` with the device's LED layout baked in. Built as `.shdp` ZIPs at compile time and embedded as resources in the DLL. Deployed lazily to SimHub's `DevicesDefinitions/User/` directory when the matching device is first detected over serial — not at startup. A restart banner appears in the plugin settings panel when new definitions are deployed.
+- `MozaWheel*/` — Per-model wheel definitions. Known models: GS V2P (10 buttons), CS V2.1 (6 buttons), CSP/KSP/FSR2 (14 buttons), plus a generic fallback (14 buttons) for unknown new-protocol wheels and an old-protocol definition (RPM only) for ES wheels
+- `MozaDashShdp/` — Dashboard definition (10 RPM LEDs + 6 flag LEDs)
 
 **Telemetry Data** (`Data/`) — Embedded resources for the telemetry streaming system:
 - `Telemetry.json` — Channel definitions (150+ entries) describing the telemetry channels supported by Moza dashboards, each with URL, compression type, and package_level. Loaded by `DashboardProfileStore` at runtime
@@ -186,8 +186,8 @@ Every setting that writes to the device on UI change must round-trip through pro
 
 ### Dependencies
 
-- **NuGet:** `Microsoft.NETFramework.ReferenceAssemblies.net48`
+- **NuGet:** `Microsoft.NETFramework.ReferenceAssemblies.net48`, `Newtonsoft.Json`, `log4net`
 - **Runtime (Windows only):** `System.Management` — loaded via reflection for WMI port discovery; falls back to probe-based discovery if unavailable
-- **SimHub DLLs** (checked into `libs/SimHub/`, reference-only, not packaged): `SimHub.Plugins.dll`, `GameReaderCommon.dll`, `SimHub.Logging.dll`, `Newtonsoft.Json.dll`, `log4net.dll`, `SerialDash.dll`, `BA63Driver.dll`. A daily GitHub Actions workflow automatically creates PRs when new SimHub versions are released.
+- **SimHub DLLs** (checked into `libs/SimHub/`, reference-only, not packaged): `SimHub.Plugins.dll`, `GameReaderCommon.dll`, `SimHub.Logging.dll`, `SerialDash.dll`, `BA63Driver.dll`. A daily GitHub Actions workflow automatically creates PRs when new SimHub versions are released.
 
 **Important:** The SimHub DLLs in `libs/SimHub/` must match the runtime SimHub version. The PluginSdk ships older DLLs that may be missing interface members added in newer releases, causing `TypeLoadException` at runtime. Always update from the actual SimHub installation directory.

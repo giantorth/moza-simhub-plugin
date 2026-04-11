@@ -18,6 +18,13 @@ namespace MozaPlugin.Devices
 
         private readonly DispatcherTimer _refreshTimer;
 
+        /// <summary>
+        /// The virtual LED driver for the device instance this control belongs to.
+        /// When set, connection status is derived from the driver's model-aware IsConnected().
+        /// When null (legacy), falls back to global plugin state.
+        /// </summary>
+        internal MozaLedDeviceManager? LinkedLedDriver { get; set; }
+
         // Color swatch references
         private readonly Border[] _wheelFlagColorSwatches = new Border[6];
         private readonly Border[] _wheelButtonColorSwatches = new Border[14];
@@ -135,20 +142,20 @@ namespace MozaPlugin.Devices
             if (!_swatchesBuilt)
                 BuildColorSwatches();
 
-            // Status
-            bool connected = _data!.IsBaseConnected;
-            StatusDot.Fill = connected ? Brushes.LimeGreen : Brushes.Red;
-            StatusText.Text = connected ? "Connected" : "Disconnected";
+            // Use the linked LED driver's model-aware connection check when available
+            bool wheelConnected = LinkedLedDriver?.IsConnected() ?? false;
+            StatusDot.Fill = wheelConnected ? Brushes.LimeGreen : Brushes.Red;
+            StatusText.Text = wheelConnected ? "Connected" : "Disconnected";
 
-            bool newWheel = _plugin!.IsNewWheelDetected;
-            bool oldWheel = _plugin.IsOldWheelDetected;
+            bool newWheel = wheelConnected && _plugin!.IsNewWheelDetected;
+            bool oldWheel = wheelConnected && _plugin!.IsOldWheelDetected;
 
-            string modelName = _data!.WheelModelName;
-            string swVersion = _data.WheelSwVersion;
-            string hwVersion = _data.WheelHwVersion;
-
-            if (newWheel || oldWheel)
+            if (wheelConnected)
             {
+                string modelName = _data!.WheelModelName;
+                string swVersion = _data.WheelSwVersion;
+                string hwVersion = _data.WheelHwVersion;
+
                 WheelTypeText.Text = string.IsNullOrEmpty(modelName) ? "Detecting wheel..." : modelName;
                 var fwParts = new System.Collections.Generic.List<string>();
                 if (!string.IsNullOrEmpty(swVersion)) fwParts.Add($"FW: {swVersion}");
@@ -157,7 +164,7 @@ namespace MozaPlugin.Devices
             }
             else
             {
-                WheelTypeText.Text = connected ? "Detecting..." : "";
+                WheelTypeText.Text = "";
                 WheelFwText.Text = "";
             }
 
@@ -171,7 +178,7 @@ namespace MozaPlugin.Devices
 
                 if (newWheel)
                 {
-                    SetComboSafe(WheelTelemetryModeCombo, _data.WheelTelemetryMode);
+                    SetComboSafe(WheelTelemetryModeCombo, _data!.WheelTelemetryMode);
                     SetComboSafe(WheelIdleEffectCombo, _data.WheelTelemetryIdleEffect);
                     SetComboSafe(WheelButtonIdleEffectCombo, _data.WheelButtonsIdleEffect);
                     SetComboSafe(PaddlesModeCombo, _data.WheelPaddlesMode);
@@ -203,7 +210,7 @@ namespace MozaPlugin.Devices
 
                 if (oldWheel)
                 {
-                    int storedIndicator = _data.WheelRpmIndicatorMode;
+                    int storedIndicator = _data!.WheelRpmIndicatorMode;
                     if (storedIndicator >= 0 && storedIndicator < EsIndicatorToDisplay.Length)
                         SetComboSafe(EsRpmIndicatorCombo, EsIndicatorToDisplay[storedIndicator]);
                     SetComboSafe(EsRpmDisplayCombo, _data.WheelRpmDisplayMode);

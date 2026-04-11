@@ -1,4 +1,6 @@
 using System;
+using System.IO;
+using System.Reflection;
 using System.Timers;
 using System.Windows.Media;
 using GameReaderCommon;
@@ -132,6 +134,12 @@ namespace MozaPlugin
             get => _dashDeviceExtensionActive;
             set => _dashDeviceExtensionActive = value;
         }
+
+        /// <summary>
+        /// Set to true when a new device definition is deployed at runtime.
+        /// The plugin settings panel shows a restart notice when this is true.
+        /// </summary>
+        internal volatile bool DeviceDefinitionDeployed;
 
         internal bool IsDashDetected => _dashDetected;
         internal bool IsHandbrakeDetected => _handbrakeDetected;
@@ -368,6 +376,7 @@ namespace MozaPlugin
         {
             if (_connection.Connect())
             {
+                _unmatched = 0;
                 SimHub.Logging.Current.Info("[Moza] Connected to MOZA device");
                 _deviceManager.ReadSettings(SettingsPollCommands);
                 // Probe all wheel IDs immediately for fast detection
@@ -451,6 +460,7 @@ namespace MozaPlugin
                     if (!_dashDetected)
                     {
                         _dashDetected = true;
+                        DeployDeviceDefinition("MOZA Dashboard", "MozaPlugin.Devices.Dash.device.json");
                         ApplySavedDashSettings();
                         SimHub.Logging.Current.Info("[Moza] Dashboard detected");
                     }
@@ -481,6 +491,7 @@ namespace MozaPlugin
                         SimHub.Logging.Current.Info(
                             $"[Moza] Wheel model: {_data.WheelModelName} " +
                             $"(buttons={WheelModelInfo.ButtonLedCount}, flags={WheelModelInfo.HasFlagLeds})");
+                        DeployDeviceDefinitionForModel(_data.WheelModelName);
                     }
                     else
                     {
@@ -509,6 +520,7 @@ namespace MozaPlugin
                         _deviceManager.ReadSetting("wheel-serial-a");
                         _deviceManager.ReadSetting("wheel-serial-b");
                         ApplySavedWheelSettings();
+                        DeployDeviceDefinitionForOldProto();
                         SimHub.Logging.Current.Info($"[Moza] Old-protocol wheel detected on ID {deviceId}");
                     }
                     break;
@@ -1048,6 +1060,84 @@ namespace MozaPlugin
             }
 
             PersistSettings();
+        }
+
+        /// <summary>
+        /// Known wheel model definitions: firmware model prefix → (display dir name, embedded resource).
+        /// </summary>
+        private static readonly (string Prefix, string DirName, string ResourceName)[] WheelDefinitions =
+        {
+            ("GS V2P",  "MOZA GS V2 Pro",  "MozaPlugin.Devices.WheelGSV2P.device.json"),
+            ("CS V2.1", "MOZA CS V2",       "MozaPlugin.Devices.WheelCSV21.device.json"),
+            ("CSP",     "MOZA CS Pro",      "MozaPlugin.Devices.WheelCSP.device.json"),
+            ("KSP",     "MOZA KS Pro",      "MozaPlugin.Devices.WheelKSP.device.json"),
+            ("FSR2",    "MOZA FSR V2",      "MozaPlugin.Devices.WheelFSR2.device.json"),
+        };
+
+        /// <summary>
+        /// Deploy the device definition matching a new-protocol wheel's model name.
+        /// Falls back to the generic definition for unknown models.
+        /// Called once when the wheel model name is first received from firmware.
+        /// </summary>
+        private void DeployDeviceDefinitionForModel(string modelName)
+        {
+            foreach (var (prefix, dirName, resourceName) in WheelDefinitions)
+            {
+                if (modelName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    DeployDeviceDefinition(dirName, resourceName);
+                    return;
+                }
+            }
+
+            // Unknown model — deploy generic fallback
+            DeployDeviceDefinition("MOZA Racing Wheel", "MozaPlugin.Devices.WheelGeneric.device.json");
+        }
+
+        /// <summary>
+        /// Deploy the old-protocol wheel device definition.
+        /// Called once when an ES wheel is detected.
+        /// </summary>
+        private void DeployDeviceDefinitionForOldProto()
+        {
+            DeployDeviceDefinition("MOZA Old Protocol Wheel", "MozaPlugin.Devices.WheelOldProto.device.json");
+        }
+
+        private void DeployDeviceDefinition(string deviceName, string resourceName)
+        {
+            try
+            {
+                var simHubDir = AppDomain.CurrentDomain.BaseDirectory;
+                var userDefsDir = Path.Combine(simHubDir, "DevicesDefinitions", "User");
+                var deviceDir = Path.Combine(userDefsDir, deviceName);
+                var deviceJsonPath = Path.Combine(deviceDir, "device.json");
+
+                if (File.Exists(deviceJsonPath))
+                    return;
+
+                var assembly = Assembly.GetExecutingAssembly();
+                using (var stream = assembly.GetManifestResourceStream(resourceName))
+                {
+                    if (stream == null)
+                    {
+                        SimHub.Logging.Current.Warn($"[Moza] Embedded resource not found: {resourceName}");
+                        return;
+                    }
+
+                    Directory.CreateDirectory(deviceDir);
+                    using (var fileStream = File.Create(deviceJsonPath))
+                    {
+                        stream.CopyTo(fileStream);
+                    }
+                }
+
+                DeviceDefinitionDeployed = true;
+                SimHub.Logging.Current.Info($"[Moza] Deployed device definition: {deviceName} (restart SimHub to add it)");
+            }
+            catch (Exception ex)
+            {
+                SimHub.Logging.Current.Error($"[Moza] Error deploying device definition '{deviceName}': {ex.Message}");
+            }
         }
 
     }

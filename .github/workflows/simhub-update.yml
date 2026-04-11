@@ -83,8 +83,6 @@ jobs:
             (Test-Path -path "C:\simhub\GameReaderCommon.dll" -PathType Leaf) -and
             (Test-Path -path "C:\simhub\SimHub.Logging.dll" -PathType Leaf) -and
             (Test-Path -path "C:\simhub\SimHub.Plugins.dll" -PathType Leaf) -and
-            (Test-Path -path "C:\simhub\log4net.dll" -PathType Leaf) -and
-            (Test-Path -path "C:\simhub\Newtonsoft.Json.dll" -PathType Leaf) -and
             (Test-Path -path "C:\simhub\SerialDash.dll" -PathType Leaf) -and
             (Test-Path -path "C:\simhub\BA63Driver.dll" -PathType Leaf)
           )
@@ -100,8 +98,6 @@ jobs:
             C:/simhub/GameReaderCommon.dll
             C:/simhub/SimHub.Logging.dll
             C:/simhub/SimHub.Plugins.dll
-            C:/simhub/log4net.dll
-            C:/simhub/Newtonsoft.Json.dll
             C:/simhub/SerialDash.dll
             C:/simhub/BA63Driver.dll
           retention-days: 1

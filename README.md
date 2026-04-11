@@ -28,10 +28,10 @@ _Thank you to a gracious tester who provided this custom Engine Start and Pit Li
 Download the latest `MozaPlugin_v*.zip` from the [Releases](https://github.com/giantorth/moza-simhub-plugin/releases) page and extract into your SimHub installation directory:
 
 - `MozaPlugin.dll` — copy to the SimHub root directory
-- `MozaRacingWheel.shdevicetemplate` — copy to `DevicesDefaults/StandardDevicesTemplatesUser/` (create the folder if it doesn't exist)
-- `MozaRacingDash.shdevicetemplate` — copy to `DevicesDefaults/StandardDevicesTemplatesUser/`
 
-Restart SimHub — the plugin appears under Settings > Plugins as "MOZA Control". To use SimHub's LED effects system, go to Devices and add the "MOZA Racing Wheel" and/or "MOZA Racing Dash" devices.
+Restart SimHub — the plugin appears under Settings > Plugins as "MOZA Control".
+
+**Device setup:** Connect your hardware and restart SimHub. The plugin auto-detects connected devices (wheel model, dashboard) and deploys matching device definitions. A banner in the plugin settings panel will prompt you to restart SimHub, after which the devices appear under Devices ready to add. Requires SimHub 9.11+.
 
 ## Features
 
@@ -374,8 +374,14 @@ Devices/
   MozaDashSettingsControl.xaml(.cs) Status panel for the dashboard device extension tab
   MozaDashLedDeviceManager.cs      Virtual dashboard LED driver — spoofs connection, forwards bitmask
 DeviceTemplates/
-  MozaWheel/                       Source files for wheel .shdevicetemplate (zipped at build time)
-  MozaDash/                        Source files for dashboard .shdevicetemplate (zipped at build time)
+  MozaWheelCSP/                    Per-model .shdp definitions (deployed at runtime on detection)
+  MozaWheelKSP/                    Each contains a device.json with model-specific LED layout
+  MozaWheelFSR2/                   Built as .shdp ZIPs and embedded in the DLL
+  MozaWheelGSV2P/
+  MozaWheelCSV21/
+  MozaWheelGeneric/                Generic fallback for unknown new-protocol wheels
+  MozaWheelOldProto/               Old-protocol (ES) wheels — RPM LEDs only
+  MozaDashShdp/                    Dashboard definition (10 RPM + 6 flag LEDs)
 UI/
   SettingsControl.xaml(.cs)        WPF settings UI (Base, Wheel, Options, Telemetry tabs)
   ColorPickerDialog.xaml(.cs)      RGB color picker dialog

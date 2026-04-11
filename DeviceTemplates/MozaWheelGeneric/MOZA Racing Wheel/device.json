@@ -1,0 +1,146 @@
+{
+  "DescriptorUniqueId": "ed153fcb-774d-4cea-97db-5f7096cd1099",
+  "SchemaVersion": 1,
+  "MinimumSimHubVersion": "9.11.8",
+  "DeviceDescription": {
+    "BrandName": "MOZA",
+    "ProductName": "Generic Racing Wheel"
+  },
+  "LedsFeature": {
+    "IsIndividualLedsSectionEnabled": true,
+    "PhysicalLedsMappings": {
+      "Items": [
+        {
+          "SourceRole": 1,
+          "SourceIndex": 0,
+          "RepeatCount": 10,
+          "RepeatMode": 1
+        },
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        {
+          "SourceRole": 2,
+          "SourceIndex": 0,
+          "RepeatCount": 14,
+          "RepeatMode": 1
+        },
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        {}
+      ]
+    },
+    "LogicalTelemetryLeds": {
+      "LedCount": 10,
+      "Segments": [],
+      "IsEnabled": true
+    },
+    "LogicalButtonsSection": {
+      "IsButtonEditorEnabled": false,
+      "Items": [
+        {
+          "Left": 20,
+          "Top": 20,
+          "Width": 40
+        },
+        {
+          "Left": 20,
+          "Top": 20,
+          "Width": 40
+        },
+        {
+          "Left": 20,
+          "Top": 20,
+          "Width": 40
+        },
+        {
+          "Left": 20,
+          "Top": 20,
+          "Width": 40
+        },
+        {
+          "Left": 20,
+          "Top": 20,
+          "Width": 40
+        },
+        {
+          "Left": 20,
+          "Top": 20,
+          "Width": 40
+        },
+        {
+          "Left": 20,
+          "Top": 20,
+          "Width": 40
+        },
+        {
+          "Left": 20,
+          "Top": 20,
+          "Width": 40
+        },
+        {
+          "Left": 20,
+          "Top": 20,
+          "Width": 40
+        },
+        {
+          "Left": 20,
+          "Top": 20,
+          "Width": 40
+        },
+        {
+          "Left": 20,
+          "Top": 20,
+          "Width": 40
+        },
+        {
+          "Left": 20,
+          "Top": 20,
+          "Width": 40
+        },
+        {
+          "Left": 20,
+          "Top": 20,
+          "Width": 40
+        },
+        {
+          "Left": 20,
+          "Top": 20,
+          "Width": 40
+        }
+      ],
+      "IsEnabled": true
+    },
+    "IsEnabled": true
+  },
+  "HardwareInterface": {
+    "HardwareInterface": {
+      "TypeName": "LedsStandardHIDProtocol",
+      "HIDUsagePage": "0xFF00",
+      "HIDUsage": "0x77",
+      "HIDReportId": "0x68",
+      "HIDReportSize": 64,
+      "DeviceDetection": {
+        "Vid": "0x346E",
+        "Pid": "0x0004"
+      }
+    }
+  },
+  "IsLocked": true
+}

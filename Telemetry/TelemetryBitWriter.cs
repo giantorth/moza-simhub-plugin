@@ -24,6 +24,7 @@ namespace MozaPlugin.Telemetry
         /// </summary>
         public void WriteBits(uint value, int bitCount)
         {
+            if (bitCount == 0) return;
             int byteOff = _bitPosition / 8;
             int bitOff = _bitPosition % 8;
             if (byteOff + (bitOff + bitCount - 1) / 8 >= _buffer.Length)
