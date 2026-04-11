@@ -23,6 +23,12 @@ namespace MozaPlugin.Protocol
         public event Action<byte[]>? MessageReceived;
         public bool IsConnected => _port?.IsOpen == true;
 
+        /// <summary>
+        /// The HID Product ID discovered from WMI during device enumeration.
+        /// Null if PID could not be determined (e.g. probe-based discovery under Wine).
+        /// </summary>
+        public string? DiscoveredPid { get; private set; }
+
         public bool Connect()
         {
             // Try the last known port first to avoid re-probing (which
@@ -30,9 +36,12 @@ namespace MozaPlugin.Protocol
             if (_lastPortName != null && TryOpen(_lastPortName))
                 return true;
 
-            var portName = FindMozaPort();
+            var (portName, pid) = FindMozaPort();
             if (portName == null)
                 return false;
+
+            if (pid != null)
+                DiscoveredPid = pid;
 
             return TryOpen(portName);
         }
@@ -219,7 +228,7 @@ namespace MozaPlugin.Protocol
             }
         }
 
-        private static string? FindMozaPort()
+        private static (string? PortName, string? Pid) FindMozaPort()
         {
             // Try WMI-based discovery first (native Windows), loaded optionally via reflection
             try
@@ -247,8 +256,9 @@ namespace MozaPlugin.Protocol
                                 if (comEnd > comStart)
                                 {
                                     var portName = caption.Substring(comStart + 1, comEnd - comStart - 1);
-                                    SimHub.Logging.Current.Info($"[Moza] Found Moza device on {portName} (WMI)");
-                                    return portName;
+                                    var pid = ExtractPid(deviceId);
+                                    SimHub.Logging.Current.Info($"[Moza] Found Moza device on {portName} PID={pid ?? "unknown"} (WMI)");
+                                    return (portName, pid);
                                 }
                             }
                         }
@@ -276,12 +286,35 @@ namespace MozaPlugin.Protocol
                 if (ProbeMozaDevice(port))
                 {
                     SimHub.Logging.Current.Info($"[Moza] Found Moza device on {port} (probe)");
-                    return port;
+                    return (port, null);
                 }
             }
 
             SimHub.Logging.Current.Info("[Moza] No MOZA device found on any COM port");
-            return null;
+            return (null, null);
+        }
+
+        /// <summary>
+        /// Extract the PID from a WMI DeviceID string.
+        /// Format: USB\VID_346E&amp;PID_XXXX\...
+        /// Returns the PID as a hex string like "0x0006", or null if not found.
+        /// </summary>
+        private static string? ExtractPid(string deviceId)
+        {
+            int pidIndex = deviceId.IndexOf("PID_", StringComparison.OrdinalIgnoreCase);
+            if (pidIndex < 0 || pidIndex + 8 > deviceId.Length)
+                return null;
+
+            var pidHex = deviceId.Substring(pidIndex + 4, 4);
+
+            // Validate it's actually hex
+            foreach (char c in pidHex)
+            {
+                if (!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f')))
+                    return null;
+            }
+
+            return "0x" + pidHex.ToUpperInvariant();
         }
 
         /// <summary>

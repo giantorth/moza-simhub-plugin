@@ -1023,6 +1023,20 @@ namespace MozaPlugin
             }
 
             PersistSettings();
+
+            // Apply telemetry settings if present in this profile
+            if (extSettings.TelemetrySettingsPresent)
+            {
+                if (_settings.TelemetryEnabled)
+                {
+                    ApplyTelemetrySettings();
+                    _telemetrySender?.Start();
+                }
+                else
+                {
+                    _telemetrySender?.Stop();
+                }
+            }
         }
 
         /// <summary>
@@ -1125,10 +1139,29 @@ namespace MozaPlugin
                     }
 
                     Directory.CreateDirectory(deviceDir);
-                    using (var fileStream = File.Create(deviceJsonPath))
+
+                    // Read the template JSON and patch the PID if we discovered one
+                    string json;
+                    using (var reader = new StreamReader(stream))
                     {
-                        stream.CopyTo(fileStream);
+                        json = reader.ReadToEnd();
                     }
+
+                    var discoveredPid = _connection.DiscoveredPid;
+                    if (discoveredPid != null)
+                    {
+                        json = json.Replace("__DETECT_PID__", discoveredPid);
+                        SimHub.Logging.Current.Info($"[Moza] Patched device PID to {discoveredPid} for {deviceName}");
+                    }
+                    else
+                    {
+                        // Fallback: no PID discovered (e.g. probe-based discovery under Wine).
+                        // Use 0x0004 as a reasonable default.
+                        json = json.Replace("__DETECT_PID__", "0x0004");
+                        SimHub.Logging.Current.Info($"[Moza] No PID discovered, using fallback 0x0004 for {deviceName}");
+                    }
+
+                    File.WriteAllText(deviceJsonPath, json);
                 }
 
                 DeviceDefinitionDeployed = true;

@@ -20,3 +20,4 @@ Desktop.ini
 settings.local.json
 
 usb-capture/
+.venv/

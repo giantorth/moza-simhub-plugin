@@ -138,7 +138,7 @@
       "HIDReportSize": 64,
       "DeviceDetection": {
         "Vid": "0x346E",
-        "Pid": "0x0004"
+        "Pid": "__DETECT_PID__"
       }
     }
   },

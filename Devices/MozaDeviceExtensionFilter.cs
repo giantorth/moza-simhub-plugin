@@ -15,7 +15,7 @@ namespace MozaPlugin.Devices
         {
             var typeId = device.DeviceDescriptor.DeviceTypeID ?? "";
 
-            SimHub.Logging.Current.Info($"[Moza] ExtensionFilter checking DeviceTypeID: {typeId}");
+            SimHub.Logging.Current.Debug($"[Moza] ExtensionFilter checking DeviceTypeID: {typeId}");
 
             // Any known wheel device ID (old template, new generic, old-protocol) → wheel extension
             if (MozaDeviceConstants.GetWheelModelPrefix(typeId) != null)
