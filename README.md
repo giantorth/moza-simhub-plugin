@@ -57,6 +57,10 @@ MOZA wheels and dashboards register as native SimHub devices, appearing in SimHu
 
 The plugin injects virtual LED drivers so SimHub's effects UI shows each device as connected, even though MOZA uses a proprietary serial protocol. The computed LED colors are forwarded to the hardware each frame.
 
+![Effects List](docs/Effects.png)
+
+SimHub contains many effects to choose from and this plugin supports any custom effects that target a device.
+
 Tested:
 - Old-protocol wheels (ES series)
 - R5 Base
