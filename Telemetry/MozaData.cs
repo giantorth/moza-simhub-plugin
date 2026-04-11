@@ -251,10 +251,10 @@ namespace MozaPlugin
                 case "wheel-idle-mode":              WheelIdleMode = value; break;
                 case "wheel-idle-timeout":           WheelIdleTimeout = value; break;
                 case "wheel-idle-speed":             WheelIdleSpeed = value; break;
-                case "wheel-paddles-mode":           WheelPaddlesMode = value; break;
+                case "wheel-paddles-mode":           WheelPaddlesMode = value - 1; break; // raw 1/2/3 → display 0/1/2
                 case "wheel-clutch-point":           WheelClutchPoint = value; break;
                 case "wheel-knob-mode":              WheelKnobMode = value; break;
-                case "wheel-stick-mode":             WheelStickMode = value; break;
+                case "wheel-stick-mode":             WheelStickMode = value / 256; break; // raw 0/256 → display 0/1
                 case "wheel-rpm-indicator-mode":     WheelRpmIndicatorMode = value - 1; break; // raw 1/2/3 → display 0/1/2
                 case "wheel-get-rpm-display-mode":  WheelRpmDisplayMode = value; break;
                 case "wheel-old-rpm-brightness":     WheelESRpmBrightness = value; break;

@@ -1224,6 +1224,7 @@ commands:
       id: [3]
       bytes: 1
       type: int
+      # 1-based: 1=Buttons, 2=Combined, 3=Split
 
     stick-mode:
       read: 64
@@ -1231,6 +1232,7 @@ commands:
       id: [5]
       bytes: 2
       type: int
+      # 0=Buttons, 256=D-Pad
 
     set-rpm-display-mode:
       read: -1
