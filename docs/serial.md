@@ -331,8 +331,8 @@ Full serial number = serial-a + serial-b (32 ASCII chars total).
 | colors | `00` | 15 | hex | Write-only |
 | brightness | `01` | 1 | int | |
 | rpm-timings | `02` | 10 | array | |
-| paddles-mode | `03` | 1 | int | |
-| stick-mode | `05` | 2 | int | |
+| paddles-mode | `03` | 1 | int | 1=Buttons, 2=Combined, 3=Split (1-based) |
+| stick-mode | `05` | 2 | int | 0=Buttons, 256=D-Pad |
 | set-rpm-display-mode | `07` | 1 | int | Write-only |
 | get-rpm-display-mode | `08` | 1 | int | Read-only |
 | clutch-point | `09` | 1 | int | |

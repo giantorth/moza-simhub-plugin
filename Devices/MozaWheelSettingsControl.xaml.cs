@@ -325,7 +325,7 @@ namespace MozaPlugin.Devices
             int val = PaddlesModeCombo.SelectedIndex;
             _data!.WheelPaddlesMode = val;
             ClutchPointPanel.Visibility = val == 2 ? Visibility.Visible : Visibility.Collapsed;
-            _device!.WriteSetting("wheel-paddles-mode", val);
+            _device!.WriteSetting("wheel-paddles-mode", val + 1); // display 0/1/2 → raw 1/2/3
             _plugin.SaveSettings();
         }
 
@@ -353,7 +353,7 @@ namespace MozaPlugin.Devices
             if (_suppressEvents || _plugin == null) return;
             int val = StickModeCheck.IsChecked == true ? 1 : 0;
             _data!.WheelStickMode = val;
-            _device!.WriteSetting("wheel-stick-mode", val);
+            _device!.WriteSetting("wheel-stick-mode", val * 256); // 0=Buttons, 256=D-Pad
             _plugin.SaveSettings();
         }
 

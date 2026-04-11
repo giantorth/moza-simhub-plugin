@@ -690,6 +690,20 @@ D11 (R21/R25/R27 Ultra) omits bus 5; S09 CM2 dash connects as bus 19 directly of
 
 ---
 
+## Wheel input setting value encoding (group 0x3F/0x40)
+
+Several wheel input configuration commands use non-obvious value encoding. These were confirmed by cross-referencing Pithouse USB captures with the boxflat source.
+
+| Command | ID | Raw values | Notes |
+|---------|-----|-----------|-------|
+| paddles-mode | `03` | 1=Buttons, 2=Combined, 3=Split | **1-based**, not 0-based. Sending 0 is invalid and causes the firmware to break all paddle input including shift paddles |
+| stick-mode | `05` | 0=Buttons, 256=D-Pad | 2-byte field; D-Pad mode sets the high byte (`0x0100`) |
+| rpm-indicator-mode | `04` | 1=RPM, 2=Off, 3=On | **1-based** |
+
+See [serial.md](serial.md) and [serial.yml](serial.yml) for the full command tables.
+
+---
+
 ## Open questions
 
 - ~~Value scaling for specialized types~~ — **RESOLVED**: All conversion formulas determined. Key insight: the `percent_1` scale factor is exactly 10.0 (not 10.22 as previously estimated from capture data)
