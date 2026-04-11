@@ -21,11 +21,15 @@ namespace MozaPlugin.Telemetry
         private int _tickCounter;
         private int _testFrameCounter;
         private int _modeCounter;
+        private int _slowCounter;
         private int _baseTickMs;  // Timer period derived from fastest tier's package_level
+        private byte _sequenceCounter;
+        private int _displayConfigPage;
 
         // Settings
         public byte FlagByte { get; set; } = 0x01;
         public bool SendTelemetryMode { get; set; } = true;
+        public bool SendSequenceCounter { get; set; } = true;
         public bool TestMode { get; set; } = false;
 
         public MultiStreamProfile? Profile
@@ -82,6 +86,9 @@ namespace MozaPlugin.Telemetry
             _modeCounter = 0;
             _testFrameCounter = 0;
             _framesSent = 0;
+            _sequenceCounter = 0;
+            _slowCounter = 0;
+            _displayConfigPage = 0;
 
             SendChannelConfig();
 
@@ -143,11 +150,29 @@ namespace MozaPlugin.Telemetry
                     }
                 }
 
+                // Telemetry enable signal — Pithouse sends this at ~48 Hz the entire session.
+                // Without it the wheel may ignore 0x43/7D:23 data frames.
+                _connection.Send(BuildTelemetryEnableFrame());
+
+                // Sequence counter to the base unit (~30 Hz, matching our tick rate)
+                if (SendSequenceCounter)
+                    _connection.Send(BuildSequenceCounterFrame());
+
                 _tickCounter++;
 
                 // Periodically send telemetry mode frame to keep wheel in multi-channel mode
                 if (SendTelemetryMode && (_modeCounter++ % 10 == 0))
                     _connection.Send(BuildTelemetryModeFrame());
+
+                // ~1 Hz slow streams: heartbeat, keepalive, display config, status push
+                int slowInterval = Math.Max(1, 1000 / _baseTickMs);
+                if (_slowCounter++ % slowInterval == 0)
+                {
+                    SendHeartbeat();
+                    SendDashKeepalive();
+                    SendDisplayConfig();
+                    SendStatusPush();
+                }
             }
             catch (Exception ex)
             {
@@ -235,6 +260,112 @@ namespace MozaPlugin.Telemetry
             };
             frame.Add(MozaProtocol.CalculateChecksum(frame.ToArray()));
             return frame.ToArray();
+        }
+
+        private byte[] BuildTelemetryEnableFrame()
+        {
+            // 7E 06 41 17 FD DE 00 00 00 00 [checksum]
+            // Pithouse sends this at ~48 Hz the entire telemetry session.
+            var frame = new System.Collections.Generic.List<byte>
+            {
+                MozaProtocol.MessageStart,        // 7E
+                6,                                // N = cmd(2) + data(4)
+                MozaProtocol.BaseSendTelemetry,   // 41
+                MozaProtocol.DeviceWheel,         // 17
+                0xFD, 0xDE,                       // cmd: dash telemetry enable
+                0x00, 0x00, 0x00, 0x00,           // data: always zero
+            };
+            frame.Add(MozaProtocol.CalculateChecksum(frame.ToArray()));
+            return frame.ToArray();
+        }
+
+        private byte[] BuildSequenceCounterFrame()
+        {
+            // 7E 06 2D 13 F5 31 00 00 00 XX [checksum]
+            // Pithouse sends this at ~47 Hz; XX increments each send.
+            byte seq = _sequenceCounter++;
+            var frame = new System.Collections.Generic.List<byte>
+            {
+                MozaProtocol.MessageStart,  // 7E
+                6,                          // N = cmd(2) + data(4)
+                0x2D,                       // group: sequence counter
+                MozaProtocol.DeviceBase,    // 13
+                0xF5, 0x31,                 // cmd ID
+                0x00, 0x00, 0x00, seq,      // data: counter in last byte
+            };
+            frame.Add(MozaProtocol.CalculateChecksum(frame.ToArray()));
+            return frame.ToArray();
+        }
+
+        /// <summary>
+        /// Send heartbeat (group 0x00, n=0) to all device IDs 18–30.
+        /// Pithouse does this ~once per second as a keep-alive/presence check.
+        /// </summary>
+        private void SendHeartbeat()
+        {
+            for (byte dev = 18; dev <= 30; dev++)
+            {
+                var frame = new byte[] { MozaProtocol.MessageStart, 0x00, 0x00, dev, 0x00 };
+                frame[4] = MozaProtocol.CalculateChecksum(frame);
+                _connection.Send(frame);
+            }
+        }
+
+        /// <summary>
+        /// Send keepalive (group 0x43, n=1, payload 0x00) to dash (0x14) and dev21 (0x15).
+        /// Pithouse sends these ~1.5/s during active telemetry.
+        /// </summary>
+        private void SendDashKeepalive()
+        {
+            foreach (byte dev in new byte[] { MozaProtocol.DeviceDash, 0x15 })
+            {
+                var frame = new byte[] { MozaProtocol.MessageStart, 0x01, MozaProtocol.TelemetrySendGroup, dev, 0x00, 0x00 };
+                frame[5] = MozaProtocol.CalculateChecksum(frame);
+                _connection.Send(frame);
+            }
+        }
+
+        /// <summary>
+        /// Send display config push (group 0x43, cmd 7C:27) to the wheel.
+        /// Pithouse sends two payloads per page, cycling through pages ~1/s.
+        /// Byte values are page-derived: byte2 = 5 + 2*page, byte4 = 3 + 2*page,
+        /// companion byte2 = 6 + 2*page. Confirmed across 1-page and 3-page dashboards.
+        /// </summary>
+        private void SendDisplayConfig()
+        {
+            int pageCount = _profile?.PageCount ?? 1;
+            int page = _displayConfigPage % pageCount;
+            _displayConfigPage++;
+
+            byte b2 = (byte)(0x05 + 2 * page);
+            byte b4 = (byte)(0x03 + 2 * page);
+            byte z  = (byte)(0x06 + 2 * page);
+
+            // 7E 0A 43 17 7C 27 0F 80 [b2] 00 [b4] 00 FE 01 [checksum]
+            var frame1 = new byte[] { MozaProtocol.MessageStart, 0x0A, MozaProtocol.TelemetrySendGroup,
+                MozaProtocol.DeviceWheel, 0x7C, 0x27, 0x0F, 0x80, b2, 0x00, b4, 0x00, 0xFE, 0x01, 0x00 };
+            frame1[14] = MozaProtocol.CalculateChecksum(frame1);
+            _connection.Send(frame1);
+
+            // 7E 06 43 17 7C 27 0F 00 [z] 00 [checksum]
+            var frame2 = new byte[] { MozaProtocol.MessageStart, 0x06, MozaProtocol.TelemetrySendGroup,
+                MozaProtocol.DeviceWheel, 0x7C, 0x27, 0x0F, 0x00, z, 0x00, 0x00 };
+            frame2[10] = MozaProtocol.CalculateChecksum(frame2);
+            _connection.Send(frame2);
+        }
+
+        /// <summary>
+        /// Send status push (group 0x43, cmd FC:00) to the wheel.
+        /// Pithouse sends this ~1/s. Data is session(1) + ack_seq(2 LE);
+        /// we send zeros since we haven't done a file transfer session.
+        /// </summary>
+        private void SendStatusPush()
+        {
+            // 7E 05 43 17 FC 00 00 00 00 [checksum]
+            var frame = new byte[] { MozaProtocol.MessageStart, 0x05, MozaProtocol.TelemetrySendGroup,
+                MozaProtocol.DeviceWheel, 0xFC, 0x00, 0x00, 0x00, 0x00, 0x00 };
+            frame[9] = MozaProtocol.CalculateChecksum(frame);
+            _connection.Send(frame);
         }
 
         public void Dispose()

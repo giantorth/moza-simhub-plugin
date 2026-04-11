@@ -55,6 +55,12 @@ namespace MozaPlugin.Telemetry
         /// </summary>
         public List<DashboardProfile> Tiers { get; set; } = new List<DashboardProfile>();
 
+        /// <summary>
+        /// Number of pages (children) in the dashboard. Used for 7c:27 display config frames.
+        /// Defaults to 1 for profiles that don't come from an mzdash file.
+        /// </summary>
+        public int PageCount { get; set; } = 1;
+
         public override string ToString()
         {
             var parts = Tiers.Select(t => $"L{t.PackageLevel}:{t.Channels.Count}ch/{t.TotalBytes}B");

@@ -315,8 +315,9 @@ namespace MozaPlugin
             if (_telemetrySender == null) return;
             var s = _settings;
 
-            _telemetrySender.FlagByte          = s.TelemetryFlagByte;
-            _telemetrySender.SendTelemetryMode = s.TelemetrySendModeFrame;
+            _telemetrySender.FlagByte            = s.TelemetryFlagByte;
+            _telemetrySender.SendTelemetryMode   = s.TelemetrySendModeFrame;
+            _telemetrySender.SendSequenceCounter = s.TelemetrySendSequenceCounter;
 
             // Resolve the active multi-stream profile
             MultiStreamProfile? profile = null;

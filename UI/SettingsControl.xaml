@@ -726,6 +726,10 @@
                         <CheckBox x:Name="TelemetrySendModeCheck" Content="Send mode frame (0x40/28:02) periodically"
                                   Margin="0,0,0,8" Click="TelemetrySendModeCheck_Click"/>
 
+                        <!-- Sequence counter toggle -->
+                        <CheckBox x:Name="TelemetrySeqCounterCheck" Content="Send sequence counter (0x2D) to base"
+                                  Margin="0,0,0,8" Click="TelemetrySeqCounterCheck_Click"/>
+
                         <!-- Separator -->
                         <Separator Margin="0,4,0,8"/>
                         <TextBlock Text="Test Pattern" FontWeight="SemiBold" Margin="0,0,0,6"/>

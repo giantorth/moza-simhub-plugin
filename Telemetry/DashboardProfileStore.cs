@@ -115,7 +115,19 @@ namespace MozaPlugin.Telemetry
             if (urls.Count == 0)
                 return null;
 
-            return BuildMultiStreamProfile(name, urls);
+            var profile = BuildMultiStreamProfile(name, urls);
+
+            // Extract page count from mzdash children array
+            try
+            {
+                var json = JObject.Parse(content);
+                var children = json["children"] as JArray;
+                if (children != null && children.Count > 0)
+                    profile.PageCount = children.Count;
+            }
+            catch { /* keep default of 1 */ }
+
+            return profile;
         }
 
         /// <summary>

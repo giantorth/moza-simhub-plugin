@@ -73,7 +73,7 @@ Sent to every known device ID (18–30) roughly once per second. Payload length 
 ## Unsolicited messages
 
 - **Group 0x0E** from wheel (device 23): ASCII debug/log text, ~every 2s. Contains NRF radio stats, e.g. `NRFloss[avg:0.00000%] recvGap[avg:4.70100ms]`.
-- **Group 0x06** from wheel (device 23): emitted on connection, ~12 bytes. Possibly a partial hardware identifier.
+- **Group 0x06** from wheel (device 23): 12-byte hardware identifier. In `connect-wheel-start-game.json` this is host-initiated (part of the probe sequence), not purely unsolicited. VGS response: `be 49 30 02 14 71 35 04 30 30 33 37`.
 
 ---
 
@@ -81,11 +81,15 @@ Sent to every known device ID (18–30) roughly once per second. Payload length 
 
 When a wheel is detected, Pithouse queries device 0x17 for identity. All identity strings are 16-byte null-padded ASCII.
 
+Observed probe order (from `connect-wheel-start-game.json`): 0x09, 0x04, 0x06, 0x02, 0x05, 0x07, 0x0F, 0x11, 0x08, 0x10.
+
 | Group | Cmd ID | Response | Notes |
 |-------|--------|----------|-------|
+| 0x09 | — (n=0) | 2 bytes (e.g. `00 01`) | **Presence/ready check** — sent first, before all other probes. Response may indicate sub-device count |
 | 0x02 | — | 1 byte (e.g. `0x02`) | Possibly protocol version |
-| 0x04 | `0x00` + 3 zero bytes | 2 bytes | Unknown |
-| 0x05 | `0x00` + 3 zero bytes | 4 bytes, per-model | Capability flags? VGS: `01 02 1f 01`; CS V2.1: `01 02 26 00` |
+| 0x04 | `0x00` + 3 zero bytes | 4 bytes, per-model | VGS: `01 02 04 06`; Display sub-device: `01 02 08 06`. Byte 2 may encode device type (0x04=wheel, 0x08=display) |
+| 0x05 | `0x00` + 3 zero bytes | 4 bytes, per-model | Capability flags? VGS: `01 02 1f 01`; CS V2.1: `01 02 26 00`; Display: `01 02 00 00` |
+| 0x06 | — (n=0) | 12 bytes | Hardware identifier. VGS: `be 49 30 02 14 71 35 04 30 30 33 37` |
 | 0x07 | `0x01` | 16-byte string | **Model name** — `VGS`, `CS V2.1`, `R5 Black # MOT-1` |
 | 0x08 | `0x01` | 16-byte string | **HW version** — `RS21-W08-HW SM-C` |
 | 0x08 | `0x02` | 16-byte string | **HW revision** — `U-V12`, `U-V02` |
@@ -95,6 +99,21 @@ When a wheel is detected, Pithouse queries device 0x17 for identity. All identit
 | 0x11 | `0x04` | 2 bytes | Unknown |
 
 Full serial = two halves concatenated (32 ASCII chars).
+
+### Display sub-device (inside VGS wheel)
+
+During dashboard upload, Pithouse runs the same identity probe sequence against a **Display** sub-module inside the wheel (routed via `0x43` frames). The Display has a distinct identity:
+
+| Field | VGS (wheel) | Display (sub-module) |
+|-------|-------------|---------------------|
+| Model (0x07) | `VGS` | `Display` |
+| HW version (0x08/01) | `RS21-W08-HW SM-C` | `RS21-W08-HW SM-D` |
+| HW revision (0x08/02) | `U-V12` | `U-V14` |
+| Caps (0x05) | `01 02 1f 01` | `01 02 00 00` |
+| Type (0x04) byte 2 | `04` | `08` |
+| Serial | (differs) | (differs) |
+
+The SM-C/SM-D suffix distinguishes the main controller from the display controller. The Display sub-device has no capability flags (`00 00` vs `1f 01`).
 
 ---
 
@@ -249,22 +268,23 @@ Pit House sends several concurrent command streams when telemetry is active. Ana
 
 ### Concurrent outbound streams during active telemetry
 
-| Stream | Rate | Device | Group/Cmd | Purpose |
-|--------|------|--------|-----------|---------|
-| Sequence counter | ~45/s | base (0x13) | `0x2D/F5:31` | Frame sync to base |
-| Telemetry enable | ~42/s | wheel (0x17) | `0x41/FD:DE` data=`00:00:00:00` | Mode/enable flag |
-| **Live telemetry** | ~31/s | wheel (0x17) | `0x43/7D:23` | Bit-packed game data |
-| Heartbeat | ~8/s | all devices | `0x00` n=0 | Keep-alive |
-| RPM LED position | ~4/s | wheel (0x17) | `0x3F/1A:00` | LED bar position |
-| Telemetry mode | ~3/s | wheel (0x17) | `0x40/28:02` data=`01:00` | Set/poll multi-channel mode |
-| Dash heartbeat | ~1.5/s | dash/dev21 | `0x43` n=1 | Dash keep-alive |
-| Settings block | ~1/s | wheel (0x17) | `0x43/7C:00` | Config sync |
-| Status push | ~1/s | wheel (0x17) | `0x43/FC:00` | Status push |
-| Button LED | ~1/s | wheel (0x17) | `0x3F/1A:01` | Button LED state |
+| Stream | Rate | Device | Group/Cmd | Purpose | Required? |
+|--------|------|--------|-----------|---------|-----------|
+| Sequence counter | ~45/s | base (0x13) | `0x2D/F5:31` | Frame sync to base | TBD |
+| Telemetry enable | ~48/s | wheel (0x17) | `0x41/FD:DE` data=`00:00:00:00` | Mode/enable flag | Likely — runs entire session |
+| **Live telemetry** | ~31/s | wheel (0x17) | `0x43/7D:23` | Bit-packed game data | Yes |
+| Heartbeat | ~1/s each | all devices (18–30) | `0x00` n=0 | Keep-alive / presence check | Likely |
+| RPM LED position | ~4/s | wheel (0x17) | `0x3F/1A:00` | LED bar position | Separate feature |
+| Telemetry mode | ~3/s | wheel (0x17) | `0x40/28:02` data=`01:00` | Set/poll multi-channel mode | Likely |
+| Dash keepalive | ~1.5/s | dash (0x14), dev21 (0x15) | `0x43` n=1, data=`00` | Dash/dev21 keep-alive | TBD |
+| Display config | ~1/s | wheel (0x17) | `0x43/7C:27` | Page-cycled display params | TBD |
+| Status push | ~1/s | wheel (0x17) | `0x43/FC:00` | Session acknowledgment | TBD |
+| Settings block | ~1/s | wheel (0x17) | `0x43/7C:00` | Config sync | No (file transfer) |
+| Button LED | ~1/s | wheel (0x17) | `0x3F/1A:01` | Button LED state | Separate feature |
 
 ### Startup timeline
 
-From `dash.ndjson` (capture starts before telemetry is active):
+From `dash.ndjson` (capture starts with telemetry already being set up):
 
 | Time | Command | Notes |
 |------|---------|-------|
@@ -279,19 +299,42 @@ From `dash.ndjson` (capture starts before telemetry is active):
 
 The enable signal (`0x41`) runs from t=0.022 — **0.65 seconds before** the first telemetry frame. The telemetry mode set (`0x40/28:02 data=01:00`) runs from t=0.244.
 
-### Minimum viable sender (hypothesis)
+### Full connect-to-telemetry timeline
+
+From `connect-wheel-start-game.json` (capture starts with Pithouse running, no wheel connected, then wheel plugged in and Assetto Corsa started):
+
+| Phase | Time | Events |
+|-------|------|--------|
+| **Idle** | t=0–7.8s | Heartbeats to all devices (~1/s each), `0x43` keepalive to dev20/21/23, `0x0E` debug poll to dev18/base. Only dev18, base(19), wheel(23) respond |
+| **Wheel detected** | t=7.82s | Identity probe: 0x09 → 0x04 → 0x06 → 0x02 → 0x05 → 0x07 → 0x0F → 0x11 → 0x08 → 0x10 |
+| **Config burst** | t=8.2–9.1s | ~50 `0x40` commands (channel enables, page config, LED config). `0x29` to base once. `0x40/28:02` polling starts at ~3 Hz |
+| **Dashboard upload** | t=21.4–23.5s | `0x43/7c:00` chunked file transfer (~60 chunks). Display sub-device probed during transfer |
+| **Pre-game steady state** | t=24–30.5s | `0x40/28:02` polling continues (response always `00:00`), heartbeats, keepalives. `0x28` queries to base at t=27.3s and t=29.3s |
+| **Game starts** | t=30.568s | `0x41/FD:DE` enable (~48 Hz) and `0x2D/F5:31` seq counter (~47 Hz) start simultaneously |
+| **First telemetry** | t=30.600s | `0x43/7D:23` live data begins (flag base=0x02). Level-500 is a 2-byte stub. ~31 frames/s steady state |
+| **Data changes** | t=40.2s | Telemetry values begin changing (car on track after ~9.6s of loading) |
+
+**Key observation:** The `0x40/28:02 data=01:00` polling runs for ~22 seconds before the game starts, and the wheel **always responds `00:00`** (never `01:00`). Telemetry flows regardless. The wheel may not actually acknowledge this mode setting, or the response value has a different meaning than expected.
+
+### Minimum viable sender
 
 The `cs-to-vgs-wheel.ndjson` capture shows that Pit House sends the `0x40` channel configuration burst on every wheel connection, even without a dashboard upload. This suggests the wheel may require channel declarations before accepting telemetry.
 
 **Recommended startup sequence:**
 
 1. **Channel configuration** (`0x40`): send `1e:00`/`1e:01` for each channel in the dashboard, plus `09:00`, page config (`1c`, `1d`), and `28:02 data=0100`
-2. **Live telemetry** (`0x43/7D:23`): bit-packed frames at ~20-30 Hz
-3. **Optional**: `0x41/FD:DE` enable signal (~50 Hz) and `0x40/28:02 data=01:00` polling (~3 Hz)
+2. **Telemetry enable** (`0x41/FD:DE data=00:00:00:00`): start sending at ~30+ Hz, runs the entire session
+3. **Live telemetry** (`0x43/7D:23`): bit-packed frames at ~20-30 Hz
+4. **Sequence counter** (`0x2D/F5:31`): incrementing counter to base at ~30+ Hz
+5. **Telemetry mode polling** (`0x40/28:02 data=01:00`): ~3 Hz
+6. **Heartbeat** (`0x00` n=0): to all devices 18–30, ~1/s
+7. **Dash keepalive** (`0x43` n=1 data=`00`): to devices 0x14, 0x15, ~1/s
+8. **Display config** (`0x43/7C:27`): page-cycled params, ~1/s
+9. **Status push** (`0x43/FC:00`): session ack with zero data, ~1/s
 
-The RPM LEDs work with zero preamble — `0x3F/1A:00` data is accepted immediately. By analogy, `7D:23` frames alone *might* work if the wheel already has valid channel config in EEPROM from a prior Pit House session. But the safest approach is to send the channel config burst first.
+The RPM LEDs work with zero preamble — `0x3F/1A:00` data is accepted immediately.
 
-**Note:** Requires user testing to confirm. The critical prerequisite is that Pit House has already uploaded a dashboard to the wheel.
+**Critical prerequisite:** Pit House must have already uploaded a dashboard to the wheel. The `0x41/FD:DE` enable signal is likely required — Pithouse sends it at ~48 Hz for the entire session, starting simultaneously with (or slightly before) the first telemetry frame.
 
 ---
 
@@ -315,6 +358,22 @@ Cmd `[0xF5, 0x31]`. Data: `00 00 00 XX` where XX increments by 1 each send. Sequ
 
 `4F XX 00/01` where XX cycles `08`→`09`→`0A`→`0B`. Response inserts `0xFF` status byte.
 
+### Group 0x28 (host → device 0x13, occasional)
+
+Queries device parameters from the base unit. Request format: `[sub_id] 00 00`. Response mirrors sub_id with 2 data bytes.
+
+Observed in `connect-wheel-start-game.json` (sent twice, ~2s apart):
+
+| Sub-cmd | Response value | Notes |
+|---------|---------------|-------|
+| `0x01` | `01 C2` (450) | Base parameter |
+| `0x17` | `01 C2` (450) | Wheel (device 0x17) parameter — possibly FFB strength/range |
+| `0x02` | `03 E8` (1000) | Base parameter |
+
+### Group 0x29 (host → device 0x13, once during config)
+
+Sent once during dashboard config burst. Payload: `13 04 4C` (device 0x13, value 1100). Response mirrors exactly. Possibly a timing/rate setting for the base.
+
 ### Group 0x2B (host → device 0x13, occasional)
 
 `02 00 00`, sent on state changes (pause, session end).
@@ -325,7 +384,7 @@ Cmd `[0xF5, 0x31]`. Data: `00 00 00 XX` where XX increments by 1 each send. Sequ
 |--------|------|-----------|-------|
 | `[0xFC, 0x00]` | 3 bytes | varies | Session acknowledgment (`session + ack_seq`) |
 | `[0x7C, 0x00]` | varies | varies | Session-based file transfer / RPC (see Dashboard upload protocol) |
-| `[0x7C, 0x27]` | 4–8 bytes | ~1/s | Periodic display config push |
+| `[0x7C, 0x27]` | 4–8 bytes | ~1/s | Periodic display config push (page-cycled; see § Dashboard upload) |
 | `[0x7C, 0x23]` | 8 bytes | once | Dashboard activation notification |
 
 ### Group 0x43 broadcast (devices 0x14, 0x15)
@@ -418,7 +477,16 @@ After the file is transferred, Pit House sends a burst of `0x40` commands to con
 
 **4. Periodic display config (group 0x43, cmd `7c:27`)**
 
-Sent ~1/s after the dashboard is active. Two payloads per cycle: `0f 80 05 00 03 00 fe 01` (8 bytes) and `0f 00 06 00` (4 bytes). Likely RPM bar or display parameters.
+Sent ~1/s after the dashboard is active. Two payloads per page, cycling through all dashboard pages. Values are **page-derived**, confirmed across 1-page (rpm-only) and 3-page (F1) dashboards:
+
+| Page `p` | 8-byte payload | 4-byte payload |
+|-----------|---------------|---------------|
+| 0 | `0f 80 05 00 03 00 fe 01` | `0f 00 06 00` |
+| 1 | `0f 80 07 00 05 00 fe 01` | `0f 00 08 00` |
+| 2 | `0f 80 09 00 07 00 fe 01` | `0f 00 0a 00` |
+| Formula | `0f 80 (5+2p) 00 (3+2p) 00 fe 01` | `0f 00 (6+2p) 00` |
+
+Bytes `0f`, `80`/`00`, `fe 01` are constant. The page count equals the mzdash `children` array length.
 
 A one-shot `7c:23` command is sent when a dashboard is first activated, with 8 bytes of display parameters.
 
@@ -654,10 +722,14 @@ D11 (R21/R25/R27 Ultra) omits bus 5; S09 CM2 dash connects as bus 19 directly of
 
 - ~~Value scaling for specialized types~~ — **RESOLVED**: All conversion formulas determined. Key insight: the `percent_1` scale factor is exactly 10.0 (not 10.22 as previously estimated from capture data)
 - **Dashboard byte limit configuration** — stored at config object offset `+0x30`, set during dashboard upload (group 0x40). Exact mechanism for setting this limit not yet traced
-- **Cold-start initialization** — no capture of a full power-on to game-start flow exists; unclear if the wheel needs re-initialization after power cycle or if stored config persists
+- **Cold-start initialization** — `connect-wheel-start-game.json` captures wheel connection → game start, confirming the full init sequence (identity probe → config burst → dashboard upload → telemetry). Still unclear if the wheel needs re-initialization after power cycle or if EEPROM config persists across power cycles
 - ~~Flag byte origin~~ — **RESOLVED**: The flag is a monotonic counter, incremented each time a new client connects. It is NOT communicated to the wheel during connection setup. The flag serves only as a host-side map key for client multiplexing. **The wheel firmware almost certainly does not validate the flag byte.** Any fixed value (e.g., `0x01`) should work for sending telemetry.
 - **MDD (standalone dash)** — no captures of telemetry sent to device 0x14; protocol may differ
 - ~~Gear encoding for reverse~~ — **RESOLVED**: `int30` is a signed 5-bit value: -1=R, 0=N, 1–12=gears. Reverse is stored as 31 (two's complement -1 in 5 bits).
 - **EEPROM direct access** — group 10 protocol found in rs21_parameter.db but never observed in USB captures; needs live verification
 - **Base ambient LEDs** — groups 32/34 commands found in rs21_parameter.db; not captured in USB traces (requires base with LED strips)
 - **Wheel LED groups 2-4** — Single, Rotary, and Ambient groups found in rs21_parameter.db with up to 56 LEDs; only groups 0 (Shift/RPM) and 1 (Button) confirmed in captures so far
+- **Group 0x09 semantics** — presence/ready check sent first during probe. Response `00 01` may indicate sub-device count (VGS has 1 Display sub-device). Needs verification with other wheel models
+- **Group 0x28 / 0x29 purpose** — group 0x28 queries base for per-device parameters (values 450, 1000 seen); group 0x29 sets a base parameter (value 1100). Possibly FFB or calibration related
+- **0x40/28:02 response discrepancy** — wheel always responds `00:00` to `28:02 data=01:00` in `connect-wheel-start-game.json`, yet telemetry flows. In `dash.ndjson` timeline the same command appears to be accepted. May depend on timing or dashboard state
+- **Display sub-device routing** — identity queries for the Display sub-module appear embedded inside `0x43` frames during dashboard upload. The exact routing mechanism (how Pithouse addresses the Display vs the wheel main controller) needs further analysis

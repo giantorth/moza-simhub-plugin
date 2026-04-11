@@ -991,6 +991,7 @@ namespace MozaPlugin
                 TelemetryEnabledCheck.IsChecked = s.TelemetryEnabled;
                 TelemetryFlagByteBox.Text = $"0x{s.TelemetryFlagByte:X2}";
                 TelemetrySendModeCheck.IsChecked = s.TelemetrySendModeFrame;
+                TelemetrySeqCounterCheck.IsChecked = s.TelemetrySendSequenceCounter;
 
                 // Populate profile dropdown
                 TelemetryProfileCombo.Items.Clear();
@@ -1127,6 +1128,14 @@ namespace MozaPlugin
         {
             if (_suppressEvents) return;
             _plugin.Settings.TelemetrySendModeFrame = TelemetrySendModeCheck.IsChecked == true;
+            _plugin.ApplyTelemetrySettings();
+            _plugin.SaveSettings();
+        }
+
+        private void TelemetrySeqCounterCheck_Click(object sender, RoutedEventArgs e)
+        {
+            if (_suppressEvents) return;
+            _plugin.Settings.TelemetrySendSequenceCounter = TelemetrySeqCounterCheck.IsChecked == true;
             _plugin.ApplyTelemetrySettings();
             _plugin.SaveSettings();
         }

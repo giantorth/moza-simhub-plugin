@@ -69,5 +69,8 @@ namespace MozaPlugin
 
         // Whether to send the 0x40/28:02 telemetry mode frame periodically
         public bool TelemetrySendModeFrame { get; set; } = true;
+
+        // Whether to send the 0x2D/F5:31 sequence counter to the base (~30 Hz)
+        public bool TelemetrySendSequenceCounter { get; set; } = true;
     }
 }
