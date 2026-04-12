@@ -306,64 +306,40 @@ Pit House sends several concurrent command streams when telemetry is active. Ana
 | Settings block | ~1/s | wheel (0x17) | `0x43/7C:00` | Config sync | No (file transfer) |
 | Button LED | ~1/s | wheel (0x17) | `0x3F/1A:01` | Button LED state | Separate feature |
 
-### Startup timeline
+### Telemetry startup timeline
 
-From `dash.ndjson` (capture starts with telemetry already being set up):
+Two captures provide complementary views of the startup sequence:
 
-| Time | Command | Notes |
-|------|---------|-------|
-| t=0.015 | `0x2D/F5:31` | Sequence counter starts immediately |
-| t=0.022 | `0x41/FD:DE` | Enable signal starts (runs continuously at ~50/s) |
-| t=0.032 | `0x00` heartbeat | First heartbeat to wheel |
-| t=0.135 | `0x3F/1A:00` | First RPM LED update |
-| t=0.150 | `0x00` heartbeat burst | Heartbeat to ALL devices |
-| t=0.244 | `0x40/28:02 data=01:00` | Set telemetry mode to multi-channel |
-| t=0.591 | `0x43/FC:00` | Status push |
-| **t=0.672** | **`0x43/7D:23`** | **First live telemetry frame** |
+**Preamble detail** — from `moza-startup.json` (raw Wireshark JSON, 2026-04-12). This is the most precise source, decoded directly from raw USB packets with individual frame extraction:
 
-The enable signal (`0x41`) runs from t=0.022 — **0.65 seconds before** the first telemetry frame. The telemetry mode set (`0x40/28:02 data=01:00`) runs from t=0.244.
+| Offset | Frame | Notes |
+|--------|-------|-------|
+| +0.000 | `7c:00` type=0x81 session 0x01 + 0x02 | Opens two SerialStream sessions simultaneously |
+| +0.009 | (IN) `fc:00` acks for both sessions | Wheel accepts immediately |
+| +0.013 | (IN) `7c:00` data on session 0x02 | Wheel dumps channel registrations (v1/gameData/Rpm etc.) |
+| +0.053-0.087 | `fc:00` acks (seq 04→17) | Host acks each incoming data chunk |
+| +0.064-0.070 | `7c:00` tier definition TO wheel | Host sends tier config (channel indices, compression codes, bit widths) |
+| +0.072 | First `7d:23` telemetry (flag=0x00) | Interleaved with acks — smaller "probe" tier, n=14 |
+| +0.100-1.000 | `7d:23` flag=0x00 (~25 frames) | ~30Hz, heartbeats only — no 0x41 enable yet |
+| +0.700-0.970 | Identity probes to wheel/base/pedals | Groups 0x00, 0x02-0x11 |
+| +0.970 | **`0x0E` debug poll starts** | Parameter table reads at ~9Hz to 0x12/0x13/0x17 |
+| +1.054 | **First `0x41/FD:DE` enable** | 1.05s after session opens |
+| +1.089 | `0x40` channel config (1E, 09:00) | Deferred until after session exchange |
+| +1.124-1.127 | `7c:00` additional config on session 0x02 | Second batch of tier data |
+| +1.130 | **First `7d:23` with flag=0x02** (n=24) | Full telemetry — session exchange complete |
+| +1.200 | Display sub-device probe | Identity commands via 0x43 (model="Display") |
 
-### Telemetry preamble detail (from raw JSON, 2026-04-12)
-
-From `moza-startup.json` (raw Wireshark JSON, not ndjson), the precise frame-by-frame startup sequence after Pithouse connects to a wheel is:
-
-| Time | Frame | Notes |
-|------|-------|-------|
-| t=8.756 | `7c:00` type=0x81 session 0x01 + 0x02 | Opens two SerialStream sessions simultaneously |
-| t=8.765 | (IN) `fc:00` session 0x01 ack + session 0x02 ack | Wheel accepts both sessions immediately |
-| t=8.769 | (IN) `7c:00` data on sessions 0x01+0x02 | Wheel starts dumping channel registrations (v1/gameData/Rpm etc.) |
-| t=8.809-8.843 | `fc:00` acks for session 0x02 (seq 04→17) | **Host acks each incoming data chunk** |
-| t=8.820-8.826 | `7c:00` data TO wheel on session 0x02 | Host sends config data back to wheel |
-| t=8.828 | **First `7d:23` telemetry** (flag=0x00, n=14) | Interleaved with fc:00 acks — smaller "probe" tier |
-| t=8.857-9.758 | `7d:23` with flag=0x00 (~25 frames) | Continues at ~30Hz, no 0x41 enable yet |
-| t=9.443-9.724 | Identity probes to wheel/base/pedals | Groups 0x00, 0x02-0x11 to devices 0x12, 0x13, 0x17 |
-| t=9.810 | **First `0x41/FD:DE` enable** | **1.05s after session opens!** |
-| t=9.845-9.866 | `0x40` channel config (0b:00, 09:00) | **1.1s after session opens** — deferred, not immediate |
-| t=9.880-9.883 | `7c:00` more config data on session 0x02 | Additional config exchange |
-| t=9.886 | **First `7d:23` with flag=0x02** (n=24) | Transitions to full telemetry — session data exchange complete |
-
-**Key findings for plugin implementation:**
-1. fc:00 acks for session 0x02 data are sent **during** the first second, interleaved with early telemetry
-2. `0x41` enable signal does NOT start until ~1s after session opens — sending it immediately may interfere
-3. `0x40` channel config (1E enables, 09:00) is sent AFTER the session data exchange, not before
-4. Flag byte transitions from 0x00 (probe tier) to 0x02 (full tier) after session completes
-
-### Full connect-to-telemetry timeline
-
-From `connect-wheel-start-game.json` (capture starts with Pithouse running, no wheel connected, then wheel plugged in and Assetto Corsa started):
+**Full connect-to-telemetry** — from `connect-wheel-start-game.json` (wheel plugged in cold, then Assetto Corsa started):
 
 | Phase | Time | Events |
 |-------|------|--------|
-| **Idle** | t=0–7.8s | Heartbeats to all devices (~1/s each), `0x43` keepalive to dev20/21/23, `0x0E` debug poll to dev18/base. Only dev18, base(19), wheel(23) respond |
+| **Idle** | t=0–7.8s | Heartbeats, keepalives, `0x0E` debug poll. Only dev18/19/23 respond |
 | **Wheel detected** | t=7.82s | Identity probe: 0x09 → 0x04 → 0x06 → 0x02 → 0x05 → 0x07 → 0x0F → 0x11 → 0x08 → 0x10 |
-| **Config burst** | t=8.2–9.1s | ~50 `0x40` commands (channel enables, page config, LED config). `0x29` to base once. `0x40/28:02` polling starts at ~3 Hz |
-| **Dashboard upload** | t=21.4–23.5s | `0x43/7c:00` chunked file transfer (~60 chunks). Display sub-device probed during transfer |
-| **Pre-game steady state** | t=24–30.5s | `0x40/28:02` polling continues (response always `00:00`), heartbeats, keepalives. `0x28` queries to base at t=27.3s and t=29.3s |
-| **Game starts** | t=30.568s | `0x41/FD:DE` enable (~48 Hz) and `0x2D/F5:31` seq counter (~47 Hz) start simultaneously |
-| **First telemetry** | t=30.600s | `0x43/7D:23` live data begins (flag base=0x02). Level-500 is a 2-byte stub. ~31 frames/s steady state |
-| **Data changes** | t=40.2s | Telemetry values begin changing (car on track after ~9.6s of loading) |
-
-**Key observation:** The `0x40/28:02 data=01:00` polling runs for ~22 seconds before the game starts, and the wheel **always responds `00:00`** (never `01:00`). Telemetry flows regardless. The wheel may not actually acknowledge this mode setting, or the response value has a different meaning than expected.
+| **Config burst** | t=8.2–9.1s | ~50 `0x40` commands (channel enables, page config, LED config). `0x40/28:02` polling at ~3 Hz |
+| **Dashboard upload** | t=21.4–23.5s | `0x43/7c:00` chunked file transfer. Display sub-device probed |
+| **Pre-game** | t=24–30.5s | `0x40/28:02` polling (response always `00:00`), heartbeats, keepalives |
+| **Game starts** | t=30.568s | `0x41/FD:DE` enable + `0x2D/F5:31` seq counter start simultaneously |
+| **Telemetry** | t=30.600s | `0x43/7D:23` live data (flag=0x02). ~31 frames/s steady state |
 
 ### SerialStream telemetry port (flag byte)
 
@@ -414,28 +390,32 @@ This matches Pithouse's observed timing: session opens first, ~1s of session dat
 
 **Port probing:** The plugin probes for available ports by sending type=0x81 session opens starting from port 1, waiting ~80ms for an fc:00 ack on each. The first two ports that respond become the management and telemetry sessions. The telemetry session's port becomes the FlagByte. This handles any counter state — whether the wheel was just powered on (ports 1-2 available) or Pithouse has run (ports 1-N consumed, the next free port is found automatically). The probe adds ~100-400ms to startup depending on how many ports must be skipped.
 
-### Minimum viable sender
+### Plugin startup sequence
 
-The `cs-to-vgs-wheel.ndjson` capture shows that Pit House sends the `0x40` channel configuration burst on every wheel connection, even without a dashboard upload. This suggests the wheel may require channel declarations before accepting telemetry.
+The plugin replicates Pithouse's observed preamble with probe-based port allocation:
 
-**Recommended startup sequence:**
+**Phase 0 — Port probe** (~100-400ms, before timer starts):
+1. Send type=0x81 session opens from port 1 upward, wait ~80ms for fc:00 ack
+2. First two acked ports become management + telemetry sessions
+3. Send tier definition as 7c:00 data chunks on the telemetry session (channel indices, compression codes, bit widths — see § Tier definition protocol)
+4. Send Display sub-device identity probe via 0x43 (see § Display sub-device probe)
 
-1. **Session open** (`0x43/7C:00` type=0x81): open SerialStream sessions — Pithouse opens two (0x01 + 0x02) simultaneously. No SYN handshake needed; the wheel accepts immediately and responds with `fc:00` acks. The telemetry session's port number becomes the flag byte for all `7d:23` frames
-2. **Tier definition** (`0x43/7C:00` data chunks on telemetry session): send the tier definition message describing the bit layout for each flag byte — channel indices, compression codes, bit widths. Without this, the wheel cannot decode `7d:23` telemetry frames. See § Tier definition protocol
-3. **Ack channel data** (`0x43/FC:00`): ack the wheel's channel registration responses on the telemetry session with incrementing `ack_seq`
-4. **Channel configuration** (`0x40`): send `1e:00`/`1e:01` for each channel in the dashboard, plus `09:00`, page config (`1c`, `1d`), and `28:02 data=0100` — deferred ~1s after session open
-3. **Telemetry enable** (`0x41/FD:DE data=00:00:00:00`): start sending at ~30+ Hz, runs the entire session
-4. **Live telemetry** (`0x43/7D:23`): bit-packed frames at ~20-30 Hz
-5. **Sequence counter** (`0x2D/F5:31`): incrementing counter to base at ~30+ Hz
-6. **Telemetry mode polling** (`0x40/28:02 data=01:00`): ~3 Hz
-7. **Heartbeat** (`0x00` n=0): to all devices 18–30, ~1/s
-8. **Dash keepalive** (`0x43` n=1 data=`00`): to devices 0x14, 0x15, ~1/s
-9. **Display config** (`0x43/7C:27`): page-cycled params, ~1/s
-10. **Status push** (`0x43/FC:00`): zero data (session ack protocol not implemented), ~1/s
+**Phase 1 — Preamble** (~1 second, timer running):
+5. Ack incoming 7c:00 channel data on the telemetry session with fc:00
+6. Send heartbeats only — no telemetry, no enable, no channel config
+7. Detect Display sub-device from 0x87 model name response
 
-The RPM LEDs work with zero preamble — `0x3F/1A:00` data is accepted immediately.
+**Phase 2 — Active** (continuous, after preamble):
+8. Send `0x40` channel config burst (1E enables, 09:00, 28:02)
+9. Begin `0x41/FD:DE` enable signal (~30+ Hz)
+10. Begin `0x43/7D:23` bit-packed telemetry (flag=FlagByte, ~30 Hz)
+11. Begin `0x2D/F5:31` sequence counter (~30 Hz)
+12. Begin periodic streams at ~1 Hz: heartbeats, dash keepalives, display config (7C:27), status push (FC:00)
+13. Begin `0x40/28:02` telemetry mode polling (~3 Hz)
 
-**Critical prerequisite:** Pit House must have already uploaded a dashboard to the wheel. The `0x41/FD:DE` enable signal is likely required — Pithouse sends it at ~48 Hz for the entire session, starting simultaneously with (or slightly before) the first telemetry frame.
+The RPM LEDs (`0x3F/1A:00`) and button LEDs (`0x3F/1A:01`) are handled separately by `MozaDashLedDeviceManager` and `MozaLedDeviceManager` and work with zero preamble.
+
+**Critical prerequisite:** Pithouse must have already uploaded a dashboard to the wheel via the `0x43/7C:00` file transfer protocol. The plugin does not upload dashboards — it sends telemetry data for the currently installed dashboard.
 
 ---
 
@@ -458,6 +438,24 @@ Cmd `[0xF5, 0x31]`. Data: `00 00 00 XX` where XX increments by 1 each send. Sequ
 ### Group 0x1F (host → device 0x12, ~3 Hz)
 
 `4F XX 00/01` where XX cycles `08`→`09`→`0A`→`0B`. Response inserts `0xFF` status byte.
+
+### Group 0x0E — parameter table reader / debug console (host → devices 0x12/0x13/0x17, ~9 Hz)
+
+Pithouse sends 158 of these per session. The host reads EEPROM parameters sequentially and receives firmware debug log output.
+
+**Request format:** `7E 03 0E [device] 00 [table] [index] [checksum]`
+- `table`: EEPROM table number (0x00 = base config, 0x01 = alt table)
+- `index`: parameter index, incremented sequentially (0x01, 0x03, 0x04, ...)
+
+**Response format (group 0x8E):**
+- **Parameter values** (cmd=00:00, n=7): `[index] 00 00 [value bytes]` — stored parameter at that index
+- **Debug log text** (cmd=05:xx, variable length): ASCII firmware log output, e.g.:
+  - `"RFloss[avg:0.00000%] recvGap[avg:4.25699ms]"` — NRF radio stats
+  - `"INFO]param_manage.c:340 Table 2, Param 43 Written: 0"` — EEPROM write confirmation
+
+The debug log entries confirm that `0x40/1E` channel config commands write to EEPROM. This is diagnostic only — **not required for telemetry**.
+
+Starts at ~1s after session opens. Sent to base (0x12, 51 frames), wheel (0x17, 68 frames), and pedals (0x13, 39 frames). The plugin does not implement this.
 
 ### Group 0x28 (host → device 0x13, occasional)
 
@@ -946,6 +944,27 @@ Pithouse sends a tier definition message to the wheel as 7c:00 data chunks (type
 
 **Verified:** The plugin's `TierDefinitionBuilder` generates tier definitions byte-identical to Pithouse for the F1 dashboard: same channel indices, compression codes, and bit widths across all 3 tiers.
 
+## Display sub-device probe (group 0x43 identity commands)
+
+The wheel may contain an internal Display sub-device (for wheels with built-in screens like the VGS). Pithouse probes this at ~t=9.97s — AFTER telemetry starts (t=9.88), so it's not a prerequisite for telemetry. The probe uses the same identity commands as the main wheel probe but routed via group 0x43 to reach the Display sub-module.
+
+**Probe sequence** (from `moza-startup.json` 2026-04-12):
+
+| Step | Frame | Response | Description |
+|------|-------|----------|-------------|
+| 1 | `7E 01 43 17 00 [cs]` | `80` | Heartbeat/ping |
+| 2 | `7E 01 43 17 09 [cs]` | `89 00 01` | Presence check (1 sub-device) |
+| 3 | `7E 05 43 17 04 00 00 00 00 [cs]` | `84 01 02 08 06` | Hardware ID |
+| 4 | `7E 01 43 17 06 [cs]` | `86` + 13 bytes | Serial number |
+| 5 | `7E 02 43 17 02 00 [cs]` | `82 02` | Product type |
+| 6 | `7E 05 43 17 05 00 00 00 00 [cs]` | (version data) | Firmware query |
+| 7 | `7E 02 43 17 07 01 [cs]` | `87 01 "Display"` | **Model name** |
+| 8 | `7E 02 43 17 0F 01 [cs]` | `8F 01 "RS21-W08-HW SM-D"` | FW version part 1 |
+| 9 | `7E 02 43 17 08 01 [cs]` | `88 01 "RS21-W08-HW SM-D"` | HW version part 1 |
+| 10 | `7E 02 43 17 0F 02 [cs]` | `8F 02 "U-V14"` | FW version part 2 |
+
+The plugin sends steps 1-10 during the preamble. The 0x87 response with model name "Display" confirms the sub-device is present, setting `DisplayDetected=true`. This is used to gate dashboard telemetry features in the UI — wheels without a display (e.g. CS V2.1 with RPM LEDs only) won't respond to this probe.
+
 ## Open questions
 
 - ~~Value scaling for specialized types~~ — **RESOLVED**: All conversion formulas determined. Key insight: the `percent_1` scale factor is exactly 10.0 (not 10.22 as previously estimated from capture data)
@@ -967,6 +986,6 @@ Pithouse sends a tier definition message to the wheel as 7c:00 data chunks (type
 - **Group 0x09 semantics** — presence/ready check sent first during probe. Response `00 01` may indicate sub-device count (VGS has 1 Display sub-device). Needs verification with other wheel models
 - **Group 0x28 / 0x29 purpose** — group 0x28 queries base for per-device parameters (values 450, 1000 seen); group 0x29 sets a base parameter (value 1100). Possibly FFB or calibration related
 - **0x40/28:02 response discrepancy** — wheel always responds `00:00` to `28:02 data=01:00` in `connect-wheel-start-game.json`, yet telemetry flows. May depend on timing or dashboard state
-- **Display sub-device identity probe** — Pithouse probes a Display sub-module inside the wheel via 0x43 frames (commands 0x09, 0x04, 0x06, 0x02, 0x05, 0x07, 0x0F, 0x11, 0x08, 0x10) at ~t=9.97s. The plugin does not do this. Unknown whether it's required for telemetry or only for dashboard upload
+- ~~Display sub-device identity probe~~ — **RESOLVED (2026-04-12)**: Pithouse probes a Display sub-module inside the wheel via 0x43 frames at ~t=9.97s (AFTER telemetry starts at t=9.88, so not a prerequisite). The plugin now sends the same probe during the preamble and detects the "Display" model name from the 0x87 response. Used to gate dashboard telemetry features in the UI. See § Display sub-device probe below
 - **SerialStream SYN handshake** — the three-way handshake (SYN1/SYN2/SYN3) is confirmed from binary strings but not observed in any capture. Type=0x81 session opens work without it — the SYN handshake may be a lower-level connection layer already established when the serial port opens
-- **Group 0x0E debug poll** — Pithouse sends 158 of these during a session. The plugin sends none. Purpose unclear but may affect long-running session stability
+- ~~Group 0x0E debug poll~~ — **RESOLVED (2026-04-12)**: Parameter table reader + firmware debug console. Pithouse reads EEPROM params sequentially at ~9Hz and receives ASCII debug log output (NRF radio stats, EEPROM write confirmations). Diagnostic only — not required for telemetry. See § Group 0x0E

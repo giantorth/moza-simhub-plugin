@@ -50,6 +50,20 @@ namespace MozaPlugin.Telemetry
         private volatile byte _lastAckedSession;  // Set by OnMessageDuringPreamble when fc:00 arrives
         private readonly ManualResetEventSlim _ackReceived = new ManualResetEventSlim(false);
 
+        // Display sub-device detection
+        private volatile bool _displayDetected;
+        private string _displayModelName = "";
+
+        /// <summary>
+        /// True if the wheel's internal Display sub-device responded to identity probe.
+        /// Use this to gate dashboard telemetry features in the UI — wheels without
+        /// a display (e.g. CS V2.1 with RPM LEDs only) won't have this set.
+        /// </summary>
+        public bool DisplayDetected => _displayDetected;
+
+        /// <summary>Display sub-device model name, e.g. "Display". Empty if not detected.</summary>
+        public string DisplayModelName => _displayModelName;
+
         // Pre-cached frames (built once, reused every tick)
         private byte[] _cachedEnableFrame = null!;
         private byte[] _cachedModeFrame = null!;
@@ -137,6 +151,12 @@ namespace MozaPlugin.Telemetry
             // channel indices, compression codes, and bit widths per tier.
             // Without this, the wheel cannot interpret 7d:23 telemetry frames.
             SendTierDefinition();
+
+            // Probe the Display sub-device inside the wheel.
+            // Pithouse sends this at t=9.97 (after telemetry starts at t=9.88).
+            // The response tells us if the wheel has a built-in display.
+            // Non-blocking: responses are caught by OnMessageDuringPreamble.
+            SendDisplayProbe();
 
             double intervalMs = _baseTickMs;
             _sendTimer = new Timer(intervalMs) { AutoReset = true };
@@ -269,6 +289,61 @@ namespace MozaPlugin.Telemetry
                 _connection.Send(frame);
         }
 
+        /// <summary>
+        /// Probe the Display sub-device inside the wheel.
+        /// Pithouse sends the same identity commands used for the main wheel
+        /// (0x09, 0x04, 0x06, 0x02, 0x05) but via group 0x43 to route them
+        /// through the SerialStream to the Display sub-module.
+        ///
+        /// Responses arrive asynchronously via OnMessageDuringPreamble:
+        /// - 0x87 data=01 "Display" → model name (confirms display present)
+        /// - 0x89 data=00:01 → presence check (1 sub-device)
+        /// - 0x82 data=02 → product type
+        /// </summary>
+        private void SendDisplayProbe()
+        {
+            if (!_connection.IsConnected) return;
+
+            // Heartbeat/ping first
+            _connection.Send(BuildDisplayFrame(0x00));
+
+            // Identity probe: 0x09 → 0x04 → 0x06 → 0x02 → 0x05
+            _connection.Send(BuildDisplayFrame(0x09));
+            _connection.Send(BuildDisplayFrameWithData(0x04, new byte[] { 0x00, 0x00, 0x00, 0x00 }));
+            _connection.Send(BuildDisplayFrame(0x06));
+            _connection.Send(BuildDisplayFrameWithData(0x02, new byte[] { 0x00 }));
+            _connection.Send(BuildDisplayFrameWithData(0x05, new byte[] { 0x00, 0x00, 0x00, 0x00 }));
+
+            // Version queries: 0x07, 0x0F, 0x11, 0x08, 0x10 (sub-device 1)
+            _connection.Send(BuildDisplayFrameWithData(0x07, new byte[] { 0x01 }));
+            _connection.Send(BuildDisplayFrameWithData(0x0F, new byte[] { 0x01 }));
+            _connection.Send(BuildDisplayFrameWithData(0x11, new byte[] { 0x04 }));
+            _connection.Send(BuildDisplayFrameWithData(0x08, new byte[] { 0x01 }));
+            _connection.Send(BuildDisplayFrameWithData(0x10, new byte[] { 0x00 }));
+        }
+
+        private byte[] BuildDisplayFrame(byte cmd)
+        {
+            var frame = new byte[] { MozaProtocol.MessageStart, 0x01,
+                MozaProtocol.TelemetrySendGroup, MozaProtocol.DeviceWheel,
+                cmd, 0x00 };
+            frame[5] = MozaProtocol.CalculateChecksum(frame);
+            return frame;
+        }
+
+        private byte[] BuildDisplayFrameWithData(byte cmd, byte[] data)
+        {
+            var frame = new byte[4 + 1 + data.Length + 1]; // start+N+grp+dev + cmd + data + checksum
+            frame[0] = MozaProtocol.MessageStart;
+            frame[1] = (byte)(1 + data.Length); // N = cmd + data
+            frame[2] = MozaProtocol.TelemetrySendGroup;
+            frame[3] = MozaProtocol.DeviceWheel;
+            frame[4] = cmd;
+            Array.Copy(data, 0, frame, 5, data.Length);
+            frame[frame.Length - 1] = MozaProtocol.CalculateChecksum(frame);
+            return frame;
+        }
+
         // ── Preamble message handling ───────────────────────────────────────
 
         /// <summary>
@@ -312,6 +387,24 @@ namespace MozaPlugin.Telemetry
                     if (seq > _sessionAckSeq)
                         _sessionAckSeq = seq;
                     SendSessionAck(FlagByte, (ushort)_sessionAckSeq);
+                }
+                return;
+            }
+
+            // Display sub-device responses (identity probe answers)
+            // cmd byte is data[2], which is the response group byte (request | 0x80)
+            // 0x87 = model name response (to 0x07 query)
+            if (data[2] == 0x87 && data.Length >= 5 && data[3] == 0x01)
+            {
+                // data[3] = sub-device index (0x01), data[4..] = null-terminated ASCII name
+                int nameLen = 0;
+                for (int k = 4; k < data.Length && data[k] != 0; k++)
+                    nameLen++;
+                if (nameLen > 0)
+                {
+                    _displayModelName = System.Text.Encoding.ASCII.GetString(data, 4, nameLen);
+                    _displayDetected = true;
+                    SimHub.Logging.Current.Info($"[Moza] Display sub-device detected: \"{_displayModelName}\"");
                 }
             }
         }

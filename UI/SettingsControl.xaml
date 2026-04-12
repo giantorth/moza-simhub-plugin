@@ -648,7 +648,11 @@
                                    FontFamily="Consolas" FontSize="11" TextWrapping="Wrap"
                                    Foreground="Gray" Text="—" Margin="0,0,0,4"/>
                         <TextBlock x:Name="TelemetryStatusLabel" Foreground="Gray" FontSize="11"
-                                   Text="Disabled" Margin="0,0,0,8"/>
+                                   Text="Disabled" Margin="0,0,0,4"/>
+
+                        <!-- Display sub-device info -->
+                        <TextBlock x:Name="TelemetryDisplayLabel" Foreground="Gray" FontSize="11"
+                                   Text="" Margin="0,0,0,8"/>
 
                     </StackPanel>
                 </ScrollViewer>

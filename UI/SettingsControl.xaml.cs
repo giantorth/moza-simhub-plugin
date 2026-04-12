@@ -861,6 +861,14 @@ namespace MozaPlugin
                 ? BitConverter.ToString(last).Replace("-", " ").ToLowerInvariant()
                 : "—";
 
+            // Display sub-device info
+            if (_plugin.IsDisplayDetected)
+                TelemetryDisplayLabel.Text = $"Display: {_plugin.DisplayModelName} (port 0x{sender.FlagByte:X2})";
+            else if (_plugin.IsNewWheelDetected)
+                TelemetryDisplayLabel.Text = "Display: not detected (no dashboard screen)";
+            else
+                TelemetryDisplayLabel.Text = "";
+
             TelemetryTestStopBtn.IsEnabled = testMode;
             TelemetryTestStartBtn.IsEnabled = !testMode;
         }

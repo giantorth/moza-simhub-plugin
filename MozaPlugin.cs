@@ -144,6 +144,12 @@ namespace MozaPlugin
         internal bool IsDashDetected => _dashDetected;
         internal bool IsHandbrakeDetected => _handbrakeDetected;
         internal bool IsPedalsDetected => _pedalsDetected;
+
+        /// <summary>True if the wheel's internal Display sub-device responded to probe.</summary>
+        internal bool IsDisplayDetected => _telemetrySender?.DisplayDetected ?? false;
+
+        /// <summary>Display sub-device model name (e.g. "Display"), or empty.</summary>
+        internal string DisplayModelName => _telemetrySender?.DisplayModelName ?? "";
         internal MozaProfileStore ProfileStore => _settings?.ProfileStore!;
 
         public void Init(PluginManager pluginManager)
