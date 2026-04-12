@@ -389,7 +389,7 @@ Pithouse opens **two sessions simultaneously** (0x01 and 0x02) in the same USB p
 
 This matches Pithouse's observed timing: session opens first, ~1s of session data exchange with acks, then channel config, then telemetry+enable. The ~1s preamble delay is required — Pithouse does not send 0x41 or 0x40 until after the session exchange.
 
-**Port probing:** The plugin probes for available ports by sending type=0x81 session opens starting from port 1, waiting ~80ms for an fc:00 ack on each. The first two ports that respond become the management and telemetry sessions. The telemetry session's port becomes the FlagByte. This handles any counter state — whether the wheel was just powered on (ports 1-2 available) or Pithouse has run (ports 1-N consumed, the next free port is found automatically). The probe adds ~100-400ms to startup depending on how many ports must be skipped.
+**Port probing:** The plugin probes for available ports by sending type=0x81 session opens starting from port 1, waiting ~80ms for an fc:00 ack on each. The first two ports that respond become the management and telemetry sessions. The telemetry session's port becomes the FlagByte. This handles any counter state — whether the wheel was just powered on (ports 1-2 available) or Pithouse has run (ports 1-N consumed, the next free port is found automatically). The probe adds ~100-400ms to startup depending on how many ports must be skipped. `Start()` is dispatched to a background thread so the serial read thread stays free to deliver the fc:00 ack responses.
 
 ### Plugin startup sequence
 

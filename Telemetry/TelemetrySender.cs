@@ -143,8 +143,12 @@ namespace MozaPlugin.Telemetry
             _connection.MessageReceived += OnMessageDuringPreamble;
 
             // Probe for available ports and open sessions.
-            // This runs synchronously (blocking ~100-400ms) before the timer starts.
+            // This may run on a background thread (dispatched by StartTelemetryIfReady)
+            // so the serial read thread stays free to deliver fc:00 ack responses.
             ProbeAndOpenSessions();
+
+            // Bail out if Stop() was called while we were probing
+            if (!_enabled) return;
 
             // Send the tier definition message on the telemetry session.
             // This tells the wheel how to decode each flag byte's bit-packed data:
@@ -157,6 +161,10 @@ namespace MozaPlugin.Telemetry
             // The response tells us if the wheel has a built-in display.
             // Non-blocking: responses are caught by OnMessageDuringPreamble.
             SendDisplayProbe();
+
+            // Final check before creating the timer — if Stop() was called during
+            // tier definition or display probe, don't create an orphaned timer.
+            if (!_enabled) return;
 
             double intervalMs = _baseTickMs;
             _sendTimer = new Timer(intervalMs) { AutoReset = true };
@@ -619,7 +627,11 @@ namespace MozaPlugin.Telemetry
             _cachedSequenceFrame[9] = seq;
             _cachedSequenceFrame[10] = MozaProtocol.CalculateChecksum(
                 _cachedSequenceFrame, _cachedSequenceFrame.Length - 1);
-            return _cachedSequenceFrame;
+            // Return a copy: the write queue holds a reference until the write thread
+            // drains it, and we mutate _cachedSequenceFrame on the next tick.
+            var copy = new byte[_cachedSequenceFrame.Length];
+            Array.Copy(_cachedSequenceFrame, copy, copy.Length);
+            return copy;
         }
 
         // ── Periodic streams ────────────────────────────────────────────────

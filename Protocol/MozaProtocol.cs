@@ -11,6 +11,9 @@ namespace MozaPlugin.Protocol
         public const int VendorId = 0x346E; // Gudsen/Moza
 
         // Device IDs
+        // Note: Main and Hub share ID 18 (same physical controller).
+        // HPattern and Sequential share ID 26 (same device type).
+        // The response parser disambiguates via group range checks.
         public const byte DeviceMain = 18;
         public const byte DeviceBase = 19;
         public const byte DeviceDash = 20;

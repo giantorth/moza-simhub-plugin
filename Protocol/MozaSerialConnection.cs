@@ -357,7 +357,7 @@ namespace MozaPlugin.Protocol
                     // Send a read request for base-state (read group 43, device base 19, cmd id 1)
                     // Message: [0x7E] [len=3] [group=43] [device=19] [cmd=1] [payload=0x00,0x01] [checksum]
                     var msg = new byte[] { 0x7E, 0x03, 0x2B, 0x13, 0x01, 0x00, 0x01, 0x00 };
-                    msg[msg.Length - 1] = MozaProtocol.CalculateChecksum(msg);
+                    msg[msg.Length - 1] = MozaProtocol.CalculateChecksum(msg, msg.Length - 1);
                     probe.Write(msg, 0, msg.Length);
 
                     // Wait briefly for a response

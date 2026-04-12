@@ -11,12 +11,13 @@ namespace MozaPlugin
         public volatile bool IsBaseConnected;
 
         // Wheel identity (populated after wheel detection, cleared on disconnect)
-        public string WheelModelName = "";
-        public string WheelSerialNumber = "";
-        public string WheelSwVersion = "";
-        public string WheelHwVersion = "";
-        private string _serialPartA = "";
-        private string _serialPartB = "";
+        // Volatile: written from serial read thread, read from UI thread.
+        public volatile string WheelModelName = "";
+        public volatile string WheelSerialNumber = "";
+        public volatile string WheelSwVersion = "";
+        public volatile string WheelHwVersion = "";
+        private volatile string _serialPartA = "";
+        private volatile string _serialPartB = "";
 
         // Temperatures (raw / 100 = degrees C from device)
         public volatile int McuTemp;
@@ -332,56 +333,58 @@ namespace MozaPlugin
         /// </summary>
         public void UpdateFromArray(string commandName, byte[] data)
         {
-            if (data == null || data.Length < 3) return;
+            if (data == null) return;
 
+            // Color commands need at least 3 bytes (R, G, B)
             // Wheel RPM colors
             if (commandName.StartsWith("wheel-rpm-color") && !commandName.Contains("blink"))
             {
                 int idx = ParseTrailingIndex(commandName, "wheel-rpm-color");
-                if (idx >= 0 && idx < 10)
+                if (idx >= 0 && idx < 10 && data.Length >= 3)
                     SetColor(WheelRpmColors[idx], data);
             }
             // Wheel button colors
             else if (commandName.StartsWith("wheel-button-color"))
             {
                 int idx = ParseTrailingIndex(commandName, "wheel-button-color");
-                if (idx >= 0 && idx < 14)
+                if (idx >= 0 && idx < 14 && data.Length >= 3)
                     SetColor(WheelButtonColors[idx], data);
             }
             // Wheel flag colors
             else if (commandName.StartsWith("wheel-flag-color"))
             {
                 int idx = ParseTrailingIndex(commandName, "wheel-flag-color");
-                if (idx >= 0 && idx < 6)
+                if (idx >= 0 && idx < 6 && data.Length >= 3)
                     SetColor(WheelFlagColors[idx], data);
             }
             // Old wheel RPM colors
             else if (commandName.StartsWith("wheel-old-rpm-color"))
             {
                 int idx = ParseTrailingIndex(commandName, "wheel-old-rpm-color");
-                if (idx >= 0 && idx < 10)
+                if (idx >= 0 && idx < 10 && data.Length >= 3)
                     SetColor(WheelESRpmColors[idx], data);
             }
             // Wheel idle color
             else if (commandName == "wheel-idle-color")
             {
-                SetColor(WheelIdleColor, data);
+                if (data.Length >= 3)
+                    SetColor(WheelIdleColor, data);
             }
             // Dash RPM colors
             else if (commandName.StartsWith("dash-rpm-color") && !commandName.Contains("blink"))
             {
                 int idx = ParseTrailingIndex(commandName, "dash-rpm-color");
-                if (idx >= 0 && idx < 10)
+                if (idx >= 0 && idx < 10 && data.Length >= 3)
                     SetColor(DashRpmColors[idx], data);
             }
             // Dash flag colors
             else if (commandName.StartsWith("dash-flag-color") && commandName != "dash-flag-colors")
             {
                 int idx = ParseTrailingIndex(commandName, "dash-flag-color");
-                if (idx >= 0 && idx < 6)
+                if (idx >= 0 && idx < 6 && data.Length >= 3)
                     SetColor(DashFlagColors[idx], data);
             }
-            // Wheel identity strings
+            // Wheel identity strings (work with any data length)
             else if (commandName == "wheel-model-name")
             {
                 WheelModelName = ParseNullTerminatedString(data);

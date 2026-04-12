@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
+using System.Threading;
 using System.Timers;
 using System.Windows.Media;
 using GameReaderCommon;
@@ -10,6 +11,7 @@ using SimHub.Plugins;
 using MozaPlugin.Devices;
 using MozaPlugin.Protocol;
 using MozaPlugin.Telemetry;
+using Timer = System.Timers.Timer;
 
 namespace MozaPlugin
 {
@@ -37,6 +39,12 @@ namespace MozaPlugin
         private bool _oldWheelDetected;
         private bool _handbrakeDetected;
         private bool _pedalsDetected;
+
+        // Guard against concurrent/duplicate telemetry Start() dispatch
+        private int _telemetryStartRequested;
+
+        // Debounce disk writes during rapid slider changes
+        private Timer? _saveDebounceTimer;
 
         private static readonly string[] StatusPollCommands = new[]
         {
@@ -141,18 +149,28 @@ namespace MozaPlugin
         /// Tracks model prefixes with an active (loaded) device extension in this SimHub session.
         /// Used by the generic fallback device to yield when a model-specific device is active.
         /// </summary>
-        private readonly HashSet<string> _activeModelPrefixes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // Copy-on-write for thread safety: reads get a consistent snapshot,
+        // mutations (rare — only on device extension init/end) create a new set.
+        private volatile HashSet<string> _activeModelPrefixes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         internal void RegisterActiveModelPrefix(string prefix)
         {
             if (!string.IsNullOrEmpty(prefix) && prefix != MozaDeviceConstants.OldProtocolMarker)
-                _activeModelPrefixes.Add(prefix);
+            {
+                var newSet = new HashSet<string>(_activeModelPrefixes, StringComparer.OrdinalIgnoreCase);
+                newSet.Add(prefix);
+                _activeModelPrefixes = newSet;
+            }
         }
 
         internal void UnregisterActiveModelPrefix(string prefix)
         {
             if (!string.IsNullOrEmpty(prefix))
-                _activeModelPrefixes.Remove(prefix);
+            {
+                var newSet = new HashSet<string>(_activeModelPrefixes, StringComparer.OrdinalIgnoreCase);
+                newSet.Remove(prefix);
+                _activeModelPrefixes = newSet;
+            }
         }
 
         /// <summary>
@@ -259,6 +277,9 @@ namespace MozaPlugin
         {
             Instance = null;
             SimHub.Logging.Current.Info("[Moza] Shutting down plugin");
+            _saveDebounceTimer?.Stop();
+            _saveDebounceTimer?.Dispose();
+            _saveDebounceTimer = null;
             this.SaveCommonSettings("MozaPluginSettings", _settings);
             ClearLedsOnHardware();
             _telemetrySender?.Stop();
@@ -273,12 +294,28 @@ namespace MozaPlugin
         internal void SaveSettings()
         {
             _settings.ProfileStore?.CurrentProfile?.CaptureFromCurrent(_settings, _data);
-            this.SaveCommonSettings("MozaPluginSettings", _settings);
+            ScheduleSave();
         }
 
         private void PersistSettings()
         {
-            this.SaveCommonSettings("MozaPluginSettings", _settings);
+            ScheduleSave();
+        }
+
+        /// <summary>
+        /// Debounce disk writes: restart a 500ms timer on each call.
+        /// Prevents dozens of writes per second during rapid slider drags.
+        /// </summary>
+        private void ScheduleSave()
+        {
+            if (_saveDebounceTimer == null)
+            {
+                _saveDebounceTimer = new Timer(500) { AutoReset = false };
+                _saveDebounceTimer.Elapsed += (s, e) =>
+                    this.SaveCommonSettings("MozaPluginSettings", _settings);
+            }
+            _saveDebounceTimer.Stop();
+            _saveDebounceTimer.Start();
         }
 
         internal void ClearSettings()
@@ -304,6 +341,7 @@ namespace MozaPlugin
             {
                 _reconnectTimer.Stop();
                 ClearLedsOnHardware();
+                _telemetrySender?.Stop();
                 _connection?.Disconnect();
                 _data.IsBaseConnected = false;
                 _data.ClearWheelIdentity();
@@ -316,6 +354,7 @@ namespace MozaPlugin
                 _pedalsDetected = false;
                 _deviceManager.ResetWheelDetection();
                 _telemetrySender.DetectedDeviceMask = 0;
+                Interlocked.Exchange(ref _telemetryStartRequested, 0);
                 SimHub.Logging.Current.Info("[Moza] Connection disabled");
             }
         }
@@ -417,6 +456,10 @@ namespace MozaPlugin
         /// a profile is loaded. Called from device detection and profile application.
         /// The session open probe requires the wheel to be present and responsive —
         /// starting before detection wastes time and may send to an uninitialized device.
+        ///
+        /// Dispatches Start() to a background thread because ProbeAndOpenSessions()
+        /// blocks waiting for ack responses delivered by the serial read thread.
+        /// Calling Start() directly on the read thread would deadlock.
         /// </summary>
         private void StartTelemetryIfReady()
         {
@@ -429,8 +472,12 @@ namespace MozaPlugin
             // Already running — don't restart (avoids re-probing ports mid-session)
             if (_telemetrySender.FramesSent > 0) return;
 
+            // Prevent duplicate dispatch (multiple callers may pass the guards above
+            // before the background thread increments FramesSent)
+            if (Interlocked.CompareExchange(ref _telemetryStartRequested, 1, 0) != 0) return;
+
             SimHub.Logging.Current.Info("[Moza] Wheel detected and telemetry enabled — starting telemetry sender");
-            _telemetrySender.Start();
+            ThreadPool.QueueUserWorkItem(_ => _telemetrySender.Start());
         }
 
         private static MultiStreamProfile? FindProfile(

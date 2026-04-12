@@ -14,7 +14,8 @@ namespace MozaPlugin.Telemetry
     public class DashboardProfileStore
     {
         private Dictionary<string, TelemetryChannelInfo>? _telemetryMap;
-        private List<MultiStreamProfile>? _builtinProfiles;
+        private volatile List<MultiStreamProfile>? _builtinProfiles;
+        private readonly object _builtinLock = new object();
 
         // Match Telemetry.get() with plain quotes ('...', "...") and escaped quotes (\"...\")
         // The F1 mzdash has FuelRemainder in escaped double quotes: Telemetry.get(\"v1/gameData/FuelRemainder\")
@@ -49,7 +50,13 @@ namespace MozaPlugin.Telemetry
             get
             {
                 if (_builtinProfiles == null)
-                    LoadBuiltinProfiles();
+                {
+                    lock (_builtinLock)
+                    {
+                        if (_builtinProfiles == null)
+                            LoadBuiltinProfiles();
+                    }
+                }
                 return _builtinProfiles!;
             }
         }

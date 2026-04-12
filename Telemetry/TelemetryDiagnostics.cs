@@ -47,8 +47,8 @@ namespace MozaPlugin.Telemetry
                 SpeedKmh               = t * 200.0,
                 Rpms                   = t * 8000.0,
                 Gear                   = (int)(t * 6) + 1,      // 1–6
-                Throttle               = t * 100.0,
-                Brake                  = (1 - t) * 100.0,
+                Throttle               = t,                      // 0.0–1.0 (matches FromStatusData normalization)
+                Brake                  = 1.0 - t,               // 0.0–1.0 (matches FromStatusData normalization)
                 BestLapTimeSeconds     = 90 + t * 10,
                 CurrentLapTimeSeconds  = t * 90,
                 LastLapTimeSeconds     = 92 + t * 5,
