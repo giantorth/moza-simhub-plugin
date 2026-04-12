@@ -123,7 +123,7 @@ Model names confirmed from USB captures and live serial queries:
 
 | Model name | Wheel | Source |
 |------------|-------|--------|
-| `VGS` | Vision GS | USB capture (`cs-to-vgs-wheel.ndjson`) |
+| `VGS` | Vision GS | USB capture (`cs-to-vgs-wheel.ndjson`). 8 button LEDs, no flag LEDs |
 | `CS V2.1` | CS V2 | USB capture (`vgs-to-cs-wheel.ndjson`) |
 
 Model names assumed from device naming conventions (unverified):
@@ -134,6 +134,7 @@ Model names assumed from device naming conventions (unverified):
 | `CSP` | CS Pro | Has flag LEDs |
 | `KSP` | KS Pro | Has flag LEDs |
 | `FSR2` | FSR V2 | Has flag LEDs |
+| `TSW` | TSW | 14 button LEDs, no flag LEDs |
 
 ### ES wheel identity caveat
 

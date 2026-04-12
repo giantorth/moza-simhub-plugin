@@ -1,9 +1,11 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using System.Timers;
 using System.Windows.Media;
 using GameReaderCommon;
+using Newtonsoft.Json.Linq;
 using SimHub.Plugins;
 using MozaPlugin.Devices;
 using MozaPlugin.Protocol;
@@ -136,6 +138,41 @@ namespace MozaPlugin
         }
 
         /// <summary>
+        /// Tracks model prefixes with an active (loaded) device extension in this SimHub session.
+        /// Used by the generic fallback device to yield when a model-specific device is active.
+        /// </summary>
+        private readonly HashSet<string> _activeModelPrefixes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        internal void RegisterActiveModelPrefix(string prefix)
+        {
+            if (!string.IsNullOrEmpty(prefix) && prefix != MozaDeviceConstants.OldProtocolMarker)
+                _activeModelPrefixes.Add(prefix);
+        }
+
+        internal void UnregisterActiveModelPrefix(string prefix)
+        {
+            if (!string.IsNullOrEmpty(prefix))
+                _activeModelPrefixes.Remove(prefix);
+        }
+
+        /// <summary>
+        /// Returns true if a model-specific device extension is active for the given wheel model.
+        /// </summary>
+        internal bool IsModelSpecificExtensionActive(string modelName)
+        {
+            if (string.IsNullOrEmpty(modelName) || _activeModelPrefixes.Count == 0)
+                return false;
+
+            foreach (var prefix in _activeModelPrefixes)
+            {
+                if (modelName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
         /// Set to true when a new device definition is deployed at runtime.
         /// The plugin settings panel shows a restart notice when this is true.
         /// </summary>
@@ -168,6 +205,8 @@ namespace MozaPlugin
             MozaProfile.UnpackColorsInto(_settings.DashRpmBlinkColors, _data.DashRpmBlinkColors);
 
             SimHub.Logging.Current.Info("[Moza] Initializing plugin");
+
+            MozaDeviceConstants.InitializeRegistry();
 
             // Read SimHub's global temperature unit preference (set at first launch)
             var tempUnit = pluginManager.GetPropertyValue("DataCorePlugin.GameData.TemperatureUnit");
@@ -1114,35 +1153,136 @@ namespace MozaPlugin
         }
 
         /// <summary>
-        /// Known wheel model definitions: firmware model prefix → (display dir name, embedded resource).
-        /// </summary>
-        private static readonly (string Prefix, string DirName, string ResourceName)[] WheelDefinitions =
-        {
-            ("GS V2P",  "MOZA GS V2 Pro",  "MozaPlugin.Devices.WheelGSV2P.device.json"),
-            ("CS V2.1", "MOZA CS V2",       "MozaPlugin.Devices.WheelCSV21.device.json"),
-            ("CSP",     "MOZA CS Pro",      "MozaPlugin.Devices.WheelCSP.device.json"),
-            ("KSP",     "MOZA KS Pro",      "MozaPlugin.Devices.WheelKSP.device.json"),
-            ("FSR2",    "MOZA FSR V2",      "MozaPlugin.Devices.WheelFSR2.device.json"),
-        };
-
-        /// <summary>
-        /// Deploy the device definition matching a new-protocol wheel's model name.
-        /// Falls back to the generic definition for unknown models.
+        /// Deploy a dynamically generated device definition for a new-protocol wheel.
+        /// Uses WheelModelInfo for button count (defaults for unknown models) and
+        /// deterministic GUIDs for device identity.
         /// Called once when the wheel model name is first received from firmware.
         /// </summary>
         private void DeployDeviceDefinitionForModel(string modelName)
         {
-            foreach (var (prefix, dirName, resourceName) in WheelDefinitions)
+            var prefix = WheelModelInfo.ExtractPrefix(modelName);
+            var friendlyName = WheelModelInfo.GetFriendlyName(prefix);
+            var guid = MozaDeviceConstants.ResolveWheelGuid(prefix);
+            var modelInfo = WheelModelInfo.FromModelName(modelName);
+            var deviceName = "MOZA " + friendlyName;
+
+            DeployGeneratedWheelDefinition(deviceName, guid, friendlyName, modelInfo.ButtonLedCount);
+        }
+
+        private void DeployGeneratedWheelDefinition(string deviceName, string guid, string productName, int buttonCount)
+        {
+            try
             {
-                if (modelName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-                {
-                    DeployDeviceDefinition(dirName, resourceName);
+                var simHubDir = AppDomain.CurrentDomain.BaseDirectory;
+                var userDefsDir = Path.Combine(simHubDir, "DevicesDefinitions", "User");
+                var deviceDir = Path.Combine(userDefsDir, deviceName);
+                var deviceJsonPath = Path.Combine(deviceDir, "device.json");
+
+                if (File.Exists(deviceJsonPath))
                     return;
-                }
+
+                Directory.CreateDirectory(deviceDir);
+
+                var pid = _connection.DiscoveredPid ?? "0x0004";
+                var json = GenerateWheelDeviceJson(guid, productName, buttonCount, pid);
+                File.WriteAllText(deviceJsonPath, json);
+
+                DeviceDefinitionDeployed = true;
+                SimHub.Logging.Current.Info(
+                    $"[Moza] Deployed device definition: {deviceName} " +
+                    $"(guid={guid}, buttons={buttonCount}, pid={pid}, restart SimHub to add it)");
+            }
+            catch (Exception ex)
+            {
+                SimHub.Logging.Current.Error($"[Moza] Error deploying device definition '{deviceName}': {ex.Message}");
+            }
+        }
+
+        private static string GenerateWheelDeviceJson(string guid, string productName, int buttonCount, string pid)
+        {
+            var physItems = new JArray();
+
+            // RPM LEDs: 10 slots (first has the mapping, rest are empty continuations)
+            physItems.Add(new JObject
+            {
+                ["SourceRole"] = 1,
+                ["SourceIndex"] = 0,
+                ["RepeatCount"] = MozaDeviceConstants.RpmLedCount,
+                ["RepeatMode"] = 1
+            });
+            for (int i = 1; i < MozaDeviceConstants.RpmLedCount; i++)
+                physItems.Add(new JObject());
+
+            // Button LEDs: buttonCount slots
+            physItems.Add(new JObject
+            {
+                ["SourceRole"] = 2,
+                ["SourceIndex"] = 0,
+                ["RepeatCount"] = buttonCount,
+                ["RepeatMode"] = 1
+            });
+            for (int i = 1; i < buttonCount; i++)
+                physItems.Add(new JObject());
+
+            var buttonItems = new JArray();
+            for (int i = 0; i < buttonCount; i++)
+            {
+                buttonItems.Add(new JObject
+                {
+                    ["Left"] = 20,
+                    ["Top"] = 20,
+                    ["Width"] = 40
+                });
             }
 
-            // Unknown model — deploy generic fallback
-            DeployDeviceDefinition("MOZA Racing Wheel", "MozaPlugin.Devices.WheelGeneric.device.json");
+            var device = new JObject
+            {
+                ["DescriptorUniqueId"] = guid,
+                ["SchemaVersion"] = 1,
+                ["MinimumSimHubVersion"] = "9.11.8",
+                ["DeviceDescription"] = new JObject
+                {
+                    ["BrandName"] = "MOZA",
+                    ["ProductName"] = productName
+                },
+                ["LedsFeature"] = new JObject
+                {
+                    ["IsIndividualLedsSectionEnabled"] = true,
+                    ["PhysicalLedsMappings"] = new JObject { ["Items"] = physItems },
+                    ["LogicalTelemetryLeds"] = new JObject
+                    {
+                        ["LedCount"] = MozaDeviceConstants.RpmLedCount,
+                        ["Segments"] = new JArray(),
+                        ["IsEnabled"] = true
+                    },
+                    ["LogicalButtonsSection"] = new JObject
+                    {
+                        ["IsButtonEditorEnabled"] = false,
+                        ["Items"] = buttonItems,
+                        ["IsEnabled"] = true
+                    },
+                    ["IsEnabled"] = true
+                },
+                ["HardwareInterface"] = new JObject
+                {
+                    ["HardwareInterface"] = new JObject
+                    {
+                        ["TypeName"] = "LedsStandardHIDProtocol",
+                        ["HIDUsagePage"] = "0xFF00",
+                        ["HIDUsage"] = "0x77",
+                        ["HIDReportId"] = "0x68",
+                        ["HIDReportSize"] = 64,
+                        ["DeviceDetection"] = new JObject
+                        {
+                            ["Vid"] = "0x346E",
+                            ["Pid"] = pid
+                        }
+                    }
+                },
+                ["IsLocked"] = true
+            };
+
+            return device.ToString(Newtonsoft.Json.Formatting.Indented);
         }
 
         /// <summary>

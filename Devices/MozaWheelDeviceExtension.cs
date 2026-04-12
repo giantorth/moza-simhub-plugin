@@ -46,7 +46,11 @@ namespace MozaPlugin.Devices
 
             var plugin = MozaPlugin.Instance;
             if (plugin != null)
+            {
                 plugin.DeviceExtensionActive = true;
+                if (_expectedModelPrefix != null && _expectedModelPrefix.Length > 0)
+                    plugin.RegisterActiveModelPrefix(_expectedModelPrefix);
+            }
 
             // Report active only when the matching wheel model is connected
             var modelPrefix = _expectedModelPrefix;
@@ -123,6 +127,8 @@ namespace MozaPlugin.Devices
             if (plugin != null)
             {
                 plugin.DeviceExtensionActive = false;
+                if (_expectedModelPrefix != null)
+                    plugin.UnregisterActiveModelPrefix(_expectedModelPrefix);
                 SimHub.Logging.Current.Info("[Moza] Device extension ended");
             }
         }

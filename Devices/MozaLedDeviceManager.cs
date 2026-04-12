@@ -103,8 +103,9 @@ namespace MozaPlugin.Devices
                 return false;
 
             // Empty prefix = generic fallback, matches any new-protocol wheel
+            // UNLESS a model-specific device extension is active for this wheel
             if (ExpectedModelPrefix.Length == 0)
-                return true;
+                return !p.IsModelSpecificExtensionActive(p.Data.WheelModelName);
 
             // Specific model — match against detected wheel's firmware model name
             var modelName = p.Data.WheelModelName;

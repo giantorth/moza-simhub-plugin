@@ -28,14 +28,17 @@ namespace MozaPlugin.Devices
         /// Known wheel models, ordered longest prefix first for correct disambiguation.
         /// Model names are 16-byte null-padded ASCII strings from the wheel firmware
         /// (group 0x07, command 0x01). Examples: "GS V2P", "CS V2.1", "VGS".
+        /// FriendlyName is used for the SimHub device profile display name.
         /// </summary>
-        private static readonly (string Prefix, WheelModelInfo Info)[] KnownModels =
+        internal static readonly (string Prefix, string FriendlyName, WheelModelInfo Info)[] KnownModels =
         {
-            ("GS V2P",  new WheelModelInfo(10, false, null)),
-            ("CS V2.1", new WheelModelInfo(6,  false, new[] { 0, 1, 3, 6, 8, 9 })),
-            ("CSP",     new WheelModelInfo(14, true,  null)),
-            ("KSP",     new WheelModelInfo(14, true,  null)),
-            ("FSR2",    new WheelModelInfo(14, true,  null)),
+            ("GS V2P",  "GS V2 Pro",  new WheelModelInfo(10, false, null)),
+            ("CS V2.1", "CS V2",      new WheelModelInfo(6,  false, new[] { 0, 1, 3, 6, 8, 9 })),
+            ("CSP",     "CS Pro",     new WheelModelInfo(14, true,  null)),
+            ("KSP",     "KS Pro",     new WheelModelInfo(14, true,  null)),
+            ("FSR2",    "FSR V2",     new WheelModelInfo(14, true,  null)),
+            ("VGS",     "Vision GS",  new WheelModelInfo(8,  false, null)),
+            ("TSW",     "TSW",        new WheelModelInfo(14, false, null)),
         };
 
         public WheelModelInfo(int buttonLedCount, bool hasFlagLeds, int[]? buttonLedMap)
@@ -55,13 +58,47 @@ namespace MozaPlugin.Devices
             if (string.IsNullOrEmpty(modelName))
                 return Default;
 
-            foreach (var (prefix, info) in KnownModels)
+            foreach (var (prefix, _, info) in KnownModels)
             {
                 if (modelName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
                     return info;
             }
 
             return Default;
+        }
+
+        /// <summary>
+        /// Extract the matching known prefix from a firmware model name, or return
+        /// the full model name if it doesn't match any known prefix (used as-is for
+        /// device naming and GUID generation for unknown wheels).
+        /// </summary>
+        public static string ExtractPrefix(string modelName)
+        {
+            if (string.IsNullOrEmpty(modelName))
+                return modelName;
+
+            foreach (var (prefix, _, _) in KnownModels)
+            {
+                if (modelName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                    return prefix;
+            }
+
+            return modelName;
+        }
+
+        /// <summary>
+        /// Get the friendly display name for a model prefix. Returns the prefix itself
+        /// for unknown models.
+        /// </summary>
+        public static string GetFriendlyName(string modelPrefix)
+        {
+            foreach (var (prefix, friendlyName, _) in KnownModels)
+            {
+                if (prefix.Equals(modelPrefix, StringComparison.OrdinalIgnoreCase))
+                    return friendlyName;
+            }
+
+            return modelPrefix;
         }
 
         /// <summary>

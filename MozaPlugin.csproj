@@ -45,11 +45,6 @@
     <EmbeddedResource Include="Data\Telemetry.json" LogicalName="MozaPlugin.Data.Telemetry.json" />
     <EmbeddedResource Include="DeviceTemplates\MozaWheelGeneric\MOZA Racing Wheel\device.json" LogicalName="MozaPlugin.Devices.WheelGeneric.device.json" />
     <EmbeddedResource Include="DeviceTemplates\MozaWheelOldProto\MOZA Old Protocol Wheel\device.json" LogicalName="MozaPlugin.Devices.WheelOldProto.device.json" />
-    <EmbeddedResource Include="DeviceTemplates\MozaWheelGSV2P\MOZA GS V2 Pro\device.json" LogicalName="MozaPlugin.Devices.WheelGSV2P.device.json" />
-    <EmbeddedResource Include="DeviceTemplates\MozaWheelCSV21\MOZA CS V2\device.json" LogicalName="MozaPlugin.Devices.WheelCSV21.device.json" />
-    <EmbeddedResource Include="DeviceTemplates\MozaWheelCSP\MOZA CS Pro\device.json" LogicalName="MozaPlugin.Devices.WheelCSP.device.json" />
-    <EmbeddedResource Include="DeviceTemplates\MozaWheelKSP\MOZA KS Pro\device.json" LogicalName="MozaPlugin.Devices.WheelKSP.device.json" />
-    <EmbeddedResource Include="DeviceTemplates\MozaWheelFSR2\MOZA FSR V2\device.json" LogicalName="MozaPlugin.Devices.WheelFSR2.device.json" />
     <EmbeddedResource Include="DeviceTemplates\MozaDashShdp\MOZA Dashboard\device.json" LogicalName="MozaPlugin.Devices.Dash.device.json" />
   </ItemGroup>
 
@@ -75,11 +70,6 @@
   <ItemGroup>
     <DeviceShdp Include="MozaWheelGeneric"  OutputName="MozaRacingWheel" />
     <DeviceShdp Include="MozaWheelOldProto" OutputName="MozaOldProtocolWheel" />
-    <DeviceShdp Include="MozaWheelGSV2P"   OutputName="MozaGSV2Pro" />
-    <DeviceShdp Include="MozaWheelCSV21"   OutputName="MozaCSV2" />
-    <DeviceShdp Include="MozaWheelCSP"     OutputName="MozaCSPro" />
-    <DeviceShdp Include="MozaWheelKSP"     OutputName="MozaKSPro" />
-    <DeviceShdp Include="MozaWheelFSR2"    OutputName="MozaFSRV2" />
     <DeviceShdp Include="MozaDashShdp"     OutputName="MozaDashboard" />
   </ItemGroup>
 
