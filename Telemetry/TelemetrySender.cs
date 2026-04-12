@@ -132,6 +132,12 @@ namespace MozaPlugin.Telemetry
             // This runs synchronously (blocking ~100-400ms) before the timer starts.
             ProbeAndOpenSessions();
 
+            // Send the tier definition message on the telemetry session.
+            // This tells the wheel how to decode each flag byte's bit-packed data:
+            // channel indices, compression codes, and bit widths per tier.
+            // Without this, the wheel cannot interpret 7d:23 telemetry frames.
+            SendTierDefinition();
+
             double intervalMs = _baseTickMs;
             _sendTimer = new Timer(intervalMs) { AutoReset = true };
             _sendTimer.Elapsed += OnTimerElapsed;
@@ -225,6 +231,42 @@ namespace MozaPlugin.Telemetry
                 FlagByte = 0x02;
                 SimHub.Logging.Current.Warn("[Moza] No ports responded to session open, falling back to 0x02");
             }
+        }
+
+        /// <summary>
+        /// Send the tier definition message on the telemetry session.
+        /// This is the critical config data that tells the wheel firmware how to
+        /// decode each flag byte's bit-packed telemetry data: which channels are
+        /// in each tier, their compression codes, and bit widths.
+        ///
+        /// Pithouse sends this as 7c:00 data chunks (type=0x01) on session 0x02
+        /// during the first ~1s after session open. Without it, the wheel silently
+        /// ignores all 7d:23 telemetry frames.
+        /// </summary>
+        private void SendTierDefinition()
+        {
+            var profile = _profile;
+            if (profile == null || profile.Tiers.Count == 0)
+                return;
+            if (!_connection.IsConnected)
+                return;
+
+            byte[] message = TierDefinitionBuilder.BuildTierDefinitionMessage(profile, FlagByte);
+            int seq = (int)FlagByte; // Start seq at FlagByte (matches Pithouse: session 0x02 starts seq at 3)
+            // Actually Pithouse starts seq at 3 for sub-message 1 and 8 for sub-message 2.
+            // We only send sub-message 2 (the full tier def). Pithouse's seq=8 corresponds
+            // to the accumulated seq after sub-message 1 (7 chunks). We start our seq at
+            // a value that won't conflict with the session open acks.
+            seq = 3; // Match Pithouse's starting seq for config data
+
+            var frames = TierDefinitionBuilder.ChunkMessage(message, FlagByte, ref seq);
+
+            SimHub.Logging.Current.Info(
+                $"[Moza] Sending tier definition: {message.Length} bytes in {frames.Count} chunks " +
+                $"on session 0x{FlagByte:X2} ({profile.Tiers.Count} tiers)");
+
+            foreach (var frame in frames)
+                _connection.Send(frame);
         }
 
         // ── Preamble message handling ───────────────────────────────────────

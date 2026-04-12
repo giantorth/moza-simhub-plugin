@@ -420,8 +420,10 @@ The `cs-to-vgs-wheel.ndjson` capture shows that Pit House sends the `0x40` chann
 
 **Recommended startup sequence:**
 
-1. **Session open** (`0x43/7C:00` type=0x81): open SerialStream sessions — Pithouse opens two (0x01 + 0x02) simultaneously. No SYN handshake needed; the wheel accepts immediately and responds with `fc:00` acks. The telemetry session's port number becomes the flag byte for all `7d:23` frames. Port allocation is unresolved — see § SerialStream telemetry port
-2. **Channel configuration** (`0x40`): send `1e:00`/`1e:01` for each channel in the dashboard, plus `09:00`, page config (`1c`, `1d`), and `28:02 data=0100`
+1. **Session open** (`0x43/7C:00` type=0x81): open SerialStream sessions — Pithouse opens two (0x01 + 0x02) simultaneously. No SYN handshake needed; the wheel accepts immediately and responds with `fc:00` acks. The telemetry session's port number becomes the flag byte for all `7d:23` frames
+2. **Tier definition** (`0x43/7C:00` data chunks on telemetry session): send the tier definition message describing the bit layout for each flag byte — channel indices, compression codes, bit widths. Without this, the wheel cannot decode `7d:23` telemetry frames. See § Tier definition protocol
+3. **Ack channel data** (`0x43/FC:00`): ack the wheel's channel registration responses on the telemetry session with incrementing `ack_seq`
+4. **Channel configuration** (`0x40`): send `1e:00`/`1e:01` for each channel in the dashboard, plus `09:00`, page config (`1c`, `1d`), and `28:02 data=0100` — deferred ~1s after session open
 3. **Telemetry enable** (`0x41/FD:DE data=00:00:00:00`): start sending at ~30+ Hz, runs the entire session
 4. **Live telemetry** (`0x43/7D:23`): bit-packed frames at ~20-30 Hz
 5. **Sequence counter** (`0x2D/F5:31`): incrementing counter to base at ~30+ Hz
@@ -911,27 +913,60 @@ Complete byte-level verification of the telemetry data frames confirmed:
 | Level 500 | 0x03 | FuelRemainder | 10→16 | 2 | 2 ✓ |
 | Level 2000 | 0x04 | BestLapTime, LastLapTime, TyreWear×4 | 104 | 13 | 13 ✓ |
 
-**Bug found and fixed:** The `.mzdash` regex parser failed to match escaped-quote URLs (`Telemetry.get(\"v1/gameData/FuelRemainder\")`), silently dropping FuelRemainder (level-500 tier). This caused tier-to-flag misalignment: the plugin sent 13-byte level-2000 data on flag=0x03 where the wheel expected 2-byte level-500 data. The corrupted non-base tier frames may have caused the wheel to reject all telemetry.
+**Bugs found and fixed:**
+1. The `.mzdash` regex parser failed to match escaped-quote URLs (`Telemetry.get(\"v1/gameData/FuelRemainder\")`), silently dropping FuelRemainder (level-500 tier). This caused tier-to-flag misalignment: the plugin sent 13-byte level-2000 data on flag=0x03 where the wheel expected 2-byte level-500 data.
+2. The plugin never sent the **tier definition message** — a critical 7c:00 data exchange on the telemetry session that tells the wheel firmware how to decode each flag byte's bit-packed data (channel indices, compression codes, bit widths per tier). Without this, the wheel cannot interpret 7d:23 frames at all. See § Tier definition protocol below.
+
+## Tier definition protocol (group 0x43, session data on 7c:00)
+
+Pithouse sends a tier definition message to the wheel as 7c:00 data chunks (type=0x01) on the telemetry session during the first ~1s preamble. This message describes the exact bit layout for each flag byte, enabling the wheel firmware to decode the packed telemetry data.
+
+**Message format** (decoded from raw capture `moza-startup.json` 2026-04-12, sub-message 2, seq 8-16):
+
+```
+[0x00] [01 00 00 00] [flag_offset]           — tier enable (repeated per tier)
+[0x01] [size: u32 LE] [flag_byte]            — tier definition header
+  [ch_index: u32 LE] [comp: u32 LE]         — 16-byte channel entry (repeated)
+  [bits: u32 LE]     [reserved: u32 LE]
+[0x06] [04 00 00 00] [total_channels: u32 LE] — end marker
+```
+
+**Channel indices** are 1-based, assigned alphabetically by URL across all tiers (not per-tier).
+
+**Compression codes** (confirmed from capture):
+
+| Code | Type | Bits | Code | Type | Bits |
+|------|------|------|------|------|------|
+| 0x00 | bool | 1 | 0x07 | float | 32 |
+| 0x04 | uint16_t | 16 | 0x0D | int30 | 5 |
+| 0x0E | percent_1 | 10 | 0x0F | float_6000_1 | 16 |
+| 0x14 | uint3 | 4 | 0x17 | float_001 | 10 |
+
+**Chunking:** The message is sent as SerialStream data chunks with CRC-32 trailers (standard ISO 3309). Max 54 net bytes per non-last chunk (58 with CRC). The last chunk has no CRC.
+
+**Verified:** The plugin's `TierDefinitionBuilder` generates tier definitions byte-identical to Pithouse for the F1 dashboard: same channel indices, compression codes, and bit widths across all 3 tiers.
 
 ## Open questions
 
 - ~~Value scaling for specialized types~~ — **RESOLVED**: All conversion formulas determined. Key insight: the `percent_1` scale factor is exactly 10.0 (not 10.22 as previously estimated from capture data)
 - ~~CRC algorithm~~ — **RESOLVED**: Standard CRC-32 (ISO 3309), same as `zlib.crc32()`. Little-endian, covers 54-byte payload only. See § Dashboard upload protocol.
 - ~~File transfer header format~~ — **RESOLVED**: 8-byte header: role(1) + max_chunk_size(1) + transfer_type(1) + reserved(5). TLV paths use markers 0x8C (local) and 0x84 (remote) with UTF-16LE. See § Session 4 wire format in pithouse-re.md.
-- ~~Session lifecycle~~ — **RESOLVED**: Sessions are pre-assigned (not negotiated). Device opens with type=0x81 (session_id + window). 8 concurrent sessions observed: 1 management, 1 file transfer, 1 configJson RPC, 5 keepalive. See § Concurrent session map.
+- ~~Session lifecycle~~ — **RESOLVED (2026-04-12, corrected)**: Sessions are opened via type=0x81 frames with port numbers from a global monotonic counter. Both host and device can open sessions. The host probes for available ports by sending type=0x81 and waiting for fc:00 acks. See § SerialStream telemetry port.
 - ~~Protocol identity~~ — **RESOLVED**: The 0x43/7c:00 framing is `MOZA::Protocol::SerialStreamManager`, a proprietary TCP-like reliable stream. NOT CoAP. CoAP (libcoap 4.3.4) is a separate layer for device parameter management.
-- **Dashboard byte limit configuration** — stored at config object offset `+0x30`, set during dashboard upload (group 0x40). Exact mechanism for setting this limit not yet traced
-- **Cold-start initialization** — `connect-wheel-start-game.json` captures wheel connection → game start, confirming the full init sequence (identity probe → config burst → dashboard upload → telemetry). Still unclear if the wheel needs re-initialization after power cycle or if EEPROM config persists across power cycles
-- ~~Flag byte / SerialStream port~~ — **RESOLVED (2026-04-12)**: The flag byte is a **SerialStream port number** allocated from a global monotonic counter shared between host and wheel. Pithouse opens sessions via type=0x81 in `7c:00` and the port number becomes the `7d:23` flag byte. Observed values: 0x02, 0x0a, 0x13 — incrementing across connections, resetting on wheel power cycle. The plugin probes for available ports by sending type=0x81 opens starting from port 1, waiting for fc:00 acks. The first two acked ports become management + telemetry sessions. See § SerialStream telemetry port.
-- **MDD (standalone dash)** — no captures of telemetry sent to device 0x14; protocol may differ
+- ~~Flag byte / SerialStream port~~ — **RESOLVED (2026-04-12)**: See § SerialStream telemetry port. Plugin uses probe-based allocation.
+- ~~Session ID / port allocation~~ — **RESOLVED (2026-04-12)**: Session IDs (chunk header byte) and port numbers (payload) are **independent**. Port counter is global and monotonic within a power cycle. Plugin probes from port 1 upward.
+- ~~Tier definition protocol~~ — **RESOLVED (2026-04-12)**: Pithouse sends a tier definition message (channel indices, compression codes, bit widths) as 7c:00 data chunks on the telemetry session. The plugin generates byte-identical tier definitions via `TierDefinitionBuilder`. See § Tier definition protocol.
 - ~~Gear encoding for reverse~~ — **RESOLVED**: `int30` is a signed 5-bit value: -1=R, 0=N, 1–12=gears. Reverse is stored as 31 (two's complement -1 in 5 bits).
+- **Dashboard byte limit configuration** — stored at config object offset `+0x30`, set during dashboard upload (group 0x40). Exact mechanism for setting this limit not yet traced
+- **Cold-start initialization** — `connect-wheel-start-game.json` captures wheel connection → game start, confirming the full init sequence (identity probe → config burst → dashboard upload → telemetry). EEPROM persistence across power cycles is confirmed for channel config; unclear for session state
+- **MDD (standalone dash)** — no captures of telemetry sent to device 0x14; protocol may differ
+- **Compression codes for non-F1 types** — 8 codes confirmed from capture (bool, uint3, int30, uint16_t, float, float_001, float_6000_1, percent_1). Codes for brake_temp_1, tyre_temp_1, tyre_pressure_1, track_temp_1, oil_pressure_1, float_600_2, location_t, int32_t, uint32_t, double, uint8_t are inferred but unverified. Need captures with dashboards that use these types
 - **EEPROM direct access** — group 10 protocol found in rs21_parameter.db but never observed in USB captures; needs live verification
 - **Base ambient LEDs** — groups 32/34 commands found in rs21_parameter.db; not captured in USB traces (requires base with LED strips)
 - **Wheel LED groups 2-4** — Single, Rotary, and Ambient groups found in rs21_parameter.db with up to 56 LEDs; only groups 0 (Shift/RPM) and 1 (Button) confirmed in captures so far
 - **Group 0x09 semantics** — presence/ready check sent first during probe. Response `00 01` may indicate sub-device count (VGS has 1 Display sub-device). Needs verification with other wheel models
 - **Group 0x28 / 0x29 purpose** — group 0x28 queries base for per-device parameters (values 450, 1000 seen); group 0x29 sets a base parameter (value 1100). Possibly FFB or calibration related
-- **0x40/28:02 response discrepancy** — wheel always responds `00:00` to `28:02 data=01:00` in `connect-wheel-start-game.json`, yet telemetry flows. In `dash.ndjson` timeline the same command appears to be accepted. May depend on timing or dashboard state
-- **Display sub-device routing** — identity queries for the Display sub-module appear embedded inside `0x43` frames during dashboard upload. The exact routing mechanism (how Pithouse addresses the Display vs the wheel main controller) needs further analysis
-- **Sub-message 2 endianness** — the destination path in the file content push uses UTF-16BE while TLV paths use UTF-16LE. Needs verification with a second capture to confirm this is consistent and not a parsing artifact
-- **SerialStream SYN handshake** — the three-way handshake (SYN1/SYN2/SYN3) is confirmed from binary strings but not observed in the capture (capture may start after connection is established). Need a cold-start capture to see the handshake on the wire
-- ~~Session ID / port allocation~~ — **RESOLVED (2026-04-12)**: Session IDs (chunk header byte) and port numbers (payload) are **independent**. Host sessions 0x01-0x03 got ports 1, 2, 10 respectively — session 0x03 got port 0x0a because the wheel had already allocated ports 3-9 for its own sessions. The port counter is global and monotonic within a power cycle. The plugin uses probe-based allocation: try type=0x81 opens from port 1 upward, wait for fc:00 ack (~80ms timeout). Ports consumed by Pithouse or the wheel simply don't ack and are skipped.
+- **0x40/28:02 response discrepancy** — wheel always responds `00:00` to `28:02 data=01:00` in `connect-wheel-start-game.json`, yet telemetry flows. May depend on timing or dashboard state
+- **Display sub-device identity probe** — Pithouse probes a Display sub-module inside the wheel via 0x43 frames (commands 0x09, 0x04, 0x06, 0x02, 0x05, 0x07, 0x0F, 0x11, 0x08, 0x10) at ~t=9.97s. The plugin does not do this. Unknown whether it's required for telemetry or only for dashboard upload
+- **SerialStream SYN handshake** — the three-way handshake (SYN1/SYN2/SYN3) is confirmed from binary strings but not observed in any capture. Type=0x81 session opens work without it — the SYN handshake may be a lower-level connection layer already established when the serial port opens
+- **Group 0x0E debug poll** — Pithouse sends 158 of these during a session. The plugin sends none. Purpose unclear but may affect long-running session stability
