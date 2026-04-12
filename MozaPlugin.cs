@@ -199,8 +199,10 @@ namespace MozaPlugin
 
             _telemetrySender = new TelemetrySender(_connection);
             ApplyTelemetrySettings();
-            if (_settings.TelemetryEnabled)
-                _telemetrySender.Start();
+            // Don't start telemetry here — defer until wheel is detected.
+            // The session open probe requires the wheel to be present and responsive.
+            // StartTelemetryIfReady() is called from DetectDevices() when the wheel
+            // is first detected, and from profile application callbacks.
         }
 
         public void DataUpdate(PluginManager pluginManager, ref GameData data)
@@ -356,12 +358,34 @@ namespace MozaPlugin
             if (enabled)
             {
                 ApplyTelemetrySettings();
-                _telemetrySender?.Start();
+                StartTelemetryIfReady();
             }
             else
             {
                 _telemetrySender?.Stop();
             }
+        }
+
+        /// <summary>
+        /// Start the telemetry sender only if preconditions are met:
+        /// connection is up, a wheel is detected, telemetry is enabled, and
+        /// a profile is loaded. Called from device detection and profile application.
+        /// The session open probe requires the wheel to be present and responsive —
+        /// starting before detection wastes time and may send to an uninitialized device.
+        /// </summary>
+        private void StartTelemetryIfReady()
+        {
+            if (_telemetrySender == null) return;
+            if (!_settings.TelemetryEnabled) return;
+            if (!_connection.IsConnected) return;
+            if (!_newWheelDetected && !_oldWheelDetected) return;
+            if (_telemetrySender.Profile == null) return;
+
+            // Already running — don't restart (avoids re-probing ports mid-session)
+            if (_telemetrySender.FramesSent > 0) return;
+
+            SimHub.Logging.Current.Info("[Moza] Wheel detected and telemetry enabled — starting telemetry sender");
+            _telemetrySender.Start();
         }
 
         private static MultiStreamProfile? FindProfile(
@@ -483,6 +507,7 @@ namespace MozaPlugin
                         _deviceManager.ReadSetting("wheel-serial-b");
                         ApplySavedWheelSettings();
                         SimHub.Logging.Current.Info($"[Moza] New-protocol wheel detected on ID {deviceId}");
+                        StartTelemetryIfReady();
                     }
                     break;
 
@@ -527,6 +552,7 @@ namespace MozaPlugin
                         ApplySavedWheelSettings();
                         DeployDeviceDefinitionForOldProto();
                         SimHub.Logging.Current.Info($"[Moza] Old-protocol wheel detected on ID {deviceId}");
+                        StartTelemetryIfReady();
                     }
                     break;
 
@@ -1035,7 +1061,7 @@ namespace MozaPlugin
                 if (_settings.TelemetryEnabled)
                 {
                     ApplyTelemetrySettings();
-                    _telemetrySender?.Start();
+                    StartTelemetryIfReady();
                 }
                 else
                 {

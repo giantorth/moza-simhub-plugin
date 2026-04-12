@@ -1,12 +1,27 @@
 using System;
+using System.Threading;
 using System.Timers;
 using GameReaderCommon;
 using MozaPlugin.Protocol;
+using Timer = System.Timers.Timer;
 
 namespace MozaPlugin.Telemetry
 {
     /// <summary>
     /// Periodically encodes game data and sends telemetry frames to the wheel.
+    ///
+    /// Startup follows Pithouse's observed sequence (from USB capture analysis):
+    ///   1. Probe for available SerialStream ports (try type=0x81, wait for fc:00 ack)
+    ///   2. Open management session + telemetry session on consecutive ports
+    ///   3. Ack incoming channel data on telemetry session with fc:00 (~1 second)
+    ///   4. Send 0x40 channel config burst (1E enables, 09:00, 28:02)
+    ///   5. Begin 0x41 enable signal + 7d:23 telemetry with flag=FlagByte
+    ///
+    /// Port allocation: the wheel uses a global monotonic counter shared between
+    /// host and device. We probe from port 1 upward, sending a type=0x81 session
+    /// open and waiting ~50ms for an fc:00 ack. The first port that gets acked
+    /// becomes the management session; the next acked port becomes the telemetry
+    /// session and its port number is used as the FlagByte for all 7d:23 frames.
     ///
     /// Each tier in the MultiStreamProfile runs at its own rate derived from package_level.
     /// Flag bytes are FlagByte + tier index (sorted by package_level ascending).
@@ -26,17 +41,32 @@ namespace MozaPlugin.Telemetry
         private byte _sequenceCounter;
         private int _displayConfigPage;
 
+        // Preamble state
+        private bool _preambleComplete;
+        private int _preambleTickTarget;
+        private int _sessionAckSeq;
+
+        // Port probing state
+        private volatile byte _lastAckedSession;  // Set by OnMessageDuringPreamble when fc:00 arrives
+        private readonly ManualResetEventSlim _ackReceived = new ManualResetEventSlim(false);
+
         // Pre-cached frames (built once, reused every tick)
         private byte[] _cachedEnableFrame = null!;
         private byte[] _cachedModeFrame = null!;
         private byte[] _cachedSequenceFrame = null!;
         private byte[][] _cachedHeartbeatFrames = null!;
 
-        // Settings
+        // The telemetry session port / flag byte. Determined during port probing.
         public byte FlagByte { get; set; } = 0x02;
         public bool SendTelemetryMode { get; set; } = true;
         public bool SendSequenceCounter { get; set; } = true;
         public bool TestMode { get; set; } = false;
+
+        /// <summary>Maximum port number to try during probing before giving up.</summary>
+        private const byte MaxProbePort = 0x30;
+
+        /// <summary>How long to wait for an fc:00 ack per probe attempt.</summary>
+        private const int ProbeTimeoutMs = 80;
 
         public MultiStreamProfile? Profile
         {
@@ -51,14 +81,12 @@ namespace MozaPlugin.Telemetry
                     return;
                 }
 
-                // Timer ticks at the fastest tier's rate (lowest package_level)
                 _baseTickMs = value.Tiers[0].PackageLevel;
 
                 _tiers = new TierState[value.Tiers.Count];
                 for (int i = 0; i < value.Tiers.Count; i++)
                 {
                     var tier = value.Tiers[i];
-                    // How many base ticks between sends for this tier
                     int tickInterval = Math.Max(1, tier.PackageLevel / _baseTickMs);
                     _tiers[i] = new TierState
                     {
@@ -70,13 +98,9 @@ namespace MozaPlugin.Telemetry
         }
         private MultiStreamProfile? _profile;
 
-        /// <summary>Incremented each time the fastest-tier frame is sent, for UI display.</summary>
         private volatile int _framesSent;
         public int FramesSent => _framesSent;
-
-        /// <summary>The last fastest-tier frame bytes sent, for diagnostic display.</summary>
         public byte[]? LastFrameSent { get; private set; }
-
         public TelemetryDiagnostics Diagnostics { get; } = new TelemetryDiagnostics();
 
         public TelemetrySender(MozaSerialConnection connection)
@@ -95,9 +119,18 @@ namespace MozaPlugin.Telemetry
             _sequenceCounter = 0;
             _slowCounter = 0;
             _displayConfigPage = 0;
+            _preambleComplete = false;
+            _sessionAckSeq = 0;
+            _preambleTickTarget = Math.Max(1, 1000 / _baseTickMs);
 
             BuildCachedFrames();
-            SendChannelConfig();
+
+            // Subscribe early so we catch fc:00 acks during port probing AND preamble
+            _connection.MessageReceived += OnMessageDuringPreamble;
+
+            // Probe for available ports and open sessions.
+            // This runs synchronously (blocking ~100-400ms) before the timer starts.
+            ProbeAndOpenSessions();
 
             double intervalMs = _baseTickMs;
             _sendTimer = new Timer(intervalMs) { AutoReset = true };
@@ -108,6 +141,7 @@ namespace MozaPlugin.Telemetry
         public void Stop()
         {
             _enabled = false;
+            _connection.MessageReceived -= OnMessageDuringPreamble;
             if (_sendTimer != null)
             {
                 _sendTimer.Stop();
@@ -117,11 +151,130 @@ namespace MozaPlugin.Telemetry
             }
         }
 
-        /// <summary>Called from plugin DataUpdate — stores the latest game data.</summary>
         public void UpdateGameData(StatusDataBase? data)
         {
             _latestGameData = data;
         }
+
+        // ── Port probing ────────────────────────────────────────────────────
+
+        /// <summary>
+        /// Probe for available SerialStream ports by sending type=0x81 session opens
+        /// and waiting for fc:00 acks. The wheel uses a global monotonic port counter;
+        /// ports already consumed by Pithouse won't ack. We need two consecutive ports:
+        /// one for management (like Pithouse session 0x01) and one for telemetry
+        /// (becomes FlagByte, like Pithouse session 0x02).
+        /// </summary>
+        private void ProbeAndOpenSessions()
+        {
+            if (!_connection.IsConnected)
+                return;
+
+            byte mgmtPort = 0;
+            byte telemetryPort = 0;
+            int portsFound = 0;
+
+            SimHub.Logging.Current.Info("[Moza] Probing for available SerialStream ports...");
+
+            for (byte port = 1; port <= MaxProbePort && portsFound < 2; port++)
+            {
+                if (!_enabled || !_connection.IsConnected)
+                    break;
+
+                _ackReceived.Reset();
+                _lastAckedSession = 0;
+
+                // Send session open: session byte = port (they match for initial allocations)
+                SendSessionOpen(port, port);
+
+                // Wait for fc:00 ack
+                if (_ackReceived.Wait(ProbeTimeoutMs))
+                {
+                    portsFound++;
+                    if (portsFound == 1)
+                    {
+                        mgmtPort = port;
+                        SimHub.Logging.Current.Info($"[Moza] Management session opened on port 0x{port:X2}");
+                    }
+                    else
+                    {
+                        telemetryPort = port;
+                        SimHub.Logging.Current.Info($"[Moza] Telemetry session opened on port 0x{port:X2}");
+                    }
+                }
+                else
+                {
+                    SimHub.Logging.Current.Debug($"[Moza] Port 0x{port:X2} not available (no ack)");
+                }
+            }
+
+            if (telemetryPort != 0)
+            {
+                FlagByte = telemetryPort;
+                SimHub.Logging.Current.Info($"[Moza] FlagByte set to 0x{FlagByte:X2} (telemetry port)");
+            }
+            else if (mgmtPort != 0)
+            {
+                // Only got one port — use it for telemetry
+                FlagByte = mgmtPort;
+                SimHub.Logging.Current.Warn($"[Moza] Only one port available (0x{mgmtPort:X2}), using for telemetry");
+            }
+            else
+            {
+                // No ports acked — fall back to 0x02 (post-power-cycle default)
+                FlagByte = 0x02;
+                SimHub.Logging.Current.Warn("[Moza] No ports responded to session open, falling back to 0x02");
+            }
+        }
+
+        // ── Preamble message handling ───────────────────────────────────────
+
+        /// <summary>
+        /// Handle incoming messages during port probing and the ~1s preamble phase.
+        /// Detects fc:00 session acks (for port probing) and acks incoming 7c:00
+        /// channel data on the telemetry session.
+        /// </summary>
+        private void OnMessageDuringPreamble(byte[] data)
+        {
+            if (!_enabled)
+                return;
+
+            // data layout from MozaSerialConnection: [group, device, cmdPayload...]
+            if (data.Length < 4)
+                return;
+
+            // Only process 0xC3 (response to 0x43) from device 0x71 (nibble-swapped 0x17)
+            if (data[0] != 0xC3 || data[1] != 0x71)
+                return;
+
+            byte cmd1 = data[2];
+            byte cmd2 = data[3];
+
+            // fc:00 ack — signals a session open was accepted
+            if (cmd1 == 0xFC && cmd2 == 0x00 && data.Length >= 5)
+            {
+                _lastAckedSession = data[4];
+                _ackReceived.Set();
+                return;
+            }
+
+            // 7c:00 data chunks — ack channel registrations during preamble
+            if (cmd1 == 0x7C && cmd2 == 0x00 && data.Length >= 8 && !_preambleComplete)
+            {
+                byte session = data[4];
+                byte type = data[5];
+
+                if (session == FlagByte && type == 0x01)
+                {
+                    int seq = data[6] | (data[7] << 8);
+                    if (seq > _sessionAckSeq)
+                        _sessionAckSeq = seq;
+                    SendSessionAck(FlagByte, (ushort)_sessionAckSeq);
+                }
+            }
+        }
+
+        // ── Timer loop ──────────────────────────────────────────────────────
 
         private void OnTimerElapsed(object sender, ElapsedEventArgs e)
         {
@@ -134,6 +287,32 @@ namespace MozaPlugin.Telemetry
 
             try
             {
+                // Preamble phase: ~1 second of session ack processing + heartbeats.
+                // No telemetry, enable, or channel config until preamble completes.
+                if (!_preambleComplete)
+                {
+                    _tickCounter++;
+
+                    int slowInterval = Math.Max(1, 1000 / _baseTickMs);
+                    if (_tickCounter % slowInterval == 0)
+                        SendHeartbeat();
+
+                    if (_tickCounter >= _preambleTickTarget)
+                    {
+                        _preambleComplete = true;
+                        _connection.MessageReceived -= OnMessageDuringPreamble;
+
+                        // Channel config burst (matches Pithouse t=9.8-9.9)
+                        SendChannelConfig();
+
+                        _tickCounter = 0;
+                        _modeCounter = 0;
+                        _slowCounter = 0;
+                    }
+                    return;
+                }
+
+                // Active phase: telemetry + enable + periodic streams
                 var snapshot = TestMode
                     ? Diagnostics.BuildTestPattern(_testFrameCounter++)
                     : GameDataSnapshot.FromStatusData(_latestGameData);
@@ -148,7 +327,6 @@ namespace MozaPlugin.Telemetry
                     byte[] frame = tier.Builder.BuildFrameFromSnapshot(snapshot, flagByte);
                     _connection.Send(frame);
 
-                    // Track the fastest tier (index 0) for diagnostics
                     if (i == 0)
                     {
                         LastFrameSent = frame;
@@ -157,23 +335,18 @@ namespace MozaPlugin.Telemetry
                     }
                 }
 
-                // Telemetry enable signal — Pithouse sends this at ~48 Hz the entire session.
-                // Without it the wheel may ignore 0x43/7D:23 data frames.
                 _connection.Send(_cachedEnableFrame);
 
-                // Sequence counter to the base unit (~30 Hz, matching our tick rate)
                 if (SendSequenceCounter)
                     _connection.Send(BuildSequenceCounterFrame());
 
                 _tickCounter++;
 
-                // Periodically send telemetry mode frame to keep wheel in multi-channel mode
                 if (SendTelemetryMode && (_modeCounter++ % 10 == 0))
                     _connection.Send(_cachedModeFrame);
 
-                // ~1 Hz slow streams: heartbeat, keepalive, display config, status push
-                int slowInterval = Math.Max(1, 1000 / _baseTickMs);
-                if (_slowCounter++ % slowInterval == 0)
+                int slow = Math.Max(1, 1000 / _baseTickMs);
+                if (_slowCounter++ % slow == 0)
                 {
                     SendHeartbeat();
                     SendDashKeepalive();
@@ -187,16 +360,43 @@ namespace MozaPlugin.Telemetry
             }
         }
 
-        /// <summary>
-        /// Send the channel configuration burst observed in Pit House captures.
-        /// Declares which channel groups are active on each page, then sets
-        /// multi-channel telemetry mode. Pit House sends this on every wheel
-        /// connection before telemetry frames flow.
-        ///
-        /// From captures: indices 2-5 are sent on pages 0 and 1 with data CC 00 00.
-        /// The wheel responds with stored interval values (500, 1000, 3000) confirming
-        /// it knows those channels from its stored dashboard config.
-        /// </summary>
+        // ── Session management ──────────────────────────────────────────────
+
+        private void SendSessionOpen(byte session, byte port)
+        {
+            var frame = new byte[]
+            {
+                MozaProtocol.MessageStart, 0x0A,
+                MozaProtocol.TelemetrySendGroup, MozaProtocol.DeviceWheel,
+                0x7C, 0x00,
+                session, 0x81,          // session byte + type (channel open)
+                port, 0x00,             // seq = port (LE)
+                port, 0x00,             // session_id = port (LE)
+                0xFD, 0x02,             // receive_window = 765 (LE)
+                0x00                    // checksum placeholder
+            };
+            frame[14] = MozaProtocol.CalculateChecksum(frame);
+            _connection.Send(frame);
+        }
+
+        private void SendSessionAck(byte session, ushort ackSeq)
+        {
+            var frame = new byte[]
+            {
+                MozaProtocol.MessageStart, 0x05,
+                MozaProtocol.TelemetrySendGroup, MozaProtocol.DeviceWheel,
+                0xFC, 0x00,
+                session,
+                (byte)(ackSeq & 0xFF),
+                (byte)(ackSeq >> 8),
+                0x00
+            };
+            frame[9] = MozaProtocol.CalculateChecksum(frame);
+            _connection.Send(frame);
+        }
+
+        // ── Channel configuration ───────────────────────────────────────────
+
         private void SendChannelConfig()
         {
             if (!_connection.IsConnected)
@@ -206,71 +406,24 @@ namespace MozaPlugin.Telemetry
             if (profile == null || profile.Tiers.Count == 0)
                 return;
 
-            // Open a SerialStream session/port on the wheel. Pithouse's telemetry
-            // runs over MOZA::Protocol::SerialStreamManager which assigns ports via
-            // a type=0x81 "session channel open" inside a 7c:00 frame. The flag byte
-            // in telemetry frames (7d:23) must match this port number. Without this
-            // open, the wheel silently drops all telemetry data.
-            //
-            // Observed flag bytes across captures: 0x02, 0x07, 0x0a, 0x10, 0x13 —
-            // a monotonic counter that increments with each Pithouse connection.
-            // The wheel accepts whatever port the host opens.
-            SendSessionOpen();
-
-            // 1e:page data=CC0000 — enable stream group CC on each page.
-            // All captures show fixed values 2-5 regardless of dashboard or wheel type.
-            // The m Formula 1 dashboard has 2 tiers (9ch + 6ch) but CC=2,3,4,5 are
-            // always sent — these appear to be fixed stream slot identifiers.
             for (int page = 0; page <= 1; page++)
             {
                 for (byte cc = 2; cc <= 5; cc++)
                     _connection.Send(BuildChannelEnableFrame((byte)page, cc));
             }
 
-            // 09:00 — config mode
             _connection.Send(BuildGroup40Frame(0x09, 0x00));
-
-            // 28:02 01 00 — set multi-channel telemetry mode
             _connection.Send(_cachedModeFrame);
-        }
-
-        /// <summary>
-        /// Open a SerialStream session on the wheel using the FlagByte as port number.
-        /// Format: 7E 0A 43 17 7C 00 [session] 81 [seq_lo] [seq_hi] [port_lo] [port_hi] [win_lo] [win_hi] [checksum]
-        /// Pithouse sends this on every connection before telemetry flows.
-        /// The wheel responds with fc:00 ack and begins accepting telemetry on this port.
-        /// </summary>
-        private void SendSessionOpen()
-        {
-            byte session = FlagByte;
-            // type=0x81 (session channel open), seq=session (matches Pithouse pattern)
-            // payload: session_id(2 LE) + receive_window(2 LE) = 0x02FD (765) — standard window
-            var frame = new byte[]
-            {
-                MozaProtocol.MessageStart, 0x0A,
-                MozaProtocol.TelemetrySendGroup, MozaProtocol.DeviceWheel,
-                0x7C, 0x00,                         // cmd: serial stream data
-                session, 0x81,                       // session + type (channel open)
-                session, 0x00,                       // seq (LE)
-                session, 0x00,                       // port/session_id (LE)
-                0xFD, 0x02,                          // receive_window (LE) = 765
-                0x00                                 // checksum placeholder
-            };
-            frame[14] = MozaProtocol.CalculateChecksum(frame);
-            _connection.Send(frame);
         }
 
         private byte[] BuildChannelEnableFrame(byte page, byte channelIndex)
         {
-            // 7E 05 40 17 1E [page] [channel] 00 00 [checksum]
             var frame = new System.Collections.Generic.List<byte>
             {
-                MozaProtocol.MessageStart,       // 7E
-                5,                               // N = cmd(2) + data(3)
-                MozaProtocol.TelemetryModeGroup, // 40
-                MozaProtocol.DeviceWheel,        // 17
-                0x1E, page,                      // cmd: channel enable on page
-                channelIndex, 0x00, 0x00,        // data: channel index + zeros
+                MozaProtocol.MessageStart, 5,
+                MozaProtocol.TelemetryModeGroup, MozaProtocol.DeviceWheel,
+                0x1E, page,
+                channelIndex, 0x00, 0x00,
             };
             frame.Add(MozaProtocol.CalculateChecksum(frame.ToArray()));
             return frame.ToArray();
@@ -280,22 +433,16 @@ namespace MozaPlugin.Telemetry
         {
             var frame = new System.Collections.Generic.List<byte>
             {
-                MozaProtocol.MessageStart,       // 7E
-                2,                               // N = cmd only
-                MozaProtocol.TelemetryModeGroup, // 40
-                MozaProtocol.DeviceWheel,        // 17
+                MozaProtocol.MessageStart, 2,
+                MozaProtocol.TelemetryModeGroup, MozaProtocol.DeviceWheel,
                 cmd1, cmd2,
             };
             frame.Add(MozaProtocol.CalculateChecksum(frame.ToArray()));
             return frame.ToArray();
         }
 
-        /// <summary>
-        /// Pre-build frames that are sent every tick. Called once from Start().
-        /// The enable and mode frames are fully static. The sequence counter frame
-        /// has its counter byte and checksum patched in-place each tick.
-        /// Heartbeat frames are static per device ID.
-        /// </summary>
+        // ── Cached frame construction ───────────────────────────────────────
+
         private void BuildCachedFrames()
         {
             _cachedModeFrame = BuildStaticFrame(new byte[] {
@@ -313,7 +460,6 @@ namespace MozaPlugin.Telemetry
                 0x2D, MozaProtocol.DeviceBase,
                 0xF5, 0x31, 0x00, 0x00, 0x00, 0x00 });
 
-            // Pre-build heartbeat frames for device IDs 18-30
             _cachedHeartbeatFrames = new byte[13][];
             for (int i = 0; i < 13; i++)
             {
@@ -334,7 +480,6 @@ namespace MozaPlugin.Telemetry
 
         private byte[] BuildSequenceCounterFrame()
         {
-            // Patch the counter byte and recalculate checksum in-place
             byte seq = _sequenceCounter++;
             _cachedSequenceFrame[9] = seq;
             _cachedSequenceFrame[10] = MozaProtocol.CalculateChecksum(
@@ -342,33 +487,20 @@ namespace MozaPlugin.Telemetry
             return _cachedSequenceFrame;
         }
 
-        /// <summary>
-        /// Bitmask of device IDs (18–30) that have been detected.
-        /// Set bit (devId - 18) to send heartbeat to that device.
-        /// Updated by the plugin when devices are detected/disconnected.
-        /// When zero (default), heartbeats are sent to all IDs for discovery.
-        /// </summary>
+        // ── Periodic streams ────────────────────────────────────────────────
+
         public volatile int DetectedDeviceMask;
 
-        /// <summary>
-        /// Send heartbeat (group 0x00, n=0) to detected devices (or all if none detected yet).
-        /// Pithouse does this ~once per second as a keep-alive/presence check.
-        /// </summary>
         private void SendHeartbeat()
         {
             int mask = DetectedDeviceMask;
             for (int i = 0; i < _cachedHeartbeatFrames.Length; i++)
             {
-                // If no devices detected yet, send to all for discovery; otherwise only detected ones
                 if (mask == 0 || (mask & (1 << i)) != 0)
                     _connection.Send(_cachedHeartbeatFrames[i]);
             }
         }
 
-        /// <summary>
-        /// Send keepalive (group 0x43, n=1, payload 0x00) to dash (0x14) and dev21 (0x15).
-        /// Pithouse sends these ~1.5/s during active telemetry.
-        /// </summary>
         private void SendDashKeepalive()
         {
             foreach (byte dev in new byte[] { MozaProtocol.DeviceDash, 0x15 })
@@ -379,12 +511,6 @@ namespace MozaPlugin.Telemetry
             }
         }
 
-        /// <summary>
-        /// Send display config push (group 0x43, cmd 7C:27) to the wheel.
-        /// Pithouse sends two payloads per page, cycling through pages ~1/s.
-        /// Byte values are page-derived: byte2 = 5 + 2*page, byte4 = 3 + 2*page,
-        /// companion byte2 = 6 + 2*page. Confirmed across 1-page and 3-page dashboards.
-        /// </summary>
         private void SendDisplayConfig()
         {
             int pageCount = _profile?.PageCount ?? 1;
@@ -395,31 +521,21 @@ namespace MozaPlugin.Telemetry
             byte b4 = (byte)(0x03 + 2 * page);
             byte z  = (byte)(0x06 + 2 * page);
 
-            // 7E 0A 43 17 7C 27 0F 80 [b2] 00 [b4] 00 FE 01 [checksum]
             var frame1 = new byte[] { MozaProtocol.MessageStart, 0x0A, MozaProtocol.TelemetrySendGroup,
                 MozaProtocol.DeviceWheel, 0x7C, 0x27, 0x0F, 0x80, b2, 0x00, b4, 0x00, 0xFE, 0x01, 0x00 };
             frame1[14] = MozaProtocol.CalculateChecksum(frame1);
             _connection.Send(frame1);
 
-            // 7E 06 43 17 7C 27 0F 00 [z] 00 [checksum]
             var frame2 = new byte[] { MozaProtocol.MessageStart, 0x06, MozaProtocol.TelemetrySendGroup,
                 MozaProtocol.DeviceWheel, 0x7C, 0x27, 0x0F, 0x00, z, 0x00, 0x00 };
             frame2[10] = MozaProtocol.CalculateChecksum(frame2);
             _connection.Send(frame2);
         }
 
-        /// <summary>
-        /// Send status push (group 0x43, cmd FC:00) to the wheel.
-        /// Pithouse sends this ~1/s. Data is session(1) + ack_seq(2 LE).
-        /// The session byte must match FlagByte — Pithouse uses the same value
-        /// (0x02) for both the telemetry flag and the fc:00 session field.
-        /// Captures show the wheel ignores fc:00 with session=0x00.
-        /// </summary>
         private void SendStatusPush()
         {
-            // 7E 05 43 17 FC 00 [session] 00 00 [checksum]
             var frame = new byte[] { MozaProtocol.MessageStart, 0x05, MozaProtocol.TelemetrySendGroup,
-                MozaProtocol.DeviceWheel, 0xFC, 0x00, FlagByte, 0x00, 0x00, 0x00 };
+                MozaProtocol.DeviceWheel, 0xFC, 0x00, 0x00, 0x00, 0x00, 0x00 };
             frame[9] = MozaProtocol.CalculateChecksum(frame);
             _connection.Send(frame);
         }
@@ -427,6 +543,7 @@ namespace MozaPlugin.Telemetry
         public void Dispose()
         {
             Stop();
+            _ackReceived.Dispose();
         }
 
         private class TierState

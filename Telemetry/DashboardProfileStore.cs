@@ -16,8 +16,10 @@ namespace MozaPlugin.Telemetry
         private Dictionary<string, TelemetryChannelInfo>? _telemetryMap;
         private List<MultiStreamProfile>? _builtinProfiles;
 
+        // Match Telemetry.get() with plain quotes ('...', "...") and escaped quotes (\"...\")
+        // The F1 mzdash has FuelRemainder in escaped double quotes: Telemetry.get(\"v1/gameData/FuelRemainder\")
         private static readonly Regex TelemetryGetRegex =
-            new Regex(@"Telemetry\.get\([""'](v1/gameData/[^""']+)[""']\)",
+            new Regex(@"Telemetry\.get\(\\?[""'](v1/gameData/[^""'\\]+)\\?[""']\)",
                 RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
         /// <summary>URL suffix → SimHub field mapping.</summary>

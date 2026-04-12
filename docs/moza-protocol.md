@@ -323,6 +323,31 @@ From `dash.ndjson` (capture starts with telemetry already being set up):
 
 The enable signal (`0x41`) runs from t=0.022 — **0.65 seconds before** the first telemetry frame. The telemetry mode set (`0x40/28:02 data=01:00`) runs from t=0.244.
 
+### Telemetry preamble detail (from raw JSON, 2026-04-12)
+
+From `moza-startup.json` (raw Wireshark JSON, not ndjson), the precise frame-by-frame startup sequence after Pithouse connects to a wheel is:
+
+| Time | Frame | Notes |
+|------|-------|-------|
+| t=8.756 | `7c:00` type=0x81 session 0x01 + 0x02 | Opens two SerialStream sessions simultaneously |
+| t=8.765 | (IN) `fc:00` session 0x01 ack + session 0x02 ack | Wheel accepts both sessions immediately |
+| t=8.769 | (IN) `7c:00` data on sessions 0x01+0x02 | Wheel starts dumping channel registrations (v1/gameData/Rpm etc.) |
+| t=8.809-8.843 | `fc:00` acks for session 0x02 (seq 04→17) | **Host acks each incoming data chunk** |
+| t=8.820-8.826 | `7c:00` data TO wheel on session 0x02 | Host sends config data back to wheel |
+| t=8.828 | **First `7d:23` telemetry** (flag=0x00, n=14) | Interleaved with fc:00 acks — smaller "probe" tier |
+| t=8.857-9.758 | `7d:23` with flag=0x00 (~25 frames) | Continues at ~30Hz, no 0x41 enable yet |
+| t=9.443-9.724 | Identity probes to wheel/base/pedals | Groups 0x00, 0x02-0x11 to devices 0x12, 0x13, 0x17 |
+| t=9.810 | **First `0x41/FD:DE` enable** | **1.05s after session opens!** |
+| t=9.845-9.866 | `0x40` channel config (0b:00, 09:00) | **1.1s after session opens** — deferred, not immediate |
+| t=9.880-9.883 | `7c:00` more config data on session 0x02 | Additional config exchange |
+| t=9.886 | **First `7d:23` with flag=0x02** (n=24) | Transitions to full telemetry — session data exchange complete |
+
+**Key findings for plugin implementation:**
+1. fc:00 acks for session 0x02 data are sent **during** the first second, interleaved with early telemetry
+2. `0x41` enable signal does NOT start until ~1s after session opens — sending it immediately may interfere
+3. `0x40` channel config (1E enables, 09:00) is sent AFTER the session data exchange, not before
+4. Flag byte transitions from 0x00 (probe tier) to 0x02 (full tier) after session completes
+
 ### Full connect-to-telemetry timeline
 
 From `connect-wheel-start-game.json` (capture starts with Pithouse running, no wheel connected, then wheel plugged in and Assetto Corsa started):
@@ -340,41 +365,54 @@ From `connect-wheel-start-game.json` (capture starts with Pithouse running, no w
 
 **Key observation:** The `0x40/28:02 data=01:00` polling runs for ~22 seconds before the game starts, and the wheel **always responds `00:00`** (never `01:00`). Telemetry flows regardless. The wheel may not actually acknowledge this mode setting, or the response value has a different meaning than expected.
 
-### SerialStream telemetry port
+### SerialStream telemetry port (flag byte)
 
-Pithouse's telemetry system runs over `MOZA::Protocol::SerialStreamManager`, a TCP-like reliable stream multiplexed over the serial connection. Each telemetry session opens a **port** on the wheel via a type=0x81 "session channel open" frame inside `0x43/7c:00`. This port number is then used as:
+Pithouse's telemetry system runs over `MOZA::Protocol::SerialStreamManager`, a TCP-like reliable stream multiplexed over the serial connection. Each telemetry session opens a **port** on the wheel via a type=0x81 "session channel open" frame inside `0x43/7c:00`. The port number is then used as the **flag byte** in `7d:23` telemetry data frames (byte offset 10 in the raw frame).
 
-- The **flag byte** in `7d:23` telemetry data frames (byte offset 10 in the raw frame)
-- The **session byte** in `fc:00` status push frames (first data byte)
-- The **session byte** in any `7c:00` serial stream data frames
+**Port allocation uses a global monotonic counter** shared between host and wheel. Both sides allocate from the same counter space — the host picks low numbers (1, 2, 3...) while the wheel picks its own (6, 8, 9...). The next host allocation accounts for wheel-allocated ports (e.g. host session 3 gets port 0x0a because 3-9 were taken by the wheel). The counter resets on wheel power cycle.
 
-**Port allocation is monotonic** — each new Pithouse connection gets the next available port number. Observed across captures:
+**Observed session opens in `moza-startup.json` (2026-04-12, raw JSON):**
 
-| Capture | Port/Flag | Context |
-|---------|-----------|---------|
-| `dash.ndjson` | 0x02 | Fresh after wheel power-on |
-| `0-100redline-0-other-dash` | 0x02 | Same power cycle, early |
-| `0-100redline-0-simple-rpm` | 0x07 | Later connection |
-| `0-6thgear-0-main-dash` | 0x0a | Later connection |
-| `burn-tyres` | 0x0a | Same connection as above |
-| `0-6thgear-0-simple-rpm` | 0x10 | Later connection |
-| `0-100redline-0-main-dash` | 0x13 | Latest connection |
+| Time | Source | Session byte | Port (payload) | Notes |
+|------|--------|-------------|----------------|-------|
+| 8.756s | Host | 0x01 | 0x0001 | First host session (management/upload) |
+| 8.756s | Host | 0x02 | 0x0002 | Second host session (telemetry config) |
+| 11.102s | Wheel | 0x08 | 0x0008 | Wheel-initiated keepalive |
+| 11.102s | Wheel | 0x09 | 0x0009 | Wheel-initiated configJson RPC |
+| 11.187s | Host | 0x03 | 0x000a | Third host session — port 10, not 3! |
+| 11.894s | Wheel | 0x06 | 0x0006 | Wheel-initiated keepalive |
 
-The counter resets when the wheel is power-cycled.
+Key insight: the **session byte** (chunk header) and **port number** (payload) are different for session 0x03 — the session byte is a host-local identifier, the port is globally allocated. For sessions 0x01 and 0x02 they happen to match because those are the first allocations after power-on.
 
-**Session open frame** (observed at the start of every Pithouse telemetry session):
+**Observed flag bytes across captures (confirmed from raw JSON, not ndjson):**
+
+| Capture | Flag | Verified from |
+|---------|------|---------------|
+| `moza-startup.json` (today) | 0x02 | Raw JSON — first port after power-on |
+| `burn-tyres.json` | 0x0a | Raw JSON — later connection |
+| `0-100redline-0-main-dash.json` | 0x13 | Raw JSON — even later connection |
+
+**Pithouse startup flag transition:** Pithouse starts sending telemetry with **flag=0x00** (n=14, 6 data bytes — a smaller startup tier) for ~25 frames before transitioning to **flag=0x02** (n=24, 16 data bytes — the full dashboard tier) after its session 0x02 config exchange completes. The flag=0x00 frames may be a pre-session "probe" tier with a different channel layout.
+
+**Session open frame format:**
 
 ```
-7E 0A 43 17 7C 00 [port] 81 [port] 00 [port] 00 FD 02 [checksum]
-                   └─session  └─seq(LE)  └─port_id(LE) └─window(LE)=765
+7E 0A 43 17 7C 00 [session] 81 [port_lo] [port_hi] [port_lo] [port_hi] FD 02 [checksum]
+                   └─chunk ID   └─seq(LE)=port       └─session_id(LE)   └─window=765
 ```
 
-- `session` = port number (matches flag byte)
-- `type` = 0x81 (session channel open)
-- `seq` = port number (initial sequence, LE)
-- `payload` = port_id(2 LE) + receive_window(2 LE, always 0x02FD = 765)
+Pithouse opens **two sessions simultaneously** (0x01 and 0x02) in the same USB packet. The wheel responds with `fc:00` acks for both. The `fc:00` session bytes in steady state track the **session ack protocol** (incrementing ack_seq for each 7c:00 data chunk received), NOT the telemetry flag byte.
 
-The wheel responds with `fc:00` ack (`[port] [ack_seq] 00`) and begins accepting `7d:23` frames with that flag byte. **Without this session open, the wheel silently drops all telemetry data** — confirmed by comparative USB captures (SimHub plugin vs Pithouse, 2026-04-12).
+**Current plugin approach:** The plugin implements the observed Pithouse preamble sequence:
+1. Opens sessions 0x01 and 0x02 via type=0x81 frames (byte-identical to Pithouse)
+2. Subscribes to incoming `MessageReceived` to ack session 0x02 channel data with fc:00
+3. Waits ~1 second for the session data exchange to complete (heartbeats only during this period)
+4. Sends 0x40 channel config burst (1E enables, 09:00, 28:02)
+5. Begins 0x41 enable signal and 7d:23 telemetry with flag=0x02
+
+This matches Pithouse's observed timing: session opens first, ~1s of session data exchange with acks, then channel config, then telemetry+enable. The ~1s preamble delay is required — Pithouse does not send 0x41 or 0x40 until after the session exchange.
+
+**Port probing:** The plugin probes for available ports by sending type=0x81 session opens starting from port 1, waiting ~80ms for an fc:00 ack on each. The first two ports that respond become the management and telemetry sessions. The telemetry session's port becomes the FlagByte. This handles any counter state — whether the wheel was just powered on (ports 1-2 available) or Pithouse has run (ports 1-N consumed, the next free port is found automatically). The probe adds ~100-400ms to startup depending on how many ports must be skipped.
 
 ### Minimum viable sender
 
@@ -382,7 +420,7 @@ The `cs-to-vgs-wheel.ndjson` capture shows that Pit House sends the `0x40` chann
 
 **Recommended startup sequence:**
 
-1. **Session open** (`0x43/7C:00` type=0x81): open a SerialStream port for telemetry. The port number becomes the flag byte for all subsequent frames. See § SerialStream telemetry port
+1. **Session open** (`0x43/7C:00` type=0x81): open SerialStream sessions — Pithouse opens two (0x01 + 0x02) simultaneously. No SYN handshake needed; the wheel accepts immediately and responds with `fc:00` acks. The telemetry session's port number becomes the flag byte for all `7d:23` frames. Port allocation is unresolved — see § SerialStream telemetry port
 2. **Channel configuration** (`0x40`): send `1e:00`/`1e:01` for each channel in the dashboard, plus `09:00`, page config (`1c`, `1d`), and `28:02 data=0100`
 3. **Telemetry enable** (`0x41/FD:DE data=00:00:00:00`): start sending at ~30+ Hz, runs the entire session
 4. **Live telemetry** (`0x43/7D:23`): bit-packed frames at ~20-30 Hz
@@ -391,7 +429,7 @@ The `cs-to-vgs-wheel.ndjson` capture shows that Pit House sends the `0x40` chann
 7. **Heartbeat** (`0x00` n=0): to all devices 18–30, ~1/s
 8. **Dash keepalive** (`0x43` n=1 data=`00`): to devices 0x14, 0x15, ~1/s
 9. **Display config** (`0x43/7C:27`): page-cycled params, ~1/s
-10. **Status push** (`0x43/FC:00`): session byte must equal the opened port number, ack_seq=0, ~1/s
+10. **Status push** (`0x43/FC:00`): zero data (session ack protocol not implemented), ~1/s
 
 The RPM LEDs work with zero preamble — `0x3F/1A:00` data is accepted immediately.
 
@@ -855,6 +893,26 @@ See [serial.md](serial.md) and [serial.yml](serial.yml) for the full command tab
 
 ---
 
+## Telemetry data verification (2026-04-12)
+
+Complete byte-level verification of the telemetry data frames confirmed:
+
+**Frame structure:** Header `7E [N] 43 17 7D 23 32 00 23 32 [flag] 20 [data] [checksum]` — all constant bytes, N computation, and checksum algorithm match Pithouse captures exactly. Verified checksums for session opens, mode frames, enable frames, and telemetry frames all produce byte-identical results to Pithouse.
+
+**Bit-packing:** LSB-first algorithm in `TelemetryBitWriter` is correct. Channel sort order (case-insensitive by URL) matches the order observed in Pithouse captures. Decoding Pithouse telemetry data with the plugin's channel layout yields plausible game values (gears 0-6, RPM 0-7000, speed 0-260, brake/throttle 0-1).
+
+**Encoding formulas:** All verified against capture data — `float_001` (×1000), `percent_1` (×10), `uint16_t` (direct), `float_6000_1` (×10), `int30` (5-bit, -1→31), `float` (IEEE 754), `bool` (0/1).
+
+**F1 dashboard tier layout (3 tiers, all sizes match Pithouse):**
+
+| Tier | Flag | Channels | Bits | Bytes | Pithouse bytes |
+|------|------|----------|------|-------|---------------|
+| Level 30 | 0x02 | Brake, CurrentLapTime, DrsState, ErsState, GAP, Gear, Rpm, SpeedKmh, Throttle | 126→128 | 16 | 16 ✓ |
+| Level 500 | 0x03 | FuelRemainder | 10→16 | 2 | 2 ✓ |
+| Level 2000 | 0x04 | BestLapTime, LastLapTime, TyreWear×4 | 104 | 13 | 13 ✓ |
+
+**Bug found and fixed:** The `.mzdash` regex parser failed to match escaped-quote URLs (`Telemetry.get(\"v1/gameData/FuelRemainder\")`), silently dropping FuelRemainder (level-500 tier). This caused tier-to-flag misalignment: the plugin sent 13-byte level-2000 data on flag=0x03 where the wheel expected 2-byte level-500 data. The corrupted non-base tier frames may have caused the wheel to reject all telemetry.
+
 ## Open questions
 
 - ~~Value scaling for specialized types~~ — **RESOLVED**: All conversion formulas determined. Key insight: the `percent_1` scale factor is exactly 10.0 (not 10.22 as previously estimated from capture data)
@@ -864,7 +922,7 @@ See [serial.md](serial.md) and [serial.yml](serial.yml) for the full command tab
 - ~~Protocol identity~~ — **RESOLVED**: The 0x43/7c:00 framing is `MOZA::Protocol::SerialStreamManager`, a proprietary TCP-like reliable stream. NOT CoAP. CoAP (libcoap 4.3.4) is a separate layer for device parameter management.
 - **Dashboard byte limit configuration** — stored at config object offset `+0x30`, set during dashboard upload (group 0x40). Exact mechanism for setting this limit not yet traced
 - **Cold-start initialization** — `connect-wheel-start-game.json` captures wheel connection → game start, confirming the full init sequence (identity probe → config burst → dashboard upload → telemetry). Still unclear if the wheel needs re-initialization after power cycle or if EEPROM config persists across power cycles
-- ~~Flag byte origin~~ — **RESOLVED (2026-04-12)**: The flag byte is a **SerialStream port number** assigned by `MOZA::Protocol::SerialStreamManager`. Pithouse's telemetry runs over this stream layer, which allocates ports via a type=0x81 "session channel open" inside a `7c:00` frame. The port number becomes the flag byte in `7d:23` telemetry frames and the session byte in `fc:00` status pushes. Observed values across captures: 0x02, 0x07, 0x0a, 0x10, 0x13 — a monotonic counter that increments with each new Pithouse connection (resets on wheel power cycle). The wheel **validates** this value: comparative USB captures (Pithouse vs SimHub, 2026-04-12) show the wheel silently dropping `7d:23` and `fc:00` frames with an unopened port number while still responding to other commands (`7c:27` display config). A session open (`7c:00` type=0x81) must be sent before telemetry will be accepted. See § SerialStream telemetry port.
+- ~~Flag byte / SerialStream port~~ — **RESOLVED (2026-04-12)**: The flag byte is a **SerialStream port number** allocated from a global monotonic counter shared between host and wheel. Pithouse opens sessions via type=0x81 in `7c:00` and the port number becomes the `7d:23` flag byte. Observed values: 0x02, 0x0a, 0x13 — incrementing across connections, resetting on wheel power cycle. The plugin probes for available ports by sending type=0x81 opens starting from port 1, waiting for fc:00 acks. The first two acked ports become management + telemetry sessions. See § SerialStream telemetry port.
 - **MDD (standalone dash)** — no captures of telemetry sent to device 0x14; protocol may differ
 - ~~Gear encoding for reverse~~ — **RESOLVED**: `int30` is a signed 5-bit value: -1=R, 0=N, 1–12=gears. Reverse is stored as 31 (two's complement -1 in 5 bits).
 - **EEPROM direct access** — group 10 protocol found in rs21_parameter.db but never observed in USB captures; needs live verification
@@ -876,4 +934,4 @@ See [serial.md](serial.md) and [serial.yml](serial.yml) for the full command tab
 - **Display sub-device routing** — identity queries for the Display sub-module appear embedded inside `0x43` frames during dashboard upload. The exact routing mechanism (how Pithouse addresses the Display vs the wheel main controller) needs further analysis
 - **Sub-message 2 endianness** — the destination path in the file content push uses UTF-16BE while TLV paths use UTF-16LE. Needs verification with a second capture to confirm this is consistent and not a parsing artifact
 - **SerialStream SYN handshake** — the three-way handshake (SYN1/SYN2/SYN3) is confirmed from binary strings but not observed in the capture (capture may start after connection is established). Need a cold-start capture to see the handshake on the wire
-- ~~Session ID assignment~~ — **RESOLVED (2026-04-12)**: Session IDs are SerialStream port numbers allocated by the host. The host picks the next available port and opens it with a type=0x81 frame. For telemetry, the port number is reused as the `7d:23` flag byte and `fc:00` session byte. Port numbers are monotonic within a wheel power cycle (observed: 0x02 → 0x07 → 0x0a → 0x10 → 0x13 across successive Pithouse connections). Non-telemetry sessions (file transfer, management, keepalive) use separate port numbers from the same allocator. See § SerialStream telemetry port.
+- ~~Session ID / port allocation~~ — **RESOLVED (2026-04-12)**: Session IDs (chunk header byte) and port numbers (payload) are **independent**. Host sessions 0x01-0x03 got ports 1, 2, 10 respectively — session 0x03 got port 0x0a because the wheel had already allocated ports 3-9 for its own sessions. The port counter is global and monotonic within a power cycle. The plugin uses probe-based allocation: try type=0x81 opens from port 1 upward, wait for fc:00 ack (~80ms timeout). Ports consumed by Pithouse or the wheel simply don't ack and are skipped.

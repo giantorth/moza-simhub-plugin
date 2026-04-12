@@ -62,7 +62,7 @@ namespace MozaPlugin
         public int TelemetryByteLimitOverride { get; set; } = 0;
 
         // SerialStream port number used as flag byte in telemetry frames.
-        // Opened via 7c:00 type=0x81 session open on each connection.
+        // 0x02 is the first port Pithouse allocates after wheel power-on.
         public byte TelemetryFlagByte { get; set; } = 0x02;
 
         // Telemetry send rate in Hz
