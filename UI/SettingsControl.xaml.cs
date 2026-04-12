@@ -833,9 +833,7 @@ namespace MozaPlugin
             try
             {
                 var s = _plugin.Settings;
-                TelemetryFlagByteBox.Text = $"0x{s.TelemetryFlagByte:X2}";
-                TelemetrySendModeCheck.IsChecked = s.TelemetrySendModeFrame;
-                TelemetrySeqCounterCheck.IsChecked = s.TelemetrySendSequenceCounter;
+                // Mode frame and sequence counter are always enabled (required by protocol)
             }
             finally
             {
@@ -865,35 +863,6 @@ namespace MozaPlugin
 
             TelemetryTestStopBtn.IsEnabled = testMode;
             TelemetryTestStartBtn.IsEnabled = !testMode;
-        }
-
-        private void TelemetryFlagByteBox_TextChanged(object sender, TextChangedEventArgs e)
-        {
-            if (_suppressEvents) return;
-            string text = TelemetryFlagByteBox.Text.Trim().TrimStart('0', 'x', 'X');
-            if (byte.TryParse(text, System.Globalization.NumberStyles.HexNumber, null, out byte val))
-            {
-                _plugin.Settings.TelemetryFlagByte = val;
-                _plugin.ApplyTelemetrySettings();
-                _plugin.SaveSettings();
-            }
-        }
-
-
-        private void TelemetrySendModeCheck_Click(object sender, RoutedEventArgs e)
-        {
-            if (_suppressEvents) return;
-            _plugin.Settings.TelemetrySendModeFrame = TelemetrySendModeCheck.IsChecked == true;
-            _plugin.ApplyTelemetrySettings();
-            _plugin.SaveSettings();
-        }
-
-        private void TelemetrySeqCounterCheck_Click(object sender, RoutedEventArgs e)
-        {
-            if (_suppressEvents) return;
-            _plugin.Settings.TelemetrySendSequenceCounter = TelemetrySeqCounterCheck.IsChecked == true;
-            _plugin.ApplyTelemetrySettings();
-            _plugin.SaveSettings();
         }
 
         private void TelemetryTestStart_Click(object sender, RoutedEventArgs e)

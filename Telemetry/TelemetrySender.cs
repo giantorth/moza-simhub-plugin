@@ -33,7 +33,7 @@ namespace MozaPlugin.Telemetry
         private byte[][] _cachedHeartbeatFrames = null!;
 
         // Settings
-        public byte FlagByte { get; set; } = 0x01;
+        public byte FlagByte { get; set; } = 0x02;
         public bool SendTelemetryMode { get; set; } = true;
         public bool SendSequenceCounter { get; set; } = true;
         public bool TestMode { get; set; } = false;
@@ -206,6 +206,17 @@ namespace MozaPlugin.Telemetry
             if (profile == null || profile.Tiers.Count == 0)
                 return;
 
+            // Open a SerialStream session/port on the wheel. Pithouse's telemetry
+            // runs over MOZA::Protocol::SerialStreamManager which assigns ports via
+            // a type=0x81 "session channel open" inside a 7c:00 frame. The flag byte
+            // in telemetry frames (7d:23) must match this port number. Without this
+            // open, the wheel silently drops all telemetry data.
+            //
+            // Observed flag bytes across captures: 0x02, 0x07, 0x0a, 0x10, 0x13 —
+            // a monotonic counter that increments with each Pithouse connection.
+            // The wheel accepts whatever port the host opens.
+            SendSessionOpen();
+
             // 1e:page data=CC0000 — enable stream group CC on each page.
             // All captures show fixed values 2-5 regardless of dashboard or wheel type.
             // The m Formula 1 dashboard has 2 tiers (9ch + 6ch) but CC=2,3,4,5 are
@@ -221,6 +232,32 @@ namespace MozaPlugin.Telemetry
 
             // 28:02 01 00 — set multi-channel telemetry mode
             _connection.Send(_cachedModeFrame);
+        }
+
+        /// <summary>
+        /// Open a SerialStream session on the wheel using the FlagByte as port number.
+        /// Format: 7E 0A 43 17 7C 00 [session] 81 [seq_lo] [seq_hi] [port_lo] [port_hi] [win_lo] [win_hi] [checksum]
+        /// Pithouse sends this on every connection before telemetry flows.
+        /// The wheel responds with fc:00 ack and begins accepting telemetry on this port.
+        /// </summary>
+        private void SendSessionOpen()
+        {
+            byte session = FlagByte;
+            // type=0x81 (session channel open), seq=session (matches Pithouse pattern)
+            // payload: session_id(2 LE) + receive_window(2 LE) = 0x02FD (765) — standard window
+            var frame = new byte[]
+            {
+                MozaProtocol.MessageStart, 0x0A,
+                MozaProtocol.TelemetrySendGroup, MozaProtocol.DeviceWheel,
+                0x7C, 0x00,                         // cmd: serial stream data
+                session, 0x81,                       // session + type (channel open)
+                session, 0x00,                       // seq (LE)
+                session, 0x00,                       // port/session_id (LE)
+                0xFD, 0x02,                          // receive_window (LE) = 765
+                0x00                                 // checksum placeholder
+            };
+            frame[14] = MozaProtocol.CalculateChecksum(frame);
+            _connection.Send(frame);
         }
 
         private byte[] BuildChannelEnableFrame(byte page, byte channelIndex)
@@ -373,14 +410,16 @@ namespace MozaPlugin.Telemetry
 
         /// <summary>
         /// Send status push (group 0x43, cmd FC:00) to the wheel.
-        /// Pithouse sends this ~1/s. Data is session(1) + ack_seq(2 LE);
-        /// we send zeros since we haven't done a file transfer session.
+        /// Pithouse sends this ~1/s. Data is session(1) + ack_seq(2 LE).
+        /// The session byte must match FlagByte — Pithouse uses the same value
+        /// (0x02) for both the telemetry flag and the fc:00 session field.
+        /// Captures show the wheel ignores fc:00 with session=0x00.
         /// </summary>
         private void SendStatusPush()
         {
-            // 7E 05 43 17 FC 00 00 00 00 [checksum]
+            // 7E 05 43 17 FC 00 [session] 00 00 [checksum]
             var frame = new byte[] { MozaProtocol.MessageStart, 0x05, MozaProtocol.TelemetrySendGroup,
-                MozaProtocol.DeviceWheel, 0xFC, 0x00, 0x00, 0x00, 0x00, 0x00 };
+                MozaProtocol.DeviceWheel, 0xFC, 0x00, FlagByte, 0x00, 0x00, 0x00 };
             frame[9] = MozaProtocol.CalculateChecksum(frame);
             _connection.Send(frame);
         }

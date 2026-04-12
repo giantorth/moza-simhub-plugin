@@ -302,7 +302,7 @@ Pit House sends several concurrent command streams when telemetry is active. Ana
 | Telemetry mode | ~3/s | wheel (0x17) | `0x40/28:02` data=`01:00` | Set/poll multi-channel mode | Likely |
 | Dash keepalive | ~1.5/s | dash (0x14), dev21 (0x15) | `0x43` n=1, data=`00` | Dash/dev21 keep-alive | TBD |
 | Display config | ~1/s | wheel (0x17) | `0x43/7C:27` | Page-cycled display params | TBD |
-| Status push | ~1/s | wheel (0x17) | `0x43/FC:00` | Session acknowledgment | TBD |
+| Status push | ~1/s | wheel (0x17) | `0x43/FC:00` | Session acknowledgment (session byte must match telemetry flag byte) | Yes — wheel ignores session=0x00 |
 | Settings block | ~1/s | wheel (0x17) | `0x43/7C:00` | Config sync | No (file transfer) |
 | Button LED | ~1/s | wheel (0x17) | `0x3F/1A:01` | Button LED state | Separate feature |
 
@@ -340,21 +340,58 @@ From `connect-wheel-start-game.json` (capture starts with Pithouse running, no w
 
 **Key observation:** The `0x40/28:02 data=01:00` polling runs for ~22 seconds before the game starts, and the wheel **always responds `00:00`** (never `01:00`). Telemetry flows regardless. The wheel may not actually acknowledge this mode setting, or the response value has a different meaning than expected.
 
+### SerialStream telemetry port
+
+Pithouse's telemetry system runs over `MOZA::Protocol::SerialStreamManager`, a TCP-like reliable stream multiplexed over the serial connection. Each telemetry session opens a **port** on the wheel via a type=0x81 "session channel open" frame inside `0x43/7c:00`. This port number is then used as:
+
+- The **flag byte** in `7d:23` telemetry data frames (byte offset 10 in the raw frame)
+- The **session byte** in `fc:00` status push frames (first data byte)
+- The **session byte** in any `7c:00` serial stream data frames
+
+**Port allocation is monotonic** — each new Pithouse connection gets the next available port number. Observed across captures:
+
+| Capture | Port/Flag | Context |
+|---------|-----------|---------|
+| `dash.ndjson` | 0x02 | Fresh after wheel power-on |
+| `0-100redline-0-other-dash` | 0x02 | Same power cycle, early |
+| `0-100redline-0-simple-rpm` | 0x07 | Later connection |
+| `0-6thgear-0-main-dash` | 0x0a | Later connection |
+| `burn-tyres` | 0x0a | Same connection as above |
+| `0-6thgear-0-simple-rpm` | 0x10 | Later connection |
+| `0-100redline-0-main-dash` | 0x13 | Latest connection |
+
+The counter resets when the wheel is power-cycled.
+
+**Session open frame** (observed at the start of every Pithouse telemetry session):
+
+```
+7E 0A 43 17 7C 00 [port] 81 [port] 00 [port] 00 FD 02 [checksum]
+                   └─session  └─seq(LE)  └─port_id(LE) └─window(LE)=765
+```
+
+- `session` = port number (matches flag byte)
+- `type` = 0x81 (session channel open)
+- `seq` = port number (initial sequence, LE)
+- `payload` = port_id(2 LE) + receive_window(2 LE, always 0x02FD = 765)
+
+The wheel responds with `fc:00` ack (`[port] [ack_seq] 00`) and begins accepting `7d:23` frames with that flag byte. **Without this session open, the wheel silently drops all telemetry data** — confirmed by comparative USB captures (SimHub plugin vs Pithouse, 2026-04-12).
+
 ### Minimum viable sender
 
 The `cs-to-vgs-wheel.ndjson` capture shows that Pit House sends the `0x40` channel configuration burst on every wheel connection, even without a dashboard upload. This suggests the wheel may require channel declarations before accepting telemetry.
 
 **Recommended startup sequence:**
 
-1. **Channel configuration** (`0x40`): send `1e:00`/`1e:01` for each channel in the dashboard, plus `09:00`, page config (`1c`, `1d`), and `28:02 data=0100`
-2. **Telemetry enable** (`0x41/FD:DE data=00:00:00:00`): start sending at ~30+ Hz, runs the entire session
-3. **Live telemetry** (`0x43/7D:23`): bit-packed frames at ~20-30 Hz
-4. **Sequence counter** (`0x2D/F5:31`): incrementing counter to base at ~30+ Hz
-5. **Telemetry mode polling** (`0x40/28:02 data=01:00`): ~3 Hz
-6. **Heartbeat** (`0x00` n=0): to all devices 18–30, ~1/s
-7. **Dash keepalive** (`0x43` n=1 data=`00`): to devices 0x14, 0x15, ~1/s
-8. **Display config** (`0x43/7C:27`): page-cycled params, ~1/s
-9. **Status push** (`0x43/FC:00`): session ack with zero data, ~1/s
+1. **Session open** (`0x43/7C:00` type=0x81): open a SerialStream port for telemetry. The port number becomes the flag byte for all subsequent frames. See § SerialStream telemetry port
+2. **Channel configuration** (`0x40`): send `1e:00`/`1e:01` for each channel in the dashboard, plus `09:00`, page config (`1c`, `1d`), and `28:02 data=0100`
+3. **Telemetry enable** (`0x41/FD:DE data=00:00:00:00`): start sending at ~30+ Hz, runs the entire session
+4. **Live telemetry** (`0x43/7D:23`): bit-packed frames at ~20-30 Hz
+5. **Sequence counter** (`0x2D/F5:31`): incrementing counter to base at ~30+ Hz
+6. **Telemetry mode polling** (`0x40/28:02 data=01:00`): ~3 Hz
+7. **Heartbeat** (`0x00` n=0): to all devices 18–30, ~1/s
+8. **Dash keepalive** (`0x43` n=1 data=`00`): to devices 0x14, 0x15, ~1/s
+9. **Display config** (`0x43/7C:27`): page-cycled params, ~1/s
+10. **Status push** (`0x43/FC:00`): session byte must equal the opened port number, ack_seq=0, ~1/s
 
 The RPM LEDs work with zero preamble — `0x3F/1A:00` data is accepted immediately.
 
@@ -419,7 +456,7 @@ Short (length=2) packets to dash (device 20) and device 21 every ~5s. Heartbeat/
 
 ## Dashboard upload protocol (group 0x43, cmd `7c:00`)
 
-Pit House transfers dashboard files and configuration to the wheel using a session-based chunked protocol over `0x43/7c:00`. The `fc:00` command is used for acknowledgments.
+Pit House transfers dashboard files and configuration to the wheel using a proprietary TCP-like serial stream protocol (`MOZA::Protocol::SerialStreamManager`) over `0x43/7c:00`. The `fc:00` command is used for acknowledgments. This is NOT CoAP — CoAP is a separate layer used for device parameter management.
 
 ### Chunk format
 
@@ -431,51 +468,154 @@ session(1)  type(1)  seq_lo(1)  seq_hi(1)  payload(≤58)
 
 | Field | Size | Description |
 |-------|------|-------------|
-| session | 1 | Session ID (multiple concurrent sessions possible) |
-| type | 1 | `0x01` = data, `0x00` = control/end, `0x81` = seen in device responses |
-| seq | 2 LE | Sequence number (monotonic within session, shared across both directions) |
-| payload | ≤58 | Net data per chunk; **non-last data chunks have a 4-byte CRC trailer** |
+| session | 1 | Session ID — pre-assigned, multiple concurrent sessions |
+| type | 1 | `0x01` = data, `0x00` = control/end marker, `0x81` = session channel open (device-initiated) |
+| seq | 2 LE | Sequence number (monotonic within session) |
+| payload | ≤58 | Net data per chunk; **non-last data chunks have a 4-byte CRC-32 trailer** |
 
 Net payload per full data chunk: **54 bytes** (58 minus 4-byte CRC). The last chunk in a transfer has no CRC trailer.
 
-Acknowledgment packets use `fc:00` with 3 bytes: `session(1) + ack_seq(2 LE)`.
+Acknowledgment packets use `fc:00` with 3 bytes: `session(1) + ack_seq(2 LE)`. The session ID in the ack identifies the **ack sender's** session, not the data sender's. Linked session pairs (e.g. 0x03↔0x0A) use cross-session acks.
+
+### CRC algorithm
+
+**Standard CRC-32** (ISO 3309 / ITU-T V.42, same as zlib/Ethernet/gzip/PNG):
+- Polynomial: `0x04C11DB7` (reflected), init `0xFFFFFFFF`, xor-out `0xFFFFFFFF`
+- Stored **little-endian** in the 4-byte trailer
+- Covers only the **54-byte payload data** (excludes session/type/seq header)
+- Per-chunk (not cumulative across chunks)
+- Computable via `zlib.crc32(payload_bytes)` or `System.IO.Hashing.Crc32`
+
+### Type 0x81 — session channel open
+
+Device sends type `0x81` to initiate or acknowledge a session. Payload is 4 bytes:
+
+```
+session_id(2 LE)  receive_window(2 LE)
+```
+
+Observed: `04 00 fd 02` → session 4, window 765.
 
 ### Compressed transfer format
 
-Zlib-compressed transfers (RPC messages, file contents) prepend a 9-byte header to the first data chunk's payload:
+Zlib-compressed transfers (RPC messages, file contents) prepend a 9-byte header to the reassembled application data:
 
 ```
 flags(1)  comp_sz(4 LE)  uncomp_sz(4 LE)  [zlib data...]
 ```
 
-The zlib stream uses standard deflate (`78 9c` magic). Reassembly: strip the 9-byte header from the first chunk, strip 4-byte CRC from each non-last chunk, concatenate, and decompress the first `comp_sz` bytes.
+The zlib stream uses standard deflate (`78 9c` magic). Reassembly: strip the 4-byte CRC from each non-last chunk, concatenate all chunk payloads (excluding session/type/seq headers), then parse the 9-byte header and decompress `comp_sz` bytes.
+
+### Concurrent session map (observed in `dash-upload.ndjson`)
+
+8 concurrent sessions run during a single dashboard upload:
+
+| Session | Duration | Role | Description |
+|---------|----------|------|-------------|
+| 0x01 | 8.5s | Management | Bidirectional RPCs with `0xFF`-prefixed messages (see below) |
+| 0x02 | 6.9s | Keepalive | Dev→host, empty `00 00 00 00`, ~3.4s interval |
+| 0x03 | 6.9s | Keepalive | Host→dev, linked to 0x0A via cross-session acks |
+| 0x04 | 3.0s | **File transfer** | Path exchange + mzdash upload (75 data + 28 ack chunks) |
+| 0x06 | 6.9s | Keepalive | Alternating directions, ~3.4s |
+| 0x08 | 6.9s | Keepalive | Alternating directions, ~3.4s |
+| 0x09 | 5.8s | **configJson RPC** | Dev sends dashboard state; host responds with dashboard list |
+| 0x0A | 6.9s | Keepalive | Dev→host, linked to 0x03 |
+
+Additionally, bare `0x43` frames (no cmd bytes, n=1, payload=`0x00`) are sent to devices 0x17/0x14/0x15 every ~1.1s as connection-level keepalive pings. Device replies `0x80`.
+
+### Session 1 — management messages
+
+Management RPCs use a `0xFF`-prefixed envelope:
+
+```
+FF(1)  inner_len(4 LE)  token(4 LE)  data(inner_len)  CRC32(4)
+```
+
+The token links requests to responses. Multi-chunk messages also have per-chunk CRC trailers. The message at t=5.2s in the capture carries a zlib-compressed device log (7163 bytes, UTF-16BE) listing all installed dashboards and rendering status.
 
 ### File transfer sequence (observed in `dash-upload.ndjson`)
 
 The upload of a dashboard file involves multiple sessions and a post-transfer configuration burst:
 
-**1. File path exchange (session 4, type 0x01 data chunks)**
+**1. File path exchange + content push (session 4)**
 
-The host sends two UTF-16LE file paths (Windows temp paths) with a 10-byte header, and the device responds with its local Linux path:
+The device initiates with a type=0x81 channel open. The host then sends two sub-messages:
+
+**Sub-message 1 — path registration (no file content):**
 
 ```
-header(10)  path_len(2 LE)  path(UTF-16LE, null-terminated)  ...
-            path_len(2 LE)  path(UTF-16LE, null-terminated)  ...
-            md5_len(1=16)   md5(16 bytes)
-            metadata        [zlib-compressed file content]
+header(8)
+  TLV paths (0x8C=local, 0x84=remote)
+  MD5_len(1=0x10) + MD5(16)
+  reserved(4=0x00000000)
+  token(4)
+  sentinel(4=0xFFFFFFFF)
 ```
+
+**Sub-message 2 — file content push:**
+
+```
+header(8)
+  TLV paths (0x8C=local, 0x84=remote)
+  MD5_len(1=0x10) + MD5(16)
+  reserved(4)
+  token(4) + token(4)
+  file_count(4)
+  dest_path_byte_len(4)
+  dest_path(UTF-16BE, null-terminated)
+  compressed_header + zlib_stream
+```
+
+**8-byte transfer header:**
+
+| Byte | Host→dev | Dev→host | Meaning |
+|------|----------|----------|---------|
+| 0 | `0x02` | `0x01` | Sender role (0x02=host, 0x01=device) |
+| 1 | `0x40` (64) | `0x38` (56) | Max chunk payload size |
+| 2 | `0x01` | `0x01` | Transfer type (0x01=file transfer) |
+| 3–7 | zeros | zeros | Reserved |
+
+**TLV path markers:**
+
+| Marker | Meaning |
+|--------|---------|
+| `0x8C` | Local path (host-side temp file) |
+| `0x84` | Remote path (device-side staging or target) |
+
+Each entry: `marker(1) + 0x00(1) + UTF-16LE_path(null-terminated)`. Scan to null terminator for length.
 
 Host paths: `C:/Users/.../AppData/Local/Temp/_moza_filetransfer_tmp_{timestamp}`
-Device paths: `/home/root/_moza_filetransfer_md5_{hash}` or `/home/moza/resource/dashes/{name}/{name}.mzdash`
+Device staging: `/home/root/_moza_filetransfer_md5_{md5hex}`
+Device target: `/home/moza/resource/dashes/{name}/{name}.mzdash`
 
-The file content (mzdash JSON) is zlib-compressed and embedded after the path metadata.
+Note: TLV paths use UTF-16LE, but the destination path in sub-message 2 uses **UTF-16BE**.
+
+The file content (mzdash JSON) is zlib-compressed and embedded after the destination path.
+
+End-to-end file integrity uses **MD5** (transmitted alongside paths). The on-device staging file is named after the MD5 hash.
+
+**Session 4 sequence diagram:**
+
+```
+Device                                     Host
+  │ ──── type=0x81 (channel open) ────────→  │  seq=0x0004
+  │ ←─── fc:00 ACK ──────────────────────    │
+  │ ←─── Sub-msg 1: path registration ───    │  7 chunks
+  │ ──── fc:00 ACKs ─────────────────────→   │
+  │ ──── Sub-msg 1 response (echo paths) ─→  │  6 chunks
+  │ ←─── Sub-msg 2: file content push ───    │  32 chunks
+  │ ──── fc:00 ACKs ─────────────────────→   │
+  │ ──── Sub-msg 2 response ─────────────→   │  6 chunks
+  │ ←─── type=0x00 end marker ───────────    │
+  │ ──── type=0x00 end marker ───────────→   │
+```
 
 **2. Dashboard config RPC (session 9, compressed transfer)**
 
 Host sends a `configJson()` message listing all dashboards:
 ```json
 {"configJson()":{"dashboards":["Formula 1","GT V01",...,"rpm-only"],
-  "fontRootDir":"","fonts":[],"sortTags":0},"id":11}
+  "dashboardRootDir":"","fontRootDir":"","fonts":[],"imageRootDir":"","sortTags":0},"id":11}
 ```
 
 Device responds with dashboard management state:
@@ -718,9 +858,13 @@ See [serial.md](serial.md) and [serial.yml](serial.yml) for the full command tab
 ## Open questions
 
 - ~~Value scaling for specialized types~~ — **RESOLVED**: All conversion formulas determined. Key insight: the `percent_1` scale factor is exactly 10.0 (not 10.22 as previously estimated from capture data)
+- ~~CRC algorithm~~ — **RESOLVED**: Standard CRC-32 (ISO 3309), same as `zlib.crc32()`. Little-endian, covers 54-byte payload only. See § Dashboard upload protocol.
+- ~~File transfer header format~~ — **RESOLVED**: 8-byte header: role(1) + max_chunk_size(1) + transfer_type(1) + reserved(5). TLV paths use markers 0x8C (local) and 0x84 (remote) with UTF-16LE. See § Session 4 wire format in pithouse-re.md.
+- ~~Session lifecycle~~ — **RESOLVED**: Sessions are pre-assigned (not negotiated). Device opens with type=0x81 (session_id + window). 8 concurrent sessions observed: 1 management, 1 file transfer, 1 configJson RPC, 5 keepalive. See § Concurrent session map.
+- ~~Protocol identity~~ — **RESOLVED**: The 0x43/7c:00 framing is `MOZA::Protocol::SerialStreamManager`, a proprietary TCP-like reliable stream. NOT CoAP. CoAP (libcoap 4.3.4) is a separate layer for device parameter management.
 - **Dashboard byte limit configuration** — stored at config object offset `+0x30`, set during dashboard upload (group 0x40). Exact mechanism for setting this limit not yet traced
 - **Cold-start initialization** — `connect-wheel-start-game.json` captures wheel connection → game start, confirming the full init sequence (identity probe → config burst → dashboard upload → telemetry). Still unclear if the wheel needs re-initialization after power cycle or if EEPROM config persists across power cycles
-- ~~Flag byte origin~~ — **RESOLVED**: The flag is a monotonic counter, incremented each time a new client connects. It is NOT communicated to the wheel during connection setup. The flag serves only as a host-side map key for client multiplexing. **The wheel firmware almost certainly does not validate the flag byte.** Any fixed value (e.g., `0x01`) should work for sending telemetry.
+- ~~Flag byte origin~~ — **RESOLVED (2026-04-12)**: The flag byte is a **SerialStream port number** assigned by `MOZA::Protocol::SerialStreamManager`. Pithouse's telemetry runs over this stream layer, which allocates ports via a type=0x81 "session channel open" inside a `7c:00` frame. The port number becomes the flag byte in `7d:23` telemetry frames and the session byte in `fc:00` status pushes. Observed values across captures: 0x02, 0x07, 0x0a, 0x10, 0x13 — a monotonic counter that increments with each new Pithouse connection (resets on wheel power cycle). The wheel **validates** this value: comparative USB captures (Pithouse vs SimHub, 2026-04-12) show the wheel silently dropping `7d:23` and `fc:00` frames with an unopened port number while still responding to other commands (`7c:27` display config). A session open (`7c:00` type=0x81) must be sent before telemetry will be accepted. See § SerialStream telemetry port.
 - **MDD (standalone dash)** — no captures of telemetry sent to device 0x14; protocol may differ
 - ~~Gear encoding for reverse~~ — **RESOLVED**: `int30` is a signed 5-bit value: -1=R, 0=N, 1–12=gears. Reverse is stored as 31 (two's complement -1 in 5 bits).
 - **EEPROM direct access** — group 10 protocol found in rs21_parameter.db but never observed in USB captures; needs live verification
@@ -730,3 +874,6 @@ See [serial.md](serial.md) and [serial.yml](serial.yml) for the full command tab
 - **Group 0x28 / 0x29 purpose** — group 0x28 queries base for per-device parameters (values 450, 1000 seen); group 0x29 sets a base parameter (value 1100). Possibly FFB or calibration related
 - **0x40/28:02 response discrepancy** — wheel always responds `00:00` to `28:02 data=01:00` in `connect-wheel-start-game.json`, yet telemetry flows. In `dash.ndjson` timeline the same command appears to be accepted. May depend on timing or dashboard state
 - **Display sub-device routing** — identity queries for the Display sub-module appear embedded inside `0x43` frames during dashboard upload. The exact routing mechanism (how Pithouse addresses the Display vs the wheel main controller) needs further analysis
+- **Sub-message 2 endianness** — the destination path in the file content push uses UTF-16BE while TLV paths use UTF-16LE. Needs verification with a second capture to confirm this is consistent and not a parsing artifact
+- **SerialStream SYN handshake** — the three-way handshake (SYN1/SYN2/SYN3) is confirmed from binary strings but not observed in the capture (capture may start after connection is established). Need a cold-start capture to see the handshake on the wire
+- ~~Session ID assignment~~ — **RESOLVED (2026-04-12)**: Session IDs are SerialStream port numbers allocated by the host. The host picks the next available port and opens it with a type=0x81 frame. For telemetry, the port number is reused as the `7d:23` flag byte and `fc:00` session byte. Port numbers are monotonic within a wheel power cycle (observed: 0x02 → 0x07 → 0x0a → 0x10 → 0x13 across successive Pithouse connections). Non-telemetry sessions (file transfer, management, keepalive) use separate port numbers from the same allocator. See § SerialStream telemetry port.

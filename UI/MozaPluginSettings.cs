@@ -61,8 +61,9 @@ namespace MozaPlugin
         // Byte limit override (0 = auto from profile)
         public int TelemetryByteLimitOverride { get; set; } = 0;
 
-        // Flag byte sent in telemetry frame header (wheel doesn't validate)
-        public byte TelemetryFlagByte { get; set; } = 0x01;
+        // SerialStream port number used as flag byte in telemetry frames.
+        // Opened via 7c:00 type=0x81 session open on each connection.
+        public byte TelemetryFlagByte { get; set; } = 0x02;
 
         // Telemetry send rate in Hz
         public int TelemetrySendRateHz { get; set; } = 20;

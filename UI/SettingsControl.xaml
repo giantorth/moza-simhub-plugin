@@ -622,26 +622,6 @@
                                    Text="Telemetry enable/disable and dashboard profile selection have moved to the MOZA Wheel device tab (Devices > your wheel > MOZA Wheel)."/>
 
                         <!-- Separator -->
-                        <Separator Margin="0,12,0,8"/>
-                        <TextBlock Text="Diagnostic Options" FontWeight="SemiBold" Margin="0,0,0,6"/>
-
-                        <!-- Flag byte -->
-                        <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
-                            <TextBlock Text="Flag byte:" Width="160" VerticalAlignment="Center"/>
-                            <TextBox x:Name="TelemetryFlagByteBox" Width="70" Margin="0,0,8,0"
-                                     TextChanged="TelemetryFlagByteBox_TextChanged" VerticalAlignment="Center"/>
-                            <TextBlock Text="(wheel ignores this value)" Foreground="Gray"
-                                       FontSize="11" VerticalAlignment="Center"/>
-                        </StackPanel>
-
-                        <!-- Mode frame toggle -->
-                        <CheckBox x:Name="TelemetrySendModeCheck" Content="Send mode frame (0x40/28:02) periodically"
-                                  Margin="0,0,0,8" Click="TelemetrySendModeCheck_Click"/>
-
-                        <!-- Sequence counter toggle -->
-                        <CheckBox x:Name="TelemetrySeqCounterCheck" Content="Send sequence counter (0x2D) to base"
-                                  Margin="0,0,0,8" Click="TelemetrySeqCounterCheck_Click"/>
-
                         <!-- Separator -->
                         <Separator Margin="0,4,0,8"/>
                         <TextBlock Text="Test Pattern" FontWeight="SemiBold" Margin="0,0,0,6"/>

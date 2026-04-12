@@ -326,9 +326,9 @@ namespace MozaPlugin
             if (_telemetrySender == null) return;
             var s = _settings;
 
-            _telemetrySender.FlagByte            = s.TelemetryFlagByte;
-            _telemetrySender.SendTelemetryMode   = s.TelemetrySendModeFrame;
-            _telemetrySender.SendSequenceCounter = s.TelemetrySendSequenceCounter;
+            // FlagByte, SendTelemetryMode, and SendSequenceCounter are no longer
+            // user-configurable — they use correct defaults required by the protocol.
+            // FlagByte = SerialStream port number (0x02), opened via session open frame.
 
             // Resolve the active multi-stream profile
             MultiStreamProfile? profile = null;
