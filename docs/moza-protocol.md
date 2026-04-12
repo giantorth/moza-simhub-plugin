@@ -133,6 +133,7 @@ Model names assumed from device naming conventions (unverified):
 | `GS V2P` | GS V2P | 10 button LEDs (5 per side), no flag LEDs |
 | `CSP` | CS Pro | Has flag LEDs |
 | `KSP` | KS Pro | Has flag LEDs |
+| `KS` | KS | 10 button LEDs, no flag LEDs |
 | `FSR2` | FSR V2 | Has flag LEDs |
 | `TSW` | TSW | 14 button LEDs, no flag LEDs |
 
@@ -431,7 +432,17 @@ The RPM LEDs (`0x3F/1A:00`) and button LEDs (`0x3F/1A:01`) are handled separatel
 
 ### Group 0x40 (host → device 0x17)
 
-**Normal operation (~3.4 Hz):** `28 02 XX 00` — byte 2 varies by dashboard type (`01` with 16-channel, `00` with 1-channel).
+**Sub-command 0x28 — dashboard multi-function queries/set:**
+
+| Wire | Name (rs21_parameter.db) | Purpose |
+|------|--------------------------|---------|
+| `28:00 data=00` | `WheelGetCfg_GetMultiFunctionSwitch` | Query active dashboard mode. The wheel retains its last loaded dashboard across disconnections. |
+| `28:01 data=00` | `WheelGetCfg_GetMultiFunctionNum` | Query active page number |
+| `28:02 data=01:00` | `WheelGetCfg_GetMultiFunctionLeft` | Set multi-channel telemetry mode (01=multi, 00=RPM only) |
+
+Pithouse sends 28:00 and 28:01 (read current state) followed by 28:02 (set mode) during the channel config burst. This is a read-then-write pattern — the wheel remembers its dashboard state across power cycles.
+
+**Normal operation (~3.4 Hz):** `28 02 01 00` continues polling to maintain multi-channel mode.
 
 **Dashboard upload:** burst of 18+ distinct payloads including channel enable/disable (`1E [0/1] [ch]`), page config (`1B [page] FF`), and various sub-commands.
 
@@ -682,7 +693,9 @@ After the file is transferred, Pit House sends a burst of `0x40` commands to con
 | `1e:00` | `CC 00 00` | Enable channel CC on page 0 |
 | `1c:00`/`1c:01` | `00` | Page configuration |
 | `1d:00`/`1d:01` | `00` | Page configuration |
-| `28:02` | `01 00` | Set multi-channel telemetry mode |
+| `28:00` | `00` | Query active dashboard mode (wheel retains across power cycles) |
+| `28:01` | `00` | Query active page number |
+| `28:02` | `01 00` | Set multi-channel telemetry mode (01=multi, 00=RPM only) |
 | various | — | Display settings (`0a`, `0b`, `05`, `1b`, `20`, `21`, `24`, etc.) |
 
 **4. Periodic display config (group 0x43, cmd `7c:27`)**
@@ -935,7 +948,9 @@ Pithouse always sends a 14-byte preamble message before the tier definition (con
 07 04 00 00 00 02 00 00 00 03 00 00 00 00
 ```
 
-Structure: tag 0x07 with param=4 and value=2, followed by tag 0x03 with value=0. This likely resets or prepares the wheel's tier config parser — without it, the subsequent tier definition may be ignored.
+Structure (decoded from Pithouse binary RTTI class `TelemetryDataOutputBuffer` in `FormulaSteeringTelemetryDataStructres.cc`):
+- **Tag 0x07** (param=4, value=2): protocol version or capability level. Constant across all observed sessions — not a dynamic value.
+- **Tag 0x03** (param=0, value=0): base flag offset. Value 0 means tier flags start at 0x00.
 
 ### Sub-message 2 — tier definition
 
@@ -962,7 +977,7 @@ Structure: tag 0x07 with param=4 and value=2, followed by tag 0x03 with value=0.
 | 0x0E | percent_1 | 10 | 0x0F | float_6000_1 | 16 |
 | 0x14 | uint3 | 4 | 0x17 | float_001 | 10 |
 
-**Chunking:** Both sub-messages are sent as SerialStream data chunks with CRC-32 trailers (standard ISO 3309). Max 54 net bytes per non-last chunk (58 with CRC). The last chunk has no CRC. Sequence numbers are continuous across both sub-messages (sub-message 1 at seq 3-4, sub-message 2 at seq 5+).
+**Chunking:** Both sub-messages are sent as SerialStream data chunks with CRC-32 trailers (standard ISO 3309). **ALL chunks have CRC-32 trailers, including the final chunk** — verified by computing CRC-32 of every chunk's net data in `moza-startup-1` and `moza-startup-2` captures and confirming the trailing 4 bytes match. Max 54 net bytes per chunk (58 with CRC). Sequence numbers are continuous across both sub-messages (sub-message 1 at seq 3-4, sub-message 2 at seq 5+).
 
 **Verified:** The plugin's `TierDefinitionBuilder` generates tier definitions byte-identical to Pithouse for the F1 dashboard: same channel indices, compression codes, and bit widths across all 3 tiers.
 
@@ -990,13 +1005,14 @@ The plugin sends steps 1-10 during the preamble. The 0x87 response with model na
 ## Open questions
 
 - ~~Value scaling for specialized types~~ — **RESOLVED**: All conversion formulas determined. Key insight: the `percent_1` scale factor is exactly 10.0 (not 10.22 as previously estimated from capture data)
-- ~~CRC algorithm~~ — **RESOLVED**: Standard CRC-32 (ISO 3309), same as `zlib.crc32()`. Little-endian, covers 54-byte payload only. See § Dashboard upload protocol.
+- ~~CRC algorithm~~ — **RESOLVED (corrected 2026-04-12)**: Standard CRC-32 (ISO 3309), same as `zlib.crc32()`. Little-endian, covers per-chunk net data only. **ALL chunks have CRC-32 trailers, including the final chunk** — verified by computing CRC-32 against every chunk in multiple captures. Previous assumption that the last chunk omitted CRC was wrong.
 - ~~File transfer header format~~ — **RESOLVED**: 8-byte header: role(1) + max_chunk_size(1) + transfer_type(1) + reserved(5). TLV paths use markers 0x8C (local) and 0x84 (remote) with UTF-16LE. See § Session 4 wire format in pithouse-re.md.
 - ~~Session lifecycle~~ — **RESOLVED (2026-04-12, corrected)**: Sessions are opened via type=0x81 frames with port numbers from a global monotonic counter. Both host and device can open sessions. The host probes for available ports by sending type=0x81 and waiting for fc:00 acks. See § SerialStream telemetry port.
 - ~~Protocol identity~~ — **RESOLVED**: The 0x43/7c:00 framing is `MOZA::Protocol::SerialStreamManager`, a proprietary TCP-like reliable stream. NOT CoAP. CoAP (libcoap 4.3.4) is a separate layer for device parameter management.
 - ~~Flag byte / SerialStream port~~ — **RESOLVED (2026-04-12, corrected 2026-04-12)**: The session port (FlagByte) is used for 7c:00 framing only. The flag byte in tier definitions and telemetry frames is **always 0-based** (0x00, 0x01, 0x02), independent of session port. Confirmed by side-by-side USB captures: Pithouse uses flags 0x00+ in both startup-1 and startup-2 even though the telemetry session was on port 0x02. The plugin previously used `FlagByte+i` as the tier flag, causing enable/tier mismatch when the session port was >0x02. See § SerialStream telemetry port.
 - ~~Session ID / port allocation~~ — **RESOLVED (2026-04-12)**: Session IDs (chunk header byte) and port numbers (payload) are **independent**. Port counter is global and monotonic within a power cycle. Plugin probes from port 1 upward.
-- ~~Tier definition protocol~~ — **RESOLVED (2026-04-12, corrected 2026-04-12)**: Pithouse sends a 14-byte sub-message 1 preamble (`07 04 00 00 00 02 00 00 00 03 00 00 00 00`) before the tier definition on the telemetry session. This may reset the wheel's tier config parser. The tier definition itself uses 0-based flag bytes. Plugin now sends both sub-message 1 and 0-based tier definitions via `TierDefinitionBuilder`. See § Tier definition protocol.
+- ~~Tier definition protocol~~ — **RESOLVED (2026-04-12, corrected 2026-04-12)**: Pithouse sends a 14-byte sub-message 1 preamble before the tier definition. Tag 0x07 (value=2) is a protocol version constant; tag 0x03 (value=0) is the base flag offset. The tier definition uses 0-based flag bytes. All session data chunks include CRC-32 trailers (including the final chunk). Plugin now sends sub-message 1, 0-based tier definitions, and correct CRC on all chunks. See § Tier definition protocol.
+- ~~0x40/28:00 and 28:01 purpose~~ — **RESOLVED (2026-04-12)**: `WheelGetCfg_GetMultiFunctionSwitch` and `WheelGetCfg_GetMultiFunctionNum` (from rs21_parameter.db). These query the wheel's active dashboard mode and page number — the wheel retains its last loaded dashboard across power cycles. Pithouse reads current state (28:00, 28:01) then sets multi-channel mode (28:02). See § Group 0x40.
 - ~~Gear encoding for reverse~~ — **RESOLVED**: `int30` is a signed 5-bit value: -1=R, 0=N, 1–12=gears. Reverse is stored as 31 (two's complement -1 in 5 bits).
 - **Dashboard byte limit configuration** — stored at config object offset `+0x30`, set during dashboard upload (group 0x40). Exact mechanism for setting this limit not yet traced
 - **Cold-start initialization** — `connect-wheel-start-game.json` captures wheel connection → game start, confirming the full init sequence (identity probe → config burst → dashboard upload → telemetry). EEPROM persistence across power cycles is confirmed for channel config; unclear for session state

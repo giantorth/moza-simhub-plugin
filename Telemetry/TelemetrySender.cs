@@ -284,10 +284,11 @@ namespace MozaPlugin.Telemetry
 
             int seq = 3; // Match Pithouse's starting seq for config data
 
-            // Sub-message 1: Pithouse always sends this 14-byte preamble before the
-            // tier definition on the telemetry session. Observed in both startup-1 and
-            // startup-2 captures. Format: tag 0x07 (param=4, value=2), tag 0x03 (value=0).
-            // This may reset or prepare the wheel's tier config parser.
+            // Sub-message 1: session preamble sent before tier definitions.
+            // Serialized by TelemetryDataOutputBuffer (FormulaSteeringTelemetryDataStructres.cc).
+            // Tag 0x07 (param=4, value=2) = protocol version / capability level (constant).
+            // Tag 0x03 (param=0, value=0) = base flag offset (0 = start tiers at flag 0x00).
+            // Confirmed in both moza-startup-1 and moza-startup-2 captures, same values.
             byte[] preambleMsg = new byte[]
             {
                 0x07, 0x04, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
@@ -574,8 +575,11 @@ namespace MozaPlugin.Telemetry
                     _connection.Send(BuildChannelEnableFrame((byte)page, cc));
             }
 
-            // Pithouse sends 28:00 and 28:01 (initial mode setup) before 09:00 and 28:02.
-            // 28:00 = N=3, data=00; 28:01 = N=3, data=00
+            // 28:00 = WheelGetCfg_GetMultiFunctionSwitch — query active dashboard mode
+            // 28:01 = WheelGetCfg_GetMultiFunctionNum — query active page number
+            // (rs21_parameter.db [64,40,0/1]). The wheel retains the last loaded
+            // dashboard across disconnections; Pithouse reads the current state before
+            // setting 28:02 (telemetry channel mode: 01=multi-channel, 00=RPM only).
             _connection.Send(BuildGroup40Frame3(0x28, 0x00, 0x00));
             _connection.Send(BuildGroup40Frame3(0x28, 0x01, 0x00));
             _connection.Send(BuildGroup40Frame(0x09, 0x00));
@@ -685,9 +689,11 @@ namespace MozaPlugin.Telemetry
 
         private void SendDashKeepalive()
         {
-            // Pithouse sends group 0x43 keepalives to dash (0x14), 0x15, AND wheel (0x17).
-            // The wheel keepalive is critical — Pithouse sends it ~15 times per session
-            // vs our previous 1 (only during display probe).
+            // TelemetryServer periodic connection ping (group 0x43, N=1, data=0x00).
+            // Pithouse sends to 0x14 (dash), 0x15, and 0x17 (wheel) every ~1.1s.
+            // Distinct from group 0x00 heartbeats and SerialStream fc:00 acks.
+            // Unclear whether the wheel requires this for telemetry to flow, but
+            // Pithouse sends it consistently (~15× per session).
             foreach (byte dev in new byte[] { MozaProtocol.DeviceDash, 0x15, MozaProtocol.DeviceWheel })
             {
                 var frame = new byte[] { MozaProtocol.MessageStart, 0x01, MozaProtocol.TelemetrySendGroup, dev, 0x00, 0x00 };
@@ -719,8 +725,10 @@ namespace MozaPlugin.Telemetry
 
         private void SendStatusPush()
         {
-            // Pithouse sends fc:00 with the actual telemetry session and current ack seq,
-            // not hardcoded zeros. This keeps the session alive and acknowledges data.
+            // Pithouse's fc:00 frames are purely reactive session acks — there is no
+            // separate "active-phase status sender." The ack_seq tracks the highest
+            // sequence received on this session. Sending periodically with the current
+            // ack_seq is harmless (just re-acks the same point if no new data arrived).
             SendSessionAck(FlagByte, (ushort)_sessionAckSeq);
         }
 

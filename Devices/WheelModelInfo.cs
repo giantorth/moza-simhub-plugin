@@ -36,6 +36,7 @@ namespace MozaPlugin.Devices
             ("CS V2.1", "CS V2",      new WheelModelInfo(6,  false, new[] { 0, 1, 3, 6, 8, 9 })),
             ("CSP",     "CS Pro",     new WheelModelInfo(14, true,  null)),
             ("KSP",     "KS Pro",     new WheelModelInfo(14, true,  null)),
+            ("KS",      "KS",         new WheelModelInfo(10, false, null)),
             ("FSR2",    "FSR V2",     new WheelModelInfo(14, true,  null)),
             ("VGS",     "Vision GS",  new WheelModelInfo(8,  false, null)),
             ("TSW",     "TSW",        new WheelModelInfo(14, false, null)),

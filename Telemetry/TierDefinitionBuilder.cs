@@ -122,14 +122,13 @@ namespace MozaPlugin.Telemetry
 
         /// <summary>
         /// Chunk a message into 7c:00 session data frames ready to send.
-        /// Each chunk: session(1) + type(1) + seq(2 LE) + payload(≤58) inside a moza frame.
-        /// Non-last chunks have a 4-byte CRC-32 trailer, leaving 54 net bytes per chunk.
-        /// The last chunk has no CRC trailer, using the full 58 bytes if needed.
+        /// Each chunk: session(1) + type(1) + seq(2 LE) + payload(≤54 net + 4 CRC) inside a moza frame.
+        /// ALL chunks have a 4-byte CRC-32 trailer (verified by CRC computation against
+        /// every chunk in moza-startup-1 and moza-startup-2 captures, including final chunks).
         /// </summary>
         public static List<byte[]> ChunkMessage(byte[] message, byte session, ref int seq)
         {
-            const int MaxPayloadWithCrc = 54;  // 58 total - 4 CRC
-            const int MaxPayloadLastChunk = 58;
+            const int MaxNetPerChunk = 54;  // 58 total - 4 CRC
 
             var frames = new List<byte[]>();
             int offset = 0;
@@ -137,15 +136,12 @@ namespace MozaPlugin.Telemetry
             while (offset < message.Length)
             {
                 int remaining = message.Length - offset;
-                bool isLast = remaining <= MaxPayloadLastChunk;
-                int chunkSize = isLast ? remaining : Math.Min(remaining, MaxPayloadWithCrc);
+                int chunkSize = Math.Min(remaining, MaxNetPerChunk);
 
-                var payload = new byte[chunkSize + (isLast ? 0 : 4)]; // +4 for CRC on non-last
+                var payload = new byte[chunkSize + 4]; // ALL chunks get CRC-32 trailer
                 Array.Copy(message, offset, payload, 0, chunkSize);
 
-                if (!isLast)
                 {
-                    // Append CRC-32 of the net data (not the chunk header)
                     uint crc = Crc32(message, offset, chunkSize);
                     payload[chunkSize]     = (byte)(crc & 0xFF);
                     payload[chunkSize + 1] = (byte)((crc >> 8) & 0xFF);

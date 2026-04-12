@@ -84,6 +84,7 @@ Each wheel model has a dedicated SimHub device definition with the correct LED l
 | MOZA CS V2 | CS V2.1 | 10 | 6 | No | Non-contiguous: positions 1,2,4,7,9,10 |
 | MOZA CS Pro | CSP | 10 | 14 | Yes | Contiguous |
 | MOZA KS Pro | KSP | 10 | 14 | Yes | Contiguous |
+| MOZA KS | KS | 10 | 10 | No | Contiguous |
 | MOZA FSR V2 | FSR2 | 10 | 14 | Yes | Contiguous |
 | MOZA Racing Wheel | *(generic)* | 10 | 14 | No | Contiguous (fallback for unknown models) |
 | MOZA Old Protocol Wheel | *(ES wheels)* | 10 | 0 | No | RPM LEDs only |
