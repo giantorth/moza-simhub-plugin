@@ -301,9 +301,9 @@ Pit House sends several concurrent command streams when telemetry is active. Ana
 | Heartbeat | ~1/s each | all devices (18–30) | `0x00` n=0 | Keep-alive / presence check | Likely |
 | RPM LED position | ~4/s | wheel (0x17) | `0x3F/1A:00` | LED bar position | Separate feature |
 | Telemetry mode | ~3/s | wheel (0x17) | `0x40/28:02` data=`01:00` | Set/poll multi-channel mode | Likely |
-| Dash keepalive | ~1.5/s | dash (0x14), dev21 (0x15) | `0x43` n=1, data=`00` | Dash/dev21 keep-alive | TBD |
+| Dash keepalive | ~1.5/s | dash (0x14), 0x15, wheel (0x17) | `0x43` n=1, data=`00` | Keep-alive for dash and wheel sub-devices | Yes — Pithouse sends to all three |
 | Display config | ~1/s | wheel (0x17) | `0x43/7C:27` | Page-cycled display params | TBD |
-| Status push | ~1/s | wheel (0x17) | `0x43/FC:00` | Session acknowledgment (session byte must match telemetry flag byte) | Yes — wheel ignores session=0x00 |
+| Status push | ~1/s | wheel (0x17) | `0x43/FC:00` | Session ack with session=FlagByte and current ack seq (NOT zeros) | Yes — Pithouse uses real session/seq |
 | Settings block | ~1/s | wheel (0x17) | `0x43/7C:00` | Config sync | No (file transfer) |
 | Button LED | ~1/s | wheel (0x17) | `0x3F/1A:01` | Button LED state | Separate feature |
 
@@ -344,7 +344,9 @@ Two captures provide complementary views of the startup sequence:
 
 ### SerialStream telemetry port (flag byte)
 
-Pithouse's telemetry system runs over `MOZA::Protocol::SerialStreamManager`, a TCP-like reliable stream multiplexed over the serial connection. Each telemetry session opens a **port** on the wheel via a type=0x81 "session channel open" frame inside `0x43/7c:00`. The port number is then used as the **flag byte** in `7d:23` telemetry data frames (byte offset 10 in the raw frame).
+Pithouse's telemetry system runs over `MOZA::Protocol::SerialStreamManager`, a TCP-like reliable stream multiplexed over the serial connection. Each telemetry session opens a **port** on the wheel via a type=0x81 "session channel open" frame inside `0x43/7c:00`. The session port identifies which `7c:00` stream carries configuration data (tier definitions, acks).
+
+**IMPORTANT: The flag byte in `7d:23` telemetry frames (byte offset 10) is NOT the session port number.** Flag bytes are always **0-based** (0x00, 0x01, 0x02 for 3 tiers), independent of which session port was allocated. The tier definition message's enable entries use 0-based offsets that map 1:1 to flag bytes. If enable offset 0 is active, the firmware expects telemetry frames with flag=0x00 — not flag=session_port.
 
 **Port allocation uses a global monotonic counter** shared between host and wheel. Both sides allocate from the same counter space — the host picks low numbers (1, 2, 3...) while the wheel picks its own (6, 8, 9...). The next host allocation accounts for wheel-allocated ports (e.g. host session 3 gets port 0x0a because 3-9 were taken by the wheel). The counter resets on wheel power cycle.
 
@@ -369,7 +371,7 @@ Key insight: the **session byte** (chunk header) and **port number** (payload) a
 | `burn-tyres.json` | 0x0a | Raw JSON — later connection |
 | `0-100redline-0-main-dash.json` | 0x13 | Raw JSON — even later connection |
 
-**Pithouse startup flag transition:** Pithouse starts sending telemetry with **flag=0x00** (n=14, 6 data bytes — a smaller startup tier) for ~25 frames before transitioning to **flag=0x02** (n=24, 16 data bytes — the full dashboard tier) after its session 0x02 config exchange completes. The flag=0x00 frames may be a pre-session "probe" tier with a different channel layout.
+**Pithouse flag byte assignment (confirmed 2026-04-12 comparative captures):** Pithouse **always** uses 0-based flag bytes regardless of session port. In both `moza-startup-1` and `moza-startup-2` captures, tier definitions use flags 0x00, 0x01, 0x02 and the first telemetry frame uses flag=0x00 — even though the telemetry session was on port 0x02. Pithouse starts with flag=0x00 (the fastest tier) and sends all tier flags from the first frame. The earlier observation of a "transition from 0x00 to 0x02" was actually the separate tiers running at different rates, not a flag transition.
 
 **Session open frame format:**
 
@@ -381,38 +383,43 @@ Key insight: the **session byte** (chunk header) and **port number** (payload) a
 Pithouse opens **two sessions simultaneously** (0x01 and 0x02) in the same USB packet. The wheel responds with `fc:00` acks for both. The `fc:00` session bytes in steady state track the **session ack protocol** (incrementing ack_seq for each 7c:00 data chunk received), NOT the telemetry flag byte.
 
 **Current plugin approach:** The plugin implements the observed Pithouse preamble sequence:
-1. Opens sessions 0x01 and 0x02 via type=0x81 frames (byte-identical to Pithouse)
-2. Subscribes to incoming `MessageReceived` to ack session 0x02 channel data with fc:00
-3. Waits ~1 second for the session data exchange to complete (heartbeats only during this period)
-4. Sends 0x40 channel config burst (1E enables, 09:00, 28:02)
-5. Begins 0x41 enable signal and 7d:23 telemetry with flag=0x02
+1. Probes for available ports (type=0x81 from port 1 upward, ~80ms per probe)
+2. First two acked ports become management + telemetry sessions; telemetry port = FlagByte
+3. Sends sub-message 1 preamble (14-byte `07...03...` message) on the telemetry session
+4. Sends tier definition as 7c:00 data chunks on the telemetry session (flags 0x00+, NOT FlagByte+)
+5. Sends Display sub-device identity probe via 0x43
+6. Subscribes to incoming `MessageReceived` to ack telemetry session channel data with fc:00
+7. Waits ~1 second for the session data exchange to complete (heartbeats only during this period)
+8. Sends 0x40 channel config burst (1E enables, 28:00, 28:01, 09:00, 28:02)
+9. Begins 0x41 enable signal and 7d:23 telemetry with flags 0x00, 0x01, 0x02
 
-This matches Pithouse's observed timing: session opens first, ~1s of session data exchange with acks, then channel config, then telemetry+enable. The ~1s preamble delay is required — Pithouse does not send 0x41 or 0x40 until after the session exchange.
+This matches Pithouse's observed timing: session opens first, sub-message 1 + tier def, ~1s of session data exchange with acks, then channel config, then telemetry+enable. The ~1s preamble delay is required — Pithouse does not send 0x41 or 0x40 until after the session exchange.
 
-**Port probing:** The plugin probes for available ports by sending type=0x81 session opens starting from port 1, waiting ~80ms for an fc:00 ack on each. The first two ports that respond become the management and telemetry sessions. The telemetry session's port becomes the FlagByte. This handles any counter state — whether the wheel was just powered on (ports 1-2 available) or Pithouse has run (ports 1-N consumed, the next free port is found automatically). The probe adds ~100-400ms to startup depending on how many ports must be skipped. `Start()` is dispatched to a background thread so the serial read thread stays free to deliver the fc:00 ack responses.
+**Port probing:** The plugin probes for available ports by sending type=0x81 session opens starting from port 1, waiting ~80ms for an fc:00 ack on each. The first two ports that respond become the management and telemetry sessions. The telemetry session's port (FlagByte) is used only for 7c:00 session framing and fc:00 acks — NOT for the tier flag bytes in telemetry frames. This handles any counter state — whether the wheel was just powered on (ports 1-2 available) or SimHub's built-in support has consumed ports 1-N (the next free port is found automatically). The probe adds ~100-400ms to startup depending on how many ports must be skipped. `Start()` is dispatched to a background thread so the serial read thread stays free to deliver the fc:00 ack responses.
 
 ### Plugin startup sequence
 
 The plugin replicates Pithouse's observed preamble with probe-based port allocation:
 
-**Phase 0 — Port probe** (~100-400ms, before timer starts):
+**Phase 0 — Port probe + config** (~100-400ms, before timer starts):
 1. Send type=0x81 session opens from port 1 upward, wait ~80ms for fc:00 ack
-2. First two acked ports become management + telemetry sessions
-3. Send tier definition as 7c:00 data chunks on the telemetry session (channel indices, compression codes, bit widths — see § Tier definition protocol)
-4. Send Display sub-device identity probe via 0x43 (see § Display sub-device probe)
+2. First two acked ports become management + telemetry sessions (FlagByte = telemetry port)
+3. Send sub-message 1 preamble (`07 04 00 00 00 02 00 00 00 03 00 00 00 00`) as 7c:00 data on the telemetry session — prepares the wheel's tier config parser
+4. Send tier definition as 7c:00 data chunks on the telemetry session (channel indices, compression codes, bit widths — see § Tier definition protocol). **Flag bytes are 0x00-based, NOT session-port-based.**
+5. Send Display sub-device identity probe via 0x43 (see § Display sub-device probe)
 
 **Phase 1 — Preamble** (~1 second, timer running):
-5. Ack incoming 7c:00 channel data on the telemetry session with fc:00
-6. Send heartbeats only — no telemetry, no enable, no channel config
-7. Detect Display sub-device from 0x87 model name response
+6. Ack incoming 7c:00 channel data on the telemetry session with fc:00 (session=FlagByte)
+7. Send heartbeats only — no telemetry, no enable, no channel config
+8. Detect Display sub-device from 0x87 model name response
 
 **Phase 2 — Active** (continuous, after preamble):
-8. Send `0x40` channel config burst (1E enables, 09:00, 28:02)
-9. Begin `0x41/FD:DE` enable signal (~30+ Hz)
-10. Begin `0x43/7D:23` bit-packed telemetry (flag=FlagByte, ~30 Hz)
-11. Begin `0x2D/F5:31` sequence counter (~30 Hz)
-12. Begin periodic streams at ~1 Hz: heartbeats, dash keepalives, display config (7C:27), status push (FC:00)
-13. Begin `0x40/28:02` telemetry mode polling (~3 Hz)
+9. Send `0x40` channel config burst (1E enables for pages 0-1 channels 2-5, then 28:00, 28:01, 09:00, 28:02)
+10. Begin `0x41/FD:DE` enable signal (~30+ Hz)
+11. Begin `0x43/7D:23` bit-packed telemetry (flags 0x00/0x01/0x02, ~30 Hz per tier)
+12. Begin `0x2D/F5:31` sequence counter (~30 Hz)
+13. Begin periodic streams at ~1 Hz: heartbeats, dash keepalives (0x43 to dev 0x14, 0x15, 0x17), display config (7C:27), session ack (FC:00 with session=FlagByte and current ack seq)
+14. Begin `0x40/28:02` telemetry mode polling (~3 Hz)
 
 The RPM LEDs (`0x3F/1A:00`) and button LEDs (`0x3F/1A:01`) are handled separately by `MozaDashLedDeviceManager` and `MozaLedDeviceManager` and work with zero preamble.
 
@@ -918,9 +925,21 @@ Complete byte-level verification of the telemetry data frames confirmed:
 
 ## Tier definition protocol (group 0x43, session data on 7c:00)
 
-Pithouse sends a tier definition message to the wheel as 7c:00 data chunks (type=0x01) on the telemetry session during the first ~1s preamble. This message describes the exact bit layout for each flag byte, enabling the wheel firmware to decode the packed telemetry data.
+Pithouse sends two sub-messages as 7c:00 data chunks (type=0x01) on the telemetry session during startup. The first is a preamble, the second is the tier definition describing the exact bit layout for each flag byte.
 
-**Message format** (decoded from raw capture `moza-startup.json` 2026-04-12, sub-message 2, seq 8-16):
+### Sub-message 1 — session preamble
+
+Pithouse always sends a 14-byte preamble message before the tier definition (confirmed in both `moza-startup-1` and `moza-startup-2` captures from 2026-04-12). Sent at seq 3-4 on the telemetry session:
+
+```
+07 04 00 00 00 02 00 00 00 03 00 00 00 00
+```
+
+Structure: tag 0x07 with param=4 and value=2, followed by tag 0x03 with value=0. This likely resets or prepares the wheel's tier config parser — without it, the subsequent tier definition may be ignored.
+
+### Sub-message 2 — tier definition
+
+**Message format** (decoded from raw capture `moza-startup.json` 2026-04-12):
 
 ```
 [0x00] [01 00 00 00] [flag_offset]           — tier enable (repeated per tier)
@@ -929,6 +948,8 @@ Pithouse sends a tier definition message to the wheel as 7c:00 data chunks (type
   [bits: u32 LE]     [reserved: u32 LE]
 [0x06] [04 00 00 00] [total_channels: u32 LE] — end marker
 ```
+
+**CRITICAL: Flag bytes are 0-based.** The `flag_offset` in enable entries and the `flag_byte` in tier headers are always 0x00, 0x01, 0x02 — they are NOT the session port number. The firmware maps enable offset N → tier with flag N. If the enable says offset 0 is active but the tier definition says flag=0x09, the firmware cannot match them and silently ignores all telemetry.
 
 **Channel indices** are 1-based, assigned alphabetically by URL across all tiers (not per-tier).
 
@@ -941,7 +962,7 @@ Pithouse sends a tier definition message to the wheel as 7c:00 data chunks (type
 | 0x0E | percent_1 | 10 | 0x0F | float_6000_1 | 16 |
 | 0x14 | uint3 | 4 | 0x17 | float_001 | 10 |
 
-**Chunking:** The message is sent as SerialStream data chunks with CRC-32 trailers (standard ISO 3309). Max 54 net bytes per non-last chunk (58 with CRC). The last chunk has no CRC.
+**Chunking:** Both sub-messages are sent as SerialStream data chunks with CRC-32 trailers (standard ISO 3309). Max 54 net bytes per non-last chunk (58 with CRC). The last chunk has no CRC. Sequence numbers are continuous across both sub-messages (sub-message 1 at seq 3-4, sub-message 2 at seq 5+).
 
 **Verified:** The plugin's `TierDefinitionBuilder` generates tier definitions byte-identical to Pithouse for the F1 dashboard: same channel indices, compression codes, and bit widths across all 3 tiers.
 
@@ -973,9 +994,9 @@ The plugin sends steps 1-10 during the preamble. The 0x87 response with model na
 - ~~File transfer header format~~ — **RESOLVED**: 8-byte header: role(1) + max_chunk_size(1) + transfer_type(1) + reserved(5). TLV paths use markers 0x8C (local) and 0x84 (remote) with UTF-16LE. See § Session 4 wire format in pithouse-re.md.
 - ~~Session lifecycle~~ — **RESOLVED (2026-04-12, corrected)**: Sessions are opened via type=0x81 frames with port numbers from a global monotonic counter. Both host and device can open sessions. The host probes for available ports by sending type=0x81 and waiting for fc:00 acks. See § SerialStream telemetry port.
 - ~~Protocol identity~~ — **RESOLVED**: The 0x43/7c:00 framing is `MOZA::Protocol::SerialStreamManager`, a proprietary TCP-like reliable stream. NOT CoAP. CoAP (libcoap 4.3.4) is a separate layer for device parameter management.
-- ~~Flag byte / SerialStream port~~ — **RESOLVED (2026-04-12)**: See § SerialStream telemetry port. Plugin uses probe-based allocation.
+- ~~Flag byte / SerialStream port~~ — **RESOLVED (2026-04-12, corrected 2026-04-12)**: The session port (FlagByte) is used for 7c:00 framing only. The flag byte in tier definitions and telemetry frames is **always 0-based** (0x00, 0x01, 0x02), independent of session port. Confirmed by side-by-side USB captures: Pithouse uses flags 0x00+ in both startup-1 and startup-2 even though the telemetry session was on port 0x02. The plugin previously used `FlagByte+i` as the tier flag, causing enable/tier mismatch when the session port was >0x02. See § SerialStream telemetry port.
 - ~~Session ID / port allocation~~ — **RESOLVED (2026-04-12)**: Session IDs (chunk header byte) and port numbers (payload) are **independent**. Port counter is global and monotonic within a power cycle. Plugin probes from port 1 upward.
-- ~~Tier definition protocol~~ — **RESOLVED (2026-04-12)**: Pithouse sends a tier definition message (channel indices, compression codes, bit widths) as 7c:00 data chunks on the telemetry session. The plugin generates byte-identical tier definitions via `TierDefinitionBuilder`. See § Tier definition protocol.
+- ~~Tier definition protocol~~ — **RESOLVED (2026-04-12, corrected 2026-04-12)**: Pithouse sends a 14-byte sub-message 1 preamble (`07 04 00 00 00 02 00 00 00 03 00 00 00 00`) before the tier definition on the telemetry session. This may reset the wheel's tier config parser. The tier definition itself uses 0-based flag bytes. Plugin now sends both sub-message 1 and 0-based tier definitions via `TierDefinitionBuilder`. See § Tier definition protocol.
 - ~~Gear encoding for reverse~~ — **RESOLVED**: `int30` is a signed 5-bit value: -1=R, 0=N, 1–12=gears. Reverse is stored as 31 (two's complement -1 in 5 bits).
 - **Dashboard byte limit configuration** — stored at config object offset `+0x30`, set during dashboard upload (group 0x40). Exact mechanism for setting this limit not yet traced
 - **Cold-start initialization** — `connect-wheel-start-game.json` captures wheel connection → game start, confirming the full init sequence (identity probe → config burst → dashboard upload → telemetry). EEPROM persistence across power cycles is confirmed for channel config; unclear for session state

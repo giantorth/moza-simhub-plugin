@@ -13,18 +13,21 @@ namespace MozaPlugin.Telemetry
     /// Startup follows Pithouse's observed sequence (from USB capture analysis):
     ///   1. Probe for available SerialStream ports (try type=0x81, wait for fc:00 ack)
     ///   2. Open management session + telemetry session on consecutive ports
-    ///   3. Ack incoming channel data on telemetry session with fc:00 (~1 second)
-    ///   4. Send 0x40 channel config burst (1E enables, 09:00, 28:02)
-    ///   5. Begin 0x41 enable signal + 7d:23 telemetry with flag=FlagByte
+    ///   3. Send session preamble (sub-message 1) then tier definition on telemetry session
+    ///   4. Ack incoming channel data on telemetry session with fc:00 (~1 second)
+    ///   5. Send 0x40 channel config burst (1E enables, 28:00, 28:01, 09:00, 28:02)
+    ///   6. Begin 0x41 enable signal + 7d:23 telemetry with flag=0x00+tier
     ///
     /// Port allocation: the wheel uses a global monotonic counter shared between
     /// host and device. We probe from port 1 upward, sending a type=0x81 session
     /// open and waiting ~50ms for an fc:00 ack. The first port that gets acked
     /// becomes the management session; the next acked port becomes the telemetry
-    /// session and its port number is used as the FlagByte for all 7d:23 frames.
+    /// session (FlagByte). The session port identifies which 7c:00 stream carries
+    /// config data; the flag bytes inside tier definitions and telemetry frames
+    /// are always 0-based (0x00, 0x01, 0x02), independent of the session port.
     ///
     /// Each tier in the MultiStreamProfile runs at its own rate derived from package_level.
-    /// Flag bytes are FlagByte + tier index (sorted by package_level ascending).
+    /// Flag bytes are 0 + tier index (sorted by package_level ascending).
     /// </summary>
     public class TelemetrySender : IDisposable
     {
@@ -279,19 +282,34 @@ namespace MozaPlugin.Telemetry
             if (!_connection.IsConnected)
                 return;
 
-            byte[] message = TierDefinitionBuilder.BuildTierDefinitionMessage(profile, FlagByte);
-            int seq = (int)FlagByte; // Start seq at FlagByte (matches Pithouse: session 0x02 starts seq at 3)
-            // Actually Pithouse starts seq at 3 for sub-message 1 and 8 for sub-message 2.
-            // We only send sub-message 2 (the full tier def). Pithouse's seq=8 corresponds
-            // to the accumulated seq after sub-message 1 (7 chunks). We start our seq at
-            // a value that won't conflict with the session open acks.
-            seq = 3; // Match Pithouse's starting seq for config data
+            int seq = 3; // Match Pithouse's starting seq for config data
+
+            // Sub-message 1: Pithouse always sends this 14-byte preamble before the
+            // tier definition on the telemetry session. Observed in both startup-1 and
+            // startup-2 captures. Format: tag 0x07 (param=4, value=2), tag 0x03 (value=0).
+            // This may reset or prepare the wheel's tier config parser.
+            byte[] preambleMsg = new byte[]
+            {
+                0x07, 0x04, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
+                0x03, 0x00, 0x00, 0x00, 0x00
+            };
+            var preambleFrames = TierDefinitionBuilder.ChunkMessage(preambleMsg, FlagByte, ref seq);
+            foreach (var frame in preambleFrames)
+                _connection.Send(frame);
+
+            // Flag bytes in tier definitions are 0-based (0x00, 0x01, 0x02), NOT
+            // tied to the session port. The session port only identifies which 7c:00
+            // stream carries the data; the flag byte inside the tier definition and
+            // telemetry frames is a separate counter that the firmware maps 1:1 to
+            // the enable entry offsets (also 0-based). Pithouse always uses 0x00+.
+            byte[] message = TierDefinitionBuilder.BuildTierDefinitionMessage(profile, 0x00);
 
             var frames = TierDefinitionBuilder.ChunkMessage(message, FlagByte, ref seq);
 
             SimHub.Logging.Current.Info(
-                $"[Moza] Sending tier definition: {message.Length} bytes in {frames.Count} chunks " +
-                $"on session 0x{FlagByte:X2} ({profile.Tiers.Count} tiers)");
+                $"[Moza] Sending tier definition: preamble ({preambleFrames.Count} chunks) + " +
+                $"{message.Length} bytes in {frames.Count} chunks " +
+                $"on session 0x{FlagByte:X2} ({profile.Tiers.Count} tiers, flags 0x00+)");
 
             foreach (var frame in frames)
                 _connection.Send(frame);
@@ -466,7 +484,8 @@ namespace MozaPlugin.Telemetry
                     if (_tickCounter % tier.TickInterval != 0)
                         continue;
 
-                    byte flagByte = (byte)(FlagByte + i);
+                    // Flag bytes are 0-based (matching tier definition), not session-port-based.
+                    byte flagByte = (byte)i;
                     byte[] frame = tier.Builder.BuildFrameFromSnapshot(snapshot, flagByte);
                     _connection.Send(frame);
 
@@ -555,6 +574,10 @@ namespace MozaPlugin.Telemetry
                     _connection.Send(BuildChannelEnableFrame((byte)page, cc));
             }
 
+            // Pithouse sends 28:00 and 28:01 (initial mode setup) before 09:00 and 28:02.
+            // 28:00 = N=3, data=00; 28:01 = N=3, data=00
+            _connection.Send(BuildGroup40Frame3(0x28, 0x00, 0x00));
+            _connection.Send(BuildGroup40Frame3(0x28, 0x01, 0x00));
             _connection.Send(BuildGroup40Frame(0x09, 0x00));
             _connection.Send(_cachedModeFrame);
         }
@@ -579,6 +602,18 @@ namespace MozaPlugin.Telemetry
                 MozaProtocol.MessageStart, 2,
                 MozaProtocol.TelemetryModeGroup, MozaProtocol.DeviceWheel,
                 cmd1, cmd2,
+            };
+            frame.Add(MozaProtocol.CalculateChecksum(frame.ToArray()));
+            return frame.ToArray();
+        }
+
+        private byte[] BuildGroup40Frame3(byte cmd1, byte cmd2, byte cmd3)
+        {
+            var frame = new System.Collections.Generic.List<byte>
+            {
+                MozaProtocol.MessageStart, 3,
+                MozaProtocol.TelemetryModeGroup, MozaProtocol.DeviceWheel,
+                cmd1, cmd2, cmd3,
             };
             frame.Add(MozaProtocol.CalculateChecksum(frame.ToArray()));
             return frame.ToArray();
@@ -650,7 +685,10 @@ namespace MozaPlugin.Telemetry
 
         private void SendDashKeepalive()
         {
-            foreach (byte dev in new byte[] { MozaProtocol.DeviceDash, 0x15 })
+            // Pithouse sends group 0x43 keepalives to dash (0x14), 0x15, AND wheel (0x17).
+            // The wheel keepalive is critical — Pithouse sends it ~15 times per session
+            // vs our previous 1 (only during display probe).
+            foreach (byte dev in new byte[] { MozaProtocol.DeviceDash, 0x15, MozaProtocol.DeviceWheel })
             {
                 var frame = new byte[] { MozaProtocol.MessageStart, 0x01, MozaProtocol.TelemetrySendGroup, dev, 0x00, 0x00 };
                 frame[5] = MozaProtocol.CalculateChecksum(frame);
@@ -681,10 +719,9 @@ namespace MozaPlugin.Telemetry
 
         private void SendStatusPush()
         {
-            var frame = new byte[] { MozaProtocol.MessageStart, 0x05, MozaProtocol.TelemetrySendGroup,
-                MozaProtocol.DeviceWheel, 0xFC, 0x00, 0x00, 0x00, 0x00, 0x00 };
-            frame[9] = MozaProtocol.CalculateChecksum(frame);
-            _connection.Send(frame);
+            // Pithouse sends fc:00 with the actual telemetry session and current ack seq,
+            // not hardcoded zeros. This keeps the session alive and acknowledges data.
+            SendSessionAck(FlagByte, (ushort)_sessionAckSeq);
         }
 
         public void Dispose()
