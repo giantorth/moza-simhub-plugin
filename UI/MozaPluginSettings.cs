@@ -61,9 +61,14 @@ namespace MozaPlugin
         // Byte limit override (0 = auto from profile)
         public int TelemetryByteLimitOverride { get; set; } = 0;
 
-        // SerialStream port number used as flag byte in telemetry frames.
-        // 0x02 is the first port Pithouse allocates after wheel power-on.
-        public byte TelemetryFlagByte { get; set; } = 0x02;
+        // How to assign flag bytes in tier definitions and telemetry frames.
+        // We don't fully understand how the wheel uses flag bytes — Pithouse uses
+        // a monotonic counter and the wheel accepts values from 0x00 to 0x13+.
+        // Options:
+        //   0 = Zero-based (0x00, 0x01, 0x02) — matches Pithouse's initial probe batch
+        //   1 = Session-port-based (FlagByte+0, +1, +2) — matches Pithouse's mid-session behavior
+        //   2 = Two-batch (probe at 0x00 then real at FlagByte) — matches Pithouse's full sequence
+        public int TelemetryFlagByteMode { get; set; } = 0;
 
         // Telemetry send rate in Hz
         public int TelemetrySendRateHz { get; set; } = 20;

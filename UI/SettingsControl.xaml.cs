@@ -833,7 +833,7 @@ namespace MozaPlugin
             try
             {
                 var s = _plugin.Settings;
-                // Mode frame and sequence counter are always enabled (required by protocol)
+                FlagByteModeCombo.SelectedIndex = Math.Max(0, Math.Min(2, s.TelemetryFlagByteMode));
             }
             finally
             {
@@ -896,6 +896,14 @@ namespace MozaPlugin
                 ts.Stop();
             TelemetryTestStartBtn.IsEnabled = true;
             TelemetryTestStopBtn.IsEnabled = false;
+        }
+
+        private void FlagByteMode_Changed(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+        {
+            if (_suppressEvents) return;
+            _plugin.Settings.TelemetryFlagByteMode = FlagByteModeCombo.SelectedIndex;
+            _plugin.SaveSettings();
+            _plugin.ApplyTelemetrySettings();
         }
 
         private void TelemetryExportLog_Click(object sender, RoutedEventArgs e)

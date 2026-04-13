@@ -121,6 +121,33 @@ namespace MozaPlugin.Telemetry
         }
 
         /// <summary>
+        /// Build a probe batch: tier definitions at flagBase with no enables and
+        /// total_channels=0. Pithouse sends this as a first batch before the real
+        /// tier definitions. The probe batch may prime the wheel's tier parser.
+        /// </summary>
+        public static byte[] BuildProbeBatch(MultiStreamProfile profile, byte flagBase)
+        {
+            using var ms = new MemoryStream();
+            using var w = new BinaryWriter(ms);
+
+            // Tier definitions with no channel data — just flag + empty channel list
+            for (int i = 0; i < profile.Tiers.Count; i++)
+            {
+                byte flag = (byte)(flagBase + i);
+                w.Write((byte)0x01);         // tag
+                w.Write((uint)1);            // size = 1 (flag byte only, no channels)
+                w.Write(flag);               // flag byte
+            }
+
+            // End marker with total_channels=0
+            w.Write((byte)0x06);
+            w.Write((uint)4);
+            w.Write((uint)0);
+
+            return ms.ToArray();
+        }
+
+        /// <summary>
         /// Chunk a message into 7c:00 session data frames ready to send.
         /// Each chunk: session(1) + type(1) + seq(2 LE) + payload(≤54 net + 4 CRC) inside a moza frame.
         /// ALL chunks have a 4-byte CRC-32 trailer (verified by CRC computation against

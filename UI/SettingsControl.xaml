@@ -654,6 +654,21 @@
                         <TextBlock x:Name="TelemetryDisplayLabel" Foreground="Gray" FontSize="11"
                                    Text="" Margin="0,0,0,8"/>
 
+                        <!-- Advanced / debug -->
+                        <Separator Margin="0,4,0,8"/>
+                        <TextBlock Text="Advanced" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                            <TextBlock Text="Flag byte mode:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                            <ComboBox x:Name="FlagByteModeCombo" Width="260"
+                                      SelectionChanged="FlagByteMode_Changed">
+                                <ComboBoxItem Content="0 — Zero-based (0x00+)" IsSelected="True"/>
+                                <ComboBoxItem Content="1 — Session port-based"/>
+                                <ComboBoxItem Content="2 — Two-batch (Pithouse-style)"/>
+                            </ComboBox>
+                        </StackPanel>
+                        <TextBlock TextWrapping="Wrap" Foreground="Gray" FontSize="11" Margin="0,2,0,8"
+                                   Text="How tier flag bytes are assigned. Change requires telemetry restart. Default 0 if unsure."/>
+
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>

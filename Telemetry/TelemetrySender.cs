@@ -27,7 +27,8 @@ namespace MozaPlugin.Telemetry
     /// are always 0-based (0x00, 0x01, 0x02), independent of the session port.
     ///
     /// Each tier in the MultiStreamProfile runs at its own rate derived from package_level.
-    /// Flag bytes are 0 + tier index (sorted by package_level ascending).
+    /// Flag bytes are TierFlagBase + tier index (sorted by package_level ascending).
+    /// TierFlagBase depends on FlagByteMode setting — see § TelemetryFlagByteMode.
     /// </summary>
     public class TelemetrySender : IDisposable
     {
@@ -73,11 +74,21 @@ namespace MozaPlugin.Telemetry
         private byte[] _cachedSequenceFrame = null!;
         private byte[][] _cachedHeartbeatFrames = null!;
 
-        // The telemetry session port / flag byte. Determined during port probing.
+        // The telemetry session port. Determined during port probing.
+        // Used for 7c:00 session framing and fc:00 acks.
         public byte FlagByte { get; set; } = 0x02;
         public bool SendTelemetryMode { get; set; } = true;
         public bool SendSequenceCounter { get; set; } = true;
         public bool TestMode { get; set; } = false;
+
+        /// <summary>
+        /// How flag bytes are assigned in tier definitions and telemetry frames.
+        /// 0 = Zero-based (0x00+). 1 = Session-port-based (FlagByte+). 2 = Two-batch (Pithouse-style).
+        /// We don't fully understand how the wheel uses the flag byte — Pithouse uses a monotonic
+        /// counter and the wheel accepts values from 0x00 to 0x13+. This setting lets us test
+        /// different approaches to isolate what actually matters.
+        /// </summary>
+        public int FlagByteMode { get; set; } = 0;
 
         /// <summary>Maximum port number to try during probing before giving up.</summary>
         private const byte MaxProbePort = 0x30;
@@ -186,6 +197,8 @@ namespace MozaPlugin.Telemetry
                 _sendTimer.Dispose();
                 _sendTimer = null;
             }
+            // Reset so StartTelemetryIfReady() won't skip us on re-enable
+            _framesSent = 0;
         }
 
         public void UpdateGameData(StatusDataBase? data)
@@ -274,6 +287,14 @@ namespace MozaPlugin.Telemetry
         /// during the first ~1s after session open. Without it, the wheel silently
         /// ignores all 7d:23 telemetry frames.
         /// </summary>
+        /// <summary>
+        /// Compute the flag byte base for tier definitions and telemetry frames.
+        /// Returns the value to pass to BuildTierDefinitionMessage and to add to
+        /// the tier index in the telemetry send loop.
+        /// </summary>
+        private byte TierFlagBase =>
+            FlagByteMode == 1 ? FlagByte : (byte)0x00;
+
         private void SendTierDefinition()
         {
             var profile = _profile;
@@ -287,8 +308,8 @@ namespace MozaPlugin.Telemetry
             // Sub-message 1: session preamble sent before tier definitions.
             // Serialized by TelemetryDataOutputBuffer (FormulaSteeringTelemetryDataStructres.cc).
             // Tag 0x07 (param=4, value=2) = protocol version / capability level (constant).
-            // Tag 0x03 (param=0, value=0) = base flag offset (0 = start tiers at flag 0x00).
-            // Confirmed in both moza-startup-1 and moza-startup-2 captures, same values.
+            // Tag 0x03 (param=0, value=0) = base flag offset.
+            // Confirmed across all 4 PitHouse captures with tier config sessions.
             byte[] preambleMsg = new byte[]
             {
                 0x07, 0x04, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
@@ -298,19 +319,28 @@ namespace MozaPlugin.Telemetry
             foreach (var frame in preambleFrames)
                 _connection.Send(frame);
 
-            // Flag bytes in tier definitions are 0-based (0x00, 0x01, 0x02), NOT
-            // tied to the session port. The session port only identifies which 7c:00
-            // stream carries the data; the flag byte inside the tier definition and
-            // telemetry frames is a separate counter that the firmware maps 1:1 to
-            // the enable entry offsets (also 0-based). Pithouse always uses 0x00+.
-            byte[] message = TierDefinitionBuilder.BuildTierDefinitionMessage(profile, 0x00);
+            byte flagBase = TierFlagBase;
 
+            if (FlagByteMode == 2)
+            {
+                // Two-batch mode: send a probe batch at 0x00 (total_channels=0, no enables)
+                // then the real batch at FlagByte. Matches Pithouse's full sequence.
+                byte[] probeMsg = TierDefinitionBuilder.BuildProbeBatch(profile, 0x00);
+                var probeFrames = TierDefinitionBuilder.ChunkMessage(probeMsg, FlagByte, ref seq);
+                foreach (var frame in probeFrames)
+                    _connection.Send(frame);
+
+                flagBase = FlagByte;
+            }
+
+            byte[] message = TierDefinitionBuilder.BuildTierDefinitionMessage(profile, flagBase);
             var frames = TierDefinitionBuilder.ChunkMessage(message, FlagByte, ref seq);
 
             SimHub.Logging.Current.Info(
-                $"[Moza] Sending tier definition: preamble ({preambleFrames.Count} chunks) + " +
+                $"[Moza] Sending tier definition: mode={FlagByteMode} flagBase=0x{flagBase:X2}, " +
+                $"preamble ({preambleFrames.Count} chunks) + " +
                 $"{message.Length} bytes in {frames.Count} chunks " +
-                $"on session 0x{FlagByte:X2} ({profile.Tiers.Count} tiers, flags 0x00+)");
+                $"on session 0x{FlagByte:X2} ({profile.Tiers.Count} tiers)");
 
             foreach (var frame in frames)
                 _connection.Send(frame);
@@ -485,8 +515,7 @@ namespace MozaPlugin.Telemetry
                     if (_tickCounter % tier.TickInterval != 0)
                         continue;
 
-                    // Flag bytes are 0-based (matching tier definition), not session-port-based.
-                    byte flagByte = (byte)i;
+                    byte flagByte = (byte)(TierFlagBase + i);
                     byte[] frame = tier.Builder.BuildFrameFromSnapshot(snapshot, flagByte);
                     _connection.Send(frame);
 
