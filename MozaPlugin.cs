@@ -430,11 +430,19 @@ namespace MozaPlugin
 
             _telemetrySender.ProtocolVersion = s.TelemetryProtocolVersion;
             _telemetrySender.FlagByteMode = s.TelemetryFlagByteMode;
+            _telemetrySender.UploadDashboard = s.TelemetryUploadDashboard;
 
-            // Resolve the active multi-stream profile
+            // Resolve the active multi-stream profile and raw mzdash content
             MultiStreamProfile? profile = null;
+            byte[]? mzdashContent = null;
+            string mzdashName = "";
+
             if (!string.IsNullOrEmpty(s.TelemetryMzdashPath) && System.IO.File.Exists(s.TelemetryMzdashPath))
+            {
                 profile = DashProfileStore.ParseMzdash(s.TelemetryMzdashPath);
+                mzdashContent = System.IO.File.ReadAllBytes(s.TelemetryMzdashPath);
+                mzdashName = System.IO.Path.GetFileNameWithoutExtension(s.TelemetryMzdashPath);
+            }
 
             if (profile == null)
             {
@@ -445,9 +453,26 @@ namespace MozaPlugin
                         profile = FindProfile(builtins, s.TelemetryProfileName);
                     profile ??= builtins[0];
                 }
+
+                // Load raw mzdash content from embedded resource for upload
+                if (profile != null && mzdashContent == null)
+                {
+                    mzdashName = profile.Name;
+                    string resourceName = $"MozaPlugin.Data.Dashes.{profile.Name.Replace(" ", "_")}.mzdash";
+                    var assembly = System.Reflection.Assembly.GetExecutingAssembly();
+                    using var stream = assembly.GetManifestResourceStream(resourceName);
+                    if (stream != null)
+                    {
+                        using var ms = new System.IO.MemoryStream();
+                        stream.CopyTo(ms);
+                        mzdashContent = ms.ToArray();
+                    }
+                }
             }
 
             _telemetrySender.Profile = profile;
+            _telemetrySender.MzdashContent = mzdashContent;
+            _telemetrySender.MzdashName = mzdashName;
         }
 
         /// <summary>

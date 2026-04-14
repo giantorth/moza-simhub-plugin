@@ -61,6 +61,10 @@ namespace MozaPlugin
         // Byte limit override (0 = auto from profile)
         public int TelemetryByteLimitOverride { get; set; } = 0;
 
+        // Upload the .mzdash dashboard to the wheel on every telemetry start.
+        // PitHouse does this on every connection — the wheel may require it.
+        public bool TelemetryUploadDashboard { get; set; } = true;
+
         // Tier definition protocol version.
         // 0 = URL-based subscription (CSP-style — host sends channel URLs,
         //     wheel firmware resolves compression internally)

@@ -833,6 +833,7 @@ namespace MozaPlugin
             try
             {
                 var s = _plugin.Settings;
+                UploadDashboardCheck.IsChecked = s.TelemetryUploadDashboard;
                 int protoVer = s.TelemetryProtocolVersion;
                 ProtocolVersionCombo.SelectedIndex = protoVer == 0 ? 1 : 0;
                 FlagByteModeCombo.SelectedIndex = Math.Max(0, Math.Min(2, s.TelemetryFlagByteMode));
@@ -906,6 +907,14 @@ namespace MozaPlugin
                 ts.Stop();
             TelemetryTestStartBtn.IsEnabled = true;
             TelemetryTestStopBtn.IsEnabled = false;
+        }
+
+        private void UploadDashboard_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_suppressEvents) return;
+            _plugin.Settings.TelemetryUploadDashboard = UploadDashboardCheck.IsChecked == true;
+            _plugin.SaveSettings();
+            _plugin.RestartTelemetry();
         }
 
         private void ProtocolVersion_Changed(object sender, System.Windows.Controls.SelectionChangedEventArgs e)

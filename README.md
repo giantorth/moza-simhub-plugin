@@ -49,7 +49,7 @@ MOZA wheels and dashboards register as native SimHub devices, appearing in SimHu
 
 ![Device Panel](docs/Device.png)
 
-- **Per-Model Device Definitions** — Each wheel model (CS Pro, KS Pro, FSR V2, GS V2 Pro, CS V2, etc.) has its own device definition with the correct LED layout baked in. Definitions are deployed automatically on first detection — just connect your hardware, restart SimHub, and add the device. Requires SimHub 9.11+
+- **Per-Model Device Definitions** — Each new wheel attached will get a generated device definition with the LED layout baked in. Definitions are deployed automatically on first detection — just connect your hardware, restart SimHub, and add the device. Requires SimHub 9.11+
 - **LED Effects System** — Use SimHub's full Button and Telemetry effects configuration UI (RPM indicators, flags, speed limiter animations, scripted effects, etc.) to control your wheel and dashboard LEDs
 - **Per-Game Device Profiles** — SimHub's device profile system saves and restores LED effect configurations per game
 - **Model-Aware Connection** — Only the device matching the currently connected wheel reports as connected. Swap wheels and the correct device activates automatically
@@ -92,7 +92,7 @@ Each wheel model has a dedicated SimHub device definition with the correct LED l
 | MOZA Old Protocol Wheel | *(ES wheels)* | 10 | 0 | No | RPM LEDs only |
 | MOZA Dashboard | — | 10 | 0 | Yes | RPM + flag LEDs |
 
-If your wheel model isn't listed, the generic "MOZA Racing Wheel" definition is deployed. Check the SimHub log for the `[Moza] Wheel model:` line and report the model name string so a dedicated definition can be added.
+If your wheel model isn't listed or incorrect, the generic "MOZA Racing Wheel" definition is deployed. Check the SimHub log for the `[Moza] Wheel model:` line and report the model name string so a dedicated definition can be added.
 
 ### Known Issues
 
