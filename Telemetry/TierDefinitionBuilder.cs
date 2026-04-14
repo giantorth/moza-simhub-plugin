@@ -121,6 +121,53 @@ namespace MozaPlugin.Telemetry
         }
 
         /// <summary>
+        /// Build a version 0 (URL-based) subscription message.
+        /// The host sends channel URLs; the wheel firmware resolves compression internally.
+        /// Format (confirmed from CSP captures and VGS incoming channel catalog):
+        ///   [0xFF]                                         — sentinel
+        ///   [0x03] [04 00 00 00] [01 00 00 00]            — config (value=1)
+        ///   [0x04] [size: u32 LE] [ch_index: u8] [url: ASCII]  — per-channel (repeated)
+        ///   [0x06] [04 00 00 00] [total_channels: u32 LE] — end marker
+        /// </summary>
+        public static byte[] BuildV0UrlSubscription(MultiStreamProfile profile)
+        {
+            using var ms = new MemoryStream();
+            using var w = new BinaryWriter(ms);
+
+            var allChannels = profile.Tiers
+                .SelectMany(t => t.Channels)
+                .OrderBy(c => c.Url, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            // Sentinel
+            w.Write((byte)0xFF);
+
+            // Config: tag 0x03, param_size=4, value=1 (version 0 uses value=1)
+            w.Write((byte)0x03);
+            w.Write((uint)4);
+            w.Write((uint)1);
+
+            // Per-channel URL entries
+            for (int i = 0; i < allChannels.Count; i++)
+            {
+                byte[] urlBytes = System.Text.Encoding.ASCII.GetBytes(allChannels[i].Url);
+                uint size = (uint)(1 + urlBytes.Length);
+
+                w.Write((byte)0x04);
+                w.Write(size);
+                w.Write((byte)(i + 1)); // 1-based channel index
+                w.Write(urlBytes);
+            }
+
+            // End marker
+            w.Write((byte)0x06);
+            w.Write((uint)4);
+            w.Write((uint)allChannels.Count);
+
+            return ms.ToArray();
+        }
+
+        /// <summary>
         /// Build a probe batch: tier definitions at flagBase with no enables and
         /// total_channels=0. Pithouse sends this as a first batch before the real
         /// tier definitions. The probe batch may prime the wheel's tier parser.

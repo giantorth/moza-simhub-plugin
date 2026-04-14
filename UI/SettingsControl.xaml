@@ -652,12 +652,24 @@
 
                         <!-- Display sub-device info -->
                         <TextBlock x:Name="TelemetryDisplayLabel" Foreground="Gray" FontSize="11"
-                                   Text="" Margin="0,0,0,8"/>
+                                   Text="" Margin="0,0,0,4"/>
+                        <TextBlock x:Name="TelemetryWheelChannelsLabel" Foreground="Gray" FontSize="11"
+                                   TextWrapping="Wrap" Text="" Margin="0,0,0,8"/>
 
                         <!-- Advanced / debug -->
                         <Separator Margin="0,4,0,8"/>
                         <TextBlock Text="Advanced" FontWeight="SemiBold" Margin="0,0,0,6"/>
                         <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                            <TextBlock Text="Protocol version:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                            <ComboBox x:Name="ProtocolVersionCombo" Width="260"
+                                      SelectionChanged="ProtocolVersion_Changed">
+                                <ComboBoxItem Content="2 — Compact numeric (VGS-style)"/>
+                                <ComboBoxItem Content="0 — URL subscription (CSP-style)"/>
+                            </ComboBox>
+                        </StackPanel>
+                        <TextBlock TextWrapping="Wrap" Foreground="Gray" FontSize="11" Margin="0,2,0,8"
+                                   Text="Tier definition format. Version 2 sends compression codes; version 0 sends channel URLs. Telemetry restarts automatically on change."/>
+                        <StackPanel x:Name="FlagByteModePanel" Orientation="Horizontal" Margin="0,0,0,4">
                             <TextBlock Text="Flag byte mode:" VerticalAlignment="Center" Margin="0,0,8,0"/>
                             <ComboBox x:Name="FlagByteModeCombo" Width="260"
                                       SelectionChanged="FlagByteMode_Changed">
@@ -667,7 +679,7 @@
                             </ComboBox>
                         </StackPanel>
                         <TextBlock TextWrapping="Wrap" Foreground="Gray" FontSize="11" Margin="0,2,0,8"
-                                   Text="How tier flag bytes are assigned. Change requires telemetry restart. Default 0 if unsure."/>
+                                   Text="How tier flag bytes are assigned (version 2 only). Default 0 if unsure."/>
 
                     </StackPanel>
                 </ScrollViewer>

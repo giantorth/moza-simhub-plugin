@@ -428,6 +428,7 @@ namespace MozaPlugin
             if (_telemetrySender == null) return;
             var s = _settings;
 
+            _telemetrySender.ProtocolVersion = s.TelemetryProtocolVersion;
             _telemetrySender.FlagByteMode = s.TelemetryFlagByteMode;
 
             // Resolve the active multi-stream profile
@@ -447,6 +448,20 @@ namespace MozaPlugin
             }
 
             _telemetrySender.Profile = profile;
+        }
+
+        /// <summary>
+        /// Restart the telemetry session with current settings. Called when protocol version,
+        /// flag byte mode, or other send options change in the UI.
+        /// </summary>
+        internal void RestartTelemetry()
+        {
+            if (_telemetrySender == null) return;
+            _telemetrySender.Stop();
+            Interlocked.Exchange(ref _telemetryStartRequested, 0);
+            ApplyTelemetrySettings();
+            if (_settings.TelemetryEnabled)
+                StartTelemetryIfReady();
         }
 
         internal void SetTelemetryEnabled(bool enabled)

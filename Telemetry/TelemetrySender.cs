@@ -58,6 +58,10 @@ namespace MozaPlugin.Telemetry
         private volatile bool _displayDetected;
         private string _displayModelName = "";
 
+        // Wheel channel catalog (parsed from incoming 7c:00 session data during preamble)
+        private System.Collections.Generic.List<byte> _incomingSessionBuffer = new();
+        private volatile System.Collections.Generic.List<string>? _wheelChannelCatalog;
+
         /// <summary>
         /// True if the wheel's internal Display sub-device responded to identity probe.
         /// Use this to gate dashboard telemetry features in the UI — wheels without
@@ -84,11 +88,19 @@ namespace MozaPlugin.Telemetry
         /// <summary>
         /// How flag bytes are assigned in tier definitions and telemetry frames.
         /// 0 = Zero-based (0x00+). 1 = Session-port-based (FlagByte+). 2 = Two-batch (Pithouse-style).
-        /// We don't fully understand how the wheel uses the flag byte — Pithouse uses a monotonic
-        /// counter and the wheel accepts values from 0x00 to 0x13+. This setting lets us test
-        /// different approaches to isolate what actually matters.
+        /// Only applies to protocol version 2. Version 0 always uses zero-based flags.
         /// </summary>
         public int FlagByteMode { get; set; } = 0;
+
+        /// <summary>
+        /// Tier definition protocol version.
+        /// 0 = URL-based subscription (send channel URLs, wheel resolves compression).
+        /// 2 = Compact numeric (send flag bytes, channel indices, compression codes, bit widths).
+        /// </summary>
+        public int ProtocolVersion { get; set; } = 2;
+
+        /// <summary>Channel URLs reported by the wheel during session startup. Null until parsed.</summary>
+        public System.Collections.Generic.IReadOnlyList<string>? WheelChannelCatalog => _wheelChannelCatalog;
 
         /// <summary>Maximum port number to try during probing before giving up.</summary>
         private const byte MaxProbePort = 0x30;
@@ -148,6 +160,8 @@ namespace MozaPlugin.Telemetry
             _slowCounter = 0;
             _displayConfigPage = 0;
             _preambleComplete = false;
+            lock (_incomingSessionBuffer) { _incomingSessionBuffer.Clear(); }
+            _wheelChannelCatalog = null;
             _sessionAckSeq = 0;
             _preambleTickTarget = Math.Max(1, 1000 / _baseTickMs);
 
@@ -305,45 +319,60 @@ namespace MozaPlugin.Telemetry
 
             int seq = 3; // Match Pithouse's starting seq for config data
 
-            // Sub-message 1: session preamble sent before tier definitions.
-            // Serialized by TelemetryDataOutputBuffer (FormulaSteeringTelemetryDataStructres.cc).
-            // Tag 0x07 (param=4, value=2) = protocol version / capability level (constant).
-            // Tag 0x03 (param=0, value=0) = base flag offset.
-            // Confirmed across all 4 PitHouse captures with tier config sessions.
-            byte[] preambleMsg = new byte[]
+            if (ProtocolVersion == 0)
             {
-                0x07, 0x04, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
-                0x03, 0x00, 0x00, 0x00, 0x00
-            };
-            var preambleFrames = TierDefinitionBuilder.ChunkMessage(preambleMsg, FlagByte, ref seq);
-            foreach (var frame in preambleFrames)
-                _connection.Send(frame);
+                // Version 0: URL-based subscription.
+                // The sentinel (0xFF) and tag 0x03 (value=1) are inline in the message.
+                // No separate tag 0x07/0x03 preamble needed.
+                byte[] message = TierDefinitionBuilder.BuildV0UrlSubscription(profile);
+                var frames = TierDefinitionBuilder.ChunkMessage(message, FlagByte, ref seq);
 
-            byte flagBase = TierFlagBase;
+                int channelCount = 0;
+                foreach (var t in profile.Tiers) channelCount += t.Channels.Count;
+                SimHub.Logging.Current.Info(
+                    $"[Moza] Sending v0 URL subscription: " +
+                    $"{message.Length} bytes in {frames.Count} chunks " +
+                    $"on session 0x{FlagByte:X2} ({channelCount} channels)");
 
-            if (FlagByteMode == 2)
+                foreach (var frame in frames)
+                    _connection.Send(frame);
+            }
+            else
             {
-                // Two-batch mode: send a probe batch at 0x00 (total_channels=0, no enables)
-                // then the real batch at FlagByte. Matches Pithouse's full sequence.
-                byte[] probeMsg = TierDefinitionBuilder.BuildProbeBatch(profile, 0x00);
-                var probeFrames = TierDefinitionBuilder.ChunkMessage(probeMsg, FlagByte, ref seq);
-                foreach (var frame in probeFrames)
+                // Version 2: compact numeric tier definitions.
+                // Sub-message 1 preamble: tag 0x07 (version=2), tag 0x03 (value=0).
+                byte[] preambleMsg = new byte[]
+                {
+                    0x07, 0x04, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
+                    0x03, 0x00, 0x00, 0x00, 0x00
+                };
+                var preambleFrames = TierDefinitionBuilder.ChunkMessage(preambleMsg, FlagByte, ref seq);
+                foreach (var frame in preambleFrames)
                     _connection.Send(frame);
 
-                flagBase = FlagByte;
+                byte flagBase = TierFlagBase;
+
+                if (FlagByteMode == 2)
+                {
+                    byte[] probeMsg = TierDefinitionBuilder.BuildProbeBatch(profile, 0x00);
+                    var probeFrames = TierDefinitionBuilder.ChunkMessage(probeMsg, FlagByte, ref seq);
+                    foreach (var frame in probeFrames)
+                        _connection.Send(frame);
+                    flagBase = FlagByte;
+                }
+
+                byte[] message = TierDefinitionBuilder.BuildTierDefinitionMessage(profile, flagBase);
+                var frames = TierDefinitionBuilder.ChunkMessage(message, FlagByte, ref seq);
+
+                SimHub.Logging.Current.Info(
+                    $"[Moza] Sending v2 tier definition: mode={FlagByteMode} flagBase=0x{flagBase:X2}, " +
+                    $"preamble ({preambleFrames.Count} chunks) + " +
+                    $"{message.Length} bytes in {frames.Count} chunks " +
+                    $"on session 0x{FlagByte:X2} ({profile.Tiers.Count} tiers)");
+
+                foreach (var frame in frames)
+                    _connection.Send(frame);
             }
-
-            byte[] message = TierDefinitionBuilder.BuildTierDefinitionMessage(profile, flagBase);
-            var frames = TierDefinitionBuilder.ChunkMessage(message, FlagByte, ref seq);
-
-            SimHub.Logging.Current.Info(
-                $"[Moza] Sending tier definition: mode={FlagByteMode} flagBase=0x{flagBase:X2}, " +
-                $"preamble ({preambleFrames.Count} chunks) + " +
-                $"{message.Length} bytes in {frames.Count} chunks " +
-                $"on session 0x{FlagByte:X2} ({profile.Tiers.Count} tiers)");
-
-            foreach (var frame in frames)
-                _connection.Send(frame);
         }
 
         /// <summary>
@@ -432,18 +461,41 @@ namespace MozaPlugin.Telemetry
                 return;
             }
 
-            // 7c:00 data chunks — ack channel registrations during preamble
+            // 7c:00 data chunks — ack and buffer channel registrations during preamble
             if (cmd1 == 0x7C && cmd2 == 0x00 && data.Length >= 8 && !_preambleComplete)
             {
                 byte session = data[4];
                 byte type = data[5];
 
-                if (session == FlagByte && type == 0x01)
+                if (type == 0x01)
                 {
                     int seq = data[6] | (data[7] << 8);
-                    if (seq > _sessionAckSeq)
-                        _sessionAckSeq = seq;
-                    SendSessionAck(FlagByte, (ushort)_sessionAckSeq);
+
+                    // Ack on the telemetry session
+                    if (session == FlagByte)
+                    {
+                        if (seq > _sessionAckSeq)
+                            _sessionAckSeq = seq;
+                        SendSessionAck(FlagByte, (ushort)_sessionAckSeq);
+                    }
+
+                    // Buffer the chunk payload (strip CRC) for channel catalog parsing.
+                    // The wheel sends its channel URLs on session 0x02 as tag 0x04 entries.
+                    if (session == FlagByte && data.Length > 12)
+                    {
+                        byte[] raw = new byte[data.Length - 8]; // strip session+type+seq prefix
+                        Array.Copy(data, 8, raw, 0, raw.Length);
+                        // Strip 4-byte CRC from chunk payload
+                        if (raw.Length >= 5)
+                        {
+                            int netLen = raw.Length - 4;
+                            lock (_incomingSessionBuffer)
+                            {
+                                for (int k = 0; k < netLen; k++)
+                                    _incomingSessionBuffer.Add(raw[k]);
+                            }
+                        }
+                    }
                 }
                 return;
             }
@@ -463,6 +515,70 @@ namespace MozaPlugin.Telemetry
                     _displayDetected = true;
                     SimHub.Logging.Current.Info($"[Moza] Display sub-device detected: \"{_displayModelName}\"");
                 }
+            }
+        }
+
+        /// <summary>
+        /// Parse the wheel's channel catalog from the buffered incoming 7c:00 session data.
+        /// The wheel sends tag 0x04 entries with channel URLs during the preamble.
+        /// </summary>
+        private void ParseWheelChannelCatalog()
+        {
+            byte[] buffer;
+            lock (_incomingSessionBuffer)
+            {
+                if (_incomingSessionBuffer.Count == 0) return;
+                buffer = _incomingSessionBuffer.ToArray();
+            }
+
+            var channels = new System.Collections.Generic.List<string>();
+            int i = 0;
+            while (i < buffer.Length)
+            {
+                byte tag = buffer[i];
+                if (tag == 0xFF)
+                {
+                    i++;
+                    continue;
+                }
+                if (i + 5 > buffer.Length) break;
+                uint param = (uint)(buffer[i + 1] | (buffer[i + 2] << 8) |
+                             (buffer[i + 3] << 16) | (buffer[i + 4] << 24));
+
+                if (tag == 0x04 && i + 5 + (int)param <= buffer.Length && param > 1 && param < 200)
+                {
+                    // Channel URL: [ch_index:u8] [url:ASCII]
+                    int urlLen = (int)param - 1;
+                    string url = System.Text.Encoding.ASCII.GetString(buffer, i + 6, urlLen);
+                    // Extract just the suffix after the last /
+                    int slash = url.LastIndexOf('/');
+                    string name = slash >= 0 ? url.Substring(slash + 1) : url;
+                    channels.Add(name);
+                    i += 5 + (int)param;
+                }
+                else if (tag == 0x06)
+                {
+                    break; // end marker
+                }
+                else if (tag == 0x03 && param <= 8)
+                {
+                    i += 5 + (int)param;
+                }
+                else
+                {
+                    // Unknown tag — skip by trying param as size
+                    if (param < 200)
+                        i += 5 + (int)param;
+                    else
+                        break;
+                }
+            }
+
+            if (channels.Count > 0)
+            {
+                _wheelChannelCatalog = channels;
+                SimHub.Logging.Current.Info(
+                    $"[Moza] Wheel channel catalog ({channels.Count}): {string.Join(", ", channels)}");
             }
         }
 
@@ -493,6 +609,13 @@ namespace MozaPlugin.Telemetry
                     {
                         _preambleComplete = true;
                         _connection.MessageReceived -= OnMessageDuringPreamble;
+
+                        // Parse the wheel's channel catalog from buffered session data
+                        ParseWheelChannelCatalog();
+
+                        // Version 0: re-send URL subscription (Pithouse double-sends)
+                        if (ProtocolVersion == 0)
+                            SendTierDefinition();
 
                         // Channel config burst (matches Pithouse t=9.8-9.9)
                         SendChannelConfig();

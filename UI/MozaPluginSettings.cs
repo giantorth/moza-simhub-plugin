@@ -61,6 +61,13 @@ namespace MozaPlugin
         // Byte limit override (0 = auto from profile)
         public int TelemetryByteLimitOverride { get; set; } = 0;
 
+        // Tier definition protocol version.
+        // 0 = URL-based subscription (CSP-style — host sends channel URLs,
+        //     wheel firmware resolves compression internally)
+        // 2 = Compact numeric (VGS-style — host sends flag bytes, channel indices,
+        //     compression codes, and bit widths per tier)
+        public int TelemetryProtocolVersion { get; set; } = 2;
+
         // How to assign flag bytes in tier definitions and telemetry frames.
         // We don't fully understand how the wheel uses flag bytes — Pithouse uses
         // a monotonic counter and the wheel accepts values from 0x00 to 0x13+.

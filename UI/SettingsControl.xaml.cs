@@ -833,7 +833,10 @@ namespace MozaPlugin
             try
             {
                 var s = _plugin.Settings;
+                int protoVer = s.TelemetryProtocolVersion;
+                ProtocolVersionCombo.SelectedIndex = protoVer == 0 ? 1 : 0;
                 FlagByteModeCombo.SelectedIndex = Math.Max(0, Math.Min(2, s.TelemetryFlagByteMode));
+                FlagByteModePanel.IsEnabled = protoVer != 0;
             }
             finally
             {
@@ -869,6 +872,13 @@ namespace MozaPlugin
             else
                 TelemetryDisplayLabel.Text = "";
 
+            // Wheel channel catalog
+            var catalog = sender.WheelChannelCatalog;
+            if (catalog != null && catalog.Count > 0)
+                TelemetryWheelChannelsLabel.Text = $"Wheel channels ({catalog.Count}): {string.Join(", ", catalog)}";
+            else
+                TelemetryWheelChannelsLabel.Text = "";
+
             TelemetryTestStopBtn.IsEnabled = testMode;
             TelemetryTestStartBtn.IsEnabled = !testMode;
         }
@@ -898,12 +908,22 @@ namespace MozaPlugin
             TelemetryTestStopBtn.IsEnabled = false;
         }
 
+        private void ProtocolVersion_Changed(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+        {
+            if (_suppressEvents) return;
+            int version = ProtocolVersionCombo.SelectedIndex == 1 ? 0 : 2;
+            _plugin.Settings.TelemetryProtocolVersion = version;
+            FlagByteModePanel.IsEnabled = version != 0;
+            _plugin.SaveSettings();
+            _plugin.RestartTelemetry();
+        }
+
         private void FlagByteMode_Changed(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
         {
             if (_suppressEvents) return;
             _plugin.Settings.TelemetryFlagByteMode = FlagByteModeCombo.SelectedIndex;
             _plugin.SaveSettings();
-            _plugin.ApplyTelemetrySettings();
+            _plugin.RestartTelemetry();
         }
 
         private void TelemetryExportLog_Click(object sender, RoutedEventArgs e)
