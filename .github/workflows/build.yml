@@ -29,10 +29,15 @@ jobs:
       - name: Setup .NET SDK
         uses: actions/setup-dotnet@v5
         with:
-          dotnet-version: "8.0.x"
+          dotnet-version: |
+            8.0.x
+            9.0.x
 
       - name: Restore dependencies
         run: dotnet restore
 
       - name: Build plugin DLL
         run: dotnet build -c Release --no-restore
+
+      - name: Run tests
+        run: dotnet test MozaPlugin.Tests/MozaPlugin.Tests.csproj -c Release --no-build --verbosity normal

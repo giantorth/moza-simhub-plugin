@@ -19,6 +19,13 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Remove="MozaPlugin.Tests\**" />
+    <EmbeddedResource Remove="MozaPlugin.Tests\**" />
+    <None Remove="MozaPlugin.Tests\**" />
+    <Page Remove="MozaPlugin.Tests\**" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Reference Include="SimHub.Plugins">
       <HintPath>libs\SimHub\SimHub.Plugins.dll</HintPath>
       <Private>false</Private>

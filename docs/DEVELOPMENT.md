@@ -92,6 +92,33 @@ You can build the plugin entirely on Linux. The .NET SDK can target .NET Framewo
 - SimHub DLLs in `libs/SimHub/` are reference-only (`Private=false`) and not copied to output.
 - The build produces a single output DLL with no additional runtime dependencies to deploy.
 
+### Running Tests
+
+The test project (`MozaPlugin.Tests/`) uses xUnit and targets `net9.0`. It includes the testable source files directly from the main project (via `<Compile Include>`) rather than using a `<ProjectReference>`, because the main project's net48 DLL has WPF and SimHub dependencies that cannot load under .NET 9 on Linux. Minimal stubs in `MozaPlugin.Tests/Stubs/` satisfy the two external types referenced by included source files (`GameReaderCommon.StatusDataBase` and `SimHub.Logging.Current`).
+
+```bash
+dotnet test -c Release
+```
+
+This works on both Linux and Windows.
+
+**Test structure:**
+
+| Layer | Test file | Coverage |
+|---|---|---|
+| Protocol utilities | `Protocol/MozaProtocolTests.cs` | Checksum, nibble swap, bit toggle, captured frame validation |
+| Command building | `Protocol/MozaCommandTests.cs` | Read/write message construction, big-endian encoding, parse round-trips |
+| Response parsing | `Protocol/MozaResponseParserTests.cs` | Known command parsing, noise filtering, null handling |
+| Bit packing | `Telemetry/TelemetryBitWriterTests.cs` | LSB-first writes, cross-byte spans, float/double, external buffers |
+| Value encoding | `Telemetry/TelemetryEncoderTests.cs` | All 25+ compression types with clamping and edge cases |
+| Frame assembly | `Telemetry/TelemetryFrameBuilderTests.cs` | Header format, checksum, stub frames, flag byte patching |
+| Tier definitions | `Telemetry/TierDefinitionBuilderTests.cs` | CRC-32, chunking, tier structure, channel indices, probe batch |
+| Dashboard upload | `Telemetry/DashboardUploaderTests.cs` | Zlib round-trip, Adler-32, MD5, FF-prefixed field structure |
+| Test patterns | `Telemetry/TelemetryDiagnosticsTests.cs` | Determinism, known values, DRS toggling, frame log capping |
+| Capture verification | `Integration/CaptureComparisonTests.cs` | Captured frame checksum, header match, builder output comparison |
+
+The `Integration/F1DashboardProfileFixture.cs` shared helper manually constructs the F1 dashboard profile (9 channels, 126 bits, 16 bytes) without depending on `DashboardProfileStore`, which requires SimHub DLLs at runtime.
+
 ### CI/CD
 
 - **Build**: Every push to `main` and every PR is built automatically via GitHub Actions.
