@@ -940,33 +940,111 @@ Complete byte-level verification of the telemetry data frames confirmed:
 
 ## Tier definition protocol (group 0x43, session data on 7c:00)
 
-Pithouse sends two sub-messages as 7c:00 data chunks (type=0x01) on the telemetry session during startup. The first is a preamble, the second is the tier definition describing the exact bit layout for each flag byte.
+Tier configuration uses a TLV (tag-length-value) encoding exchanged as 7c:00 session data chunks. The protocol is a **two-way handshake**: the wheel declares its channel catalog, then the host tells the wheel how to decode incoming telemetry.
 
-### Sub-message 1 — session preamble
+### Handshake sequence (from bidirectional frame traces)
 
-Pithouse always sends a 14-byte preamble message before the tier definition (confirmed in both `moza-startup-1` and `moza-startup-2` captures from 2026-04-12). Sent at seq 3-4 on the telemetry session:
-
-```
-07 04 00 00 00 02 00 00 00 03 00 00 00 00
-```
-
-Structure (decoded from Pithouse binary RTTI class `TelemetryDataOutputBuffer` in `FormulaSteeringTelemetryDataStructres.cc`):
-- **Tag 0x07** (param=4, value=2): protocol version or capability level. Constant across all observed sessions — not a dynamic value.
-- **Tag 0x03** (param=0, value=0): base flag offset. Value 0 means tier flags start at 0x00.
-
-### Sub-message 2 — tier definition
-
-**Message format** (decoded from raw capture `moza-startup.json` 2026-04-12):
+Before PitHouse opens sessions, the wheel already advertises its channel catalog via `7c:23` display config frames. The full handshake, traced frame-by-frame from both VGS (`moza-startup-1.pcapng`) and CSP (`pithouse-complete.txt`):
 
 ```
-[0x00] [01 00 00 00] [flag_offset]           — tier enable (repeated per tier)
+Phase 1 — Wheel advertisement (before session opens):
+  Wheel sends 7c:23 display config frames at ~10Hz (alternating payloads)
+
+Phase 2 — Session open + wheel channel catalog:
+  Host  >>> 7C:00 SESSION_OPEN port=0x01, port=0x02 (both in same USB packet)
+  Wheel <<< FC:00 ACK for both sessions (immediate)
+  Wheel <<< 7C:00 session 0x01: tag 0x07 (version=0) + tag 0x0c (device hash)
+                                + tag 0x01 + tag 0x05 + tag 0x04 ch=0 + tag 0x06 END
+  Wheel <<< 7C:00 session 0x02: tag 0xff (sentinel) + tag 0x03 (value=1)
+                                + tag 0x04 × N channel URLs + tag 0x06 END (total=N)
+  Host  >>> FC:00 ACKs for wheel's channel data (incremental)
+
+Phase 3 — Host tier config (format depends on wheel model):
+  Host  >>> 7C:00 session 0x02: tier definition (version 0 or 2, see below)
+  Host  >>> FC:00 ACKs continue for any remaining wheel data
+
+Phase 4 — Telemetry starts:
+  Host  >>> 7D:23 telemetry frames (~30 Hz)
+  Host  >>> FD:DE enable signal (~30 Hz, starts ~1s after session open)
+
+Phase 5 — Channel config burst (~1s after session open):
+  Host  >>> 0x40 1E:xx channel enables, 28:00, 28:01, 09:00, 28:02
+  Host  >>> Second batch of tier definitions (real dashboard tiers at higher flags)
+```
+
+Both VGS and CSP follow this exact sequence. The wheel always declares version 0 (`tag 0x07 param=1 value=0x00`) — both models send identical version tags. PitHouse decides the host→wheel response format based on the wheel's model name (from the 0x87 identity response), not from the version tag.
+
+**Timing note:** On VGS, PitHouse starts sending telemetry (flag=0x00, 11B probe tier) at t+0.3s after session open, BEFORE the enable signal or channel config. The enable signal starts at t+1.0s, and the real dashboard telemetry (flag=0x03, 16B) starts at t+1.5s after the second tier definition batch.
+
+### Session 0x01 — device description (both directions, both models)
+
+Both the wheel and PitHouse send a short descriptor on session 0x01. Structure is identical:
+
+```
+[0x07] [01 00 00 00] [00]                     — version 0
+[0x0c] [size] [data...]                        — device-specific hash/fingerprint
+[0x01] [size: u32 LE] [data...]               — descriptor body
+[0x05] [00]                                    — unknown
+[0x04] [size] [ch_index=0] [url or padding]   — single channel entry (index 0)
+[0x06] [00]                                    — end
+```
+
+Tag 0x0c (14 bytes) differs per device — VGS: `0c 06 69 42 07 14 e8 06...`, CSP: `0c 04 8a e5 d0 86 b2 fc...`. May encode hardware ID or firmware fingerprint. The channel entry at index 0 appears to be padding (3 ASCII spaces on VGS).
+
+### Session 0x02 — channel catalog (wheel → host, both models)
+
+The wheel sends its supported channels. Confirmed identical structure from VGS and CSP:
+
+```
+[0xff]                                         — sentinel / reset marker
+[0x03] [04 00 00 00] [01 00 00 00]            — config param (value=1, constant across models)
+[0x04] [size: u32 LE] [ch_index: u8] [url: ASCII]  — per-channel (repeated)
+[0x06] [04 00 00 00] [total_channels: u32 LE] — end marker
+```
+
+VGS reports 16 channels (BestLapTime, Brake, CurrentLapTime, DrsState, ErsState, FuelRemainder, GAP, Gear, LastLapTime, Rpm, SpeedKmh, Throttle, TyreWear×4). CSP reports 20 channels (adds ABSActive, ABSLevel, TCActive, TCLevel, TyrePressure×4, TyreTemp×4).
+
+The channel catalog tells the host what the currently loaded dashboard subscribes to. Channel indices are 1-based, sorted alphabetically by URL.
+
+### Session 0x02 — host response: version 0 URL subscription (CSP)
+
+For CSP, PitHouse responds on session 0x02 with the same tag 0x04 format — echoing back the channel URLs as a subscription confirmation. The wheel firmware knows compression types internally.
+
+```
+[0xff]                                         — sentinel / reset
+[0x03] [04 00 00 00] [01 00 00 00]            — config (value=1)
+[0x04] [size: u32 LE] [ch_index: u8] [url: ASCII]  — per-channel subscription (repeated)
+[0x06] [04 00 00 00] [total_channels: u32 LE] — end marker
+```
+
+PitHouse sends this twice in rapid succession (first immediately after session open, then again after acks arrive). Confirmed from `CSP captures/pithouse-complete.txt` (20 channels, identical to wheel catalog).
+
+### Session 0x02 — host response: version 2 compact tier definitions (VGS)
+
+PitHouse sends a different format: flag bytes, channel indices, compression codes, and bit widths. The wheel is told exactly how to decode the bit stream.
+
+**Session preamble (same session as tier defs):**
+```
+[0x07] [04 00 00 00] [02 00 00 00]            — version 2
+[0x03] [00 00 00 00]                           — config (value=0)
+```
+
+**Tier definition:**
+```
 [0x01] [size: u32 LE] [flag_byte]            — tier definition header
   [ch_index: u32 LE] [comp: u32 LE]         — 16-byte channel entry (repeated)
   [bits: u32 LE]     [reserved: u32 LE]
 [0x06] [04 00 00 00] [total_channels: u32 LE] — end marker
 ```
 
-**CRITICAL: Flag bytes are 0-based.** The `flag_offset` in enable entries and the `flag_byte` in tier headers are always 0x00, 0x01, 0x02 — they are NOT the session port number. The firmware maps enable offset N → tier with flag N. If the enable says offset 0 is active but the tier definition says flag=0x09, the firmware cannot match them and silently ignores all telemetry.
+Optionally followed by enable entries and a second batch of tier definitions:
+```
+[0x00] [01 00 00 00] [flag_offset]           — tier enable (repeated per tier)
+[0x01] ...                                    — second batch of tier defs at higher flag values
+[0x06] [04 00 00 00] [total_channels: u32 LE] — end marker with actual channel count
+```
+
+Pithouse sends two batches: a first "probe" batch at flags 0x00+ with `total_channels=0`, then a second "real" batch at higher flags with the actual dashboard channels and total count. The wheel accepts telemetry on flags from either batch (observed: 0x00, 0x02, 0x07, 0x0a, 0x13 across captures).
 
 **Channel indices** are 1-based, assigned alphabetically by URL across all tiers (not per-tier).
 
@@ -979,9 +1057,28 @@ Structure (decoded from Pithouse binary RTTI class `TelemetryDataOutputBuffer` i
 | 0x0E | percent_1 | 10 | 0x0F | float_6000_1 | 16 |
 | 0x14 | uint3 | 4 | 0x17 | float_001 | 10 |
 
-**Chunking:** Both sub-messages are sent as SerialStream data chunks with CRC-32 trailers (standard ISO 3309). **ALL chunks have CRC-32 trailers, including the final chunk** — verified by computing CRC-32 of every chunk's net data in `moza-startup-1` and `moza-startup-2` captures and confirming the trailing 4 bytes match. Max 54 net bytes per chunk (58 with CRC). Sequence numbers are continuous across both sub-messages (sub-message 1 at seq 3-4, sub-message 2 at seq 5+).
+### Tag 0x03 — config parameter
 
-**Verified:** The plugin's `TierDefinitionBuilder` generates tier definitions byte-identical to Pithouse for the F1 dashboard: same channel indices, compression codes, and bit widths across all 3 tiers.
+Tag 0x03 has different values depending on direction and version:
+
+| Direction | Version | Value | Interpretation |
+|-----------|---------|-------|---------------|
+| Wheel → Host | 0 | 1 | Constant across VGS and CSP |
+| Host → Wheel | 0 (CSP) | 1 | Mirrors wheel value |
+| Host → Wheel | 2 (VGS) | 0 | Different meaning in version 2 context |
+
+### Chunking (both versions, both directions)
+
+All 7c:00 session data uses SerialStream chunks with CRC-32 trailers (standard ISO 3309). **ALL chunks have CRC-32 trailers, including the final chunk** — verified by computing CRC-32 of every chunk's net data across multiple captures. Max 54 net bytes per chunk (58 with CRC).
+
+### Current plugin implementation
+
+The plugin generates **version 2** (VGS-style) tier definitions only. Version 0 (URL subscription) is simpler — just echo back the channel URLs the wheel already sent — and may work for all models since the wheel firmware already knows compression types. The plugin does not currently:
+- Parse the wheel's incoming channel catalog (session 0x02 tag 0x04 URLs)
+- Send a session 0x01 device descriptor
+- Send a version 0 URL subscription (needed for CSP and possibly universal)
+
+Future work: parse the wheel's channel catalog to auto-discover supported channels, and implement version 0 subscription as a universal fallback.
 
 ## Display sub-device probe (group 0x43 identity commands)
 
@@ -1019,7 +1116,9 @@ The plugin sends steps 1-10 during the preamble. The 0x87 response with model na
 - **Dashboard byte limit configuration** — stored at config object offset `+0x30`, set during dashboard upload (group 0x40). Exact mechanism for setting this limit not yet traced
 - **Cold-start initialization** — `connect-wheel-start-game.json` captures wheel connection → game start, confirming the full init sequence (identity probe → config burst → dashboard upload → telemetry). EEPROM persistence across power cycles is confirmed for channel config; unclear for session state
 - **MDD (standalone dash)** — no captures of telemetry sent to device 0x14; protocol may differ
-- **Compression codes for non-F1 types** — 8 codes confirmed from capture (bool, uint3, int30, uint16_t, float, float_001, float_6000_1, percent_1). Codes for brake_temp_1, tyre_temp_1, tyre_pressure_1, track_temp_1, oil_pressure_1, float_600_2, location_t, int32_t, uint32_t, double, uint8_t are inferred but unverified. Need captures with dashboards that use these types
+- **Tier definition version selection** — PitHouse sends version 2 (compact) to VGS and version 0 (URL-based) to CSP. Both wheels declare version 0 identically — the version is not negotiated from the wheel's tag 0x07. PitHouse likely maps model name → version. Tag 0x0c data (14 bytes, differs per wheel) may encode capabilities or firmware version but is not yet decoded. Could we send version 0 (URL subscription) universally since both wheels understand it on the incoming side?
+- **Wheel channel catalog parsing** — the wheel sends its supported channels as tag 0x04 URL strings on session 0x02 during startup. The plugin currently ignores this data. Parsing it would enable auto-discovery of supported channels and could replace the static Telemetry.json embedded resource
+- **Compression codes for non-F1 types** — 8 codes confirmed from capture (bool, uint3, int30, uint16_t, float, float_001, float_6000_1, percent_1). Codes for brake_temp_1, tyre_temp_1, tyre_pressure_1, track_temp_1, oil_pressure_1, float_600_2, location_t, int32_t, uint32_t, double, uint8_t are inferred but unverified. The CSP uses version 0 (URL-based) which doesn't need compression codes — the wheel firmware resolves them by URL
 - **EEPROM direct access** — group 10 protocol found in rs21_parameter.db but never observed in USB captures; needs live verification
 - **Base ambient LEDs** — groups 32/34 commands found in rs21_parameter.db; not captured in USB traces (requires base with LED strips)
 - **Wheel LED groups 2-4** — Single, Rotary, and Ambient groups found in rs21_parameter.db with up to 56 LEDs; only groups 0 (Shift/RPM) and 1 (Button) confirmed in captures so far
