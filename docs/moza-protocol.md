@@ -1121,7 +1121,7 @@ Three sub-messages are sent:
 | Field | Payload size | Content | Notes |
 |-------|-------------|---------|-------|
 | 0 | 16 bytes | Device tokens (session-specific, differs per wheel) | remaining = total size of fields 1+2 |
-| 1 | 8 bytes | `9e 79 52 7d 07 00 00 00` — protocol constant | Identical between VGS and CSP. remaining=3 |
+| 1 | 8 bytes | `9e 79 52 7d 07 00 00 00` — protocol constant | Identical between VGS and CSP. remaining=3. NOT a literal in the PE binary (computed or serialized at runtime |
 | 2 | varies (VGS: 1350, CSP: 100) | Compressed mzdash content | 12B pre-header + zlib stream (last field, no remaining/CRC trailer) |
 
 Each field except the last is followed by `remaining_transfer_size(4 LE) + CRC32(4)`. The CRC covers all bytes from `FF` through `remaining_transfer_size`. Field 2 is the last field and has no trailing remaining/CRC.

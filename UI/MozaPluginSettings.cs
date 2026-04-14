@@ -63,7 +63,7 @@ namespace MozaPlugin
 
         // Upload the .mzdash dashboard to the wheel on every telemetry start.
         // PitHouse does this on every connection — the wheel may require it.
-        public bool TelemetryUploadDashboard { get; set; } = true;
+        public bool TelemetryUploadDashboard { get; set; } = false;
 
         // Tier definition protocol version.
         // 0 = URL-based subscription (CSP-style — host sends channel URLs,
@@ -79,7 +79,7 @@ namespace MozaPlugin
         //   0 = Zero-based (0x00, 0x01, 0x02) — matches Pithouse's initial probe batch
         //   1 = Session-port-based (FlagByte+0, +1, +2) — matches Pithouse's mid-session behavior
         //   2 = Two-batch (probe at 0x00 then real at FlagByte) — matches Pithouse's full sequence
-        public int TelemetryFlagByteMode { get; set; } = 0;
+        public int TelemetryFlagByteMode { get; set; } = 2;
 
         // Telemetry send rate in Hz
         public int TelemetrySendRateHz { get; set; } = 20;

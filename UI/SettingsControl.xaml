@@ -677,7 +677,7 @@
                             <TextBlock Text="Flag byte mode:" VerticalAlignment="Center" Margin="0,0,8,0"/>
                             <ComboBox x:Name="FlagByteModeCombo" Width="260"
                                       SelectionChanged="FlagByteMode_Changed">
-                                <ComboBoxItem Content="0 — Zero-based (0x00+)" IsSelected="True"/>
+                                <ComboBoxItem Content="0 — Zero-based (0x00+)"/>
                                 <ComboBoxItem Content="1 — Session port-based"/>
                                 <ComboBoxItem Content="2 — Two-batch (Pithouse-style)"/>
                             </ComboBox>
