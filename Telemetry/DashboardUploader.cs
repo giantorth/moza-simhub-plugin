@@ -15,9 +15,9 @@ namespace MozaPlugin.Telemetry
     ///
     /// Three fields are sent:
     ///   Field 0: 16B correlation tokens [random_u32|0x00000002][timestamp|0x00000000]
-    ///            remaining=7200 (fixed constant, not byte count)
+    ///            remaining = total bytes of fields 1+2 (dynamic)
     ///   Field 1: 8B protocol constant (identical across VGS and CSP)
-    ///            remaining=3 (fixed constant)
+    ///            remaining=3 (semantics unknown — not a byte count)
     ///   Field 2: 12B header + zlib-compressed mzdash content (no remaining/CRC)
     ///
     /// Wire format confirmed by CRC-32 verification across 8 sessions (VGS and CSP).
@@ -58,11 +58,16 @@ namespace MozaPlugin.Telemetry
             Array.Copy(preHeader, 0, field2Payload, 0, preHeader.Length);
             Array.Copy(compressed, 0, field2Payload, preHeader.Length, compressed.Length);
 
-            // "Remaining" values are fixed constants in all captures (VGS and CSP,
-            // across 8 sessions with dashboards ranging from 100B to 1350B compressed).
-            // Field 0 remaining = 7200 (0x1C20), field 1 remaining = 3.
-            // NOT byte counts — semantics unknown (possibly buffer size or protocol params).
-            const uint field0Remaining = 7200;
+            // Field 0 remaining = total bytes of subsequent fields (field 1 + field 2).
+            // Field 1: FF(1) + size(4) + payload(8) + remaining(4) + CRC(4) = 21
+            // Field 2: FF(1) + size(4) + field2Payload.Length (no remaining/CRC)
+            int field1Block = 5 + 8 + 4 + 4;           // 21
+            int field2Block = 5 + field2Payload.Length;
+            uint field0Remaining = (uint)(field1Block + field2Block);
+
+            // Field 1 remaining: always 3 in all captures. Semantics unknown —
+            // NOT a byte count (field 2 is much larger). Possibly a field count,
+            // message type, or protocol constant.
             const uint field1Remaining = 3;
 
             using var ms = new MemoryStream();
