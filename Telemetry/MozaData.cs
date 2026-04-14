@@ -9,6 +9,7 @@ namespace MozaPlugin
     {
         // Connection status
         public volatile bool IsBaseConnected;
+        public volatile bool BaseSettingsRead;
 
         // Wheel identity (populated after wheel detection, cleared on disconnect)
         // Volatile: written from serial read thread, read from UI thread.
@@ -199,7 +200,7 @@ namespace MozaPlugin
                 case "base-state-err":      BaseStateError = value; break;
 
                 // Core settings
-                case "base-limit":          Limit = value; break;
+                case "base-limit":          Limit = value; BaseSettingsRead = true; break;
                 case "base-max-angle":      MaxAngle = value; break;
                 case "base-ffb-strength":   FfbStrength = value; break;
                 case "base-torque":         Torque = value; break;

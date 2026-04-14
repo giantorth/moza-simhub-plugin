@@ -346,6 +346,7 @@ namespace MozaPlugin
                 _data.IsBaseConnected = false;
                 _data.ClearWheelIdentity();
                 _baseDetected = false;
+                _data.BaseSettingsRead = false;
                 _dashDetected = false;
                 _newWheelDetected = false;
                 _oldWheelDetected = false;
