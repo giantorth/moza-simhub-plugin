@@ -10,6 +10,8 @@ MOZA makes excellent sim racing hardware, but their companion software — Pitho
 
 The goal is to expand the functionality of MOZA devices to a wider audience by providing tools that work across multiple platforms.  
 
+**Expect a lot of updates in the coming weeks. Feedback and issues are appreciated.**
+
 ![MOZA Plugin Settings](docs/Screenshot.png)
 
 > [!NOTE]
