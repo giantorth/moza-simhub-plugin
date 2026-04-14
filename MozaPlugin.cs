@@ -346,6 +346,7 @@ namespace MozaPlugin
                 _data.IsBaseConnected = false;
                 _data.ClearWheelIdentity();
                 _baseDetected = false;
+                _data.BaseSettingsRead = false;
                 _dashDetected = false;
                 _newWheelDetected = false;
                 _oldWheelDetected = false;
@@ -781,6 +782,22 @@ namespace MozaPlugin
         internal void ApplyProfile(MozaProfile profile)
         {
             SimHub.Logging.Current.Info($"[Moza] Applying profile: {profile.Name}");
+
+            // Guard: a profile with all core base settings at zero was captured from
+            // uninitialized device data (first-launch race condition). Reset them to
+            // sentinels so they're skipped — the device keeps its own values.
+            if (profile.Limit == 0 && profile.FfbStrength == 0 && profile.Torque == 0 && profile.Speed == 0)
+            {
+                SimHub.Logging.Current.Warn("[Moza] Profile has zeroed base settings — resetting to sentinels");
+                profile.Limit = -1; profile.FfbStrength = -1; profile.Torque = -1; profile.Speed = -1;
+                profile.Damper = -1; profile.Friction = -1; profile.Inertia = -1; profile.Spring = -1;
+                profile.SpeedDamping = -1; profile.SpeedDampingPoint = -1;
+                profile.NaturalInertia = -1; profile.SoftLimitStiffness = -1;
+                profile.SoftLimitRetain = -1; profile.FfbReverse = -1; profile.Protection = -1;
+                profile.GameDamper = -1; profile.GameFriction = -1;
+                profile.GameInertia = -1; profile.GameSpring = -1;
+                profile.WorkMode = -1;
+            }
 
             // --- Base/Motor settings → _data + device ---
             ApplyBaseSettingIfSet(profile.Limit, v => { _data.Limit = v; _data.MaxAngle = v; }, "base-limit", "base-max-angle");

@@ -29,6 +29,8 @@ namespace MozaPlugin.Devices
         /// </summary>
         public void CaptureFromCurrent(MozaPluginSettings settings, MozaData data)
         {
+            if (!data.BaseSettingsRead) return;
+
             DashRpmBrightness = settings.DashRpmBrightness;
             DashFlagsBrightness = settings.DashFlagsBrightness;
             DashRpmIndicatorMode = data.DashRpmIndicatorMode;

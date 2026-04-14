@@ -172,6 +172,8 @@ namespace MozaPlugin
         /// </summary>
         public void CaptureFromCurrent(MozaPluginSettings settings, MozaData data)
         {
+            if (!data.BaseSettingsRead) return;
+
             // Base/Motor
             Limit = data.Limit; FfbStrength = data.FfbStrength; Torque = data.Torque;
             Speed = data.Speed; Damper = data.Damper; Friction = data.Friction;

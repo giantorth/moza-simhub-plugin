@@ -44,6 +44,8 @@ namespace MozaPlugin.Devices
         /// </summary>
         public void CaptureFromCurrent(MozaPluginSettings settings, MozaData data)
         {
+            if (!data.BaseSettingsRead) return;
+
             WheelTelemetryMode = settings.WheelTelemetryMode;
             WheelIdleEffect = settings.WheelIdleEffect;
             WheelButtonsIdleEffect = settings.WheelButtonsIdleEffect;
