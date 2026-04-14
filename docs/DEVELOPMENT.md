@@ -102,7 +102,7 @@ You can build the plugin entirely on Linux. The .NET SDK can target .NET Framewo
 
 ### Component Layers
 
-**Plugin Entry Point** (`MozaPlugin.cs`) — Implements SimHub's `IPlugin`, `IDataPlugin`, `IWPFSettingsV2`. Manages lifecycle (Init/DataUpdate/End), connection state, auto-reconnect (5s timer), setting polling (2s timer), `TelemetrySender` for dashboard data streaming, and `DashboardProfileStore` for profile management. Detects base, wheel, dashboard, handbrake, and pedals. This is the orchestrator that wires everything together.
+**Plugin Entry Point** (`MozaPlugin.cs`) — Implements SimHub's `IPlugin`, `IDataPlugin`, `IWPFSettingsV2`. Manages lifecycle (Init/DataUpdate/End), connection state, auto-reconnect (5s timer), setting polling (2s timer), `TelemetrySender` for dashboard data streaming, and `DashboardProfileStore` for profile management. Uses phased per-device initialization: `TryConnect()` sends only lightweight detection probes, then `DetectDevices()` applies saved settings and reads back device state as each device (base, wheel, dashboard, handbrake, pedals) is confirmed present. This is the orchestrator that wires everything together.
 
 **Serial Protocol Layer** (`Protocol/`) — Binary protocol over USB serial at 115200 baud (VID `0x346E`):
 - `MozaSerialConnection` — Device auto-discovery, background read/write threads, frame assembly
@@ -164,7 +164,7 @@ When adding a new setting that is written to the device, it must also be saved/r
 2. **`MozaDeviceManager.cs`** — Add device type mapping in `GetDeviceId()` if it's a new device
 3. **`MozaProtocol.cs`** — Add device ID and read/write group constants if needed
 4. **`MozaData.cs`** — Add volatile field(s) and `UpdateFromCommand` case(s)
-5. **`MozaPlugin.cs`** — Add to `StatusPollCommands` (detection probe), `SettingsPollCommands` (read on connect), detection logic in `DetectDevices()`, and `ApplyProfile()` (restore from profile → `_data` + device write)
+5. **`MozaPlugin.cs`** — Add to `StatusPollCommands` (if it's a detection probe) and the appropriate per-device read array (e.g. `BaseSettingsReadCommands`, `NewWheelSettingsReadCommands`, `HandbrakeSettingsReadCommands`, etc.) so it's read after that device is detected. Add detection logic in `DetectDevices()` if needed, update `ApplyProfile()` (restore from profile → `_data` + device write), and update the device's `ApplySaved*Settings()` method so the value is written on detection
 6. **`MozaProfile.cs`** — Add property (with -1 sentinel default), copy in `CopyProfilePropertiesFrom()`, capture in `CaptureFromCurrent()`
 7. **`SettingsControl.xaml`** — Add UI controls
 8. **`SettingsControl.xaml.cs`** — Add refresh logic and event handlers (handler must update `_data`, write to device, and call `SaveSettings()`). `SaveSettings()` is debounced (500ms) so rapid slider drags don't thrash the disk

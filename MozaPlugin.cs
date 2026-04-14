@@ -52,9 +52,12 @@ namespace MozaPlugin
             "base-state",
         };
 
-        private static readonly string[] SettingsPollCommands = new[]
+        // --- Per-device settings read commands ---
+        // These are sent only after the corresponding device is detected,
+        // rather than blasting all commands on connect.
+
+        private static readonly string[] BaseSettingsReadCommands = new[]
         {
-            // Base
             "base-limit", "base-ffb-strength", "base-torque", "base-speed",
             "base-damper", "base-friction", "base-inertia", "base-spring",
             "base-protection", "base-natural-inertia",
@@ -70,43 +73,55 @@ namespace MozaPlugin
             "base-equalizer4", "base-equalizer5", "base-equalizer6",
             // FFB Curve (Y outputs only; X breakpoints are fixed at 20/40/60/80)
             "base-ffb-curve-y1", "base-ffb-curve-y2", "base-ffb-curve-y3", "base-ffb-curve-y4", "base-ffb-curve-y5",
-            // Wheel LED
+        };
+
+        private static readonly string[] NewWheelSettingsReadCommands = new[]
+        {
             "wheel-telemetry-mode", "wheel-telemetry-idle-effect",
             "wheel-buttons-idle-effect",
             "wheel-rpm-brightness", "wheel-buttons-brightness", "wheel-flags-brightness",
             "wheel-idle-mode", "wheel-idle-timeout", "wheel-idle-speed",
             "wheel-idle-color",
-            // Wheel paddle settings
             "wheel-paddles-mode", "wheel-clutch-point", "wheel-knob-mode", "wheel-stick-mode",
-            // Wheel RPM colors
+            // RPM colors
             "wheel-rpm-color1", "wheel-rpm-color2", "wheel-rpm-color3",
             "wheel-rpm-color4", "wheel-rpm-color5", "wheel-rpm-color6",
             "wheel-rpm-color7", "wheel-rpm-color8", "wheel-rpm-color9",
             "wheel-rpm-color10",
-            // ES Wheel specific
+        };
+
+        private static readonly string[] OldWheelSettingsReadCommands = new[]
+        {
             "wheel-rpm-indicator-mode", "wheel-get-rpm-display-mode",
             "wheel-old-rpm-brightness",
             "wheel-old-rpm-color1", "wheel-old-rpm-color2", "wheel-old-rpm-color3",
             "wheel-old-rpm-color4", "wheel-old-rpm-color5", "wheel-old-rpm-color6",
             "wheel-old-rpm-color7", "wheel-old-rpm-color8", "wheel-old-rpm-color9",
             "wheel-old-rpm-color10",
-            // Dash LED
+        };
+
+        private static readonly string[] DashSettingsReadCommands = new[]
+        {
             "dash-rpm-indicator-mode", "dash-flags-indicator-mode",
             "dash-rpm-display-mode",
             "dash-rpm-brightness", "dash-flags-brightness",
-            // Dash RPM colors
             "dash-rpm-color1", "dash-rpm-color2", "dash-rpm-color3",
             "dash-rpm-color4", "dash-rpm-color5", "dash-rpm-color6",
             "dash-rpm-color7", "dash-rpm-color8", "dash-rpm-color9",
             "dash-rpm-color10",
-            // Dash flag colors
             "dash-flag-color1", "dash-flag-color2", "dash-flag-color3",
             "dash-flag-color4", "dash-flag-color5", "dash-flag-color6",
-            // Handbrake
+        };
+
+        private static readonly string[] HandbrakeSettingsReadCommands = new[]
+        {
             "handbrake-direction", "handbrake-min", "handbrake-max",
             "handbrake-mode", "handbrake-button-threshold",
             "handbrake-y1", "handbrake-y2", "handbrake-y3", "handbrake-y4", "handbrake-y5",
-            // Pedals settings
+        };
+
+        private static readonly string[] PedalsSettingsReadCommands = new[]
+        {
             "pedals-throttle-dir", "pedals-throttle-min", "pedals-throttle-max",
             "pedals-brake-dir", "pedals-brake-min", "pedals-brake-max", "pedals-brake-angle-ratio",
             "pedals-clutch-dir", "pedals-clutch-min", "pedals-clutch-max",
@@ -498,9 +513,13 @@ namespace MozaPlugin
             {
                 _unmatched = 0;
                 SimHub.Logging.Current.Info("[Moza] Connected to MOZA device");
-                _deviceManager.ReadSettings(SettingsPollCommands);
-                // Probe all wheel IDs immediately for fast detection
+                // Only send detection probes — device-specific settings are read
+                // after each device is confirmed present in DetectDevices().
+                _deviceManager.ReadSettings(StatusPollCommands);
                 _deviceManager.ProbeWheelDetection();
+                _deviceManager.ReadSetting("dash-rpm-indicator-mode");
+                _deviceManager.ReadSetting("handbrake-direction");
+                _deviceManager.ReadSetting("pedals-throttle-dir");
             }
         }
 
@@ -572,10 +591,14 @@ namespace MozaPlugin
             if (commandName == "base-mcu-temp" && !_baseDetected)
             {
                 _baseDetected = true;
-                SimHub.Logging.Current.Info("[Moza] Base detected, applying profile");
+                SimHub.Logging.Current.Info("[Moza] Base detected");
+                // Apply profile first (queues writes), then read settings (queues reads).
+                // Since the write queue is FIFO, the device processes writes before reads,
+                // so read responses reflect the values we just wrote.
                 var profile = _settings.ProfileStore.CurrentProfile;
                 if (profile != null)
                     ApplyProfile(profile);
+                _deviceManager.ReadSettings(BaseSettingsReadCommands);
             }
 
             switch (commandName)
@@ -586,6 +609,7 @@ namespace MozaPlugin
                         _dashDetected = true;
                         DeployDeviceDefinition("MOZA Dashboard", "MozaPlugin.Devices.Dash.device.json");
                         ApplySavedDashSettings();
+                        _deviceManager.ReadSettings(DashSettingsReadCommands);
                         SimHub.Logging.Current.Info("[Moza] Dashboard detected");
                     }
                     break;
@@ -595,12 +619,14 @@ namespace MozaPlugin
                     {
                         _newWheelDetected = true;
                         _deviceManager.LockWheelId(deviceId);
+                        // Writes first so device has saved values before reads return
+                        ApplySavedWheelSettings();
                         _deviceManager.ReadSetting("wheel-model-name");
                         _deviceManager.ReadSetting("wheel-sw-version");
                         _deviceManager.ReadSetting("wheel-hw-version");
                         _deviceManager.ReadSetting("wheel-serial-a");
                         _deviceManager.ReadSetting("wheel-serial-b");
-                        ApplySavedWheelSettings();
+                        _deviceManager.ReadSettings(NewWheelSettingsReadCommands);
                         SimHub.Logging.Current.Info($"[Moza] New-protocol wheel detected on ID {deviceId}");
                         StartTelemetryIfReady();
                     }
@@ -639,12 +665,13 @@ namespace MozaPlugin
                     {
                         _oldWheelDetected = true;
                         _deviceManager.LockWheelId(deviceId);
+                        ApplySavedWheelSettings();
                         _deviceManager.ReadSetting("wheel-model-name");
                         _deviceManager.ReadSetting("wheel-sw-version");
                         _deviceManager.ReadSetting("wheel-hw-version");
                         _deviceManager.ReadSetting("wheel-serial-a");
                         _deviceManager.ReadSetting("wheel-serial-b");
-                        ApplySavedWheelSettings();
+                        _deviceManager.ReadSettings(OldWheelSettingsReadCommands);
                         DeployDeviceDefinitionForOldProto();
                         SimHub.Logging.Current.Info($"[Moza] Old-protocol wheel detected on ID {deviceId}");
                         StartTelemetryIfReady();
@@ -655,6 +682,8 @@ namespace MozaPlugin
                     if (!_handbrakeDetected)
                     {
                         _handbrakeDetected = true;
+                        ApplySavedHandbrakeSettings();
+                        _deviceManager.ReadSettings(HandbrakeSettingsReadCommands);
                         SimHub.Logging.Current.Info("[Moza] Handbrake detected");
                     }
                     break;
@@ -663,6 +692,8 @@ namespace MozaPlugin
                     if (!_pedalsDetected)
                     {
                         _pedalsDetected = true;
+                        ApplySavedPedalSettings();
+                        _deviceManager.ReadSettings(PedalsSettingsReadCommands);
                         SimHub.Logging.Current.Info("[Moza] Pedals detected");
                     }
                     break;
@@ -730,7 +761,85 @@ namespace MozaPlugin
             _deviceManager.WriteSetting("dash-flags-brightness", _settings.DashFlagsBrightness);
         }
 
+        /// <summary>
+        /// Apply saved handbrake settings from the current profile after detection.
+        /// Previously handbrake settings were only written if the handbrake was
+        /// already detected when ApplyProfile ran — now they're written on detection.
+        /// </summary>
+        private void ApplySavedHandbrakeSettings()
+        {
+            var profile = _settings.ProfileStore.CurrentProfile;
+            if (profile == null) return;
+            SimHub.Logging.Current.Info("[Moza] Applying saved handbrake settings");
 
+            if (profile.HandbrakeMode >= 0)
+            {
+                _data.HandbrakeMode = profile.HandbrakeMode;
+                _deviceManager.WriteSetting("handbrake-mode", profile.HandbrakeMode);
+            }
+            if (profile.HandbrakeButtonThreshold >= 0)
+            {
+                _data.HandbrakeButtonThreshold = profile.HandbrakeButtonThreshold;
+                _deviceManager.WriteSetting("handbrake-button-threshold", profile.HandbrakeButtonThreshold);
+            }
+            if (profile.HandbrakeDirection >= 0)
+            {
+                _data.HandbrakeDirection = profile.HandbrakeDirection;
+                _deviceManager.WriteSetting("handbrake-direction", profile.HandbrakeDirection);
+            }
+            if (profile.HandbrakeMin >= 0)
+            {
+                _data.HandbrakeMin = profile.HandbrakeMin;
+                _deviceManager.WriteSetting("handbrake-min", profile.HandbrakeMin);
+            }
+            if (profile.HandbrakeMax >= 0)
+            {
+                _data.HandbrakeMax = profile.HandbrakeMax;
+                _deviceManager.WriteSetting("handbrake-max", profile.HandbrakeMax);
+            }
+            if (profile.HandbrakeCurve != null)
+            {
+                for (int i = 0; i < Math.Min(5, profile.HandbrakeCurve.Length); i++)
+                {
+                    _data.HandbrakeCurve[i] = profile.HandbrakeCurve[i];
+                    _deviceManager.WriteFloat($"handbrake-y{i + 1}", profile.HandbrakeCurve[i]);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Apply saved pedal settings from the current profile after detection.
+        /// </summary>
+        private void ApplySavedPedalSettings()
+        {
+            var profile = _settings.ProfileStore.CurrentProfile;
+            if (profile == null) return;
+            SimHub.Logging.Current.Info("[Moza] Applying saved pedal settings");
+
+            if (profile.PedalsThrottleDir >= 0)
+            {
+                _data.PedalsThrottleDir = profile.PedalsThrottleDir;
+                _deviceManager.WriteSetting("pedals-throttle-dir", profile.PedalsThrottleDir);
+            }
+            if (profile.PedalsBrakeDir >= 0)
+            {
+                _data.PedalsBrakeDir = profile.PedalsBrakeDir;
+                _deviceManager.WriteSetting("pedals-brake-dir", profile.PedalsBrakeDir);
+            }
+            if (profile.PedalsClutchDir >= 0)
+            {
+                _data.PedalsClutchDir = profile.PedalsClutchDir;
+                _deviceManager.WriteSetting("pedals-clutch-dir", profile.PedalsClutchDir);
+            }
+            if (profile.PedalsBrakeAngleRatio >= 0)
+            {
+                _data.PedalsBrakeAngleRatio = profile.PedalsBrakeAngleRatio;
+                _deviceManager.WriteFloat("pedals-brake-angle-ratio", profile.PedalsBrakeAngleRatio);
+            }
+            ApplyCurveIfSet(profile.PedalsThrottleCurve, _data.PedalsThrottleCurve, "pedals-throttle-y", true);
+            ApplyCurveIfSet(profile.PedalsBrakeCurve, _data.PedalsBrakeCurve, "pedals-brake-y", true);
+            ApplyCurveIfSet(profile.PedalsClutchCurve, _data.PedalsClutchCurve, "pedals-clutch-y", true);
+        }
 
         // ===== Profile system (SimHub native) =====
 
@@ -1072,8 +1181,8 @@ namespace MozaPlugin
 
         private void WriteProfileColorsToDevice(MozaProfile profile)
         {
-            // Wheel colors (skip when device extension owns wheel settings)
-            if (!DeviceExtensionActive)
+            // New-protocol wheel colors
+            if (!DeviceExtensionActive && _newWheelDetected)
             {
                 WriteColorArray(profile.WheelRpmColors, "wheel-rpm-color", 10);
                 WriteColorArray(profile.WheelRpmBlinkColors, "wheel-rpm-blink-color", 10);
@@ -1084,11 +1193,16 @@ namespace MozaPlugin
                     var rgb = MozaProfile.UnpackColor(profile.WheelIdleColor[0]);
                     _deviceManager.WriteColor("wheel-idle-color", rgb[0], rgb[1], rgb[2]);
                 }
+            }
+
+            // Old-protocol (ES) wheel colors
+            if (!DeviceExtensionActive && _oldWheelDetected)
+            {
                 WriteColorArray(profile.WheelESRpmColors, "wheel-old-rpm-color", 10);
             }
 
-            // Dash colors (skip when dash device extension owns settings)
-            if (!DashDeviceExtensionActive)
+            // Dash colors
+            if (!DashDeviceExtensionActive && _dashDetected)
             {
                 WriteColorArray(profile.DashRpmColors, "dash-rpm-color", 10);
                 WriteColorArray(profile.DashRpmBlinkColors, "dash-rpm-blink-color", 10);
