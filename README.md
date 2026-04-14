@@ -359,7 +359,7 @@ To capture USB traffic between your MOZA device and PC for diagnosing issues or 
 
 - **Read**: Plugin sends a read request; device responds with the current value
 - **Write**: Plugin sends the new value; device applies it immediately
-- **Polling**: Temperatures polled every 2 seconds; all other settings read on connect and manual refresh
+- **Polling**: Temperatures polled every 2 seconds; device settings read per-device after detection (not all at once on connect)
 - **UI update**: Settings control refreshes from the data model every 500ms
 
 ## Project Structure
