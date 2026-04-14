@@ -14,11 +14,15 @@ namespace MozaPlugin.Telemetry
     ///   [CRC32: u32 LE]   ← covers all bytes from FF through remaining_size
     ///
     /// Three fields are sent:
-    ///   Field 0: 16B device tokens (session-specific)
+    ///   Field 0: 16B correlation tokens [random_u32|0x00000002][timestamp|0x00000000]
+    ///            remaining=7200 (fixed constant, not byte count)
     ///   Field 1: 8B protocol constant (identical across VGS and CSP)
-    ///   Field 2: 12B header + zlib-compressed mzdash content
+    ///            remaining=3 (fixed constant)
+    ///   Field 2: 12B header + zlib-compressed mzdash content (no remaining/CRC)
     ///
-    /// Wire format confirmed by CRC-32 verification across VGS and CSP captures.
+    /// Wire format confirmed by CRC-32 verification across 8 sessions (VGS and CSP).
+    /// Token structure confirmed from capture analysis: token 1 has random nonce +
+    /// constant 0x02 prefix, token 2 is Unix timestamp. Not validated by wheel.
     /// </summary>
     public static class DashboardUploader
     {
@@ -27,8 +31,8 @@ namespace MozaPlugin.Telemetry
         /// Returns the raw byte stream to be chunked via TierDefinitionBuilder.ChunkMessage().
         /// </summary>
         /// <param name="mzdashContent">Raw .mzdash file content (JSON, UTF-8)</param>
-        /// <param name="sessionToken1">First 8 bytes of field 0 (session-specific token)</param>
-        /// <param name="sessionToken2">Second 8 bytes of field 0 (session-specific token)</param>
+        /// <param name="sessionToken1">Correlation nonce: [random_u32 | 0x00000002] (LE)</param>
+        /// <param name="sessionToken2">Session timestamp: [unix_seconds | 0x00000000] (LE)</param>
         public static byte[] BuildUploadMessage(byte[] mzdashContent, ulong sessionToken1, ulong sessionToken2)
         {
             // Compress the mzdash content
@@ -54,32 +58,23 @@ namespace MozaPlugin.Telemetry
             Array.Copy(preHeader, 0, field2Payload, 0, preHeader.Length);
             Array.Copy(compressed, 0, field2Payload, preHeader.Length, compressed.Length);
 
-            // Calculate remaining_transfer_size for each field.
-            // Field 0: remaining = total bytes after field 0's CRC
-            //   = field1_block + field2_block
-            //   field1_block = 5 (FF+size) + 8 (payload) + 4 (remaining) + 4 (CRC) = 21
-            //   field2_block = 5 (FF+size) + field2Payload.Length (no remaining/CRC after last field?)
-            // Actually from captures: field 2 doesn't have remaining+CRC (it's the last field).
-            // But we need to verify this. For now, follow the capture pattern.
-
-            int field2Block = 5 + field2Payload.Length; // last field has no remaining+CRC
-            int field1Block = 5 + 8 + 4 + 4;           // FF+size+payload+remaining+CRC = 21
-            int field0Remaining = field1Block + field2Block;
-
-            // Field 1 remaining: from captures this is 3 (meaning 3 bytes left after field 1's CRC?)
-            // Actually "remaining=3" might mean something different. Let's use the value from captures.
-            int field1Remaining = 3;
+            // "Remaining" values are fixed constants in all captures (VGS and CSP,
+            // across 8 sessions with dashboards ranging from 100B to 1350B compressed).
+            // Field 0 remaining = 7200 (0x1C20), field 1 remaining = 3.
+            // NOT byte counts — semantics unknown (possibly buffer size or protocol params).
+            const uint field0Remaining = 7200;
+            const uint field1Remaining = 3;
 
             using var ms = new MemoryStream();
             using var w = new BinaryWriter(ms);
 
             // Field 0: [FF] [10 00 00 00] [16B tokens] [remaining: u32 LE] [CRC32: u32 LE]
-            byte[] f0 = BuildField(new byte[16], sessionToken1, sessionToken2, (uint)field0Remaining);
+            byte[] f0 = BuildField(new byte[16], sessionToken1, sessionToken2, field0Remaining);
             w.Write(f0);
 
             // Field 1: [FF] [08 00 00 00] [8B constant] [remaining: u32 LE] [CRC32: u32 LE]
             byte[] field1Payload = new byte[] { 0x9E, 0x79, 0x52, 0x7D, 0x07, 0x00, 0x00, 0x00 };
-            byte[] f1 = BuildFieldWithRemaining(field1Payload, (uint)field1Remaining);
+            byte[] f1 = BuildFieldWithRemaining(field1Payload, field1Remaining);
             w.Write(f1);
 
             // Field 2: [FF] [size: u32 LE] [payload] (no remaining/CRC — last field)

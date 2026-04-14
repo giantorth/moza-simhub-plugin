@@ -424,10 +424,13 @@ namespace MozaPlugin.Telemetry
             if (!_connection.IsConnected || _mgmtPort == 0)
                 return;
 
-            // Generate session tokens (PitHouse uses session-specific values;
-            // we use a timestamp-based approach since we don't know the exact semantics)
-            ulong token1 = (ulong)DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-            ulong token2 = (ulong)Environment.TickCount;
+            // Field 0 tokens: PitHouse sends [random_u32 | 0x00000002] [unix_timestamp | 0x00000000].
+            // Token 1: random nonce in low 32 bits, constant 0x02 in high 32 bits.
+            // Token 2: Unix timestamp in low 32 bits, zero in high 32 bits.
+            // These are correlation IDs — the wheel doesn't validate them.
+            uint nonce = (uint)Environment.TickCount ^ (uint)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            ulong token1 = ((ulong)0x00000002 << 32) | nonce;
+            ulong token2 = (ulong)DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
             byte[] message = DashboardUploader.BuildUploadMessage(content, token1, token2);
 
