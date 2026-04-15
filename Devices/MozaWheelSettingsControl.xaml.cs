@@ -184,10 +184,6 @@ namespace MozaPlugin.Devices
                     SetComboSafe(WheelTelemetryModeCombo, _data!.WheelTelemetryMode);
                     SetComboSafe(WheelIdleEffectCombo, _data.WheelTelemetryIdleEffect);
                     SetComboSafe(WheelButtonIdleEffectCombo, _data.WheelButtonsIdleEffect);
-                    SetComboSafe(PaddlesModeCombo, _data.WheelPaddlesMode);
-                    ClutchPointPanel.Visibility = _data.WheelPaddlesMode == 2 ? Visibility.Visible : Visibility.Collapsed;
-                    ClutchPointSlider.Value = Clamp(_data.WheelClutchPoint, 0, 100);
-                    ClutchPointValue.Text = $"{_data.WheelClutchPoint}%";
                     SetComboSafe(KnobModeCombo, _data.WheelKnobMode);
                     StickModeCheck.IsChecked = _data.WheelStickMode != 0;
 
@@ -317,27 +313,7 @@ namespace MozaPlugin.Devices
             _plugin.SaveSettings();
         }
 
-        // ===== Paddle settings handlers =====
-
-        private void PaddlesModeCombo_Changed(object sender, SelectionChangedEventArgs e)
-        {
-            if (_suppressEvents || _plugin == null) return;
-            int val = PaddlesModeCombo.SelectedIndex;
-            _data!.WheelPaddlesMode = val;
-            ClutchPointPanel.Visibility = val == 2 ? Visibility.Visible : Visibility.Collapsed;
-            _device!.WriteSetting("wheel-paddles-mode", val + 1); // display 0/1/2 → raw 1/2/3
-            _plugin.SaveSettings();
-        }
-
-        private void ClutchPointSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-        {
-            if (_suppressEvents || _plugin == null) return;
-            int val = (int)Math.Round(e.NewValue);
-            ClutchPointValue.Text = $"{val}%";
-            _data!.WheelClutchPoint = val;
-            _device!.WriteSetting("wheel-clutch-point", val);
-            _plugin.SaveSettings();
-        }
+        // ===== Input settings handlers =====
 
         private void KnobModeCombo_Changed(object sender, SelectionChangedEventArgs e)
         {

@@ -107,6 +107,8 @@ All settings (base, wheel LEDs, dashboard telemetry, dashboard LEDs, handbrake, 
 
 #### Wheelbase Configuration (Base Tab)
 
+**Live Steering Angle** — Displays the current physical wheel angle in degrees (read via HID at 30 Hz) with a Calibrate Center button.
+
 Read/write control of wheelbase settings:
 
 **Core Settings**
@@ -199,6 +201,15 @@ Read/write control of wheelbase settings:
 - MOSFET Temperature
 - Motor Temperature
 
+#### Wheel (Wheel Tab)
+
+**Live Paddle Input** — Progress bars showing left and right paddle positions (0-100%), or a single combined bar when paddles are in Combined mode. Read via HID at 30 Hz.
+
+| Setting | Range | Notes |
+|---------|-------|-------|
+| Paddles Mode | Buttons / Combined / Split | |
+| Clutch Split Point | 0-100% | Only shown in Combined mode |
+
 #### Dashboard LED Configuration (Dashboard Tab)
 
 > Auto-detected — tab is hidden if no dashboard is connected.
@@ -217,6 +228,8 @@ Read/write control of wheelbase settings:
 
 > Auto-detected — tab is hidden if no handbrake is connected.
 
+**Live Input** — Progress bar showing current handbrake position (0-100%), read via HID at 30 Hz.
+
 | Setting | Range | Notes |
 |---------|-------|-------|
 | Mode | Axis / Button | |
@@ -230,6 +243,8 @@ Read/write control of wheelbase settings:
 #### Pedals Configuration (Pedals Tab)
 
 > Auto-detected — tab is hidden if no pedals are connected.
+
+**Live Input** — Progress bars showing current throttle, brake, and clutch positions (0-100%), read via HID at 30 Hz.
 
 Settings for **Throttle**, **Brake**, and **Clutch** (each configured independently):
 
@@ -297,8 +312,6 @@ Streams game data (speed, RPM, gear, lap times, fuel, tyre wear, etc.) to the wh
 | Flags Brightness | 0-100 | Only shown for models with flag LEDs |
 | Button LED Colors | Per-model RGB color pickers | Count and mapping adapt to detected wheel model |
 | Button Idle Effect | Off / Constant / Breathing / Color Cycle / Rainbow / Sand Flow | |
-| Paddles Mode | Buttons / Combined / Split | |
-| Clutch Split Point | 0-100% | Only shown in Split mode |
 | Knob Mode | Mode 0-3 | |
 | Stick as D-Pad | On/Off | |
 
@@ -375,6 +388,7 @@ Protocol/
   MozaCommandDatabase.cs           150+ command definitions from serial.md
   MozaResponseParser.cs            Response decoder (bit 7 toggle, nibble swap, wildcard matching)
   MozaSerialConnection.cs          Serial port I/O with auto-discovery and background threads
+  MozaHidReader.cs                 HID input reader — steering, pedals, paddles, handbrake via HidSharp
 Telemetry/
   MozaData.cs                      Thread-safe data model for all device values
   TelemetrySender.cs               Multi-tier game data streaming to dashboard display
@@ -393,7 +407,7 @@ Devices/
   WheelModelInfo.cs                Per-model LED layout — button count, flag presence, index remapping
   MozaWheelDeviceExtension.cs      Wheel device extension — profiles, LED driver injection
   MozaWheelExtensionSettings.cs    Wheel settings for SimHub device profiles (includes telemetry)
-  MozaWheelSettingsControl.xaml(.cs) Wheel device tab — LED config, dashboard telemetry, paddle settings
+  MozaWheelSettingsControl.xaml(.cs) Wheel device tab — LED config, dashboard telemetry, input settings
   MozaLedDeviceManager.cs          Virtual wheel LED driver — spoofs connection, forwards LED colors
   MozaDashDeviceExtension.cs       Dashboard device extension — profiles, LED driver injection
   MozaDashExtensionSettings.cs     Dashboard settings for SimHub device profiles
@@ -409,7 +423,7 @@ DeviceTemplates/
   MozaWheelOldProto/               Old-protocol (ES) wheels — RPM LEDs only
   MozaDashShdp/                    Dashboard definition (10 RPM + 6 flag LEDs)
 UI/
-  SettingsControl.xaml(.cs)        WPF settings UI (Base, Wheel, Options, Telemetry Diagnostics tabs)
+  SettingsControl.xaml(.cs)        WPF settings UI (Base, Wheel, Handbrake, Pedals, Options, Telemetry tabs)
   ColorPickerDialog.xaml(.cs)      RGB color picker dialog
   MozaPluginSettings.cs            Persisted plugin settings (brightness, timings, colors)
   MozaProfile.cs                   Per-game configuration snapshot (80+ settings)

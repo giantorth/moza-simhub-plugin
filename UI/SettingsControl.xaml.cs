@@ -13,6 +13,7 @@ namespace MozaPlugin
         private readonly MozaDeviceManager _device;
         private readonly MozaData _data;
         private readonly DispatcherTimer _refreshTimer;
+        private readonly DispatcherTimer _steeringAngleTimer;
         private bool _suppressEvents;
 
         public SettingsControl(MozaPlugin plugin)
@@ -35,6 +36,13 @@ namespace MozaPlugin
             _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
             _refreshTimer.Tick += RefreshDisplay;
             _refreshTimer.Start();
+
+            _steeringAngleTimer = new DispatcherTimer(DispatcherPriority.Render)
+            {
+                Interval = TimeSpan.FromMilliseconds(33)
+            };
+            _steeringAngleTimer.Tick += (s, e) => UpdateHidInputDisplays();
+            _steeringAngleTimer.Start();
 
             RequestAllSettings();
         }
@@ -68,6 +76,7 @@ namespace MozaPlugin
             try
             {
                 RefreshBaseTab();
+                RefreshWheelTab();
                 RefreshHandbrakeTab();
                 RefreshPedalsTab();
                 InitTelemetryTab();
@@ -76,6 +85,43 @@ namespace MozaPlugin
             finally
             {
                 _suppressEvents = false;
+            }
+        }
+
+        private void UpdateHidInputDisplays()
+        {
+            var hidReader = _plugin.HidReader;
+            bool connected = hidReader != null && _data.IsHidConnected;
+
+            if (connected && _data.MaxAngle > 0)
+            {
+                double deg = hidReader!.GetCurrentAngleDegrees(_data.MaxAngle * 2);
+                SteeringAngleLabel.Text = $"{deg:0;-0;0}°";
+            }
+            else
+            {
+                SteeringAngleLabel.Text = "--";
+            }
+
+            if (connected)
+            {
+                ThrottleBar.Value      = _data.ThrottlePosition;
+                BrakeBar.Value         = _data.BrakePosition;
+                ClutchBar.Value        = _data.ClutchPosition;
+                HandbrakeBar.Value     = _data.HandbrakePosition;
+                LeftPaddleBar.Value    = _data.LeftPaddlePosition;
+                RightPaddleBar.Value   = _data.RightPaddlePosition;
+                CombinedPaddleBar.Value = _data.CombinedPaddlePosition;
+            }
+            else
+            {
+                ThrottleBar.Value      = 0;
+                BrakeBar.Value         = 0;
+                ClutchBar.Value        = 0;
+                HandbrakeBar.Value     = 0;
+                LeftPaddleBar.Value    = 0;
+                RightPaddleBar.Value   = 0;
+                CombinedPaddleBar.Value = 0;
             }
         }
 
@@ -381,6 +427,49 @@ namespace MozaPlugin
         // ===== RPM range slider handlers =====
 
         // ===== Handbrake tab =====
+
+        // ===== Wheel Tab =====
+
+        private void RefreshWheelTab()
+        {
+            if (!_plugin.IsNewWheelDetected) return;
+
+            SetComboSafe(WheelPaddlesModeCombo, _data.WheelPaddlesMode);
+            UpdatePaddlePanelVisibility(_data.WheelPaddlesMode);
+            WheelClutchPointSlider.Value = Clamp(_data.WheelClutchPoint, 0, 100);
+            WheelClutchPointValue.Text = $"{_data.WheelClutchPoint}%";
+        }
+
+        private void UpdatePaddlePanelVisibility(int mode)
+        {
+            // 0=Buttons, 1=Combined, 2=Split
+            bool combined = mode == 1;
+            CombinedPaddlePanel.Visibility = combined ? Visibility.Visible : Visibility.Collapsed;
+            SplitPaddlePanel.Visibility = combined ? Visibility.Collapsed : Visibility.Visible;
+            WheelClutchPointPanel.Visibility = combined ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        private void WheelPaddlesModeCombo_Changed(object sender, SelectionChangedEventArgs e)
+        {
+            if (_suppressEvents) return;
+            int val = WheelPaddlesModeCombo.SelectedIndex;
+            _data.WheelPaddlesMode = val;
+            UpdatePaddlePanelVisibility(val);
+            _device.WriteSetting("wheel-paddles-mode", val + 1); // display 0/1/2 → raw 1/2/3
+            _plugin.SaveSettings();
+        }
+
+        private void WheelClutchPointSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (_suppressEvents) return;
+            int val = (int)Math.Round(e.NewValue);
+            WheelClutchPointValue.Text = $"{val}%";
+            _data.WheelClutchPoint = val;
+            _device.WriteSetting("wheel-clutch-point", val);
+            _plugin.SaveSettings();
+        }
+
+        // ===== Handbrake Range + Curve + Calibration =====
 
         private void RefreshHandbrakeTab()
         {

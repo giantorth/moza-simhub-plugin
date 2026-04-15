@@ -79,9 +79,9 @@
             <StackPanel x:Name="NewWheelPanel" Visibility="Collapsed">
                 <TextBlock Text="Wheel (New Protocol)" FontSize="14" FontWeight="SemiBold" Foreground="CornflowerBlue" Margin="0,0,0,5"/>
 
-                <TextBlock Text="Telemetry Mode" Style="{StaticResource SectionHeader}"/>
+                <TextBlock Text="RPM LED Mode" Style="{StaticResource SectionHeader}"/>
                 <StackPanel Orientation="Horizontal" Margin="0,4">
-                    <TextBlock Text="Mode" Style="{StaticResource SliderLabel}"/>
+                    <TextBlock Text="RPM LED Mode" Style="{StaticResource SliderLabel}"/>
                     <ComboBox x:Name="WheelTelemetryModeCombo" Width="140" SelectionChanged="WheelTelemetryModeCombo_Changed">
                         <ComboBoxItem Content="Off"/>
                         <ComboBoxItem Content="SimHub Mode"/>
@@ -89,7 +89,7 @@
                     </ComboBox>
                 </StackPanel>
                 <StackPanel Orientation="Horizontal" Margin="0,4">
-                    <TextBlock Text="Idle Effect" Style="{StaticResource SliderLabel}"/>
+                    <TextBlock Text="RPM Idle Effect" Style="{StaticResource SliderLabel}"/>
                     <ComboBox x:Name="WheelIdleEffectCombo" Width="140" SelectionChanged="WheelIdleEffectCombo_Changed">
                         <ComboBoxItem Content="Off"/>
                         <ComboBoxItem Content="Constant"/>
@@ -126,20 +126,7 @@
                     </ComboBox>
                 </StackPanel>
 
-                <TextBlock Text="Paddle Settings" Style="{StaticResource SectionHeader}"/>
-                <StackPanel Orientation="Horizontal" Margin="0,4">
-                    <TextBlock Text="Paddles Mode" Style="{StaticResource SliderLabel}"/>
-                    <ComboBox x:Name="PaddlesModeCombo" Width="140" SelectionChanged="PaddlesModeCombo_Changed">
-                        <ComboBoxItem Content="Buttons"/>
-                        <ComboBoxItem Content="Combined"/>
-                        <ComboBoxItem Content="Split"/>
-                    </ComboBox>
-                </StackPanel>
-                <StackPanel x:Name="ClutchPointPanel" Orientation="Horizontal" Margin="0,4" Visibility="Collapsed">
-                    <TextBlock Text="Clutch Split Point" Style="{StaticResource SliderLabel}"/>
-                    <Slider x:Name="ClutchPointSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="ClutchPointSlider_ValueChanged"/>
-                    <TextBlock x:Name="ClutchPointValue" Style="{StaticResource SliderValue}" Text="50%"/>
-                </StackPanel>
+                <TextBlock Text="Input Settings" Style="{StaticResource SectionHeader}"/>
                 <StackPanel Orientation="Horizontal" Margin="0,4">
                     <TextBlock Text="Knob Mode" Style="{StaticResource SliderLabel}"/>
                     <ComboBox x:Name="KnobModeCombo" Width="140" SelectionChanged="KnobModeCombo_Changed">

@@ -46,6 +46,10 @@
       <HintPath>libs\SimHub\BA63Driver.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <Reference Include="HidSharp">
+      <HintPath>libs\SimHub\HidSharp.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
   </ItemGroup>
 
   <ItemGroup>

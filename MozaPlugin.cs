@@ -28,6 +28,7 @@ namespace MozaPlugin
         private MozaPluginSettings _settings = null!;
         private Timer _pollTimer = null!;
         private Timer _reconnectTimer = null!;
+        private MozaHidReader _hidReader = null!;
         private PluginManager _pluginManager = null!;
         private TelemetrySender _telemetrySender = null!;
         internal DashboardProfileStore DashProfileStore { get; } = new DashboardProfileStore();
@@ -88,6 +89,15 @@ namespace MozaPlugin
             "wheel-rpm-color4", "wheel-rpm-color5", "wheel-rpm-color6",
             "wheel-rpm-color7", "wheel-rpm-color8", "wheel-rpm-color9",
             "wheel-rpm-color10",
+            // Button colors
+            "wheel-button-color1",  "wheel-button-color2",  "wheel-button-color3",
+            "wheel-button-color4",  "wheel-button-color5",  "wheel-button-color6",
+            "wheel-button-color7",  "wheel-button-color8",  "wheel-button-color9",
+            "wheel-button-color10", "wheel-button-color11", "wheel-button-color12",
+            "wheel-button-color13", "wheel-button-color14",
+            // Flag colors
+            "wheel-flag-color1", "wheel-flag-color2", "wheel-flag-color3",
+            "wheel-flag-color4", "wheel-flag-color5", "wheel-flag-color6",
         };
 
         private static readonly string[] OldWheelSettingsReadCommands = new[]
@@ -275,6 +285,9 @@ namespace MozaPlugin
             if (_settings.ConnectionEnabled)
                 _reconnectTimer.Start();
 
+            _hidReader = new MozaHidReader(_data);
+            _hidReader.Start();
+
             _telemetrySender = new TelemetrySender(_connection);
             ApplyTelemetrySettings();
             // Don't start telemetry here — defer until wheel is detected.
@@ -303,8 +316,11 @@ namespace MozaPlugin
             _pollTimer?.Dispose();
             _reconnectTimer?.Stop();
             _reconnectTimer?.Dispose();
+            _hidReader?.Dispose();
             _connection?.Dispose();
         }
+
+        internal MozaHidReader HidReader => _hidReader;
 
         internal void SaveSettings()
         {
@@ -356,7 +372,7 @@ namespace MozaPlugin
             {
                 _reconnectTimer.Stop();
                 ClearLedsOnHardware();
-                _telemetrySender?.Stop();
+                _telemetrySender.Stop();
                 _connection?.Disconnect();
                 _data.IsBaseConnected = false;
                 _data.ClearWheelIdentity();

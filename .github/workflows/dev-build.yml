@@ -1,0 +1,53 @@
+name: Dev Build
+
+on:
+  push:
+    branches: [dev]
+    paths:
+      - "**.cs"
+      - "**.csproj"
+      - "**.sln"
+      - "**.xaml"
+      - "libs/**"
+      - "DeviceTemplates/**"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Restore dependencies
+        run: dotnet restore
+
+      - name: Build plugin DLL
+        run: dotnet build -c Release --no-restore
+
+      - name: Run tests
+        run: dotnet test MozaPlugin.Tests/MozaPlugin.Tests.csproj -c Release --no-build --verbosity normal
+
+      - name: Stage build files
+        run: |
+          $staging = "staging"
+          New-Item -ItemType Directory -Path $staging -Force
+          Copy-Item ./bin/x86/Release/MozaPlugin.dll $staging/
+          Copy-Item ./bin/x86/Release/*.shdp $staging/
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MozaPlugin-dev-${{ github.sha }}
+          path: staging/
+          retention-days: 14

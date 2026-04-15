@@ -88,6 +88,20 @@
             <TabItem Header="Base">
                 <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="10">
                     <StackPanel Margin="5">
+                        <!-- Steering -->
+                        <TextBlock Text="Steering" Style="{StaticResource SectionHeader}"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                            <StackPanel Margin="0,0,30,0">
+                                <TextBlock Text="Current Angle" Foreground="Gray" FontSize="11"/>
+                                <TextBlock x:Name="SteeringAngleLabel" Style="{StaticResource TempValue}" Text="--"/>
+                            </StackPanel>
+                            <Button x:Name="BaseCalibrateButton" Content="Calibrate Center"
+                                    Padding="12,4" VerticalAlignment="Center"
+                                    Click="BaseCalibrateButton_Click"/>
+                            <TextBlock x:Name="BaseCalibrateStatus" VerticalAlignment="Center"
+                                       Margin="10,0,0,0" Foreground="Gray" FontSize="11"/>
+                        </StackPanel>
+
                         <!-- Temperatures -->
                         <TextBlock Text="Temperatures" Style="{StaticResource SectionHeader}"/>
                         <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
@@ -289,30 +303,69 @@
                             <TextBlock Text="Bluetooth" Style="{StaticResource SliderLabel}"/>
                             <CheckBox x:Name="BluetoothCheck" VerticalAlignment="Center" Click="BluetoothCheck_Click"/>
                         </StackPanel>
-                        <StackPanel Orientation="Horizontal" Margin="0,8">
-                            <TextBlock Text="Calibration" Style="{StaticResource SliderLabel}"/>
-                            <Button x:Name="BaseCalibrateButton" Content="Calibrate Center" Padding="12,4" Click="BaseCalibrateButton_Click"/>
-                            <TextBlock x:Name="BaseCalibrateStatus" VerticalAlignment="Center" Margin="10,0,0,0" Foreground="Gray" FontSize="11"/>
-                        </StackPanel>
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>
 
             <!-- ==================== WHEEL TAB ==================== -->
             <TabItem Header="Wheel">
-                <StackPanel Margin="15,20">
-                    <TextBlock Text="Wheel settings have moved" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,12"/>
-                    <TextBlock TextWrapping="Wrap" Foreground="Gray"
-                               Text="Wheel settings are now in the MOZA Wheel device tab."/>
-                    <TextBlock TextWrapping="Wrap" Foreground="Gray" Margin="0,8,0,0"
-                               Text="Go to Devices &#x203A; MOZA Racing Wheel &#x203A; MOZA Wheel tab to configure your wheel."/>
-                </StackPanel>
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="10">
+                    <StackPanel Margin="5">
+
+                        <!-- Live Input -->
+                        <TextBlock Text="Paddles" Style="{StaticResource SectionHeader}"/>
+                        <StackPanel x:Name="SplitPaddlePanel" Orientation="Horizontal" Margin="0,0,0,10">
+                            <StackPanel Margin="0,0,20,0" Width="100">
+                                <TextBlock Text="Left Paddle" Foreground="Gray" FontSize="11"/>
+                                <ProgressBar x:Name="LeftPaddleBar" Height="14" Minimum="0" Maximum="100" Value="0"/>
+                            </StackPanel>
+                            <StackPanel Width="100">
+                                <TextBlock Text="Right Paddle" Foreground="Gray" FontSize="11"/>
+                                <ProgressBar x:Name="RightPaddleBar" Height="14" Minimum="0" Maximum="100" Value="0"/>
+                            </StackPanel>
+                        </StackPanel>
+                        <StackPanel x:Name="CombinedPaddlePanel" Orientation="Horizontal" Margin="0,0,0,10" Visibility="Collapsed">
+                            <StackPanel Width="100">
+                                <TextBlock Text="Combined" Foreground="Gray" FontSize="11"/>
+                                <ProgressBar x:Name="CombinedPaddleBar" Height="14" Minimum="0" Maximum="100" Value="0"/>
+                            </StackPanel>
+                        </StackPanel>
+
+                        <!-- Paddle Settings -->
+                        <TextBlock Text="Paddle Settings" Style="{StaticResource SectionHeader}"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Paddles Mode" Style="{StaticResource SliderLabel}"/>
+                            <ComboBox x:Name="WheelPaddlesModeCombo" Width="140" SelectionChanged="WheelPaddlesModeCombo_Changed">
+                                <ComboBoxItem Content="Buttons"/>
+                                <ComboBoxItem Content="Combined"/>
+                                <ComboBoxItem Content="Split"/>
+                            </ComboBox>
+                        </StackPanel>
+                        <StackPanel x:Name="WheelClutchPointPanel" Orientation="Horizontal" Margin="0,4" Visibility="Collapsed">
+                            <TextBlock Text="Clutch Split Point" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="WheelClutchPointSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="WheelClutchPointSlider_ValueChanged"/>
+                            <TextBlock x:Name="WheelClutchPointValue" Style="{StaticResource SliderValue}" Text="50%"/>
+                        </StackPanel>
+
+                        <TextBlock TextWrapping="Wrap" Foreground="Gray" FontSize="11" Margin="0,12,0,0"
+                                   Text="LED, button, and knob settings are in the MOZA Wheel device tab under Devices."/>
+                    </StackPanel>
+                </ScrollViewer>
             </TabItem>
 
             <!-- ==================== HANDBRAKE TAB ==================== -->
             <TabItem x:Name="HandbrakeTab" Header="Handbrake" Visibility="Collapsed">
                 <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="10">
                     <StackPanel Margin="5">
+
+                        <!-- Live Input -->
+                        <TextBlock Text="Handbrake" Style="{StaticResource SectionHeader}"/>
+                        <StackPanel Margin="0,0,0,10">
+                            <StackPanel Width="100" HorizontalAlignment="Left">
+                                <TextBlock Text="Position" Foreground="Gray" FontSize="11"/>
+                                <ProgressBar x:Name="HandbrakeBar" Height="14" Minimum="0" Maximum="100" Value="0"/>
+                            </StackPanel>
+                        </StackPanel>
 
                         <TextBlock Text="Handbrake Settings" Style="{StaticResource SectionHeader}"/>
 
@@ -397,6 +450,23 @@
             <TabItem x:Name="PedalsTab" Header="Pedals" Visibility="Collapsed">
                 <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="10">
                     <StackPanel Margin="5">
+
+                        <!-- Live Input -->
+                        <TextBlock Text="Live Input" Style="{StaticResource SectionHeader}"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                            <StackPanel Margin="0,0,20,0" Width="100">
+                                <TextBlock Text="Throttle" Foreground="Gray" FontSize="11"/>
+                                <ProgressBar x:Name="ThrottleBar" Height="14" Minimum="0" Maximum="100" Value="0"/>
+                            </StackPanel>
+                            <StackPanel Margin="0,0,20,0" Width="100">
+                                <TextBlock Text="Brake" Foreground="Gray" FontSize="11"/>
+                                <ProgressBar x:Name="BrakeBar" Height="14" Minimum="0" Maximum="100" Value="0"/>
+                            </StackPanel>
+                            <StackPanel Width="100">
+                                <TextBlock Text="Clutch" Foreground="Gray" FontSize="11"/>
+                                <ProgressBar x:Name="ClutchBar" Height="14" Minimum="0" Maximum="100" Value="0"/>
+                            </StackPanel>
+                        </StackPanel>
 
                         <!-- ===== THROTTLE ===== -->
                         <TextBlock Text="Throttle" Style="{StaticResource SectionHeader}"/>
@@ -579,7 +649,7 @@
                                       Checked="AutoApplyProfileCheck_Changed" Unchecked="AutoApplyProfileCheck_Changed"/>
                         </StackPanel>
 
-                        <TextBlock Text="LED Output" Style="{StaticResource SectionHeader}"/>
+                        <TextBlock Text="Wheel LED Output (RPM / Buttons)" Style="{StaticResource SectionHeader}"/>
                         <StackPanel Orientation="Horizontal" Margin="0,8">
                             <TextBlock Text="Limit updates to wheel" Style="{StaticResource SliderLabel}"/>
                             <CheckBox x:Name="LimitWheelUpdatesCheck" VerticalAlignment="Center"
@@ -614,7 +684,7 @@
                 </ScrollViewer>
             </TabItem>
 
-            <TabItem Header="Telemetry">
+            <TabItem Header="Dashboard Telemetry">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="10,5">
                         <TextBlock Text="Dashboard Telemetry" Style="{StaticResource SectionHeader}"/>

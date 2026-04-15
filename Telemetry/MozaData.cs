@@ -30,6 +30,19 @@ namespace MozaPlugin
         public volatile int BaseState;
         public volatile int BaseStateError;
 
+        // Physical input positions from HID (independent of serial protocol)
+        public volatile bool IsHidConnected;
+        public volatile int SteeringAngleRaw;
+        public volatile int SteeringAngleRawMin;
+        public volatile int SteeringAngleRawMax;
+        public volatile int ThrottlePosition;   // 0-100
+        public volatile int BrakePosition;      // 0-100
+        public volatile int ClutchPosition;     // 0-100
+        public volatile int HandbrakePosition;  // 0-100
+        public volatile int LeftPaddlePosition;     // 0-100
+        public volatile int RightPaddlePosition;    // 0-100
+        public volatile int CombinedPaddlePosition; // 0-100
+
         // Core settings
         public volatile int Limit;
         public volatile int MaxAngle;
