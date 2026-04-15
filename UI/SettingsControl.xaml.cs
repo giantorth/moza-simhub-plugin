@@ -438,6 +438,26 @@ namespace MozaPlugin
             UpdatePaddlePanelVisibility(_data.WheelPaddlesMode);
             WheelClutchPointSlider.Value = Clamp(_data.WheelClutchPoint, 0, 100);
             WheelClutchPointValue.Text = $"{_data.WheelClutchPoint}%";
+
+            bool perKnob = _data.WheelKnobSignalModeSupported;
+            KnobModeLegacyPanel.Visibility = perKnob ? Visibility.Collapsed : Visibility.Visible;
+            KnobSignalModePanel.Visibility = perKnob ? Visibility.Visible : Visibility.Collapsed;
+            if (perKnob)
+            {
+                var rows = new[] { KnobSignalMode0Row, KnobSignalMode1Row, KnobSignalMode2Row, KnobSignalMode3Row, KnobSignalMode4Row };
+                var combos = new[] { KnobSignalMode0Combo, KnobSignalMode1Combo, KnobSignalMode2Combo, KnobSignalMode3Combo, KnobSignalMode4Combo };
+                for (int i = 0; i < 5; i++)
+                {
+                    int v = _data.WheelKnobSignalModes[i];
+                    rows[i].Visibility = v >= 0 ? Visibility.Visible : Visibility.Collapsed;
+                    if (v >= 0) SetComboSafe(combos[i], v);
+                }
+            }
+            else
+            {
+                SetComboSafe(KnobModeCombo, _data.WheelKnobMode);
+            }
+            StickModeCheck.IsChecked = _data.WheelStickMode != 0;
         }
 
         private void UpdatePaddlePanelVisibility(int mode)
@@ -454,6 +474,7 @@ namespace MozaPlugin
             if (_suppressEvents) return;
             int val = WheelPaddlesModeCombo.SelectedIndex;
             _data.WheelPaddlesMode = val;
+            _settings.WheelPaddlesMode = val;
             UpdatePaddlePanelVisibility(val);
             _device.WriteSetting("wheel-paddles-mode", val + 1); // display 0/1/2 → raw 1/2/3
             _plugin.SaveSettings();
@@ -465,7 +486,47 @@ namespace MozaPlugin
             int val = (int)Math.Round(e.NewValue);
             WheelClutchPointValue.Text = $"{val}%";
             _data.WheelClutchPoint = val;
+            _settings.WheelClutchPoint = val;
             _device.WriteSetting("wheel-clutch-point", val);
+            _plugin.SaveSettings();
+        }
+
+        private void KnobModeCombo_Changed(object sender, SelectionChangedEventArgs e)
+        {
+            if (_suppressEvents) return;
+            int val = KnobModeCombo.SelectedIndex;
+            _data.WheelKnobMode = val;
+            _settings.WheelKnobMode = val;
+            _device.WriteSetting("wheel-knob-mode", val);
+            _plugin.SaveSettings();
+        }
+
+        private void WriteKnobSignalMode(int index, int value)
+        {
+            if (_suppressEvents) return;
+            _data.WheelKnobSignalModes[index] = value;
+            _device.WriteSetting($"wheel-knob-signal-mode{index}", value);
+            _plugin.SaveSettings();
+        }
+
+        private void KnobSignalMode0Combo_Changed(object sender, SelectionChangedEventArgs e)
+            => WriteKnobSignalMode(0, KnobSignalMode0Combo.SelectedIndex);
+        private void KnobSignalMode1Combo_Changed(object sender, SelectionChangedEventArgs e)
+            => WriteKnobSignalMode(1, KnobSignalMode1Combo.SelectedIndex);
+        private void KnobSignalMode2Combo_Changed(object sender, SelectionChangedEventArgs e)
+            => WriteKnobSignalMode(2, KnobSignalMode2Combo.SelectedIndex);
+        private void KnobSignalMode3Combo_Changed(object sender, SelectionChangedEventArgs e)
+            => WriteKnobSignalMode(3, KnobSignalMode3Combo.SelectedIndex);
+        private void KnobSignalMode4Combo_Changed(object sender, SelectionChangedEventArgs e)
+            => WriteKnobSignalMode(4, KnobSignalMode4Combo.SelectedIndex);
+
+        private void StickModeCheck_Click(object sender, RoutedEventArgs e)
+        {
+            if (_suppressEvents) return;
+            int val = StickModeCheck.IsChecked == true ? 1 : 0;
+            _data.WheelStickMode = val;
+            _settings.WheelStickMode = val;
+            _device.WriteSetting("wheel-stick-mode", val * 256);
             _plugin.SaveSettings();
         }
 

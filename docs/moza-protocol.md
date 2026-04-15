@@ -894,7 +894,7 @@ D11 (R21/R25/R27 Ultra) omits bus 5; S09 CM2 dash connects as bus 19 directly of
 
 ## Setting value encoding notes
 
-Several configuration commands use non-obvious value encoding. Confirmed by cross-referencing Pithouse USB captures with the foxblat source.
+Several configuration commands use non-obvious value encoding. Confirmed by cross-referencing Pithouse USB captures with the boxflat source.
 
 ### Wheel settings (group 0x3F/0x40, device 0x17)
 

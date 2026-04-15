@@ -84,6 +84,9 @@ namespace MozaPlugin
             "wheel-idle-mode", "wheel-idle-timeout", "wheel-idle-speed",
             "wheel-idle-color",
             "wheel-paddles-mode", "wheel-clutch-point", "wheel-knob-mode", "wheel-stick-mode",
+            // Per-encoder signal mode probe — silent on firmware without [42, N] support
+            "wheel-knob-signal-mode0", "wheel-knob-signal-mode1", "wheel-knob-signal-mode2",
+            "wheel-knob-signal-mode3", "wheel-knob-signal-mode4",
             // RPM colors
             "wheel-rpm-color1", "wheel-rpm-color2", "wheel-rpm-color3",
             "wheel-rpm-color4", "wheel-rpm-color5", "wheel-rpm-color6",
@@ -682,7 +685,7 @@ namespace MozaPlugin
                         _deviceManager.ReadSetting("wheel-hw-version");
                         _deviceManager.ReadSetting("wheel-serial-a");
                         _deviceManager.ReadSetting("wheel-serial-b");
-                        _deviceManager.ReadSettings(NewWheelSettingsReadCommands);
+                        _deviceManager.ReadSettingsPaced(NewWheelSettingsReadCommands);
                         SimHub.Logging.Current.Info($"[Moza] New-protocol wheel detected on ID {deviceId}");
                         StartTelemetryIfReady();
                     }
@@ -727,7 +730,7 @@ namespace MozaPlugin
                         _deviceManager.ReadSetting("wheel-hw-version");
                         _deviceManager.ReadSetting("wheel-serial-a");
                         _deviceManager.ReadSetting("wheel-serial-b");
-                        _deviceManager.ReadSettings(OldWheelSettingsReadCommands);
+                        _deviceManager.ReadSettingsPaced(OldWheelSettingsReadCommands);
                         DeployDeviceDefinitionForOldProto();
                         SimHub.Logging.Current.Info($"[Moza] Old-protocol wheel detected on ID {deviceId}");
                         StartTelemetryIfReady();
@@ -779,6 +782,14 @@ namespace MozaPlugin
             _data.WheelButtonsBrightness = _settings.WheelButtonsBrightness;
             _data.WheelFlagsBrightness = _settings.WheelFlagsBrightness;
             _data.WheelESRpmBrightness = _settings.WheelESRpmBrightness;
+
+            // Input settings — preload from saved values so the UI shows the
+            // last-known state even when the wheel silently ignores the read
+            // (newer KS firmware doesn't respond to clutch-point / knob-mode).
+            if (_settings.WheelPaddlesMode >= 0) _data.WheelPaddlesMode = _settings.WheelPaddlesMode;
+            if (_settings.WheelClutchPoint >= 0) _data.WheelClutchPoint = _settings.WheelClutchPoint;
+            if (_settings.WheelKnobMode    >= 0) _data.WheelKnobMode    = _settings.WheelKnobMode;
+            if (_settings.WheelStickMode   >= 0) _data.WheelStickMode   = _settings.WheelStickMode;
 
             // LED mode (only if previously saved)
             if (_settings.WheelTelemetryMode >= 0)

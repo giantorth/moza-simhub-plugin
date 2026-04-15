@@ -50,5 +50,28 @@ namespace MozaPlugin.Tests.Protocol
         {
             Assert.Null(MozaResponseParser.Parse(null!));
         }
+
+        [Fact]
+        public void Parse_WheelClutchPointResponse_Recognized()
+        {
+            // From usb-capture/cs-to-vgs-wheel.ndjson:
+            //   in group=0xc0 device=0x71 cmd=09:28 (clutch-point = 40)
+            byte[] response = { 0xC0, 0x71, 0x09, 0x28 };
+            var parsed = MozaResponseParser.Parse(response);
+            Assert.NotNull(parsed);
+            Assert.Equal("wheel-clutch-point", parsed!.Value.Name);
+            Assert.Equal(40, parsed.Value.IntValue);
+        }
+
+        [Fact]
+        public void Parse_WheelPaddlesModeResponse_Recognized()
+        {
+            // group 0xC0 = toggled 0x40 = 64 (wheel read). cmd id [3], value 2.
+            byte[] response = { 0xC0, 0x71, 0x03, 0x02 };
+            var parsed = MozaResponseParser.Parse(response);
+            Assert.NotNull(parsed);
+            Assert.Equal("wheel-paddles-mode", parsed!.Value.Name);
+            Assert.Equal(2, parsed.Value.IntValue);
+        }
     }
 }

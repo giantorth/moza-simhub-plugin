@@ -30,7 +30,7 @@ namespace MozaPlugin.Protocol
 
         private static readonly uint[] TrackedUsages = { UsageX, UsageY, UsageZ, UsageRx, UsageRy, UsageRz, UsageSlider, UsageDial, UsageSimRud };
 
-        // Device name patterns (lowercased), matching foxblat's MozaHidDevice class
+        // Device name patterns (lowercased), matching boxflat's MozaHidDevice class
         private static readonly string[] DevicePatterns =
         {
             @"gudsen (moza )?r[0-9]{1,2} (ultra base|base|racing wheel and pedals)",

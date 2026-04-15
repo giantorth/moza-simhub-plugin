@@ -39,13 +39,7 @@ namespace MozaPlugin.Protocol
                 deviceId
             };
             msg.AddRange(CommandId);
-
-            // Read payload: for "int" type, value is 1 (big-endian).
-            // For "array" type, value is all-zeros (bytes(length)).
-            var readPayload = new byte[PayloadBytes];
-            if (PayloadType != "array" && readPayload.Length > 0)
-                readPayload[readPayload.Length - 1] = 0x01;
-            msg.AddRange(readPayload);
+            msg.AddRange(new byte[PayloadBytes]);
 
             msg.Add(MozaProtocol.CalculateChecksum(msg.ToArray()));
             return msg.ToArray();

@@ -99,6 +99,10 @@ namespace MozaPlugin
         public volatile int WheelPaddlesMode;
         public volatile int WheelClutchPoint;
         public volatile int WheelKnobMode;
+        // Per-rotary-encoder signal mode (newer firmware). 0=Buttons, 1=Knob. -1 = unknown/no response yet.
+        public readonly int[] WheelKnobSignalModes = { -1, -1, -1, -1, -1 };
+        // True once at least one per-knob response has arrived, indicating firmware supports [42, N].
+        public volatile bool WheelKnobSignalModeSupported;
         public volatile int WheelStickMode;
         public volatile int WheelRpmDisplayMode;
 
@@ -269,6 +273,11 @@ namespace MozaPlugin
                 case "wheel-paddles-mode":           WheelPaddlesMode = value - 1; break; // raw 1/2/3 → display 0/1/2
                 case "wheel-clutch-point":           WheelClutchPoint = value; break;
                 case "wheel-knob-mode":              WheelKnobMode = value; break;
+                case "wheel-knob-signal-mode0":      WheelKnobSignalModes[0] = value; WheelKnobSignalModeSupported = true; break;
+                case "wheel-knob-signal-mode1":      WheelKnobSignalModes[1] = value; WheelKnobSignalModeSupported = true; break;
+                case "wheel-knob-signal-mode2":      WheelKnobSignalModes[2] = value; WheelKnobSignalModeSupported = true; break;
+                case "wheel-knob-signal-mode3":      WheelKnobSignalModes[3] = value; WheelKnobSignalModeSupported = true; break;
+                case "wheel-knob-signal-mode4":      WheelKnobSignalModes[4] = value; WheelKnobSignalModeSupported = true; break;
                 case "wheel-stick-mode":             WheelStickMode = value / 256; break; // raw 0/256 → display 0/1
                 case "wheel-rpm-indicator-mode":     WheelRpmIndicatorMode = value - 1; break; // raw 1/2/3 → display 0/1/2
                 case "wheel-get-rpm-display-mode":  WheelRpmDisplayMode = value; break;

@@ -347,8 +347,54 @@
                             <TextBlock x:Name="WheelClutchPointValue" Style="{StaticResource SliderValue}" Text="50%"/>
                         </StackPanel>
 
+                        <!-- Input Settings (knob + stick) -->
+                        <TextBlock Text="Input Settings" Style="{StaticResource SectionHeader}"/>
+                        <StackPanel x:Name="KnobModeLegacyPanel" Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Rotary Encoders" Style="{StaticResource SliderLabel}"/>
+                            <ComboBox x:Name="KnobModeCombo" Width="140" SelectionChanged="KnobModeCombo_Changed">
+                                <ComboBoxItem Content="Buttons"/>
+                                <ComboBoxItem Content="Knob"/>
+                            </ComboBox>
+                        </StackPanel>
+                        <StackPanel x:Name="KnobSignalModePanel" Visibility="Collapsed">
+                            <StackPanel x:Name="KnobSignalMode0Row" Orientation="Horizontal" Margin="0,4">
+                                <TextBlock Text="Rotary 1" Style="{StaticResource SliderLabel}"/>
+                                <ComboBox x:Name="KnobSignalMode0Combo" Width="140" SelectionChanged="KnobSignalMode0Combo_Changed">
+                                    <ComboBoxItem Content="Buttons"/><ComboBoxItem Content="Knob"/>
+                                </ComboBox>
+                            </StackPanel>
+                            <StackPanel x:Name="KnobSignalMode1Row" Orientation="Horizontal" Margin="0,4">
+                                <TextBlock Text="Rotary 2" Style="{StaticResource SliderLabel}"/>
+                                <ComboBox x:Name="KnobSignalMode1Combo" Width="140" SelectionChanged="KnobSignalMode1Combo_Changed">
+                                    <ComboBoxItem Content="Buttons"/><ComboBoxItem Content="Knob"/>
+                                </ComboBox>
+                            </StackPanel>
+                            <StackPanel x:Name="KnobSignalMode2Row" Orientation="Horizontal" Margin="0,4">
+                                <TextBlock Text="Rotary 3" Style="{StaticResource SliderLabel}"/>
+                                <ComboBox x:Name="KnobSignalMode2Combo" Width="140" SelectionChanged="KnobSignalMode2Combo_Changed">
+                                    <ComboBoxItem Content="Buttons"/><ComboBoxItem Content="Knob"/>
+                                </ComboBox>
+                            </StackPanel>
+                            <StackPanel x:Name="KnobSignalMode3Row" Orientation="Horizontal" Margin="0,4">
+                                <TextBlock Text="Rotary 4" Style="{StaticResource SliderLabel}"/>
+                                <ComboBox x:Name="KnobSignalMode3Combo" Width="140" SelectionChanged="KnobSignalMode3Combo_Changed">
+                                    <ComboBoxItem Content="Buttons"/><ComboBoxItem Content="Knob"/>
+                                </ComboBox>
+                            </StackPanel>
+                            <StackPanel x:Name="KnobSignalMode4Row" Orientation="Horizontal" Margin="0,4">
+                                <TextBlock Text="Rotary 5" Style="{StaticResource SliderLabel}"/>
+                                <ComboBox x:Name="KnobSignalMode4Combo" Width="140" SelectionChanged="KnobSignalMode4Combo_Changed">
+                                    <ComboBoxItem Content="Buttons"/><ComboBoxItem Content="Knob"/>
+                                </ComboBox>
+                            </StackPanel>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,8">
+                            <TextBlock Text="Stick as D-Pad" Style="{StaticResource SliderLabel}"/>
+                            <CheckBox x:Name="StickModeCheck" VerticalAlignment="Center" Click="StickModeCheck_Click"/>
+                        </StackPanel>
+
                         <TextBlock TextWrapping="Wrap" Foreground="Gray" FontSize="11" Margin="0,12,0,0"
-                                   Text="LED, button, and knob settings are in the MOZA Wheel device tab under Devices."/>
+                                   Text="LED and button settings are in the MOZA Wheel device tab under Devices."/>
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>

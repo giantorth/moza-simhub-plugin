@@ -139,7 +139,7 @@ The `Integration/F1DashboardProfileFixture.cs` shared helper manually constructs
 - `MozaProtocol` — Constants (start byte `0x7E`, device IDs, checksum formula: `(13 + sum) % 256`)
 - `MozaHidReader` — Reads physical input positions (steering, throttle, brake, clutch, paddles, handbrake) from Moza HID devices using HidSharp. Enumerates devices by name regex (matching boxflat patterns), opens per-device receiver threads, and writes normalized values to `MozaData`. Independent of the serial protocol — provides live axis data for UI display at 30 Hz
 
-**Device Management** (`MozaDeviceManager.cs`) — High-level read/write API. Handles wheel device ID cycling (IDs 23→21→19) since ES wheels respond on different IDs. `ResetWheelDetection()` must be called on disconnect so detection probes are re-sent on reconnect.
+**Device Management** (`MozaDeviceManager.cs`) — High-level read/write API. Handles wheel device ID cycling (IDs 23→21→19) since ES wheels respond on different IDs. `ResetWheelDetection()` must be called on disconnect so detection probes are re-sent on reconnect. `ReadSettingsPaced()` runs a batch of reads on a background task with an extra ~10ms gap between enqueues — used for large startup bursts (30+ wheel setting reads) that the wheel would otherwise drop, without throttling steady-state telemetry.
 
 **Data Model** (`Telemetry/MozaData.cs`) — Thread-safe storage (~60 volatile fields, including string identity fields) for all device values including base, wheel, dashboard, handbrake, pedals, and HID physical input positions (steering angle, pedal axes, paddle axes, handbrake). `UpdateFromCommand()` maps parsed responses to fields; `UpdateFromArray()` handles color/timing byte arrays with per-branch length checks (colors require 3+ bytes, identity strings accept any length).
 
@@ -211,8 +211,9 @@ Every setting that writes to the device on UI change must round-trip through pro
 
 - Message format: `[0x7E] [length] [request_group] [device_id] [command_id...] [payload...] [checksum]`
 - Response parsing: toggle bit 7 of request_group, swap nibbles of device_id, then match command_id (with 0xFF wildcards)
+- Read messages use a zero-filled payload of the declared byte width (matches boxflat's `prepare_message`). Some wheels silently drop reads with a non-zero payload, even though the protocol nominally ignores payload bytes on reads
 - All multi-byte integers are big-endian; floats are byte-reversed
-- `MozaSerialConnection` uses `ConcurrentQueue` for writes and a polling read thread (2ms interval)
+- `MozaSerialConnection` uses `ConcurrentQueue` for writes with a 4ms inter-write gap (boxflat's proven timing; tuned to leave headroom for ~48Hz telemetry) and a polling read thread (2ms interval)
 
 ### Dependencies
 

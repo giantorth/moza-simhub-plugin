@@ -11,11 +11,11 @@ namespace MozaPlugin.Tests.Protocol
             var cmd = MozaCommandDatabase.Commands["base-limit"];
             byte[]? msg = cmd.BuildReadMessage(MozaProtocol.DeviceBase);
 
-            // base-limit: ReadGroup=40 (0x28), CommandId=[1], PayloadBytes=2, type=int
-            // Read payload for int type: 2 bytes with last byte = 0x01 → [0x00, 0x01]
-            // Frame: 7E 03 28 13 01 00 01 [checksum]
-            // Checksum: (0x0D + 0x7E + 0x03 + 0x28 + 0x13 + 0x01 + 0x00 + 0x01) % 256 = 0xCB
-            byte[] expected = { 0x7E, 0x03, 0x28, 0x13, 0x01, 0x00, 0x01, 0xCB };
+            // base-limit: ReadGroup=40 (0x28), CommandId=[1], PayloadBytes=2
+            // Read payload is zero-filled (matches boxflat's prepare_message): [0x00, 0x00]
+            // Frame: 7E 03 28 13 01 00 00 [checksum]
+            // Checksum: (0x0D + 0x7E + 0x03 + 0x28 + 0x13 + 0x01 + 0x00 + 0x00) % 256 = 0xCA
+            byte[] expected = { 0x7E, 0x03, 0x28, 0x13, 0x01, 0x00, 0x00, 0xCA };
             Assert.Equal(expected, msg);
         }
 

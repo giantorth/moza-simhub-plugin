@@ -184,8 +184,6 @@ namespace MozaPlugin.Devices
                     SetComboSafe(WheelTelemetryModeCombo, _data!.WheelTelemetryMode);
                     SetComboSafe(WheelIdleEffectCombo, _data.WheelTelemetryIdleEffect);
                     SetComboSafe(WheelButtonIdleEffectCombo, _data.WheelButtonsIdleEffect);
-                    SetComboSafe(KnobModeCombo, _data.WheelKnobMode);
-                    StickModeCheck.IsChecked = _data.WheelStickMode != 0;
 
                     // Show/hide flag and button LED sections based on wheel model
                     var modelInfo = _plugin!.WheelModelInfo;
@@ -310,26 +308,6 @@ namespace MozaPlugin.Devices
             _data!.WheelRpmDisplayMode = val;
             _settings!.WheelRpmDisplayMode = val;
             _device!.WriteSetting("wheel-set-rpm-display-mode", val);
-            _plugin.SaveSettings();
-        }
-
-        // ===== Input settings handlers =====
-
-        private void KnobModeCombo_Changed(object sender, SelectionChangedEventArgs e)
-        {
-            if (_suppressEvents || _plugin == null) return;
-            int val = KnobModeCombo.SelectedIndex;
-            _data!.WheelKnobMode = val;
-            _device!.WriteSetting("wheel-knob-mode", val);
-            _plugin.SaveSettings();
-        }
-
-        private void StickModeCheck_Click(object sender, RoutedEventArgs e)
-        {
-            if (_suppressEvents || _plugin == null) return;
-            int val = StickModeCheck.IsChecked == true ? 1 : 0;
-            _data!.WheelStickMode = val;
-            _device!.WriteSetting("wheel-stick-mode", val * 256); // 0=Buttons, 256=D-Pad
             _plugin.SaveSettings();
         }
 

@@ -126,20 +126,6 @@
                     </ComboBox>
                 </StackPanel>
 
-                <TextBlock Text="Input Settings" Style="{StaticResource SectionHeader}"/>
-                <StackPanel Orientation="Horizontal" Margin="0,4">
-                    <TextBlock Text="Knob Mode" Style="{StaticResource SliderLabel}"/>
-                    <ComboBox x:Name="KnobModeCombo" Width="140" SelectionChanged="KnobModeCombo_Changed">
-                        <ComboBoxItem Content="Mode 0"/>
-                        <ComboBoxItem Content="Mode 1"/>
-                        <ComboBoxItem Content="Mode 2"/>
-                        <ComboBoxItem Content="Mode 3"/>
-                    </ComboBox>
-                </StackPanel>
-                <StackPanel Orientation="Horizontal" Margin="0,8">
-                    <TextBlock Text="Stick as D-Pad" Style="{StaticResource SliderLabel}"/>
-                    <CheckBox x:Name="StickModeCheck" VerticalAlignment="Center" Click="StickModeCheck_Click"/>
-                </StackPanel>
             </StackPanel>
 
             <!-- ===== ES WHEEL (Old Protocol) ===== -->

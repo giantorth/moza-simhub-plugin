@@ -11,6 +11,14 @@ namespace MozaPlugin
         public int WheelIdleEffect { get; set; } = -1;
         public int WheelButtonsIdleEffect { get; set; } = -1;
 
+        // Wheel input settings cached locally — newer KS-family firmware
+        // silently drops read-back for these (cmd 9 / cmd 10), so we have to
+        // remember them ourselves across restarts.
+        public int WheelPaddlesMode { get; set; } = -1; // display 0/1/2 (Buttons/Combined/Split)
+        public int WheelClutchPoint { get; set; } = -1; // 0..100
+        public int WheelKnobMode { get; set; } = -1;    // legacy 0=Buttons, 1=Knob
+        public int WheelStickMode { get; set; } = -1;   // 0=buttons, 1=D-pad
+
         // ES/Old wheel mode settings (-1 = not yet saved)
         public int WheelRpmIndicatorMode { get; set; } = -1;
         public int WheelRpmDisplayMode { get; set; } = -1;
