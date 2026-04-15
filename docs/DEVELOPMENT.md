@@ -177,8 +177,9 @@ The `Integration/F1DashboardProfileFixture.cs` shared helper manually constructs
 - `MozaDashExtensionSettings` — Dashboard-specific settings (brightness, indicator modes, colors)
 - `MozaDashSettingsControl` — Status panel with indicator modes, brightness, and color swatches (RPM, blink, flags). Connection status driven by linked LED driver's `IsConnected()`
 
-**Device Definitions** (`DeviceTemplates/`) — Per-device `.shdp` definitions using SimHub 9.11+'s Device Builder format. Each directory contains a `device.json` with the device's LED layout baked in. Built as `.shdp` ZIPs at compile time and embedded as resources in the DLL. Deployed lazily to SimHub's `DevicesDefinitions/User/` directory when the matching device is first detected over serial — not at startup. A restart banner appears in the plugin settings panel when new definitions are deployed.
-- `MozaWheel*/` — Per-model wheel definitions. Known models: GS V2P (10 buttons), CS V2.1 (6 buttons), CSP/KSP/FSR2 (14 buttons), plus a generic fallback (14 buttons) for unknown new-protocol wheels and an old-protocol definition (RPM only) for ES wheels
+**Device Definitions** (`DeviceTemplates/`) — Device definitions using SimHub 9.11+'s Device Builder format. Each directory contains a `device.json` with the device's LED layout baked in, embedded as resources in the DLL. Deployed lazily to SimHub's `DevicesDefinitions/User/` directory when the matching device is first detected over serial — not at startup. A restart banner appears in the plugin settings panel when new definitions are deployed. Per-model wheel definitions are generated dynamically at runtime based on model-specific button counts.
+- `MozaWheelGeneric/` — Generic fallback (14 buttons) for unknown new-protocol wheels
+- `MozaWheelOldProto/` — Old-protocol (ES) wheels — RPM LEDs only
 - `MozaDashShdp/` — Dashboard definition (10 RPM LEDs + 6 flag LEDs)
 
 **Telemetry Data** (`Data/`) — Embedded resources for the telemetry streaming system:

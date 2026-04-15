@@ -414,14 +414,9 @@ Devices/
   MozaDashSettingsControl.xaml(.cs) Status panel for the dashboard device extension tab
   MozaDashLedDeviceManager.cs      Virtual dashboard LED driver — spoofs connection, forwards bitmask
 DeviceTemplates/
-  MozaWheelCSP/                    Per-model .shdp definitions (deployed at runtime on detection)
-  MozaWheelKSP/                    Each contains a device.json with model-specific LED layout
-  MozaWheelFSR2/                   Built as .shdp ZIPs and embedded in the DLL
-  MozaWheelGSV2P/
-  MozaWheelCSV21/
-  MozaWheelGeneric/                Generic fallback for unknown new-protocol wheels
-  MozaWheelOldProto/               Old-protocol (ES) wheels — RPM LEDs only
-  MozaDashShdp/                    Dashboard definition (10 RPM + 6 flag LEDs)
+  MozaWheelGeneric/                Generic fallback for unknown new-protocol wheels (embedded in DLL)
+  MozaWheelOldProto/               Old-protocol (ES) wheels — RPM LEDs only (embedded in DLL)
+  MozaDashShdp/                    Dashboard definition (10 RPM + 6 flag LEDs, embedded in DLL)
 UI/
   SettingsControl.xaml(.cs)        WPF settings UI (Base, Wheel, Handbrake, Pedals, Options, Telemetry tabs)
   ColorPickerDialog.xaml(.cs)      RGB color picker dialog

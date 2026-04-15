@@ -43,7 +43,6 @@ jobs:
           $staging = "staging"
           New-Item -ItemType Directory -Path $staging -Force
           Copy-Item ./bin/x86/Release/MozaPlugin.dll $staging/
-          Copy-Item ./bin/x86/Release/*.shdp $staging/
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
