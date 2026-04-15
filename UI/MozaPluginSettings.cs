@@ -11,6 +11,14 @@ namespace MozaPlugin
         public int WheelIdleEffect { get; set; } = -1;
         public int WheelButtonsIdleEffect { get; set; } = -1;
 
+        // Wheel input settings cached locally — newer KS-family firmware
+        // silently drops read-back for these (cmd 9 / cmd 10), so we have to
+        // remember them ourselves across restarts.
+        public int WheelPaddlesMode { get; set; } = -1; // display 0/1/2 (Buttons/Combined/Split)
+        public int WheelClutchPoint { get; set; } = -1; // 0..100
+        public int WheelKnobMode { get; set; } = -1;    // legacy 0=Buttons, 1=Knob
+        public int WheelStickMode { get; set; } = -1;   // 0=buttons, 1=D-pad
+
         // ES/Old wheel mode settings (-1 = not yet saved)
         public int WheelRpmIndicatorMode { get; set; } = -1;
         public int WheelRpmDisplayMode { get; set; } = -1;
@@ -61,6 +69,17 @@ namespace MozaPlugin
         // Byte limit override (0 = auto from profile)
         public int TelemetryByteLimitOverride { get; set; } = 0;
 
+        // Upload the .mzdash dashboard to the wheel on every telemetry start.
+        // PitHouse does this on every connection — the wheel may require it.
+        public bool TelemetryUploadDashboard { get; set; } = false;
+
+        // Tier definition protocol version.
+        // 0 = URL-based subscription (CSP-style — host sends channel URLs,
+        //     wheel firmware resolves compression internally)
+        // 2 = Compact numeric (VGS-style — host sends flag bytes, channel indices,
+        //     compression codes, and bit widths per tier)
+        public int TelemetryProtocolVersion { get; set; } = 2;
+
         // How to assign flag bytes in tier definitions and telemetry frames.
         // We don't fully understand how the wheel uses flag bytes — Pithouse uses
         // a monotonic counter and the wheel accepts values from 0x00 to 0x13+.
@@ -68,7 +87,7 @@ namespace MozaPlugin
         //   0 = Zero-based (0x00, 0x01, 0x02) — matches Pithouse's initial probe batch
         //   1 = Session-port-based (FlagByte+0, +1, +2) — matches Pithouse's mid-session behavior
         //   2 = Two-batch (probe at 0x00 then real at FlagByte) — matches Pithouse's full sequence
-        public int TelemetryFlagByteMode { get; set; } = 0;
+        public int TelemetryFlagByteMode { get; set; } = 2;
 
         // Telemetry send rate in Hz
         public int TelemetrySendRateHz { get; set; } = 20;

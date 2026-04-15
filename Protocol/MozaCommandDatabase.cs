@@ -158,6 +158,9 @@ namespace MozaPlugin.Protocol
             AddCommand("wheel-get-rpm-display-mode","wheel", 64, 0xFF, new byte[] { 8 },       1, "int");
             AddCommand("wheel-clutch-point",       "wheel", 64, 63, new byte[] { 9 },          1, "int");
             AddCommand("wheel-knob-mode",          "wheel", 64, 63, new byte[] { 10 },         1, "int");
+            // Per-encoder rotary signal mode (newer firmware). Each knob independently: 0=Buttons, 1=Knob.
+            for (byte i = 0; i < 5; i++)
+                AddCommand($"wheel-knob-signal-mode{i}", "wheel", 64, 63, new byte[] { 42, i }, 1, "int");
             AddCommand("wheel-paddle-adaptive-mode","wheel",64, 63, new byte[] { 11 },         1, "int");
             AddCommand("wheel-paddle-button-mode", "wheel", 64, 63, new byte[] { 13 },         1, "int");
             AddCommand("wheel-rpm-interval",       "wheel", 64, 63, new byte[] { 22 },         4, "int");

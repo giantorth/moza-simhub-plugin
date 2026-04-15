@@ -227,7 +227,12 @@ namespace MozaPlugin.Devices
                 }
 
                 // --- Button LEDs (new-protocol wheels only) ---
-                if (isNewWheel && buttonColors.Length > 0)
+                // Gate on WheelModelInfo being known: sending with the fallback mapping
+                // before the model-name response arrives would push wrong-index state that
+                // the cache then treats as current, leaving the wheel misaligned until a
+                // power cycle or forced color change.
+                var modelInfo = plugin.WheelModelInfo;
+                if (isNewWheel && buttonColors.Length > 0 && modelInfo != null)
                 {
                     bool buttonsChanged = _lastButtons == null || !buttonColors.SequenceEqual(_lastButtons);
                     bool shouldSendButtons = buttonsChanged || (!limitUpdates && forceRefresh);
@@ -236,10 +241,8 @@ namespace MozaPlugin.Devices
                     {
                         _lastButtons = (Color[])buttonColors.Clone();
 
-                        var modelInfo = plugin.WheelModelInfo;
-                        int modelBtnCount = modelInfo?.ButtonLedCount ?? MozaDeviceConstants.ButtonLedCount;
-                        int buttonCount = Math.Min(buttonColors.Length, modelBtnCount);
-                        var buttonMap = modelInfo?.ButtonLedMap;
+                        int buttonCount = Math.Min(buttonColors.Length, modelInfo.ButtonLedCount);
+                        var buttonMap = modelInfo.ButtonLedMap;
 
                         int buttonBitmask = 0;
                         for (int i = 0; i < buttonCount; i++)

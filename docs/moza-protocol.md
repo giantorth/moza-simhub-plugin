@@ -404,29 +404,30 @@ The plugin replicates Pithouse's observed preamble with probe-based port allocat
 
 **Phase 0 — Port probe + config** (~100-400ms, before timer starts):
 1. Send type=0x81 session opens from port 1 upward, wait ~80ms for fc:00 ack
-2. First two acked ports become management + telemetry sessions (FlagByte = telemetry port)
-3. Send sub-message 1 preamble (`07 04 00 00 00 02 00 00 00 03 00 00 00 00`) as 7c:00 data on the telemetry session — prepares the wheel's tier config parser
-4. Send tier definition as 7c:00 data chunks on the telemetry session (channel indices, compression codes, bit widths — see § Tier definition protocol). **Flag bytes are 0x00-based, NOT session-port-based.**
-5. Send Display sub-device identity probe via 0x43 (see § Display sub-device probe)
+2. First two acked ports become management (`_mgmtPort`, session 0x01) and telemetry (`FlagByte`, session 0x02) sessions
+3. If `TelemetryUploadDashboard` is enabled, upload the `.mzdash` file on the management session via `DashboardUploader.BuildUploadMessage()` → `TierDefinitionBuilder.ChunkMessage()`. Wait up to 2s for wheel acknowledgment, then send type=0x00 end marker
+4. Send sub-message 1 preamble (`07 04 00 00 00 02 00 00 00 03 00 00 00 00`) as 7c:00 data on the telemetry session — prepares the wheel's tier config parser
+5. Send tier definition as 7c:00 data chunks on the telemetry session (channel indices, compression codes, bit widths — see § Tier definition protocol). **Flag bytes are 0x00-based, NOT session-port-based.**
+6. Send Display sub-device identity probe via 0x43 (see § Display sub-device probe)
 
 **Phase 1 — Preamble** (~1 second, timer running):
-6. Ack incoming 7c:00 channel data on the telemetry session with fc:00 (session=FlagByte)
-7. Send heartbeats only — no telemetry, no enable, no channel config
-8. Detect Display sub-device from 0x87 model name response
+7. Ack incoming 7c:00 channel data on the telemetry session with fc:00 (session=FlagByte)
+8. Send heartbeats only — no telemetry, no enable, no channel config
+9. Detect Display sub-device from 0x87 model name response
 
 **Phase 2 — Active** (continuous, after preamble):
-9. Send `0x40` channel config burst (1E enables for pages 0-1 channels 2-5, then 28:00, 28:01, 09:00, 28:02)
-10. Begin `0x41/FD:DE` enable signal (~30+ Hz)
-11. Begin `0x43/7D:23` bit-packed telemetry (flags 0x00/0x01/0x02, ~30 Hz per tier)
-12. Begin `0x2D/F5:31` sequence counter (~30 Hz)
-13. Begin periodic streams at ~1 Hz: heartbeats, dash keepalives (0x43 to dev 0x14, 0x15, 0x17), display config (7C:27), session ack (FC:00 with session=FlagByte and current ack seq)
-14. Begin `0x40/28:02` telemetry mode polling (~3 Hz)
+10. Send `0x40` channel config burst (1E enables for pages 0-1 channels 2-5, then 28:00, 28:01, 09:00, 28:02)
+11. Begin `0x41/FD:DE` enable signal (~30+ Hz)
+12. Begin `0x43/7D:23` bit-packed telemetry (flags 0x00/0x01/0x02, ~30 Hz per tier)
+13. Begin `0x2D/F5:31` sequence counter (~30 Hz)
+14. Begin periodic streams at ~1 Hz: heartbeats, dash keepalives (0x43 to dev 0x14, 0x15, 0x17), display config (7C:27), session ack (FC:00 with session=FlagByte and current ack seq)
+15. Begin `0x40/28:02` telemetry mode polling (~3 Hz)
 
 The RPM LEDs (`0x3F/1A:00`) and button LEDs (`0x3F/1A:01`) are handled separately by `MozaDashLedDeviceManager` and `MozaLedDeviceManager` and work with zero preamble.
 
 **Disable → re-enable:** `Stop()` resets `FramesSent` and the caller clears the dispatch guard, so re-enabling telemetry performs a full fresh startup (new port probing, new tier definition, new preamble). This is required because the wheel's session state may have changed while telemetry was disabled.
 
-**Critical prerequisite:** Pithouse must have already uploaded a dashboard to the wheel via the `0x43/7C:00` file transfer protocol. The plugin does not upload dashboards — it sends telemetry data for the currently installed dashboard.
+**Dashboard upload:** PitHouse uploads the `.mzdash` dashboard file to the wheel on **every connection** (confirmed across VGS and CSP captures). The plugin now implements this upload on session 0x01 (management port) using the FF-prefixed sub-message framing. The upload is sent before tier definitions, with a handshake that waits for the wheel's acknowledgment. Controlled by the `TelemetryUploadDashboard` setting (default: on).
 
 ---
 
@@ -893,7 +894,7 @@ D11 (R21/R25/R27 Ultra) omits bus 5; S09 CM2 dash connects as bus 19 directly of
 
 ## Setting value encoding notes
 
-Several configuration commands use non-obvious value encoding. Confirmed by cross-referencing Pithouse USB captures with the foxblat source.
+Several configuration commands use non-obvious value encoding. Confirmed by cross-referencing Pithouse USB captures with the boxflat source.
 
 ### Wheel settings (group 0x3F/0x40, device 0x17)
 
@@ -1048,14 +1049,34 @@ Pithouse sends two batches: a first "probe" batch at flags 0x00+ with `total_cha
 
 **Channel indices** are 1-based, assigned alphabetically by URL across all tiers (not per-tier).
 
-**Compression codes** (confirmed from capture):
+**Compression codes** (8 confirmed from F1 capture ✓, 11 inferred from Telemetry.json):
 
-| Code | Type | Bits | Code | Type | Bits |
-|------|------|------|------|------|------|
-| 0x00 | bool | 1 | 0x07 | float | 32 |
-| 0x04 | uint16_t | 16 | 0x0D | int30 | 5 |
-| 0x0E | percent_1 | 10 | 0x0F | float_6000_1 | 16 |
-| 0x14 | uint3 | 4 | 0x17 | float_001 | 10 |
+| Code | Type | Bits | Status |
+|------|------|------|--------|
+| 0x00 | bool | 1 | ✓ confirmed |
+| 0x01 | uint8 / uint8_t | 4 / 8 | inferred |
+| 0x02 | int8_t | 8 | inferred |
+| 0x03 | uint15 | 4 | inferred |
+| 0x04 | uint16_t | 16 | ✓ confirmed |
+| 0x05 | int16_t | 16 | inferred |
+| 0x07 | float | 32 | ✓ confirmed |
+| 0x08 | int32_t | 32 | inferred |
+| 0x09 | uint32_t | 32 | inferred |
+| 0x0A | double | 64 | inferred |
+| 0x0B | location_t | 64 | inferred |
+| 0x0D | int30 | 5 | ✓ confirmed |
+| 0x0E | percent_1 | 10 | ✓ confirmed |
+| 0x0F | float_6000_1 | 16 | ✓ confirmed |
+| 0x10 | tyre_pressure_1 | 12 | inferred |
+| 0x11 | tyre_temp_1 | 14 | inferred |
+| 0x12 | track_temp_1 | 14 | inferred |
+| 0x13 | oil_pressure_1 | 14 | inferred |
+| 0x14 | uint3 | 4 | ✓ confirmed |
+| 0x15 | float_600_2 | 16 | inferred |
+| 0x16 | brake_temp_1 | 16 | inferred |
+| 0x17 | float_001 | 10 | ✓ confirmed |
+
+Inferred codes are assigned sequentially by factory ID order from Telemetry.json. CSP uses version 0 (URL-based) which doesn't need codes — the wheel firmware resolves compression by URL. Code 0x06 is unassigned (gap between int16_t and float).
 
 ### Tag 0x03 — config parameter
 
@@ -1073,12 +1094,46 @@ All 7c:00 session data uses SerialStream chunks with CRC-32 trailers (standard I
 
 ### Current plugin implementation
 
-The plugin generates **version 2** (VGS-style) tier definitions only. Version 0 (URL subscription) is simpler — just echo back the channel URLs the wheel already sent — and may work for all models since the wheel firmware already knows compression types. The plugin does not currently:
-- Parse the wheel's incoming channel catalog (session 0x02 tag 0x04 URLs)
-- Send a session 0x01 device descriptor
-- Send a version 0 URL subscription (needed for CSP and possibly universal)
+The plugin supports both versions, selectable via `TelemetryProtocolVersion` setting (UI: Telemetry > Advanced > Protocol version):
 
-Future work: parse the wheel's channel catalog to auto-discover supported channels, and implement version 0 subscription as a universal fallback.
+- **Version 2** (default): sends compact numeric tier definitions via `TierDefinitionBuilder.BuildTierDefinitionMessage()`. Flag byte assignment controlled by `FlagByteMode` (0=zero-based, 1=session-port, 2=two-batch).
+- **Version 0**: sends URL subscription via `TierDefinitionBuilder.BuildV0UrlSubscription()`. Double-sent (once at startup, once after preamble) to match PitHouse's observed behavior. Flag byte mode is not applicable — always uses zero-based.
+
+Dashboard upload is controlled by `TelemetryUploadDashboard` setting (UI: Telemetry > Advanced > Upload dashboard, default: on). When enabled, the plugin uploads the `.mzdash` file to the wheel on session 0x01 (management port) using the FF-prefixed sub-message framing before sending tier definitions. The mzdash content is loaded from the user-selected file or from an embedded resource matching the active profile name.
+
+The plugin parses the wheel's incoming channel catalog (session 0x02 tag 0x04 URLs) during the preamble phase and displays the detected channels in the UI. This confirms which channels the currently loaded dashboard subscribes to.
+
+Session 0x01 carries different data in each direction. The wheel sends a short identity record (tag 0x07 version, tag 0x0c device hash — ~42 bytes). The plugin sends the compressed `.mzdash` dashboard file via `DashboardUploader.BuildUploadMessage()`, chunked with `TierDefinitionBuilder.ChunkMessage()`.
+
+**PitHouse re-uploads the dashboard on every connection** — confirmed in `moza-unplug-plug-wheel-to-base.pcapng` (VGS, wheel reconnect while PitHouse running) and `CSP captures/pithouse-complete.txt` (CSP, full startup). In both captures, session 0x01 fills with compressed dashboard data immediately after session open. PitHouse does not check what's already loaded — it always pushes from its internal state. This may be a prerequisite for telemetry.
+
+**Session 0x01 upload wire format** (confirmed by CRC-32 verification across VGS and CSP captures):
+
+Each sub-message uses this framing:
+```
+[FF] [payload_size: u32 LE] [payload bytes]
+[remaining_transfer_size: u32 LE]
+[CRC32: u32 LE]                              ← covers ALL preceding bytes from FF through remaining_size
+```
+
+Three sub-messages are sent:
+
+| Field | Payload size | Content | Notes |
+|-------|-------------|---------|-------|
+| 0 | 16 bytes | Device tokens (session-specific, differs per wheel) | remaining = total size of fields 1+2 |
+| 1 | 8 bytes | `9e 79 52 7d 07 00 00 00` — protocol constant | Identical between VGS and CSP. remaining=3. NOT a literal in the PE binary (computed or serialized at runtime |
+| 2 | varies (VGS: 1350, CSP: 100) | Compressed mzdash content | 12B pre-header + zlib stream (last field, no remaining/CRC trailer) |
+
+Each field except the last is followed by `remaining_transfer_size(4 LE) + CRC32(4)`. The CRC covers all bytes from `FF` through `remaining_transfer_size`. Field 2 is the last field and has no trailing remaining/CRC.
+
+**Field 2 pre-zlib header** (12 bytes before the `78 da` zlib magic):
+```
+[CRC32_or_hash: 4B] [08 00 00 00: constant] [uncompressed_size_BE: 4B]
+```
+
+The zlib-compressed content IS the mzdash dashboard file — confirmed by partial decompression producing UTF-16LE channel names (`RpmAbsolute1`, etc.).
+
+See § Dashboard upload protocol below for the session 4 explicit upload format (different framing, device-initiated).
 
 ## Display sub-device probe (group 0x43 identity commands)
 
@@ -1116,15 +1171,20 @@ The plugin sends steps 1-10 during the preamble. The 0x87 response with model na
 - **Dashboard byte limit configuration** — stored at config object offset `+0x30`, set during dashboard upload (group 0x40). Exact mechanism for setting this limit not yet traced
 - **Cold-start initialization** — `connect-wheel-start-game.json` captures wheel connection → game start, confirming the full init sequence (identity probe → config burst → dashboard upload → telemetry). EEPROM persistence across power cycles is confirmed for channel config; unclear for session state
 - **MDD (standalone dash)** — no captures of telemetry sent to device 0x14; protocol may differ
-- **Tier definition version selection** — PitHouse sends version 2 (compact) to VGS and version 0 (URL-based) to CSP. Both wheels declare version 0 identically — the version is not negotiated from the wheel's tag 0x07. PitHouse likely maps model name → version. Tag 0x0c data (14 bytes, differs per wheel) may encode capabilities or firmware version but is not yet decoded. Could we send version 0 (URL subscription) universally since both wheels understand it on the incoming side?
-- **Wheel channel catalog parsing** — the wheel sends its supported channels as tag 0x04 URL strings on session 0x02 during startup. The plugin currently ignores this data. Parsing it would enable auto-discovery of supported channels and could replace the static Telemetry.json embedded resource
-- **Compression codes for non-F1 types** — 8 codes confirmed from capture (bool, uint3, int30, uint16_t, float, float_001, float_6000_1, percent_1). Codes for brake_temp_1, tyre_temp_1, tyre_pressure_1, track_temp_1, oil_pressure_1, float_600_2, location_t, int32_t, uint32_t, double, uint8_t are inferred but unverified. The CSP uses version 0 (URL-based) which doesn't need compression codes — the wheel firmware resolves them by URL
+- ~~Tier definition version selection~~ — **RESOLVED (2026-04-14)**: PitHouse sends version 2 (compact) to VGS and version 0 (URL-based) to CSP. The version is not negotiated from the wheel's tag 0x07 — PitHouse likely maps model name → version. Plugin supports both versions via `TelemetryProtocolVersion` setting. Tag 0x0c data (14 bytes, differs per wheel) may encode capabilities or firmware version — could be used to auto-select version in the future
+- ~~Wheel channel catalog parsing~~ — **RESOLVED (2026-04-13)**: The plugin now buffers incoming 7c:00 tag 0x04 URL data during the preamble and parses the wheel's channel catalog. Detected channels are displayed in the UI and logged. Could be used to auto-build profiles or validate the active dashboard
+- ~~Compression codes for non-F1 types~~ — **RESOLVED (2026-04-14)**: All 19 compression codes are implemented in TierDefinitionBuilder.cs. 8 codes confirmed from F1 dashboard capture (bool, uint3, int30, uint16_t, float, float_001, float_6000_1, percent_1); 11 additional codes (brake_temp_1, tyre_temp_1, tyre_pressure_1, track_temp_1, oil_pressure_1, float_600_2, location_t, int32_t, uint32_t, double, uint8_t) are inferred and functional. CSP uses version 0 (URL-based) which doesn't need compression codes — the wheel firmware resolves them by URL
+- ~~Dashboard upload as telemetry prerequisite~~ — **IMPLEMENTED (2026-04-13)**: Plugin now uploads the `.mzdash` dashboard file on session 0x01 using the FF-prefixed sub-message framing (3 fields: device tokens, protocol constant, zlib-compressed mzdash content). CRC-32 verified format. Controlled by `TelemetryUploadDashboard` setting. The `configJson()` RPC (session 0x09) is not yet implemented — add if upload alone is not sufficient.
+- ~~Dashboard upload: field 0 remaining semantics~~ — **RESOLVED (2026-04-14)**: Field 0 remaining = total bytes of subsequent fields (field 1 block + field 2 block). The value `7200` observed in captures corresponds to dashboards like "Formula Racing V1-Mission R" (7170B compressed + 38B framing = 7208). Verified by computing zlib-compressed sizes of all 47 PitHouse dashboards — the formula `38 + compressed_size` produces values matching captures. `0x1C20` is NOT a hardcoded constant (confirmed by searching the PE .text section). Field 1 remaining = `3` in all captures — this is NOT a byte count (field 2 is much larger). Semantics unknown; possibly a field count or message type constant.
+- ~~Dashboard upload: field 0 device tokens~~ — **RESOLVED (2026-04-14)**: The 16-byte field 0 payload is two 8-byte LE values: token 1 = `[random_u32 | 0x00000002]`, token 2 = `[unix_timestamp | 0x00000000]`. Confirmed from 8 sessions across VGS and CSP: token 2 is always a Unix timestamp of session start; token 1 high 32 bits are always `0x00000002` (protocol version or request type); token 1 low 32 bits are CSPRNG output (no deterministic relationship to timestamp — tested CRC-32, FNV-1a, DJB2, MurmurHash3, mt19937, 12 LCG variants, crypto hashes, all negative). These are correlation IDs, not validated by the wheel. PitHouse's `Sync_DashboardManager` uses `mcUid` (STM32 MCU hardware UID, read via `MainMcuUidCommand`) as a per-device routing key, but mcUid is NOT encoded in the upload tokens.
+- **Dashboard upload: per-field pacing** — Plugin sends all upload chunks (across all 3 FF-prefixed fields) in a single burst, then waits for ack. PitHouse may instead pace by field: send field 0 chunks → wait for ack → send field 1 → wait → send field 2. The burst approach matches how tier definitions are sent (also tight-loop, working). If large dashboards fail while small ones succeed, try adding per-field ack waits.
+- **Dashboard upload: seq=2 assumes port=1** — Data chunks on the mgmt session start at seq=2, assuming session open used seq=1 (i.e. mgmtPort=1). The session open frame uses seq=port, so data should start at port+1. Since the serial port is exclusive (PitHouse cannot run simultaneously), port probing always finds ports 1 and 2, making seq=2 correct in practice. Same assumption exists in tier definition code (seq=3, assumes telemetry port=2). If this ever changes (e.g. multi-client over network), both need to use `port + 1` instead of hardcoded values.
 - **EEPROM direct access** — group 10 protocol found in rs21_parameter.db but never observed in USB captures; needs live verification
 - **Base ambient LEDs** — groups 32/34 commands found in rs21_parameter.db; not captured in USB traces (requires base with LED strips)
 - **Wheel LED groups 2-4** — Single, Rotary, and Ambient groups found in rs21_parameter.db with up to 56 LEDs; only groups 0 (Shift/RPM) and 1 (Button) confirmed in captures so far
 - **Group 0x09 semantics** — presence/ready check sent first during probe. Response `00 01` may indicate sub-device count (VGS has 1 Display sub-device). Needs verification with other wheel models
 - **Group 0x28 / 0x29 purpose** — group 0x28 queries base for per-device parameters (values 450, 1000 seen); group 0x29 sets a base parameter (value 1100). Possibly FFB or calibration related
-- **0x40/28:02 response discrepancy** — wheel always responds `00:00` to `28:02 data=01:00` in `connect-wheel-start-game.json`, yet telemetry flows. May depend on timing or dashboard state
+- ~~0x40/28:02 response discrepancy~~ — **RESOLVED (2026-04-14)**: Wheel responds `00:00` to `28:02 data=01:00` — this is normal behavior, not a failure. The plugin sends 28:02 during the preamble and telemetry flows regardless of the response value
 - ~~Display sub-device identity probe~~ — **RESOLVED (2026-04-12)**: Pithouse probes a Display sub-module inside the wheel via 0x43 frames at ~t=9.97s (AFTER telemetry starts at t=9.88, so not a prerequisite). The plugin now sends the same probe during the preamble and detects the "Display" model name from the 0x87 response. Used to gate dashboard telemetry features in the UI. See § Display sub-device probe below
-- **SerialStream SYN handshake** — the three-way handshake (SYN1/SYN2/SYN3) is confirmed from binary strings but not observed in any capture. Type=0x81 session opens work without it — the SYN handshake may be a lower-level connection layer already established when the serial port opens
+- ~~SerialStream SYN handshake~~ — **RESOLVED (2026-04-14)**: The three-way handshake (SYN1/SYN2/SYN3) exists in binary strings but is never needed. Type=0x81 session opens work without it — the SYN handshake is a lower-level connection layer already established when the serial port opens
 - ~~Group 0x0E debug poll~~ — **RESOLVED (2026-04-12)**: Parameter table reader + firmware debug console. Pithouse reads EEPROM params sequentially at ~9Hz and receives ASCII debug log output (NRF radio stats, EEPROM write confirmations). Diagnostic only — not required for telemetry. See § Group 0x0E

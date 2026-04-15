@@ -28,6 +28,7 @@ namespace MozaPlugin
         private MozaPluginSettings _settings = null!;
         private Timer _pollTimer = null!;
         private Timer _reconnectTimer = null!;
+        private MozaHidReader _hidReader = null!;
         private PluginManager _pluginManager = null!;
         private TelemetrySender _telemetrySender = null!;
         internal DashboardProfileStore DashProfileStore { get; } = new DashboardProfileStore();
@@ -83,6 +84,9 @@ namespace MozaPlugin
             "wheel-idle-mode", "wheel-idle-timeout", "wheel-idle-speed",
             "wheel-idle-color",
             "wheel-paddles-mode", "wheel-clutch-point", "wheel-knob-mode", "wheel-stick-mode",
+            // Per-encoder signal mode probe — silent on firmware without [42, N] support
+            "wheel-knob-signal-mode0", "wheel-knob-signal-mode1", "wheel-knob-signal-mode2",
+            "wheel-knob-signal-mode3", "wheel-knob-signal-mode4",
             // RPM colors
             "wheel-rpm-color1", "wheel-rpm-color2", "wheel-rpm-color3",
             "wheel-rpm-color4", "wheel-rpm-color5", "wheel-rpm-color6",
@@ -284,6 +288,9 @@ namespace MozaPlugin
             if (_settings.ConnectionEnabled)
                 _reconnectTimer.Start();
 
+            _hidReader = new MozaHidReader(_data);
+            _hidReader.Start();
+
             _telemetrySender = new TelemetrySender(_connection);
             ApplyTelemetrySettings();
             // Don't start telemetry here — defer until wheel is detected.
@@ -312,8 +319,11 @@ namespace MozaPlugin
             _pollTimer?.Dispose();
             _reconnectTimer?.Stop();
             _reconnectTimer?.Dispose();
+            _hidReader?.Dispose();
             _connection?.Dispose();
         }
+
+        internal MozaHidReader HidReader => _hidReader;
 
         internal void SaveSettings()
         {
@@ -365,7 +375,7 @@ namespace MozaPlugin
             {
                 _reconnectTimer.Stop();
                 ClearLedsOnHardware();
-                _telemetrySender?.Stop();
+                _telemetrySender.Stop();
                 _connection?.Disconnect();
                 _data.IsBaseConnected = false;
                 _data.ClearWheelIdentity();
@@ -437,12 +447,21 @@ namespace MozaPlugin
             if (_telemetrySender == null) return;
             var s = _settings;
 
+            _telemetrySender.ProtocolVersion = s.TelemetryProtocolVersion;
             _telemetrySender.FlagByteMode = s.TelemetryFlagByteMode;
+            _telemetrySender.UploadDashboard = s.TelemetryUploadDashboard;
 
-            // Resolve the active multi-stream profile
+            // Resolve the active multi-stream profile and raw mzdash content
             MultiStreamProfile? profile = null;
+            byte[]? mzdashContent = null;
+            string mzdashName = "";
+
             if (!string.IsNullOrEmpty(s.TelemetryMzdashPath) && System.IO.File.Exists(s.TelemetryMzdashPath))
+            {
                 profile = DashProfileStore.ParseMzdash(s.TelemetryMzdashPath);
+                mzdashContent = System.IO.File.ReadAllBytes(s.TelemetryMzdashPath);
+                mzdashName = System.IO.Path.GetFileNameWithoutExtension(s.TelemetryMzdashPath);
+            }
 
             if (profile == null)
             {
@@ -453,9 +472,40 @@ namespace MozaPlugin
                         profile = FindProfile(builtins, s.TelemetryProfileName);
                     profile ??= builtins[0];
                 }
+
+                // Load raw mzdash content from embedded resource for upload
+                if (profile != null && mzdashContent == null)
+                {
+                    mzdashName = profile.Name;
+                    string resourceName = $"MozaPlugin.Data.Dashes.{profile.Name.Replace(" ", "_")}.mzdash";
+                    var assembly = System.Reflection.Assembly.GetExecutingAssembly();
+                    using var stream = assembly.GetManifestResourceStream(resourceName);
+                    if (stream != null)
+                    {
+                        using var ms = new System.IO.MemoryStream();
+                        stream.CopyTo(ms);
+                        mzdashContent = ms.ToArray();
+                    }
+                }
             }
 
             _telemetrySender.Profile = profile;
+            _telemetrySender.MzdashContent = mzdashContent;
+            _telemetrySender.MzdashName = mzdashName;
+        }
+
+        /// <summary>
+        /// Restart the telemetry session with current settings. Called when protocol version,
+        /// flag byte mode, or other send options change in the UI.
+        /// </summary>
+        internal void RestartTelemetry()
+        {
+            if (_telemetrySender == null) return;
+            _telemetrySender.Stop();
+            Interlocked.Exchange(ref _telemetryStartRequested, 0);
+            ApplyTelemetrySettings();
+            if (_settings.TelemetryEnabled)
+                StartTelemetryIfReady();
         }
 
         internal void SetTelemetryEnabled(bool enabled)
@@ -635,7 +685,7 @@ namespace MozaPlugin
                         _deviceManager.ReadSetting("wheel-hw-version");
                         _deviceManager.ReadSetting("wheel-serial-a");
                         _deviceManager.ReadSetting("wheel-serial-b");
-                        _deviceManager.ReadSettings(NewWheelSettingsReadCommands);
+                        _deviceManager.ReadSettingsPaced(NewWheelSettingsReadCommands);
                         SimHub.Logging.Current.Info($"[Moza] New-protocol wheel detected on ID {deviceId}");
                         StartTelemetryIfReady();
                     }
@@ -680,7 +730,7 @@ namespace MozaPlugin
                         _deviceManager.ReadSetting("wheel-hw-version");
                         _deviceManager.ReadSetting("wheel-serial-a");
                         _deviceManager.ReadSetting("wheel-serial-b");
-                        _deviceManager.ReadSettings(OldWheelSettingsReadCommands);
+                        _deviceManager.ReadSettingsPaced(OldWheelSettingsReadCommands);
                         DeployDeviceDefinitionForOldProto();
                         SimHub.Logging.Current.Info($"[Moza] Old-protocol wheel detected on ID {deviceId}");
                         StartTelemetryIfReady();
@@ -732,6 +782,14 @@ namespace MozaPlugin
             _data.WheelButtonsBrightness = _settings.WheelButtonsBrightness;
             _data.WheelFlagsBrightness = _settings.WheelFlagsBrightness;
             _data.WheelESRpmBrightness = _settings.WheelESRpmBrightness;
+
+            // Input settings — preload from saved values so the UI shows the
+            // last-known state even when the wheel silently ignores the read
+            // (newer KS firmware doesn't respond to clutch-point / knob-mode).
+            if (_settings.WheelPaddlesMode >= 0) _data.WheelPaddlesMode = _settings.WheelPaddlesMode;
+            if (_settings.WheelClutchPoint >= 0) _data.WheelClutchPoint = _settings.WheelClutchPoint;
+            if (_settings.WheelKnobMode    >= 0) _data.WheelKnobMode    = _settings.WheelKnobMode;
+            if (_settings.WheelStickMode   >= 0) _data.WheelStickMode   = _settings.WheelStickMode;
 
             // LED mode (only if previously saved)
             if (_settings.WheelTelemetryMode >= 0)

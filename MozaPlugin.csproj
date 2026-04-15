@@ -19,6 +19,13 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Remove="MozaPlugin.Tests\**" />
+    <EmbeddedResource Remove="MozaPlugin.Tests\**" />
+    <None Remove="MozaPlugin.Tests\**" />
+    <Page Remove="MozaPlugin.Tests\**" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Reference Include="SimHub.Plugins">
       <HintPath>libs\SimHub\SimHub.Plugins.dll</HintPath>
       <Private>false</Private>
@@ -37,6 +44,10 @@
     </Reference>
     <Reference Include="BA63Driver">
       <HintPath>libs\SimHub\BA63Driver.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="HidSharp">
+      <HintPath>libs\SimHub\HidSharp.dll</HintPath>
       <Private>false</Private>
     </Reference>
   </ItemGroup>
@@ -66,17 +77,5 @@
     <Copy SourceFiles="$(OutputPath)$(AssemblyName).dll" DestinationFolder="$(SIMHUB_PATH)" />
   </Target>
 
-  <!-- Build .shdp ZIPs for all device definitions -->
-  <ItemGroup>
-    <DeviceShdp Include="MozaWheelGeneric"  OutputName="MozaRacingWheel" />
-    <DeviceShdp Include="MozaWheelOldProto" OutputName="MozaOldProtocolWheel" />
-    <DeviceShdp Include="MozaDashShdp"     OutputName="MozaDashboard" />
-  </ItemGroup>
-
-  <Target Name="BuildShdpFiles" AfterTargets="Build">
-    <Delete Files="$(OutputPath)%(DeviceShdp.OutputName).shdp" Condition="Exists('$(OutputPath)%(DeviceShdp.OutputName).shdp')" />
-    <ZipDirectory SourceDirectory="$(MSBuildProjectDirectory)/DeviceTemplates/%(DeviceShdp.Identity)"
-                  DestinationFile="$(OutputPath)%(DeviceShdp.OutputName).shdp" />
-  </Target>
 
 </Project>

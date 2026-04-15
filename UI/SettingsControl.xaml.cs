@@ -13,6 +13,7 @@ namespace MozaPlugin
         private readonly MozaDeviceManager _device;
         private readonly MozaData _data;
         private readonly DispatcherTimer _refreshTimer;
+        private readonly DispatcherTimer _steeringAngleTimer;
         private bool _suppressEvents;
 
         public SettingsControl(MozaPlugin plugin)
@@ -35,6 +36,13 @@ namespace MozaPlugin
             _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
             _refreshTimer.Tick += RefreshDisplay;
             _refreshTimer.Start();
+
+            _steeringAngleTimer = new DispatcherTimer(DispatcherPriority.Render)
+            {
+                Interval = TimeSpan.FromMilliseconds(33)
+            };
+            _steeringAngleTimer.Tick += (s, e) => UpdateHidInputDisplays();
+            _steeringAngleTimer.Start();
 
             RequestAllSettings();
         }
@@ -68,6 +76,7 @@ namespace MozaPlugin
             try
             {
                 RefreshBaseTab();
+                RefreshWheelTab();
                 RefreshHandbrakeTab();
                 RefreshPedalsTab();
                 InitTelemetryTab();
@@ -76,6 +85,43 @@ namespace MozaPlugin
             finally
             {
                 _suppressEvents = false;
+            }
+        }
+
+        private void UpdateHidInputDisplays()
+        {
+            var hidReader = _plugin.HidReader;
+            bool connected = hidReader != null && _data.IsHidConnected;
+
+            if (connected && _data.MaxAngle > 0)
+            {
+                double deg = hidReader!.GetCurrentAngleDegrees(_data.MaxAngle * 2);
+                SteeringAngleLabel.Text = $"{deg:0;-0;0}°";
+            }
+            else
+            {
+                SteeringAngleLabel.Text = "--";
+            }
+
+            if (connected)
+            {
+                ThrottleBar.Value      = _data.ThrottlePosition;
+                BrakeBar.Value         = _data.BrakePosition;
+                ClutchBar.Value        = _data.ClutchPosition;
+                HandbrakeBar.Value     = _data.HandbrakePosition;
+                LeftPaddleBar.Value    = _data.LeftPaddlePosition;
+                RightPaddleBar.Value   = _data.RightPaddlePosition;
+                CombinedPaddleBar.Value = _data.CombinedPaddlePosition;
+            }
+            else
+            {
+                ThrottleBar.Value      = 0;
+                BrakeBar.Value         = 0;
+                ClutchBar.Value        = 0;
+                HandbrakeBar.Value     = 0;
+                LeftPaddleBar.Value    = 0;
+                RightPaddleBar.Value   = 0;
+                CombinedPaddleBar.Value = 0;
             }
         }
 
@@ -381,6 +427,110 @@ namespace MozaPlugin
         // ===== RPM range slider handlers =====
 
         // ===== Handbrake tab =====
+
+        // ===== Wheel Tab =====
+
+        private void RefreshWheelTab()
+        {
+            if (!_plugin.IsNewWheelDetected) return;
+
+            SetComboSafe(WheelPaddlesModeCombo, _data.WheelPaddlesMode);
+            UpdatePaddlePanelVisibility(_data.WheelPaddlesMode);
+            WheelClutchPointSlider.Value = Clamp(_data.WheelClutchPoint, 0, 100);
+            WheelClutchPointValue.Text = $"{_data.WheelClutchPoint}%";
+
+            bool perKnob = _data.WheelKnobSignalModeSupported;
+            KnobModeLegacyPanel.Visibility = perKnob ? Visibility.Collapsed : Visibility.Visible;
+            KnobSignalModePanel.Visibility = perKnob ? Visibility.Visible : Visibility.Collapsed;
+            if (perKnob)
+            {
+                var rows = new[] { KnobSignalMode0Row, KnobSignalMode1Row, KnobSignalMode2Row, KnobSignalMode3Row, KnobSignalMode4Row };
+                var combos = new[] { KnobSignalMode0Combo, KnobSignalMode1Combo, KnobSignalMode2Combo, KnobSignalMode3Combo, KnobSignalMode4Combo };
+                for (int i = 0; i < 5; i++)
+                {
+                    int v = _data.WheelKnobSignalModes[i];
+                    rows[i].Visibility = v >= 0 ? Visibility.Visible : Visibility.Collapsed;
+                    if (v >= 0) SetComboSafe(combos[i], v);
+                }
+            }
+            else
+            {
+                SetComboSafe(KnobModeCombo, _data.WheelKnobMode);
+            }
+            StickModeCheck.IsChecked = _data.WheelStickMode != 0;
+        }
+
+        private void UpdatePaddlePanelVisibility(int mode)
+        {
+            // 0=Buttons, 1=Combined, 2=Split
+            bool combined = mode == 1;
+            CombinedPaddlePanel.Visibility = combined ? Visibility.Visible : Visibility.Collapsed;
+            SplitPaddlePanel.Visibility = combined ? Visibility.Collapsed : Visibility.Visible;
+            WheelClutchPointPanel.Visibility = combined ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        private void WheelPaddlesModeCombo_Changed(object sender, SelectionChangedEventArgs e)
+        {
+            if (_suppressEvents) return;
+            int val = WheelPaddlesModeCombo.SelectedIndex;
+            _data.WheelPaddlesMode = val;
+            _settings.WheelPaddlesMode = val;
+            UpdatePaddlePanelVisibility(val);
+            _device.WriteSetting("wheel-paddles-mode", val + 1); // display 0/1/2 → raw 1/2/3
+            _plugin.SaveSettings();
+        }
+
+        private void WheelClutchPointSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (_suppressEvents) return;
+            int val = (int)Math.Round(e.NewValue);
+            WheelClutchPointValue.Text = $"{val}%";
+            _data.WheelClutchPoint = val;
+            _settings.WheelClutchPoint = val;
+            _device.WriteSetting("wheel-clutch-point", val);
+            _plugin.SaveSettings();
+        }
+
+        private void KnobModeCombo_Changed(object sender, SelectionChangedEventArgs e)
+        {
+            if (_suppressEvents) return;
+            int val = KnobModeCombo.SelectedIndex;
+            _data.WheelKnobMode = val;
+            _settings.WheelKnobMode = val;
+            _device.WriteSetting("wheel-knob-mode", val);
+            _plugin.SaveSettings();
+        }
+
+        private void WriteKnobSignalMode(int index, int value)
+        {
+            if (_suppressEvents) return;
+            _data.WheelKnobSignalModes[index] = value;
+            _device.WriteSetting($"wheel-knob-signal-mode{index}", value);
+            _plugin.SaveSettings();
+        }
+
+        private void KnobSignalMode0Combo_Changed(object sender, SelectionChangedEventArgs e)
+            => WriteKnobSignalMode(0, KnobSignalMode0Combo.SelectedIndex);
+        private void KnobSignalMode1Combo_Changed(object sender, SelectionChangedEventArgs e)
+            => WriteKnobSignalMode(1, KnobSignalMode1Combo.SelectedIndex);
+        private void KnobSignalMode2Combo_Changed(object sender, SelectionChangedEventArgs e)
+            => WriteKnobSignalMode(2, KnobSignalMode2Combo.SelectedIndex);
+        private void KnobSignalMode3Combo_Changed(object sender, SelectionChangedEventArgs e)
+            => WriteKnobSignalMode(3, KnobSignalMode3Combo.SelectedIndex);
+        private void KnobSignalMode4Combo_Changed(object sender, SelectionChangedEventArgs e)
+            => WriteKnobSignalMode(4, KnobSignalMode4Combo.SelectedIndex);
+
+        private void StickModeCheck_Click(object sender, RoutedEventArgs e)
+        {
+            if (_suppressEvents) return;
+            int val = StickModeCheck.IsChecked == true ? 1 : 0;
+            _data.WheelStickMode = val;
+            _settings.WheelStickMode = val;
+            _device.WriteSetting("wheel-stick-mode", val * 256);
+            _plugin.SaveSettings();
+        }
+
+        // ===== Handbrake Range + Curve + Calibration =====
 
         private void RefreshHandbrakeTab()
         {
@@ -833,7 +983,11 @@ namespace MozaPlugin
             try
             {
                 var s = _plugin.Settings;
+                UploadDashboardCheck.IsChecked = s.TelemetryUploadDashboard;
+                int protoVer = s.TelemetryProtocolVersion;
+                ProtocolVersionCombo.SelectedIndex = protoVer == 0 ? 1 : 0;
                 FlagByteModeCombo.SelectedIndex = Math.Max(0, Math.Min(2, s.TelemetryFlagByteMode));
+                FlagByteModePanel.IsEnabled = protoVer != 0;
             }
             finally
             {
@@ -869,6 +1023,13 @@ namespace MozaPlugin
             else
                 TelemetryDisplayLabel.Text = "";
 
+            // Wheel channel catalog
+            var catalog = sender.WheelChannelCatalog;
+            if (catalog != null && catalog.Count > 0)
+                TelemetryWheelChannelsLabel.Text = $"Wheel channels ({catalog.Count}): {string.Join(", ", catalog)}";
+            else
+                TelemetryWheelChannelsLabel.Text = "";
+
             TelemetryTestStopBtn.IsEnabled = testMode;
             TelemetryTestStartBtn.IsEnabled = !testMode;
         }
@@ -898,12 +1059,30 @@ namespace MozaPlugin
             TelemetryTestStopBtn.IsEnabled = false;
         }
 
+        private void UploadDashboard_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_suppressEvents) return;
+            _plugin.Settings.TelemetryUploadDashboard = UploadDashboardCheck.IsChecked == true;
+            _plugin.SaveSettings();
+            _plugin.RestartTelemetry();
+        }
+
+        private void ProtocolVersion_Changed(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+        {
+            if (_suppressEvents) return;
+            int version = ProtocolVersionCombo.SelectedIndex == 1 ? 0 : 2;
+            _plugin.Settings.TelemetryProtocolVersion = version;
+            FlagByteModePanel.IsEnabled = version != 0;
+            _plugin.SaveSettings();
+            _plugin.RestartTelemetry();
+        }
+
         private void FlagByteMode_Changed(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
         {
             if (_suppressEvents) return;
             _plugin.Settings.TelemetryFlagByteMode = FlagByteModeCombo.SelectedIndex;
             _plugin.SaveSettings();
-            _plugin.ApplyTelemetrySettings();
+            _plugin.RestartTelemetry();
         }
 
         private void TelemetryExportLog_Click(object sender, RoutedEventArgs e)

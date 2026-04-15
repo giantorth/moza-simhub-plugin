@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>MozaPlugin.Tests</RootNamespace>
+    <AssemblyName>MozaPlugin.Tests</AssemblyName>
+  </PropertyGroup>
+
+  <!-- Include source files from the main project (pure logic only).
+       This avoids referencing the net48 DLL which has WPF and SimHub
+       dependencies that cannot load on Linux under .NET 9. -->
+  <ItemGroup>
+    <Compile Include="..\Protocol\MozaProtocol.cs" Link="Src\Protocol\MozaProtocol.cs" />
+    <Compile Include="..\Protocol\MozaCommand.cs" Link="Src\Protocol\MozaCommand.cs" />
+    <Compile Include="..\Protocol\MozaCommandDatabase.cs" Link="Src\Protocol\MozaCommandDatabase.cs" />
+    <Compile Include="..\Protocol\MozaResponseParser.cs" Link="Src\Protocol\MozaResponseParser.cs" />
+    <Compile Include="..\Telemetry\TelemetryEncoder.cs" Link="Src\Telemetry\TelemetryEncoder.cs" />
+    <Compile Include="..\Telemetry\TelemetryBitWriter.cs" Link="Src\Telemetry\TelemetryBitWriter.cs" />
+    <Compile Include="..\Telemetry\DashboardProfile.cs" Link="Src\Telemetry\DashboardProfile.cs" />
+    <Compile Include="..\Telemetry\GameDataSnapshot.cs" Link="Src\Telemetry\GameDataSnapshot.cs" />
+    <Compile Include="..\Telemetry\TelemetryFrameBuilder.cs" Link="Src\Telemetry\TelemetryFrameBuilder.cs" />
+    <Compile Include="..\Telemetry\TierDefinitionBuilder.cs" Link="Src\Telemetry\TierDefinitionBuilder.cs" />
+    <Compile Include="..\Telemetry\DashboardUploader.cs" Link="Src\Telemetry\DashboardUploader.cs" />
+    <Compile Include="..\Telemetry\TelemetryDiagnostics.cs" Link="Src\Telemetry\TelemetryDiagnostics.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+  </ItemGroup>
+
+</Project>

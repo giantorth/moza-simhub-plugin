@@ -1,4 +1,5 @@
-using System;
+using System.Threading;
+using System.Threading.Tasks;
 using MozaPlugin.Protocol;
 
 
@@ -128,6 +129,25 @@ namespace MozaPlugin
         {
             foreach (var name in commandNames)
                 ReadSetting(name);
+        }
+
+        /// <summary>
+        /// Read a batch of settings with an extra ~10ms gap between enqueues.
+        /// The write thread's 4ms global pacing is tuned for 48Hz telemetry throughput;
+        /// larger startup bursts (30+ reads) still get dropped by the wheel. This runs
+        /// the batch on a background task so the caller (usually the read thread) is
+        /// not blocked.
+        /// </summary>
+        public void ReadSettingsPaced(string[] commandNames, int gapMs = 10)
+        {
+            Task.Run(() =>
+            {
+                foreach (var name in commandNames)
+                {
+                    ReadSetting(name);
+                    Thread.Sleep(gapMs);
+                }
+            });
         }
 
         private byte GetDeviceId(string deviceType)
