@@ -331,6 +331,11 @@
                             </StackPanel>
                         </StackPanel>
 
+                        <!-- Active Buttons -->
+                        <TextBlock Text="Buttons" Style="{StaticResource SectionHeader}" Margin="0,4,0,8"/>
+                        <TextBlock x:Name="ActiveButtonsText" FontFamily="Consolas" FontSize="12"
+                                   Foreground="Gray" Margin="0,0,0,10" TextWrapping="Wrap">None</TextBlock>
+
                         <!-- Paddle Settings -->
                         <TextBlock Text="Paddle Settings" Style="{StaticResource SectionHeader}"/>
                         <StackPanel Orientation="Horizontal" Margin="0,4">
@@ -388,9 +393,18 @@
                                 </ComboBox>
                             </StackPanel>
                         </StackPanel>
-                        <StackPanel Orientation="Horizontal" Margin="0,8">
+                        <StackPanel x:Name="StickModeOldPanel" Orientation="Horizontal" Margin="0,8" Visibility="Collapsed">
                             <TextBlock Text="Stick as D-Pad" Style="{StaticResource SliderLabel}"/>
                             <CheckBox x:Name="StickModeCheck" VerticalAlignment="Center" Click="StickModeCheck_Click"/>
+                        </StackPanel>
+                        <StackPanel x:Name="StickModeNewPanel" Orientation="Horizontal" Margin="0,8" Visibility="Collapsed">
+                            <TextBlock Text="Stick D-Pad Mode" Style="{StaticResource SliderLabel}"/>
+                            <ComboBox x:Name="StickModeCombo" Width="120" SelectionChanged="StickModeCombo_Changed">
+                                <ComboBoxItem Content="Off"/>
+                                <ComboBoxItem Content="Right"/>
+                                <ComboBoxItem Content="Left"/>
+                                <ComboBoxItem Content="Both"/>
+                            </ComboBox>
                         </StackPanel>
 
                         <TextBlock TextWrapping="Wrap" Foreground="Gray" FontSize="11" Margin="0,12,0,0"
@@ -406,12 +420,14 @@
 
                         <!-- Live Input -->
                         <TextBlock Text="Handbrake" Style="{StaticResource SectionHeader}"/>
-                        <StackPanel Margin="0,0,0,10">
+                        <StackPanel x:Name="HandbrakeAxisPanel" Margin="0,0,0,10">
                             <StackPanel Width="100" HorizontalAlignment="Left">
                                 <TextBlock Text="Position" Foreground="Gray" FontSize="11"/>
                                 <ProgressBar x:Name="HandbrakeBar" Height="14" Minimum="0" Maximum="100" Value="0"/>
                             </StackPanel>
                         </StackPanel>
+                        <TextBlock x:Name="HandbrakeButtonStatus" FontFamily="Consolas" FontSize="14"
+                                   FontWeight="Normal" Margin="0,0,0,10" Visibility="Collapsed">Released</TextBlock>
 
                         <TextBlock Text="Handbrake Settings" Style="{StaticResource SectionHeader}"/>
 

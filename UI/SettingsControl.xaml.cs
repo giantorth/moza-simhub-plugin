@@ -1,6 +1,7 @@
 using System;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Media;
 using System.Windows.Shapes;
 using System.Windows.Threading;
@@ -15,6 +16,7 @@ namespace MozaPlugin
         private readonly DispatcherTimer _refreshTimer;
         private readonly DispatcherTimer _steeringAngleTimer;
         private bool _suppressEvents;
+        private readonly DateTime[] _buttonLastPressed = new DateTime[MozaData.MaxButtons];
 
         public SettingsControl(MozaPlugin plugin)
         {
@@ -123,6 +125,59 @@ namespace MozaPlugin
                 RightPaddleBar.Value   = 0;
                 CombinedPaddleBar.Value = 0;
             }
+
+            UpdateActiveButtons(connected);
+            UpdateHandbrakeButtonStatus(connected);
+        }
+
+        private void UpdateActiveButtons(bool connected)
+        {
+            if (!connected || _data.ButtonCount == 0)
+            {
+                ActiveButtonsText.Inlines.Clear();
+                ActiveButtonsText.Inlines.Add(new Run("None"));
+                return;
+            }
+
+            var now = DateTime.UtcNow;
+            var inlines = new System.Collections.Generic.List<Inline>();
+            int count = _data.ButtonCount;
+            for (int i = 0; i < count; i++)
+            {
+                bool pressed = _data.ButtonStates[i];
+                if (pressed)
+                    _buttonLastPressed[i] = now;
+
+                if ((now - _buttonLastPressed[i]).TotalSeconds < 1.0)
+                {
+                    if (inlines.Count > 0)
+                        inlines.Add(new Run(", "));
+
+                    var run = new Run((i + 1).ToString());
+                    if (pressed)
+                    {
+                        run.FontWeight = FontWeights.Bold;
+                        run.Foreground = Brushes.White;
+                    }
+                    inlines.Add(run);
+                }
+            }
+
+            ActiveButtonsText.Inlines.Clear();
+            if (inlines.Count > 0)
+                ActiveButtonsText.Inlines.AddRange(inlines);
+            else
+                ActiveButtonsText.Inlines.Add(new Run("None"));
+        }
+
+        private void UpdateHandbrakeButtonStatus(bool connected)
+        {
+            if (_data.HandbrakeMode != 1) return;
+
+            bool pressed = connected && _data.HandbrakeButtonPressed;
+            HandbrakeButtonStatus.Text = pressed ? "Pressed" : "Released";
+            HandbrakeButtonStatus.FontWeight = pressed ? FontWeights.Bold : FontWeights.Normal;
+            HandbrakeButtonStatus.Foreground = pressed ? Brushes.White : Brushes.Gray;
         }
 
         private void RefreshBaseTab()
@@ -457,15 +512,27 @@ namespace MozaPlugin
             {
                 SetComboSafe(KnobModeCombo, _data.WheelKnobMode);
             }
-            StickModeCheck.IsChecked = _data.WheelStickMode != 0;
+            if (_data.WheelDualStickSupported)
+            {
+                StickModeNewPanel.Visibility = Visibility.Visible;
+                StickModeOldPanel.Visibility = Visibility.Collapsed;
+                SetComboSafe(StickModeCombo, _data.WheelStickMode);
+            }
+            else
+            {
+                StickModeOldPanel.Visibility = Visibility.Visible;
+                StickModeNewPanel.Visibility = Visibility.Collapsed;
+                StickModeCheck.IsChecked = _data.WheelStickMode != 0;
+            }
         }
 
         private void UpdatePaddlePanelVisibility(int mode)
         {
             // 0=Buttons, 1=Combined, 2=Split
+            bool buttons = mode == 0;
             bool combined = mode == 1;
             CombinedPaddlePanel.Visibility = combined ? Visibility.Visible : Visibility.Collapsed;
-            SplitPaddlePanel.Visibility = combined ? Visibility.Collapsed : Visibility.Visible;
+            SplitPaddlePanel.Visibility = !buttons && !combined ? Visibility.Visible : Visibility.Collapsed;
             WheelClutchPointPanel.Visibility = combined ? Visibility.Visible : Visibility.Collapsed;
         }
 
@@ -530,6 +597,16 @@ namespace MozaPlugin
             _plugin.SaveSettings();
         }
 
+        private void StickModeCombo_Changed(object sender, SelectionChangedEventArgs e)
+        {
+            if (_suppressEvents) return;
+            int val = StickModeCombo.SelectedIndex;
+            _data.WheelStickMode = val;
+            _settings.WheelStickMode = val;
+            _device.WriteSetting("wheel-stick-mode-new", val);
+            _plugin.SaveSettings();
+        }
+
         // ===== Handbrake Range + Curve + Calibration =====
 
         private void RefreshHandbrakeTab()
@@ -541,9 +618,10 @@ namespace MozaPlugin
 
             SetComboSafe(HandbrakeModeCombo, _data.HandbrakeMode);
 
-            // Show threshold slider only in button mode
-            HandbrakeThresholdPanel.Visibility = _data.HandbrakeMode == 1
-                ? Visibility.Visible : Visibility.Collapsed;
+            bool buttonMode = _data.HandbrakeMode == 1;
+            HandbrakeThresholdPanel.Visibility = buttonMode ? Visibility.Visible : Visibility.Collapsed;
+            HandbrakeAxisPanel.Visibility = buttonMode ? Visibility.Collapsed : Visibility.Visible;
+            HandbrakeButtonStatus.Visibility = buttonMode ? Visibility.Visible : Visibility.Collapsed;
 
             HandbrakeThresholdSlider.Value = Clamp(_data.HandbrakeButtonThreshold, 0, 100);
             HandbrakeThresholdValue.Text = $"{_data.HandbrakeButtonThreshold}%";

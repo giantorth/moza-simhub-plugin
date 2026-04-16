@@ -17,7 +17,7 @@ namespace MozaPlugin
         public int WheelPaddlesMode { get; set; } = -1; // display 0/1/2 (Buttons/Combined/Split)
         public int WheelClutchPoint { get; set; } = -1; // 0..100
         public int WheelKnobMode { get; set; } = -1;    // legacy 0=Buttons, 1=Knob
-        public int WheelStickMode { get; set; } = -1;   // 0=buttons, 1=D-pad
+        public int WheelStickMode { get; set; } = -1;   // new FW: 0=off,1=left,2=right,3=both; old FW: 0=off,1=left
 
         // ES/Old wheel mode settings (-1 = not yet saved)
         public int WheelRpmIndicatorMode { get; set; } = -1;

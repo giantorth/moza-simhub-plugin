@@ -73,5 +73,30 @@ namespace MozaPlugin.Tests.Protocol
             Assert.Equal("wheel-paddles-mode", parsed!.Value.Name);
             Assert.Equal(2, parsed.Value.IntValue);
         }
+
+        [Fact]
+        public void Parse_WheelStickMode_NewFirmware1Byte()
+        {
+            // New firmware returns 1 byte for cmd [5] (PayloadBytes=2 in DB).
+            // Value 1 = left stick as D-pad.
+            byte[] response = { 0xC0, 0x71, 0x05, 0x01 };
+            var parsed = MozaResponseParser.Parse(response);
+            Assert.NotNull(parsed);
+            Assert.Equal("wheel-stick-mode", parsed!.Value.Name);
+            Assert.Equal(1, parsed.Value.IntValue);
+            Assert.Equal(1, parsed.Value.PayloadLength);
+        }
+
+        [Fact]
+        public void Parse_WheelStickMode_OldFirmware2Bytes()
+        {
+            // Old firmware returns 2 bytes: 0x01 0x00 = 256 (left stick on via *256).
+            byte[] response = { 0xC0, 0x71, 0x05, 0x01, 0x00 };
+            var parsed = MozaResponseParser.Parse(response);
+            Assert.NotNull(parsed);
+            Assert.Equal("wheel-stick-mode", parsed!.Value.Name);
+            Assert.Equal(256, parsed.Value.IntValue);
+            Assert.Equal(2, parsed.Value.PayloadLength);
+        }
     }
 }

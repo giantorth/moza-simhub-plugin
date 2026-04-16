@@ -8,6 +8,7 @@ namespace MozaPlugin.Protocol
         public int IntValue;
         public byte[] ArrayValue;
         public byte DeviceId;
+        public int PayloadLength;
     }
 
     /// <summary>
@@ -80,7 +81,7 @@ namespace MozaPlugin.Protocol
                 var valueData = new byte[payload.Length - cmd.CommandId.Length];
                 Array.Copy(payload, cmd.CommandId.Length, valueData, 0, valueData.Length);
 
-                var result = new ParsedResponse { Name = kvp.Key, DeviceId = deviceId };
+                var result = new ParsedResponse { Name = kvp.Key, DeviceId = deviceId, PayloadLength = valueData.Length };
 
                 if (cmd.PayloadType == "array")
                 {
@@ -93,7 +94,8 @@ namespace MozaPlugin.Protocol
                 }
                 else
                 {
-                    result.IntValue = MozaCommand.ParseIntValue(valueData, cmd.PayloadBytes);
+                    result.IntValue = MozaCommand.ParseIntValue(valueData,
+                        Math.Min(valueData.Length, cmd.PayloadBytes));
                 }
 
                 return result;

@@ -30,6 +30,8 @@ namespace MozaPlugin.Protocol
 
         private static readonly uint[] TrackedUsages = { UsageX, UsageY, UsageZ, UsageRx, UsageRy, UsageRz, UsageSlider, UsageDial, UsageSimRud };
 
+        private static readonly Regex HandbrakePattern = new Regex(@"hbp handbrake", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
         // Device name patterns (lowercased), matching boxflat's MozaHidDevice class
         private static readonly string[] DevicePatterns =
         {
@@ -105,7 +107,8 @@ namespace MozaPlugin.Protocol
                         if (!device.TryOpen(out HidStream stream)) continue;
                         streams.Add(stream);
 
-                        var t = new Thread(() => ReadDevice(device, stream, usages))
+                        bool isHandbrake = HandbrakePattern.IsMatch(device.GetFriendlyName() ?? "");
+                        var t = new Thread(() => ReadDevice(device, stream, usages, isHandbrake))
                         {
                             IsBackground = true,
                             Name = $"MozaHid_{device.ProductID:X4}",
@@ -172,7 +175,7 @@ namespace MozaPlugin.Protocol
                             {
                                 foreach (uint usage in dataItem.Usages.GetAllValues())
                                 {
-                                    if (Array.IndexOf(TrackedUsages, usage) >= 0)
+                                    if (Array.IndexOf(TrackedUsages, usage) >= 0 || (usage >> 16) == 0x0009)
                                         usages[usage] = (dataItem.LogicalMinimum, dataItem.LogicalMaximum);
                                 }
                             }
@@ -187,7 +190,7 @@ namespace MozaPlugin.Protocol
             return result;
         }
 
-        private void ReadDevice(HidDevice device, HidStream stream, Dictionary<uint, (int min, int max)> usages)
+        private void ReadDevice(HidDevice device, HidStream stream, Dictionary<uint, (int min, int max)> usages, bool isHandbrake = false)
         {
             try
             {
@@ -245,6 +248,28 @@ namespace MozaPlugin.Protocol
                                 if (usage == UsageX)
                                 {
                                     _data.SteeringAngleRaw = value.GetLogicalValue();
+                                }
+                                else if ((usage >> 16) == 0x0009)
+                                {
+                                    bool pressed = value.GetLogicalValue() != 0;
+                                    if (isHandbrake)
+                                    {
+                                        _data.HandbrakeButtonPressed = pressed;
+                                    }
+                                    else
+                                    {
+                                        int buttonIndex = (int)(usage & 0xFFFF) - 1;
+                                        if (buttonIndex == 120)
+                                        {
+                                            _data.HandbrakeButtonPressed = pressed;
+                                        }
+                                        else if (buttonIndex >= 0 && buttonIndex < MozaData.MaxButtons)
+                                        {
+                                            _data.ButtonStates[buttonIndex] = pressed;
+                                            if (buttonIndex >= _data.ButtonCount)
+                                                _data.ButtonCount = buttonIndex + 1;
+                                        }
+                                    }
                                 }
                                 else
                                 {

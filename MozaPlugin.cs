@@ -624,6 +624,22 @@ namespace MozaPlugin
             }
 
             var r = result.Value;
+
+            // Normalize stick-mode: old firmware sends 2-byte value (0 or 256),
+            // new firmware sends 1-byte enum (0=none, 1=left, 2=right, 3=both).
+            if (r.Name == "wheel-stick-mode")
+            {
+                if (r.PayloadLength <= 1)
+                {
+                    _data.WheelDualStickSupported = true;
+                }
+                else
+                {
+                    // Old 2-byte format: 0x0100 (256) = left D-pad on
+                    r.IntValue = r.IntValue >= 256 ? 1 : 0;
+                }
+            }
+
             _data.UpdateFromCommand(r.Name, r.IntValue);
             if (r.ArrayValue != null)
                 _data.UpdateFromArray(r.Name, r.ArrayValue);

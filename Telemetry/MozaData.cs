@@ -43,6 +43,14 @@ namespace MozaPlugin
         public volatile int RightPaddlePosition;    // 0-100
         public volatile int CombinedPaddlePosition; // 0-100
 
+        // Button states from HID (0-based index, true = pressed)
+        public const int MaxButtons = 128;
+        public readonly bool[] ButtonStates = new bool[MaxButtons];
+        public volatile int ButtonCount;
+
+        // Handbrake button (separate HID device, only fires in button mode)
+        public volatile bool HandbrakeButtonPressed;
+
         // Core settings
         public volatile int Limit;
         public volatile int MaxAngle;
@@ -104,6 +112,9 @@ namespace MozaPlugin
         // True once at least one per-knob response has arrived, indicating firmware supports [42, N].
         public volatile bool WheelKnobSignalModeSupported;
         public volatile int WheelStickMode;
+        // True when firmware uses the new 1-byte stick mode (0=none,1=left,2=right,3=both).
+        // False when firmware uses old 2-byte format (left stick toggle only).
+        public volatile bool WheelDualStickSupported;
         public volatile int WheelRpmDisplayMode;
 
         // Wheel RPM colors (10 LEDs, [R, G, B] each)
@@ -278,7 +289,7 @@ namespace MozaPlugin
                 case "wheel-knob-signal-mode2":      WheelKnobSignalModes[2] = value; WheelKnobSignalModeSupported = true; break;
                 case "wheel-knob-signal-mode3":      WheelKnobSignalModes[3] = value; WheelKnobSignalModeSupported = true; break;
                 case "wheel-knob-signal-mode4":      WheelKnobSignalModes[4] = value; WheelKnobSignalModeSupported = true; break;
-                case "wheel-stick-mode":             WheelStickMode = value / 256; break; // raw 0/256 → display 0/1
+                case "wheel-stick-mode":             WheelStickMode = value; break;
                 case "wheel-rpm-indicator-mode":     WheelRpmIndicatorMode = value - 1; break; // raw 1/2/3 → display 0/1/2
                 case "wheel-get-rpm-display-mode":  WheelRpmDisplayMode = value; break;
                 case "wheel-old-rpm-brightness":     WheelESRpmBrightness = value; break;
