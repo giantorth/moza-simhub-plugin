@@ -103,7 +103,7 @@ namespace MozaPlugin.Telemetry
         /// 0 = URL-based subscription (send channel URLs, wheel resolves compression).
         /// 2 = Compact numeric (send flag bytes, channel indices, compression codes, bit widths).
         /// </summary>
-        public int ProtocolVersion { get; set; } = 2;
+        public int ProtocolVersion { get; set; } = 0;
 
         /// <summary>Channel URLs reported by the wheel during session startup. Null until parsed.</summary>
         public System.Collections.Generic.IReadOnlyList<string>? WheelChannelCatalog => _wheelChannelCatalog;

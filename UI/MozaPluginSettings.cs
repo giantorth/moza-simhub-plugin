@@ -78,7 +78,7 @@ namespace MozaPlugin
         //     wheel firmware resolves compression internally)
         // 2 = Compact numeric (VGS-style — host sends flag bytes, channel indices,
         //     compression codes, and bit widths per tier)
-        public int TelemetryProtocolVersion { get; set; } = 2;
+        public int TelemetryProtocolVersion { get; set; } = 0;
 
         // How to assign flag bytes in tier definitions and telemetry frames.
         // We don't fully understand how the wheel uses flag bytes — Pithouse uses
