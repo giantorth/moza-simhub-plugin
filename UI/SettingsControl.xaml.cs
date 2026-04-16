@@ -81,6 +81,7 @@ namespace MozaPlugin
                 RefreshWheelTab();
                 RefreshHandbrakeTab();
                 RefreshPedalsTab();
+                RefreshHubTab();
                 InitTelemetryTab();
                 RefreshTelemetryStatus();
             }
@@ -182,8 +183,8 @@ namespace MozaPlugin
 
         private void RefreshBaseTab()
         {
-            ConnectionIndicator.Fill = _data.IsBaseConnected ? Brushes.LimeGreen : Brushes.Gray;
-            ConnectionLabel.Text = _data.IsBaseConnected ? "Connected" : "Disconnected";
+            ConnectionIndicator.Fill = _data.IsConnected ? Brushes.LimeGreen : Brushes.Gray;
+            ConnectionLabel.Text = _data.IsConnected ? "Connected" : "Disconnected";
 
             string tempUnit = _data.UseFahrenheit ? "°F" : "°C";
             McuTempLabel.Text = _data.IsBaseConnected ? $"{ConvertTemp(_data.McuTemp):F0} {tempUnit}" : "--";
@@ -901,6 +902,37 @@ namespace MozaPlugin
             SetSliderRaw(ClutchY3Slider, ClutchY3Value, _data.PedalsClutchCurve[2], 0, 100, "");
             SetSliderRaw(ClutchY4Slider, ClutchY4Value, _data.PedalsClutchCurve[3], 0, 100, "");
             SetSliderRaw(ClutchY5Slider, ClutchY5Value, _data.PedalsClutchCurve[4], 0, 100, "");
+        }
+
+        // ===== Hub Tab =====
+
+        private void RefreshHubTab()
+        {
+            bool detected = _plugin.IsHubDetected;
+            HubTab.Visibility = detected ? Visibility.Visible : Visibility.Collapsed;
+            if (!detected) return;
+
+            // Pedals port: high byte >= 1 means connected (foxblat convention)
+            UpdateHubPortIndicator(HubPedals1Dot, HubPedals1Label, _data.HubPedals1Power, isPedals: true);
+
+            // Accessory ports: value <= 1 means connected
+            UpdateHubPortIndicator(HubPort1Dot, HubPort1Label, _data.HubPort1Power, isPedals: false);
+            UpdateHubPortIndicator(HubPort2Dot, HubPort2Label, _data.HubPort2Power, isPedals: false);
+            UpdateHubPortIndicator(HubPort3Dot, HubPort3Label, _data.HubPort3Power, isPedals: false);
+        }
+
+        private static void UpdateHubPortIndicator(Ellipse dot, TextBlock label, int value, bool isPedals)
+        {
+            if (value < 0)
+            {
+                dot.Fill = Brushes.Gray;
+                label.Text = "--";
+                return;
+            }
+
+            bool connected = isPedals ? (value >> 8) >= 1 : value <= 1;
+            dot.Fill = connected ? Brushes.LimeGreen : Brushes.Gray;
+            label.Text = connected ? "Connected" : "Disconnected";
         }
 
         private void ApplyPedalCurvePreset(string pedal, int[] curve, int[] dataArray,

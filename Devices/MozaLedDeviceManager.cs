@@ -163,7 +163,7 @@ namespace MozaPlugin.Devices
                     return;
 
                 var plugin = MozaPlugin.Instance;
-                if (plugin == null || !plugin.Data.IsBaseConnected)
+                if (plugin == null || !plugin.Data.IsConnected)
                     return;
 
                 bool isNewWheel = plugin.IsNewWheelDetected;

@@ -9,7 +9,15 @@ namespace MozaPlugin
     {
         // Connection status
         public volatile bool IsBaseConnected;
+        public volatile bool IsHubConnected;
         public volatile bool BaseSettingsRead;
+
+        /// <summary>
+        /// True when any Moza device is confirmed on the serial bus (base or hub).
+        /// Use this as the "can I send commands?" guard instead of IsBaseConnected,
+        /// which is only true when a wheelbase is present.
+        /// </summary>
+        public bool IsConnected => IsBaseConnected || IsHubConnected;
 
         // Wheel identity (populated after wheel detection, cleared on disconnect)
         // Volatile: written from serial read thread, read from UI thread.
@@ -181,6 +189,15 @@ namespace MozaPlugin
 
         // Handbrake output curve (values 0-100, stored as ints; device uses 4-byte floats)
         public readonly int[] HandbrakeCurve = new int[] { 20, 40, 60, 80, 100 };
+
+        // ===== Hub port power status (-1 = not read yet) =====
+        public volatile int HubBasePower = -1;
+        public volatile int HubPort1Power = -1;
+        public volatile int HubPort2Power = -1;
+        public volatile int HubPort3Power = -1;
+        public volatile int HubPedals1Power = -1;
+        public volatile int HubPedals2Power = -1;
+        public volatile int HubPedals3Power = -1;
 
         private static byte[][] InitColorArray(int count)
         {
@@ -358,6 +375,15 @@ namespace MozaPlugin
                 case "handbrake-y3": HandbrakeCurve[2] = value; break;
                 case "handbrake-y4": HandbrakeCurve[3] = value; break;
                 case "handbrake-y5": HandbrakeCurve[4] = value; break;
+
+                // Hub port power status
+                case "hub-base-power":    HubBasePower    = value; IsHubConnected = true; break;
+                case "hub-port1-power":   HubPort1Power   = value; IsHubConnected = true; break;
+                case "hub-port2-power":   HubPort2Power   = value; break;
+                case "hub-port3-power":   HubPort3Power   = value; break;
+                case "hub-pedals1-power": HubPedals1Power = value; break;
+                case "hub-pedals2-power": HubPedals2Power = value; break;
+                case "hub-pedals3-power": HubPedals3Power = value; break;
             }
 
         }

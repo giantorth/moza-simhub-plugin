@@ -32,12 +32,13 @@ namespace MozaPlugin.Protocol
 
         private static readonly Regex HandbrakePattern = new Regex(@"hbp handbrake", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
-        // Device name patterns (lowercased), matching boxflat's MozaHidDevice class
+        // Device name patterns (lowercased), matching boxflat/foxblat's MozaHidDevice class
         private static readonly string[] DevicePatterns =
         {
             @"gudsen (moza )?r[0-9]{1,2} (ultra base|base|racing wheel and pedals)",
             @"gudsen moza (srp|sr-p|crp)[0-9]? pedals",
             @"hbp handbrake",
+            @"gudsen universal hub",
         };
 
         private readonly MozaData _data;

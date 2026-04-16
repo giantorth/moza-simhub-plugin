@@ -40,6 +40,7 @@ namespace MozaPlugin
         private bool _oldWheelDetected;
         private bool _handbrakeDetected;
         private bool _pedalsDetected;
+        private bool _hubDetected;
 
         // Guard against concurrent/duplicate telemetry Start() dispatch
         private int _telemetryStartRequested;
@@ -143,6 +144,12 @@ namespace MozaPlugin
             "pedals-clutch-y1", "pedals-clutch-y2", "pedals-clutch-y3", "pedals-clutch-y4", "pedals-clutch-y5",
         };
 
+        private static readonly string[] HubReadCommands = new[]
+        {
+            "hub-base-power", "hub-port1-power", "hub-port2-power", "hub-port3-power",
+            "hub-pedals1-power", "hub-pedals2-power", "hub-pedals3-power",
+        };
+
         public PluginManager PluginManager { set => _pluginManager = value; }
         public ImageSource? PictureIcon => null;
         public string LeftMenuTitle => "MOZA";
@@ -227,6 +234,7 @@ namespace MozaPlugin
         internal bool IsDashDetected => _dashDetected;
         internal bool IsHandbrakeDetected => _handbrakeDetected;
         internal bool IsPedalsDetected => _pedalsDetected;
+        internal bool IsHubDetected => _hubDetected;
 
         /// <summary>True if the wheel's internal Display sub-device responded to probe.</summary>
         internal bool IsDisplayDetected => _telemetrySender?.DisplayDetected ?? false;
@@ -378,6 +386,7 @@ namespace MozaPlugin
                 _telemetrySender.Stop();
                 _connection?.Disconnect();
                 _data.IsBaseConnected = false;
+                _data.IsHubConnected = false;
                 _data.ClearWheelIdentity();
                 _baseDetected = false;
                 _data.BaseSettingsRead = false;
@@ -387,6 +396,7 @@ namespace MozaPlugin
                 WheelModelInfo = null;
                 _handbrakeDetected = false;
                 _pedalsDetected = false;
+                _hubDetected = false;
                 _deviceManager.ResetWheelDetection();
                 _telemetrySender.DetectedDeviceMask = 0;
                 Interlocked.Exchange(ref _telemetryStartRequested, 0);
@@ -579,6 +589,7 @@ namespace MozaPlugin
                 _deviceManager.ReadSetting("dash-rpm-indicator-mode");
                 _deviceManager.ReadSetting("handbrake-direction");
                 _deviceManager.ReadSetting("pedals-throttle-dir");
+                _deviceManager.ReadSetting("hub-port1-power");
             }
         }
 
@@ -597,6 +608,12 @@ namespace MozaPlugin
                 _deviceManager.ReadSetting("handbrake-direction");
             if (!_pedalsDetected)
                 _deviceManager.ReadSetting("pedals-throttle-dir");
+            if (!_hubDetected)
+                _deviceManager.ReadSetting("hub-port1-power");
+
+            // Poll hub port status while hub is connected (read-only, no settings to save)
+            if (_hubDetected)
+                _deviceManager.ReadSettings(HubReadCommands);
         }
 
         private volatile int _unmatched;
@@ -770,6 +787,15 @@ namespace MozaPlugin
                         ApplySavedPedalSettings();
                         _deviceManager.ReadSettings(PedalsSettingsReadCommands);
                         SimHub.Logging.Current.Info("[Moza] Pedals detected");
+                    }
+                    break;
+
+                case "hub-port1-power":
+                    if (!_hubDetected)
+                    {
+                        _hubDetected = true;
+                        _deviceManager.ReadSettings(HubReadCommands);
+                        SimHub.Logging.Current.Info("[Moza] Universal Hub detected");
                     }
                     break;
             }
@@ -1167,7 +1193,7 @@ namespace MozaPlugin
             }
 
             // --- Write to device if connected ---
-            if (_data.IsBaseConnected)
+            if (_data.IsConnected)
             {
                 WriteProfileWheelSettingsToDevice(profile);
                 WriteProfileColorsToDevice(profile);
@@ -1319,7 +1345,7 @@ namespace MozaPlugin
             _settings.WheelRpmBlinkColors = extSettings.WheelRpmBlinkColors;
 
             // Write to hardware if connected
-            if (_data.IsBaseConnected)
+            if (_data.IsConnected)
             {
                 // Wheel mode/brightness settings
                 if (_newWheelDetected)
@@ -1393,7 +1419,7 @@ namespace MozaPlugin
             _settings.DashRpmBlinkColors = extSettings.DashRpmBlinkColors;
 
             // Write to hardware if connected
-            if (_data.IsBaseConnected && _dashDetected)
+            if (_data.IsConnected && _dashDetected)
             {
                 if (extSettings.DashRpmBrightness >= 0)
                     _deviceManager.WriteSetting("dash-rpm-brightness", extSettings.DashRpmBrightness);

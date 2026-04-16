@@ -125,13 +125,14 @@ namespace MozaPlugin.Protocol
             AddCommand("pedals-clutch-output",   "pedals", 37, 0xFF, new byte[] { 3 }, 2, "int");
 
             // ===== HUB (read group 100, read-only) =====
-            AddCommand("hub-base-power",    "hub", 100, 0xFF, new byte[] { 1 }, 2, "int");
-            AddCommand("hub-port1-power",   "hub", 100, 0xFF, new byte[] { 2 }, 2, "int");
-            AddCommand("hub-port2-power",   "hub", 100, 0xFF, new byte[] { 3 }, 2, "int");
-            AddCommand("hub-port3-power",   "hub", 100, 0xFF, new byte[] { 4 }, 2, "int");
-            AddCommand("hub-pedals1-power", "hub", 100, 0xFF, new byte[] { 5 }, 2, "int");
-            AddCommand("hub-pedals2-power", "hub", 100, 0xFF, new byte[] { 6 }, 2, "int");
-            AddCommand("hub-pedals3-power", "hub", 100, 0xFF, new byte[] { 7 }, 2, "int");
+            // Command IDs match foxblat/boxflat serial.yml
+            AddCommand("hub-base-power",    "hub", 100, 0xFF, new byte[] { 2 },    2, "int");
+            AddCommand("hub-port1-power",   "hub", 100, 0xFF, new byte[] { 3 },    2, "int");
+            AddCommand("hub-port2-power",   "hub", 100, 0xFF, new byte[] { 4 },    2, "int");
+            AddCommand("hub-port3-power",   "hub", 100, 0xFF, new byte[] { 5, 1 }, 1, "int");
+            AddCommand("hub-pedals1-power", "hub", 100, 0xFF, new byte[] { 6 },    2, "int");
+            AddCommand("hub-pedals2-power", "hub", 100, 0xFF, new byte[] { 7 },    2, "int");
+            AddCommand("hub-pedals3-power", "hub", 100, 0xFF, new byte[] { 8 },    2, "int");
 
             // ===== TELEMETRY OUTPUT =====
             AddCommand("dash-send-telemetry",           "dash",  0xFF, 65, new byte[] { 253, 222 }, 4, "int");

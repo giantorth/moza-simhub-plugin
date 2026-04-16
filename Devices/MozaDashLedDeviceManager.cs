@@ -109,7 +109,7 @@ namespace MozaPlugin.Devices
                     return;
 
                 var plugin = MozaPlugin.Instance;
-                if (plugin == null || !plugin.Data.IsBaseConnected || !plugin.IsDashDetected)
+                if (plugin == null || !plugin.Data.IsConnected || !plugin.IsDashDetected)
                     return;
 
                 bool alwaysResendBitmask = plugin.Settings.AlwaysResendBitmask;

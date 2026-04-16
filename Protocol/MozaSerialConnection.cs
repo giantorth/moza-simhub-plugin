@@ -338,8 +338,9 @@ namespace MozaPlugin.Protocol
         }
 
         /// <summary>
-        /// Try to open a port and send a Moza base-state read command.
+        /// Try to open a port and send Moza read commands to the base and hub.
         /// If we get a valid response starting with 0x7E, it's a Moza device.
+        /// Sends both probes so hub-only setups (no wheelbase) are also discovered.
         /// </summary>
         private static bool ProbeMozaDevice(string portName)
         {
@@ -355,12 +356,17 @@ namespace MozaPlugin.Protocol
                     probe.DiscardInBuffer();
 
                     // Send a read request for base-state (read group 43, device base 19, cmd id 1)
-                    // Message: [0x7E] [len=3] [group=43] [device=19] [cmd=1] [payload=0x00,0x01] [checksum]
-                    var msg = new byte[] { 0x7E, 0x03, 0x2B, 0x13, 0x01, 0x00, 0x01, 0x00 };
-                    msg[msg.Length - 1] = MozaProtocol.CalculateChecksum(msg, msg.Length - 1);
-                    probe.Write(msg, 0, msg.Length);
+                    var baseMsg = new byte[] { 0x7E, 0x03, 0x2B, 0x13, 0x01, 0x00, 0x01, 0x00 };
+                    baseMsg[baseMsg.Length - 1] = MozaProtocol.CalculateChecksum(baseMsg, baseMsg.Length - 1);
+                    probe.Write(baseMsg, 0, baseMsg.Length);
 
-                    // Wait briefly for a response
+                    // Also probe the hub (read group 100, device hub 18, cmd id 3 = port1)
+                    // Hub-only setups have no base to respond to the first probe.
+                    var hubMsg = new byte[] { 0x7E, 0x03, 0x64, 0x12, 0x03, 0x00, 0x00, 0x00 };
+                    hubMsg[hubMsg.Length - 1] = MozaProtocol.CalculateChecksum(hubMsg, hubMsg.Length - 1);
+                    probe.Write(hubMsg, 0, hubMsg.Length);
+
+                    // Wait briefly for a response from either device
                     System.Threading.Thread.Sleep(100);
 
                     if (probe.BytesToRead > 0)
