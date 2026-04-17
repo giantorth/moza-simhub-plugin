@@ -198,9 +198,6 @@ namespace MozaPlugin.Devices
                                 ? Visibility.Visible : Visibility.Collapsed;
                     }
 
-                    WheelFlagsBrightnessSlider.Value = Clamp(_data.WheelFlagsBrightness, 0, 100);
-                    WheelFlagsBrightnessValue.Text = $"{_data.WheelFlagsBrightness}";
-
                     UpdateSwatches(_wheelFlagColorSwatches, _data.WheelFlagColors, 6);
                     UpdateSwatches(_wheelButtonColorSwatches, _data.WheelButtonColors, 14);
                 }
@@ -271,17 +268,6 @@ namespace MozaPlugin.Devices
             _data!.WheelButtonsIdleEffect = val;
             _settings!.WheelButtonsIdleEffect = val;
             _device!.WriteSetting("wheel-buttons-idle-effect", val);
-            _plugin.SaveSettings();
-        }
-
-        private void WheelFlagsBrightnessSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-        {
-            if (_suppressEvents || _plugin == null) return;
-            int val = (int)Math.Round(e.NewValue);
-            WheelFlagsBrightnessValue.Text = $"{val}";
-            _data!.WheelFlagsBrightness = val;
-            _settings!.WheelFlagsBrightness = val;
-            _device!.WriteSetting("wheel-flags-brightness", val);
             _plugin.SaveSettings();
         }
 
