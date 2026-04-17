@@ -274,8 +274,34 @@ namespace MozaPlugin.Telemetry
                 // Send session open: session byte = port (they match for initial allocations)
                 SendSessionOpen(port, port);
 
-                // Wait for fc:00 ack
-                if (_ackReceived.Wait(ProbeTimeoutMs))
+                // Wait for an fc:00 ack whose session byte matches THIS port. The wheel
+                // can emit stray acks (late response to a prior probe, or an ack for a
+                // previously-opened session); attributing one of those to the current
+                // port would lock the plugin onto a session the wheel never agreed to
+                // and silently break all downstream tier-def / telemetry.
+                var deadline = DateTime.UtcNow.AddMilliseconds(ProbeTimeoutMs);
+                bool acked = false;
+                while (true)
+                {
+                    int remaining = (int)(deadline - DateTime.UtcNow).TotalMilliseconds;
+                    if (remaining <= 0 || !_ackReceived.Wait(remaining))
+                        break;
+
+                    if (_lastAckedSession == port)
+                    {
+                        acked = true;
+                        break;
+                    }
+
+                    // Stale ack (different session) — discard and keep waiting within the
+                    // remaining timeout in case the ack for THIS port is still in flight.
+                    SimHub.Logging.Current.Debug(
+                        $"[Moza] Probing port 0x{port:X2}: ignoring stale ack for session 0x{_lastAckedSession:X2}");
+                    _ackReceived.Reset();
+                    _lastAckedSession = 0;
+                }
+
+                if (acked)
                 {
                     portsFound++;
                     if (portsFound == 1)

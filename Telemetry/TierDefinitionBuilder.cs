@@ -8,18 +8,30 @@ namespace MozaPlugin.Telemetry
 {
     /// <summary>
     /// Builds the tier definition message that Pithouse sends to the wheel via
-    /// 7c:00 session data on session 0x02. This message tells the wheel firmware
-    /// how to decode the bit-packed telemetry on each flag byte.
+    /// 7c:00 session data on the telemetry session. Tells the wheel firmware how
+    /// to decode the bit-packed telemetry on each flag byte.
     ///
-    /// Message format (decoded from moza-startup.json capture 2026-04-12):
+    /// Generic TLV layout — every top-level tag is `[tag:1B][param:u32 LE][data:param bytes]`:
     ///
-    ///   [0x00] [01 00 00 00] [enable_flag]      — per-tier enable (repeated)
-    ///   [0x01] [size: u32 LE] [flag_byte]        — tier definition header
-    ///     [ch_index: u32 LE] [comp_code: u32 LE] [bits: u32 LE] [00 00 00 00]  — per channel
-    ///   [0x06] [04 00 00 00] [total_channels: u32 LE]  — end marker
+    ///   [0x00] [01 00 00 00] [enable_flag:1B]                — per-tier enable (repeated)
+    ///   [0x01] [size: u32 LE] [flag_byte:1B] [channels]      — tier header + channel table
+    ///     [ch_index:u32] [comp_code:u32] [bits:u32] [reserved:u32]   — 16B per channel
+    ///   [0x06] [04 00 00 00] [total_channels: u32 LE]        — end marker
     ///
-    /// Channel indices are 1-based, assigned alphabetically by URL across all tiers.
-    /// Compression codes are firmware-internal IDs mapped from type name strings.
+    /// Preamble tags (0x07 protocol version, 0x03 base flag offset) use the same TLV
+    /// format but are sent as a SEPARATE 14-byte 7c:00 message before this one — see
+    /// TelemetrySender.SendTierDefinition. A parser scanning the session buffer must
+    /// therefore treat unknown top-level tags as generic TLV and skip by param_size.
+    ///
+    /// In FlagByteMode=2 the plugin sends two messages back-to-back on the same
+    /// session: a probe batch (BuildProbeBatch, ends with total_channels=0) followed
+    /// by the real tier def. A robust reassembler must not break on the first 0x06
+    /// end marker — the second message starts immediately after it.
+    ///
+    /// Channel indices are 1-based, assigned alphabetically by URL across all tiers,
+    /// so indices within any single tier are NOT consecutive when a channel's URL
+    /// sorts between two channels of a different tier. Compression codes are
+    /// firmware-internal IDs mapped from type name strings.
     /// </summary>
     public static class TierDefinitionBuilder
     {
@@ -168,9 +180,12 @@ namespace MozaPlugin.Telemetry
         }
 
         /// <summary>
-        /// Build a probe batch: tier definitions at flagBase with no enables and
-        /// total_channels=0. Pithouse sends this as a first batch before the real
-        /// tier definitions. The probe batch may prime the wheel's tier parser.
+        /// Build a probe batch: empty tier definitions at flagBase + no enables +
+        /// end marker with total_channels=0. Pithouse sends this as a first batch
+        /// on the telemetry session BEFORE the real tier definitions. The probe
+        /// primes the wheel's tier parser — total_channels=0 is a sentinel ("probe"),
+        /// not a literal channel count. The two messages (probe + real) arrive on
+        /// the same session, each ending with its own 0x06 end marker.
         /// </summary>
         public static byte[] BuildProbeBatch(MultiStreamProfile profile, byte flagBase)
         {
