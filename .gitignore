@@ -21,3 +21,5 @@ settings.local.json
 
 usb-capture/
 .venv/
+
+__pycache__
