@@ -995,15 +995,24 @@ namespace MozaPlugin.Telemetry
             byte b4 = (byte)(0x03 + 2 * page);
             byte z  = (byte)(0x06 + 2 * page);
 
-            var frame1 = new byte[] { MozaProtocol.MessageStart, 0x0A, MozaProtocol.TelemetrySendGroup,
+            var configFrame = new byte[] { MozaProtocol.MessageStart, 0x0A, MozaProtocol.TelemetrySendGroup,
                 MozaProtocol.DeviceWheel, 0x7C, 0x27, 0x0F, 0x80, b2, 0x00, b4, 0x00, 0xFE, 0x01, 0x00 };
-            frame1[14] = MozaProtocol.CalculateChecksum(frame1);
-            _connection.Send(frame1);
+            configFrame[14] = MozaProtocol.CalculateChecksum(configFrame);
+            _connection.Send(configFrame);
 
-            var frame2 = new byte[] { MozaProtocol.MessageStart, 0x06, MozaProtocol.TelemetrySendGroup,
+            // 7C:23 dashboard-activate: tells the wheel which dashboard pages are
+            // active. PitHouse sends one per page interleaved with 7C:27 at ~1 Hz.
+            byte ab2 = (byte)(0x07 + 2 * page);
+            byte ab4 = (byte)(0x05 + 2 * page);
+            var activateFrame = new byte[] { MozaProtocol.MessageStart, 0x0A, MozaProtocol.TelemetrySendGroup,
+                MozaProtocol.DeviceWheel, 0x7C, 0x23, 0x46, 0x80, ab2, 0x00, ab4, 0x00, 0xFE, 0x01, 0x00 };
+            activateFrame[14] = MozaProtocol.CalculateChecksum(activateFrame);
+            _connection.Send(activateFrame);
+
+            var configFrame2 = new byte[] { MozaProtocol.MessageStart, 0x06, MozaProtocol.TelemetrySendGroup,
                 MozaProtocol.DeviceWheel, 0x7C, 0x27, 0x0F, 0x00, z, 0x00, 0x00 };
-            frame2[10] = MozaProtocol.CalculateChecksum(frame2);
-            _connection.Send(frame2);
+            configFrame2[10] = MozaProtocol.CalculateChecksum(configFrame2);
+            _connection.Send(configFrame2);
         }
 
         private void SendStatusPush()
