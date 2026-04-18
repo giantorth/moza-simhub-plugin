@@ -171,8 +171,9 @@ namespace MozaPlugin.Devices
                 if (plugin == null || !plugin.Data.IsConnected)
                     return;
 
-                bool isNewWheel = plugin.IsNewWheelDetected;
-                bool isOldWheel = plugin.IsOldWheelDetected;
+                bool isOldWheel = ExpectedModelPrefix == MozaDeviceConstants.OldProtocolMarker
+                    && plugin.IsOldWheelDetected;
+                bool isNewWheel = !isOldWheel && plugin.IsNewWheelDetected;
                 if (!isNewWheel && !isOldWheel)
                     return;
 

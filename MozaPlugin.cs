@@ -711,7 +711,7 @@ namespace MozaPlugin
                     break;
 
                 case "wheel-telemetry-mode":
-                    if (!_newWheelDetected)
+                    if (!_newWheelDetected && !_oldWheelDetected)
                     {
                         _newWheelDetected = true;
                         _deviceManager.LockWheelId(deviceId);

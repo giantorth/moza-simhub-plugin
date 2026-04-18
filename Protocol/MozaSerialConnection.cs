@@ -168,11 +168,10 @@ namespace MozaPlugin.Protocol
                     if (totalRead == raw.Length)
                     {
                         // Validate checksum: rebuild the full wire frame for calculation
-                        // Wire frame = [start][payloadLength][group][dev][cmdPayload...]
-                        var wireFrame = new byte[2 + payloadLength + 2]; // start + N + group + dev + cmdPayload
+                        var wireFrame = new byte[2 + payloadLength + 2];
                         wireFrame[0] = MozaProtocol.MessageStart;
                         wireFrame[1] = (byte)payloadLength;
-                        Array.Copy(raw, 0, wireFrame, 2, payloadLength + 2); // group + dev + cmdPayload
+                        Array.Copy(raw, 0, wireFrame, 2, payloadLength + 2);
                         byte expected = MozaProtocol.CalculateChecksum(wireFrame);
                         byte actual = raw[raw.Length - 1];
 

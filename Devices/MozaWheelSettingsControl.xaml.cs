@@ -151,8 +151,9 @@ namespace MozaPlugin.Devices
             StatusDot.Fill = wheelConnected ? Brushes.LimeGreen : Brushes.Red;
             StatusText.Text = wheelConnected ? "Connected" : "Disconnected";
 
-            bool newWheel = wheelConnected && _plugin!.IsNewWheelDetected;
-            bool oldWheel = wheelConnected && _plugin!.IsOldWheelDetected;
+            bool isOldProtoDevice = LinkedLedDriver?.ExpectedModelPrefix == MozaDeviceConstants.OldProtocolMarker;
+            bool oldWheel = wheelConnected && isOldProtoDevice && _plugin!.IsOldWheelDetected;
+            bool newWheel = wheelConnected && !isOldProtoDevice && _plugin!.IsNewWheelDetected;
 
             if (wheelConnected)
             {
@@ -179,6 +180,7 @@ namespace MozaPlugin.Devices
                 WheelNotDetectedPanel.Visibility = anyWheel ? Visibility.Collapsed : Visibility.Visible;
                 NewWheelPanel.Visibility = newWheel ? Visibility.Visible : Visibility.Collapsed;
                 EsWheelPanel.Visibility = oldWheel ? Visibility.Visible : Visibility.Collapsed;
+                TelemetrySection.Visibility = oldWheel ? Visibility.Collapsed : Visibility.Visible;
 
                 if (newWheel)
                 {
