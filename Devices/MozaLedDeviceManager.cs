@@ -254,7 +254,9 @@ namespace MozaPlugin.Devices
                 // Wheels with 3/N/3 flag layout: SimHub indices 0..2 drive flag 1..3,
                 // indices rpmN+3..rpmN+5 drive flag 4..6. Per-LED static color writes
                 // with change detection keep wire traffic low.
-                if (hasFlagLeds && ledColors.Length >= flagLeft + rpmN + 3)
+                // Flag LEDs live on the Meter sub-device (device 0x14) per RS21 DB;
+                // gate on dash detection so writes only fire once that sub-device answers.
+                if (hasFlagLeds && plugin.IsDashDetected && ledColors.Length >= flagLeft + rpmN + 3)
                 {
                     for (int i = 0; i < MozaDeviceConstants.FlagLedCount; i++)
                     {
@@ -265,7 +267,7 @@ namespace MozaPlugin.Devices
                         {
                             _lastFlagColors[i] = c;
                             plugin.DeviceManager.WriteArray(
-                                $"wheel-flag-color{i + 1}",
+                                $"dash-flag-color{i + 1}",
                                 new byte[] { c.R, c.G, c.B });
                             anySent = true;
                         }
@@ -323,10 +325,11 @@ namespace MozaPlugin.Devices
 
                 // Flag brightness is slaved to RPM brightness on wheels with flag LEDs —
                 // the 3/N/3 layout is a single logical strip, so one master knob controls all.
-                if (hasFlagLeds && rpmBrightness != _lastFlagsBrightness)
+                // Routed through the Meter sub-device via dash-flags-brightness; gated on dash detect.
+                if (hasFlagLeds && plugin.IsDashDetected && rpmBrightness != _lastFlagsBrightness)
                 {
                     _lastFlagsBrightness = rpmBrightness;
-                    plugin.DeviceManager.WriteSetting("wheel-flags-brightness", (int)(rpmBrightness * 100));
+                    plugin.DeviceManager.WriteSetting("dash-flags-brightness", (int)(rpmBrightness * 100));
                     anySent = true;
                 }
 
@@ -376,13 +379,13 @@ namespace MozaPlugin.Devices
                     plugin.DeviceManager.WriteArray("wheel-send-rpm-telemetry",
                         new byte[] { (byte)(_lastRpmBitmask & 0xFF), (byte)((_lastRpmBitmask >> 8) & 0xFF) });
 
-                if (modelInfo?.HasFlagLeds == true && _lastFlagColorsPrimed)
+                if (modelInfo?.HasFlagLeds == true && plugin.IsDashDetected && _lastFlagColorsPrimed)
                 {
                     for (int i = 0; i < MozaDeviceConstants.FlagLedCount; i++)
                     {
                         var c = _lastFlagColors[i];
                         plugin.DeviceManager.WriteArray(
-                            $"wheel-flag-color{i + 1}",
+                            $"dash-flag-color{i + 1}",
                             new byte[] { c.R, c.G, c.B });
                     }
                 }

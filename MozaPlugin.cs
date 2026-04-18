@@ -850,7 +850,11 @@ namespace MozaPlugin
             // Brightness
             _deviceManager.WriteSetting("wheel-rpm-brightness", _settings.WheelRpmBrightness);
             _deviceManager.WriteSetting("wheel-buttons-brightness", _settings.WheelButtonsBrightness);
-            _deviceManager.WriteSetting("wheel-flags-brightness", _settings.WheelFlagsBrightness);
+            // Flag brightness routes to the Meter sub-device via dash-flags-brightness
+            // (RS21 DB: MeterSetCfg_SetFlagGroupBrightness_o). Only write when the dash
+            // sub-device has responded; otherwise the write targets a device that's not present.
+            if (_dashDetected)
+                _deviceManager.WriteSetting("dash-flags-brightness", _settings.WheelFlagsBrightness);
             _deviceManager.WriteSetting("wheel-old-rpm-brightness", _settings.WheelESRpmBrightness);
         }
 
@@ -868,6 +872,12 @@ namespace MozaPlugin
             // Brightness
             _deviceManager.WriteSetting("dash-rpm-brightness", _settings.DashRpmBrightness);
             _deviceManager.WriteSetting("dash-flags-brightness", _settings.DashFlagsBrightness);
+
+            // Enable flag indicator mode (0=Off, 1=Flags, 2=On). Firmware default is 0,
+            // which silently drops all flag colour/bitmask writes. Set to 1 so the plugin's
+            // bitmask-driven LEDs actually display. Subsequent read of dash-flags-indicator-mode
+            // (via DashSettingsReadCommands) refreshes _data for the UI combo.
+            _deviceManager.WriteSetting("dash-flags-indicator-mode", 1);
         }
 
         /// <summary>
@@ -1262,8 +1272,9 @@ namespace MozaPlugin
                         _deviceManager.WriteSetting("wheel-rpm-brightness", profile.WheelRpmBrightness);
                     if (profile.WheelButtonsBrightness >= 0)
                         _deviceManager.WriteSetting("wheel-buttons-brightness", profile.WheelButtonsBrightness);
-                    if (profile.WheelFlagsBrightness >= 0)
-                        _deviceManager.WriteSetting("wheel-flags-brightness", profile.WheelFlagsBrightness);
+                    // Flag brightness → Meter sub-device (dash-flags-brightness). Gate on dash detected.
+                    if (profile.WheelFlagsBrightness >= 0 && _dashDetected)
+                        _deviceManager.WriteSetting("dash-flags-brightness", profile.WheelFlagsBrightness);
                 }
 
                 // ES/Old wheel settings
@@ -1296,7 +1307,9 @@ namespace MozaPlugin
                 WriteColorArray(profile.WheelRpmColors, "wheel-rpm-color", 10);
                 WriteColorArray(profile.WheelRpmBlinkColors, "wheel-rpm-blink-color", 10);
                 WriteColorArray(profile.WheelButtonColors, "wheel-button-color", 14);
-                WriteColorArray(profile.WheelFlagColors, "wheel-flag-color", 6);
+                // Flag colors route to Meter sub-device via dash-flag-color*. Gate on dash detection.
+                if (_dashDetected)
+                    WriteColorArray(profile.WheelFlagColors, "dash-flag-color", 6);
                 if (profile.WheelIdleColor != null && profile.WheelIdleColor.Length > 0)
                 {
                     var rgb = MozaProfile.UnpackColor(profile.WheelIdleColor[0]);
@@ -1360,8 +1373,9 @@ namespace MozaPlugin
                         _deviceManager.WriteSetting("wheel-rpm-brightness", extSettings.WheelRpmBrightness);
                     if (extSettings.WheelButtonsBrightness >= 0)
                         _deviceManager.WriteSetting("wheel-buttons-brightness", extSettings.WheelButtonsBrightness);
-                    if (extSettings.WheelFlagsBrightness >= 0)
-                        _deviceManager.WriteSetting("wheel-flags-brightness", extSettings.WheelFlagsBrightness);
+                    // Flag brightness → Meter sub-device (dash-flags-brightness). Gate on dash detected.
+                    if (extSettings.WheelFlagsBrightness >= 0 && _dashDetected)
+                        _deviceManager.WriteSetting("dash-flags-brightness", extSettings.WheelFlagsBrightness);
                 }
 
                 if (_oldWheelDetected)
@@ -1378,7 +1392,9 @@ namespace MozaPlugin
                 WriteColorArray(extSettings.WheelRpmColors, "wheel-rpm-color", 10);
                 WriteColorArray(extSettings.WheelRpmBlinkColors, "wheel-rpm-blink-color", 10);
                 WriteColorArray(extSettings.WheelButtonColors, "wheel-button-color", 14);
-                WriteColorArray(extSettings.WheelFlagColors, "wheel-flag-color", 6);
+                // Flag colors → Meter sub-device (dash-flag-color*). Gate on dash detection.
+                if (_dashDetected)
+                    WriteColorArray(extSettings.WheelFlagColors, "dash-flag-color", 6);
                 if (extSettings.WheelIdleColor != null && extSettings.WheelIdleColor.Length > 0)
                 {
                     var rgb = MozaProfile.UnpackColor(extSettings.WheelIdleColor[0]);
