@@ -17,6 +17,10 @@
 | Payload | N | Command ID (1+ bytes) followed by value bytes |
 | Checksum | 1 | See below |
 
+**N (payload length)** is bounded: valid range is 1–64. Values outside this range indicate corruption or a desync — discard and rescan for the next `0x7E` start byte.
+
+**Frame synchronization:** receivers scan the byte stream for `0x7E`, discarding all non-`0x7E` bytes. Once found, the next byte is read as N. If N is out of range or the checksum doesn't match, the frame is dropped and scanning resumes. This makes the protocol self-synchronizing after any corruption or mid-stream connection.
+
 Command IDs that are arrays of integers must be provided sequentially in order. Values are big-endian. Multiple frames can be concatenated in a single USB bulk transfer.
 
 ### Checksum
@@ -44,6 +48,8 @@ Device → host:  7e 07 8e 21 00 00 0b 00 00 00 32 7e 7e 7e 07 8e 91 ...
 In the three-`7E` case, the first `7E` is the checksum, the second is the escape, and the third is the start of the next frame.
 
 **Impact on buffer parsing:** When extracting frames from concatenated USB bulk data (pcapng captures, text logs), the parser must skip the escape byte between frames. Serial readers (byte-at-a-time) must consume one extra byte after receiving a frame with checksum `0x7E`. Failure to handle this causes the escape `0x7E` to be read as a frame start, with the next byte consumed as the length field — typically a large value (e.g. `N=0x7E`=126) that overshoots the buffer, silently dropping all subsequent frames in the transfer.
+
+**Scope:** in the known protocol space, group IDs (0x07–0x64), device IDs (0x12–0x1E), and their response transforms (group | 0x80, nibble-swapped device) never equal `0x7E`. Payload bytes are unconstrained but `0x7E` has not been observed in payload data in any capture. Only the checksum byte can equal `0x7E` in practice, so implementations only need to stuff/unstuff the checksum position. The simulator's parser (`parse_frames`) defensively handles `0x7E` anywhere in the body as a safety margin.
 
 Reference: [boxflat PR #131](https://github.com/Lawstorant/boxflat/pull/131) documents the same behavior.
 

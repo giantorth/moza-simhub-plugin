@@ -407,7 +407,11 @@ def frame_len(n: int) -> int:
     return 5 + n
 
 def parse_frames(data: bytes) -> List[bytes]:
-    """Extract all complete Moza frames from a contiguous byte buffer."""
+    """Extract all complete Moza frames from a contiguous byte buffer.
+
+    Handles byte-stuffing: any 0x7E in the frame body is doubled on the wire.
+    We decode (collapse 0x7E 0x7E → 0x7E) while scanning.
+    """
     frames = []
     i = 0
     while i < len(data):
@@ -417,24 +421,32 @@ def parse_frames(data: bytes) -> List[bytes]:
         if i + 1 >= len(data):
             break
         n = data[i + 1]
-        flen = frame_len(n)
-        if i + flen > len(data):
+        need = n + 3  # group + device + payload(n) + checksum
+        decoded = bytearray()
+        j = i + 2  # position after start + N
+        while len(decoded) < need and j < len(data):
+            if data[j] == MSG_START:
+                if j + 1 < len(data) and data[j + 1] == MSG_START:
+                    decoded.append(MSG_START)
+                    j += 2
+                else:
+                    break  # bare 0x7E = next frame start, current frame truncated
+            else:
+                decoded.append(data[j])
+                j += 1
+        if len(decoded) < need:
             break
-        frame = data[i:i + flen]
-        frames.append(frame)
-        i += flen
-        # Checksum escape: when checksum == 0x7E, sender doubles it on the wire.
-        if frame[-1] == MSG_START and i < len(data) and data[i] == MSG_START:
-            i += 1
+        frames.append(bytes([MSG_START, n]) + bytes(decoded))
+        i = j
     return frames
 
 def read_one_frame(ser) -> Optional[bytes]:
     """Read exactly one Moza frame from a pyserial port (blocking).
 
-    Handles the MOZA checksum escape: when a frame's checksum byte equals 0x7E,
-    PitHouse doubles it on the wire (sends 0x7E 0x7E). Without consuming the
-    extra byte, the reader desyncs — the escape 0x7E looks like the start of a
-    new frame, corrupting subsequent reads in a cascade.
+    Handles MOZA byte-stuffing: any 0x7E in the frame body (group, device,
+    payload, or checksum) is doubled on the wire (0x7E → 0x7E 0x7E).  The
+    reader must collapse each pair back to a single 0x7E while counting
+    *decoded* bytes against the expected length.
     See: https://github.com/Lawstorant/boxflat/pull/131
     """
     while True:
@@ -447,19 +459,24 @@ def read_one_frame(ser) -> Optional[bytes]:
     if not nb:
         return None
     n = nb[0]
-    # Need group(1) + device(1) + payload(n) + checksum(1) = n+3
-    tail = b''
+    # Need group(1) + device(1) + payload(n) + checksum(1) = n+3 decoded bytes
+    decoded = bytearray()
     need = n + 3
-    while len(tail) < need:
-        chunk = ser.read(need - len(tail))
-        if not chunk:
+    while len(decoded) < need:
+        raw = ser.read(1)
+        if not raw:
             return None
-        tail += chunk
-    frame = bytes([MSG_START, n]) + tail
-    if frame[-1] == MSG_START:
-        # Checksum is 0x7E — consume the escaped duplicate byte.
-        ser.read(1)
-    return frame
+        if raw[0] == MSG_START:
+            esc = ser.read(1)
+            if not esc:
+                return None
+            if esc[0] == MSG_START:
+                decoded.append(MSG_START)
+            else:
+                return None
+        else:
+            decoded.append(raw[0])
+    return bytes([MSG_START, n]) + bytes(decoded)
 
 def frame_payload(frame: bytes) -> bytes:
     """Return N payload bytes (cmd + data), excluding group/device/checksum."""
@@ -1676,9 +1693,11 @@ def cmd_live(port: str, db: Dict[str, dict], replay: Optional[ResponseReplay] = 
     write_lock = threading.Lock()
 
     def _write(frame: bytes, tag: str):
-        ser.write(frame)
-        if frame[-1] == MSG_START:
-            ser.write(b'\x7e')
+        ser.write(frame[:2])  # start + N unescaped
+        for b in frame[2:]:
+            ser.write(bytes([b]))
+            if b == MSG_START:
+                ser.write(b'\x7e')
         log_fh.write(f'{_ts()} TX [{tag:<13}] {frame.hex(" ")}\n')
 
     def read_loop():
