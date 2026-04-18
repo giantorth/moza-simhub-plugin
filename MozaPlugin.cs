@@ -28,6 +28,7 @@ namespace MozaPlugin
         private MozaPluginSettings _settings = null!;
         private Timer _pollTimer = null!;
         private Timer _reconnectTimer = null!;
+        private int _connectingFlag;
         private MozaHidReader _hidReader = null!;
         private PluginManager _pluginManager = null!;
         private TelemetrySender _telemetrySender = null!;
@@ -278,9 +279,6 @@ namespace MozaPlugin
 
             _deviceManager = new MozaDeviceManager(_connection);
 
-            if (_settings.ConnectionEnabled)
-                TryConnect();
-
             _pollTimer = new Timer(2000);
             _pollTimer.Elapsed += PollStatus;
             _pollTimer.AutoReset = true;
@@ -375,8 +373,6 @@ namespace MozaPlugin
             if (enabled)
             {
                 _reconnectTimer.Start();
-                if (!_connection.IsConnected)
-                    TryConnect();
                 SimHub.Logging.Current.Info("[Moza] Connection enabled");
             }
             else
@@ -578,18 +574,26 @@ namespace MozaPlugin
 
         private void TryConnect()
         {
-            if (_connection.Connect())
+            if (Interlocked.CompareExchange(ref _connectingFlag, 1, 0) != 0)
+                return;
+
+            try
             {
-                _unmatched = 0;
-                SimHub.Logging.Current.Info("[Moza] Connected to MOZA device");
-                // Only send detection probes — device-specific settings are read
-                // after each device is confirmed present in DetectDevices().
-                _deviceManager.ReadSettings(StatusPollCommands);
-                _deviceManager.ProbeWheelDetection();
-                _deviceManager.ReadSetting("dash-rpm-indicator-mode");
-                _deviceManager.ReadSetting("handbrake-direction");
-                _deviceManager.ReadSetting("pedals-throttle-dir");
-                _deviceManager.ReadSetting("hub-port1-power");
+                if (_connection.Connect())
+                {
+                    _unmatched = 0;
+                    SimHub.Logging.Current.Info("[Moza] Connected to MOZA device");
+                    _deviceManager.ReadSettings(StatusPollCommands);
+                    _deviceManager.ProbeWheelDetection();
+                    _deviceManager.ReadSetting("dash-rpm-indicator-mode");
+                    _deviceManager.ReadSetting("handbrake-direction");
+                    _deviceManager.ReadSetting("pedals-throttle-dir");
+                    _deviceManager.ReadSetting("hub-port1-power");
+                }
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _connectingFlag, 0);
             }
         }
 
