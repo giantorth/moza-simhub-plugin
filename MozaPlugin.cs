@@ -733,7 +733,7 @@ namespace MozaPlugin
                         WheelModelInfo = Devices.WheelModelInfo.FromModelName(_data.WheelModelName);
                         SimHub.Logging.Current.Info(
                             $"[Moza] Wheel model: {_data.WheelModelName} " +
-                            $"(buttons={WheelModelInfo.ButtonLedCount}, flags={WheelModelInfo.HasFlagLeds})");
+                            $"(rpm={WheelModelInfo.RpmLedCount}, buttons={WheelModelInfo.ButtonLedCount}, flags={WheelModelInfo.HasFlagLeds})");
                         DeployDeviceDefinitionForModel(_data.WheelModelName);
                     }
                     else
@@ -1455,10 +1455,10 @@ namespace MozaPlugin
             var modelInfo = WheelModelInfo.FromModelName(modelName);
             var deviceName = "MOZA " + friendlyName;
 
-            DeployGeneratedWheelDefinition(deviceName, guid, friendlyName, modelInfo.ButtonLedCount);
+            DeployGeneratedWheelDefinition(deviceName, guid, friendlyName, modelInfo.RpmLedCount, modelInfo.HasFlagLeds, modelInfo.ButtonLedCount);
         }
 
-        private void DeployGeneratedWheelDefinition(string deviceName, string guid, string productName, int buttonCount)
+        private void DeployGeneratedWheelDefinition(string deviceName, string guid, string productName, int rpmCount, bool hasFlagLeds, int buttonCount)
         {
             try
             {
@@ -1467,19 +1467,44 @@ namespace MozaPlugin
                 var deviceDir = Path.Combine(userDefsDir, deviceName);
                 var deviceJsonPath = Path.Combine(deviceDir, "device.json");
 
-                if (File.Exists(deviceJsonPath))
-                    return;
+                int expectedTelemetryCount = rpmCount + (hasFlagLeds ? 6 : 0);
+                bool fileExists = File.Exists(deviceJsonPath);
+                bool stale = false;
+
+                if (fileExists)
+                {
+                    // Compare existing LogicalTelemetryLeds.LedCount + LogicalButtonsSection.Items
+                    // against expected. Mismatch = layout changed in a plugin update; rewrite.
+                    try
+                    {
+                        var existing = JObject.Parse(File.ReadAllText(deviceJsonPath));
+                        int existingLed = existing.SelectToken("LedsFeature.LogicalTelemetryLeds.LedCount")?.Value<int>() ?? -1;
+                        int existingButtons = (existing.SelectToken("LedsFeature.LogicalButtonsSection.Items") as JArray)?.Count ?? -1;
+                        stale = existingLed != expectedTelemetryCount || existingButtons != buttonCount;
+                    }
+                    catch (Exception parseEx)
+                    {
+                        SimHub.Logging.Current.Warn(
+                            $"[Moza] Could not parse existing device.json for '{deviceName}', rewriting: {parseEx.Message}");
+                        stale = true;
+                    }
+
+                    if (!stale)
+                        return;
+                }
 
                 Directory.CreateDirectory(deviceDir);
 
                 var pid = _connection.DiscoveredPid ?? "0x0004";
-                var json = GenerateWheelDeviceJson(guid, productName, buttonCount, pid);
+                var json = GenerateWheelDeviceJson(guid, productName, rpmCount, hasFlagLeds, buttonCount, pid);
                 File.WriteAllText(deviceJsonPath, json);
 
                 DeviceDefinitionDeployed = true;
+                string action = stale ? "Refreshed" : "Deployed";
                 SimHub.Logging.Current.Info(
-                    $"[Moza] Deployed device definition: {deviceName} " +
-                    $"(guid={guid}, buttons={buttonCount}, pid={pid}, restart SimHub to add it)");
+                    $"[Moza] {action} device definition: {deviceName} " +
+                    $"(guid={guid}, telemetryLeds={expectedTelemetryCount}, rpm={rpmCount}, flags={hasFlagLeds}, " +
+                    $"buttons={buttonCount}, pid={pid}, restart SimHub to pick up changes)");
             }
             catch (Exception ex)
             {
@@ -1487,19 +1512,22 @@ namespace MozaPlugin
             }
         }
 
-        private static string GenerateWheelDeviceJson(string guid, string productName, int buttonCount, string pid)
+        private static string GenerateWheelDeviceJson(string guid, string productName, int rpmCount, bool hasFlagLeds, int buttonCount, string pid)
         {
             var physItems = new JArray();
 
-            // RPM LEDs: 10 slots (first has the mapping, rest are empty continuations)
+            // Telemetry LEDs: single contiguous sequence. When the wheel has flag LEDs
+            // they are 3-on-each-side of the RPM strip, so SimHub sees (rpmCount + 6)
+            // LEDs as one logical run: [flag 1..3][rpm 1..N][flag 4..6].
+            int telemetryCount = rpmCount + (hasFlagLeds ? 6 : 0);
             physItems.Add(new JObject
             {
                 ["SourceRole"] = 1,
                 ["SourceIndex"] = 0,
-                ["RepeatCount"] = MozaDeviceConstants.RpmLedCount,
+                ["RepeatCount"] = telemetryCount,
                 ["RepeatMode"] = 1
             });
-            for (int i = 1; i < MozaDeviceConstants.RpmLedCount; i++)
+            for (int i = 1; i < telemetryCount; i++)
                 physItems.Add(new JObject());
 
             // Button LEDs: buttonCount slots
@@ -1540,8 +1568,10 @@ namespace MozaPlugin
                     ["PhysicalLedsMappings"] = new JObject { ["Items"] = physItems },
                     ["LogicalTelemetryLeds"] = new JObject
                     {
-                        ["LedCount"] = MozaDeviceConstants.RpmLedCount,
-                        ["Segments"] = new JArray(),
+                        ["LedCount"] = telemetryCount,
+                        ["Segments"] = hasFlagLeds
+                            ? new JArray(new JObject { ["Size"] = 3 })
+                            : new JArray(),
                         ["IsEnabled"] = true
                     },
                     ["LogicalButtonsSection"] = new JObject

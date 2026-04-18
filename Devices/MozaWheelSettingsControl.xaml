@@ -108,11 +108,6 @@
                         <TextBlock Style="{StaticResource LedIndex}" Text="5"/><TextBlock Style="{StaticResource LedIndex}" Text="6"/>
                     </StackPanel>
                     <StackPanel x:Name="WheelFlagColorPanel" Orientation="Horizontal" Margin="0,0,0,10"/>
-                    <StackPanel Orientation="Horizontal" Margin="0,4">
-                        <TextBlock Text="Flags Brightness" Style="{StaticResource SliderLabel}"/>
-                        <Slider x:Name="WheelFlagsBrightnessSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="WheelFlagsBrightnessSlider_ValueChanged"/>
-                        <TextBlock x:Name="WheelFlagsBrightnessValue" Style="{StaticResource SliderValue}" Text="100"/>
-                    </StackPanel>
                 </StackPanel>
 
                 <TextBlock Text="Button LED Colors" Style="{StaticResource SectionHeader}"/>
