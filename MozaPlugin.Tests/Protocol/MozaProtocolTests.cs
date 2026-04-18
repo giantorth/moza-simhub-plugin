@@ -47,6 +47,27 @@ namespace MozaPlugin.Tests.Protocol
             Assert.Equal(frame[frame.Length - 1], computed);
         }
 
+        [Fact]
+        public void CalculateChecksum_CanProduce0x7E()
+        {
+            // From a real Wireshark capture: 7e 06 3f 17 1a 01 3d 3f 00 00 7e
+            // The checksum of this frame is 0x7E, which requires wire-level escaping.
+            byte[] frame = HexUtil.Parse("7e 06 3f 17 1a 01 3d 3f 00 00 7e");
+            byte computed = MozaProtocol.CalculateChecksum(frame, frame.Length - 1);
+            Assert.Equal(MozaProtocol.MessageStart, computed);
+            Assert.Equal(frame[frame.Length - 1], computed);
+        }
+
+        [Fact]
+        public void CalculateChecksum_DeviceFrame_0x7E()
+        {
+            // Device → host frame with checksum 0x7E (from capture):
+            // 7e 07 8e 21 00 00 0b 00 00 00 32 7e
+            byte[] frame = HexUtil.Parse("7e 07 8e 21 00 00 0b 00 00 00 32 7e");
+            byte computed = MozaProtocol.CalculateChecksum(frame, frame.Length - 1);
+            Assert.Equal(MozaProtocol.MessageStart, computed);
+        }
+
         [Theory]
         [InlineData(0x12, 0x21)]
         [InlineData(0xAB, 0xBA)]
