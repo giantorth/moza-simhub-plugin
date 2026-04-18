@@ -26,9 +26,9 @@ Setup guides (authoritative):
 import argparse
 import collections
 import json
-import os
 import struct
 import subprocess
+import zlib
 import sys
 import threading
 import time
@@ -94,80 +94,149 @@ def _id_str(s: str) -> bytes:
     """16-byte null-padded ASCII identity string."""
     return s.encode('ascii')[:16].ljust(16, b'\x00')
 
-# SimHub-plugin post-connect probes. The plugin's DetectDevices loop waits for
-# `value >= 0` from one of these commands before locking a wheel, detecting a
-# peripheral, or reading wheel identity. Without these, the plugin sees the
-# port but never promotes us to "complete wheel".
-#
-# Key:   (req_group, req_device, cmd_prefix_bytes)
-# Value: response payload (cmd_prefix + big-endian value bytes of the right width)
-#
-# Response frame is wrapped with (req_group | 0x80, swap_nibbles(req_device), payload).
-# PayloadBytes field values confirmed from Protocol/MozaCommandDatabase.cs.
-_PLUGIN_PROBE_RSP: Dict[Tuple[int, int, bytes], bytes] = {
-    # ── Wheel detection (MozaDeviceManager.ProbeWheelDetection → ids 23/21/19) ──
-    # wheel-telemetry-mode, PayloadBytes=1 → value=1 (multi-channel enabled)
-    (0x40, 0x17, b'\x28\x00'): b'\x28\x00\x01',
-    (0x40, 0x15, b'\x28\x00'): b'\x28\x00\x01',
-    (0x40, 0x13, b'\x28\x00'): b'\x28\x00\x01',
-    # wheel-rpm-value1, PayloadBytes=2 → value=1000 BE
-    (0x40, 0x17, b'\x24\x00'): b'\x24\x00\x03\xE8',
-    (0x40, 0x15, b'\x24\x00'): b'\x24\x00\x03\xE8',
-    (0x40, 0x13, b'\x24\x00'): b'\x24\x00\x03\xE8',
+# ── Wheel model profiles ──────────────────────────────────────────────────
+# Each profile defines the identity strings and protocol details for a
+# specific wheel model. Selected via --model CLI arg (default: vgs).
 
-    # ── StatusPollCommands (base status, MozaPlugin.PollStatus) ──
-    (0x2B, 0x13, b'\x01'): b'\x01\x00\x00',          # base-state
-    (0x2B, 0x13, b'\x02'): b'\x02\x00\x00',          # base-state-err
-    (0x2B, 0x13, b'\x04'): b'\x04\x01\x2C',          # base-mcu-temp  (300 → 30.0°C)
-    (0x2B, 0x13, b'\x05'): b'\x05\x01\x2C',          # base-mosfet-temp
-    (0x2B, 0x13, b'\x06'): b'\x06\x01\x2C',          # base-motor-temp
-
-    # ── Dashboard detection (MVP peripheral) ──
-    (0x33, 0x14, b'\x11\x00'): b'\x11\x00\x01',      # dash-rpm-indicator-mode
-    # Hub/pedals/handbrake intentionally omitted — MVP is base+wheel+dash only.
-    # Plugin will see no response for those probes and not promote them.
-
-    # ── Config-mode probe (docs: 0x3F/09:00 → 09:28; also seen as 09:32 → 09:28) ──
-    (0x3F, 0x17, b'\x09\x32'): b'\x09\x28',
-    (0x3F, 0x17, b'\x09\x00'): b'\x09\x28',
-
-    # ── Main hub settings write (0x1F/0x12 4E:XX) — observed fixed response ──
-    # Captured: req `4e 08 ff` / `4e 09 ff` / `4e 0a ff` / `4e 0b ff` all reply `4c 00`.
-    # PitHouse also sends the same cmd with data=0x80; use cmd-prefix only.
-    (0x1F, 0x12, b'\x4e\x08'): b'\x4c\x00',
-    (0x1F, 0x12, b'\x4e\x09'): b'\x4c\x00',
-    (0x1F, 0x12, b'\x4e\x0a'): b'\x4c\x00',
-    (0x1F, 0x12, b'\x4e\x0b'): b'\x4c\x00',
-
-    # ── Wheel identity reads (plugin queries after locking on ID 23) ──
-    # These use direct-group addressing with device=0x17, same values PitHouse
-    # sees in _VGS_ID_RSP so both clients report the same VGS identity.
-    (0x07, 0x17, b'\x01'): b'\x01' + _id_str('VGS'),
-    (0x0F, 0x17, b'\x01'): b'\x01' + _id_str('RS21-W08-MC SW'),
-    (0x08, 0x17, b'\x01'): b'\x01' + _id_str('RS21-W08-HW SM-C'),
-    (0x08, 0x17, b'\x02'): b'\x02' + _id_str('U-V12'),
-    (0x10, 0x17, b'\x00'): b'\x00' + _id_str('VGS00000000000'),
-    (0x10, 0x17, b'\x01'): b'\x01' + _id_str('00000000000000'),
+WHEEL_MODELS: Dict[str, dict] = {
+    'vgs': {
+        'name': 'VGS',
+        'friendly': 'Vision GS',
+        'sw_version': 'RS21-W08-MC SW',
+        'hw_version': 'RS21-W08-HW SM-C',
+        'hw_sub': 'U-V12',
+        'serial0': 'VGS00000000000',
+        'serial1': '00000000000000',
+        'caps': bytes([0x01, 0x02, 0x1f, 0x01]),
+        'hw_id': bytes.fromhex('be4930021471350430303337'),
+        'session1_desc': bytes.fromhex(
+            '0701000000000c0669420714e806e0df1099ff3404100105'
+            '0a060164000000050004 0a000000000000000600'
+            .replace(' ', '')),
+        'display': {
+            'name': 'Display',
+            'sw_version': 'RS21-W08-HW SM-D',
+            'hw_version': 'RS21-W08-HW SM-D',
+            'hw_sub': 'U-V14',
+            'serial0': 'VGS00000000000',
+            'serial1': '00000000000000',
+            'dev_type': bytes([0x01, 0x02, 0x08, 0x06]),
+            'caps': bytes([0x01, 0x02, 0x00, 0x00]),
+            'hw_id': bytes.fromhex('be4930021471350430303337'),
+        },
+    },
+    'csp': {
+        'name': 'W17',
+        'friendly': 'CS Pro',
+        'sw_version': 'RS21-W17-MC SW',
+        'hw_version': 'RS21-W17-HW SM-C',
+        'hw_sub': 'U-V12',
+        'serial0': '3ctgwI7Sm4agxaqP',
+        'serial1': 'KRA15R/ODpCPuVL1',
+        'caps': bytes([0x01, 0x02, 0x3f, 0x01]),
+        'hw_id': bytes.fromhex('80313bc000203004'),
+        'session1_desc': bytes.fromhex(
+            '0701000000000c048ae5d086b2fcad7486dbe208041001'
+            '0a0164000000050004020000000000000006 00'
+            .replace(' ', '')),
+        'display': {
+            'name': 'W17 Display',
+            'sw_version': 'RS21-W17-HW RGB-',
+            'hw_version': 'RS21-W17-HW RGB-',
+            'hw_sub': 'DU-V11',
+            'serial0': 'ZjHh2CULKQ7GH57',
+            'serial1': 'XoUZzSk3wTdJfkaY',
+            'dev_type': bytes([0x01, 0x02, 0x0d, 0x06]),
+            'caps': bytes([0x01, 0x02, 0x00, 0x00]),
+            'hw_id': bytes.fromhex('8ae5d086b2fcad7486dbe208'),
+        },
+    },
 }
 
-# PitHouse VGS identity probe sequence. All probes target device=0x17 with
-# different group bytes (0x02, 0x04…0x11). Key = (group, payload); value =
-# response payload. Response frame: group|0x80, device=0x71, payload.
-# Values from docs/moza-protocol.md § Wheel connection probe sequence.
-_VGS_ID_RSP: Dict[Tuple[int, bytes], bytes] = {
-    (0x09, b''):                 bytes([0x00, 0x01]),
-    (0x02, b''):                 bytes([0x02]),
-    (0x04, b'\x00\x00\x00\x00'): bytes([0x01, 0x02, 0x04, 0x06]),
-    (0x05, b'\x00\x00\x00\x00'): bytes([0x01, 0x02, 0x1f, 0x01]),
-    (0x06, b''):                 bytes.fromhex('be4930021471350430303337'),
-    (0x07, b'\x01'):             _id_str('VGS'),
-    (0x08, b'\x01'):             _id_str('RS21-W08-HW SM-C'),
-    (0x08, b'\x02'):             _id_str('U-V12'),
-    (0x0F, b'\x01'):             _id_str('RS21-W08-MC SW'),
-    (0x10, b'\x00'):             _id_str('VGS00000000000'),
-    (0x10, b'\x01'):             _id_str('00000000000000'),
-    (0x11, b'\x04'):             bytes([0x00, 0x00]),
-}
+def _build_identity_tables(model: dict) -> Tuple[
+    Dict[Tuple[int, int, bytes], bytes],
+    Dict[Tuple[int, bytes], bytes],
+]:
+    """Build plugin probe and PitHouse identity tables from a wheel model profile."""
+    name = model['name']
+    disp = model.get('display', {})
+
+    # Plugin probe responses — device-independent entries plus wheel identity
+    plugin_rsp: Dict[Tuple[int, int, bytes], bytes] = {
+        # ── Wheel detection (MozaDeviceManager.ProbeWheelDetection → ids 23/21/19) ──
+        (0x40, 0x17, b'\x28\x00'): b'\x28\x00\x01',
+        (0x40, 0x15, b'\x28\x00'): b'\x28\x00\x01',
+        (0x40, 0x13, b'\x28\x00'): b'\x28\x00\x01',
+        (0x40, 0x17, b'\x24\x00'): b'\x24\x00\x03\xE8',
+        (0x40, 0x15, b'\x24\x00'): b'\x24\x00\x03\xE8',
+        (0x40, 0x13, b'\x24\x00'): b'\x24\x00\x03\xE8',
+        # ── StatusPollCommands (base status) ──
+        (0x2B, 0x13, b'\x01'): b'\x01\x00\x00',
+        (0x2B, 0x13, b'\x02'): b'\x02\x00\x00',
+        (0x2B, 0x13, b'\x04'): b'\x04\x01\x2C',
+        (0x2B, 0x13, b'\x05'): b'\x05\x01\x2C',
+        (0x2B, 0x13, b'\x06'): b'\x06\x01\x2C',
+        # ── Dashboard detection ──
+        (0x33, 0x14, b'\x11\x00'): b'\x11\x00\x01',
+        # ── Config-mode probe ──
+        (0x3F, 0x17, b'\x09\x32'): b'\x09\x28',
+        (0x3F, 0x17, b'\x09\x00'): b'\x09\x28',
+        # ── Main hub settings write ──
+        (0x1F, 0x12, b'\x4e\x08'): b'\x4c\x00',
+        (0x1F, 0x12, b'\x4e\x09'): b'\x4c\x00',
+        (0x1F, 0x12, b'\x4e\x0a'): b'\x4c\x00',
+        (0x1F, 0x12, b'\x4e\x0b'): b'\x4c\x00',
+        # ── Wheel identity reads (model-specific) ──
+        (0x07, 0x17, b'\x01'): b'\x01' + _id_str(name),
+        (0x0F, 0x17, b'\x01'): b'\x01' + _id_str(model['sw_version']),
+        (0x08, 0x17, b'\x01'): b'\x01' + _id_str(model['hw_version']),
+        (0x08, 0x17, b'\x02'): b'\x02' + _id_str(model['hw_sub']),
+        (0x10, 0x17, b'\x00'): b'\x00' + _id_str(model['serial0']),
+        (0x10, 0x17, b'\x01'): b'\x01' + _id_str(model['serial1']),
+    }
+
+    # Display sub-device identity probes (routed via group 0x43 to device 0x17).
+    # PitHouse probes the Display controller inside the wheel after telemetry
+    # starts. Response payloads include cmd|0x80 prefix (the handler wraps them
+    # with group=0xC3, device=0x71).
+    if disp:
+        plugin_rsp.update({
+            (0x43, 0x17, b'\x09'):             bytes([0x89, 0x00, 0x01]),
+            (0x43, 0x17, b'\x02'):             bytes([0x82, 0x02]),
+            (0x43, 0x17, b'\x04\x00\x00\x00'): bytes([0x84]) + disp['dev_type'],
+            (0x43, 0x17, b'\x05\x00\x00\x00'): bytes([0x85]) + disp['caps'],
+            (0x43, 0x17, b'\x06'):             bytes([0x86]) + disp['hw_id'],
+            (0x43, 0x17, b'\x0f\x01'):         bytes([0x8f, 0x01]) + _id_str(disp['sw_version']),
+            (0x43, 0x17, b'\x0f\x02'):         bytes([0x8f, 0x02]) + _id_str(disp.get('hw_sub', '')),
+            (0x43, 0x17, b'\x08\x01'):         bytes([0x88, 0x01]) + _id_str(disp['hw_version']),
+            (0x43, 0x17, b'\x08\x02'):         bytes([0x88, 0x02]) + _id_str(disp.get('hw_sub', '')),
+            (0x43, 0x17, b'\x10\x00'):         bytes([0x90, 0x00]) + _id_str(disp['serial0']),
+            (0x43, 0x17, b'\x10\x01'):         bytes([0x90, 0x01]) + _id_str(disp['serial1']),
+            (0x43, 0x17, b'\x11\x04'):         bytes([0x91, 0x04, 0x01]),
+        })
+
+    # PitHouse identity probes (groups 0x02–0x11, device 0x17)
+    pithouse_rsp: Dict[Tuple[int, bytes], bytes] = {
+        (0x09, b''):                 bytes([0x00, 0x01]),
+        (0x02, b''):                 bytes([0x02]),
+        (0x04, b'\x00\x00\x00\x00'): bytes([0x01, 0x02, 0x04, 0x06]),
+        (0x05, b'\x00\x00\x00\x00'): model['caps'],
+        (0x06, b''):                 model['hw_id'],
+        (0x07, b'\x01'):             _id_str(name),
+        (0x08, b'\x01'):             _id_str(model['hw_version']),
+        (0x08, b'\x02'):             _id_str(model['hw_sub']),
+        (0x0F, b'\x01'):             _id_str(model['sw_version']),
+        (0x10, b'\x00'):             _id_str(model['serial0']),
+        (0x10, b'\x01'):             _id_str(model['serial1']),
+        (0x11, b'\x04'):             bytes([0x00, 0x00]),
+    }
+
+    return plugin_rsp, pithouse_rsp
+
+# Built at startup from selected --model. Populated by main().
+_PLUGIN_PROBE_RSP: Dict[Tuple[int, int, bytes], bytes] = {}
+_PITHOUSE_ID_RSP: Dict[Tuple[int, bytes], bytes] = {}
+_DISPLAY_MODEL_NAME: str = 'Display'
 
 # Semantic labels for unhandled-frame logging. Drawn from docs/moza-protocol.md
 # and Protocol/MozaProtocol.cs group constants.
@@ -221,6 +290,19 @@ _CMD_LABELS: Dict[Tuple[int, int, bytes], str] = {
     (0x5B, 0x1B, b'\x01'):     'handbrake-direction probe',
     (0x23, 0x19, b'\x01'):     'pedals-throttle-dir probe',
     (0x64, 0x12, b'\x03'):     'hub-port1-power probe',
+    # Display sub-device identity probes (via group 0x43)
+    (0x43, 0x17, b'\x09'):     'display sub-dev presence probe',
+    (0x43, 0x17, b'\x02'):     'display sub-dev product type',
+    (0x43, 0x17, b'\x04\x00'): 'display sub-dev device type',
+    (0x43, 0x17, b'\x05\x00'): 'display sub-dev capability',
+    (0x43, 0x17, b'\x06'):     'display sub-dev HW ID',
+    (0x43, 0x17, b'\x08\x01'): 'display sub-dev HW version',
+    (0x43, 0x17, b'\x08\x02'): 'display sub-dev HW sub-version',
+    (0x43, 0x17, b'\x0f\x01'): 'display sub-dev SW version',
+    (0x43, 0x17, b'\x0f\x02'): 'display sub-dev SW sub-version',
+    (0x43, 0x17, b'\x10\x00'): 'display sub-dev serial 0',
+    (0x43, 0x17, b'\x10\x01'): 'display sub-dev serial 1',
+    (0x43, 0x17, b'\x11\x04'): 'display sub-dev identity-11',
     # Telemetry / session related (high-frequency once detection completes)
     (0x41, 0x17, b'\xFD\xDE'): 'dash telemetry enable flag',
     (0x3F, 0x17, b'\x1A\x00'): 'RPM LED telemetry write',
@@ -230,6 +312,7 @@ _CMD_LABELS: Dict[Tuple[int, int, bytes], str] = {
     (0x2D, 0x13, b'\xF5\x31'): 'base sequence counter',
     (0x43, 0x17, b'\x7D\x23'): 'telemetry 7D:23 stream',
     (0x43, 0x17, b'\x7C\x00'): 'telemetry session frame',
+    (0x43, 0x17, b'\x7C\x1E'): 'display settings push',
     (0x43, 0x17, b'\x7C\x23'): 'dashboard-activate notify',
     (0x43, 0x17, b'\x7C\x27'): 'display-config page cycle',
     (0x43, 0x17, b'\xFC\x00'): 'telemetry session ack',
@@ -250,9 +333,6 @@ _CMD_LABELS: Dict[Tuple[int, int, bytes], str] = {
     (0x3F, 0x17, b'\x1d\x01'): 'page config 1d:01',
     (0x3F, 0x17, b'\x24\xff'): 'display setting write',
     (0x3E, 0x17, b'\x0b'):     'newer-wheel LED cmd 0b',
-    (0x3F, 0x17, b'\x1a\x00'): 'RPM LED telemetry write',
-    (0x3F, 0x17, b'\x19\x00'): 'RPM LED color write',
-    (0x3F, 0x17, b'\x19\x01'): 'button LED color write',
     # Heartbeat (group 0x00, empty payload, one per device ID)
     (0x00, 0x12, b''): 'heartbeat → hub',
     (0x00, 0x13, b''): 'heartbeat → base',
@@ -844,7 +924,7 @@ class WheelSimulator:
         # PitHouse VGS identity probes (groups 0x02/0x04/…/0x11, device=0x17).
         if device == DEV_WHEEL:
             key = (group, bytes(frame_payload(frame)))
-            id_rsp = _VGS_ID_RSP.get(key)
+            id_rsp = _PITHOUSE_ID_RSP.get(key)
             if id_rsp is not None:
                 self._record('identity', frame)
                 return [build_frame(group | 0x80, DEV_WHEEL_RSP, id_rsp)]
@@ -958,12 +1038,19 @@ class WheelSimulator:
 
         # ── Display probe: cmd=0x07, payload[1]=0x01 (sub-device index) ────
         # SimHub plugin sends this via GRP_HOST to check for a display sub-device.
-        # A real VGS returns its own model name here; the plugin treats any
-        # non-empty response as "display present".
+        # PitHouse uses the model name to determine display type (e.g. "Display"
+        # for VGS round, "W17 Display" for CSP rectangular).
         if cmd1 == DISPLAY_PROBE_CMD and len(payload) >= 2 and payload[1] == DISPLAY_SUBDEV:
             self.display_detected = True
-            responses.append(resp_wheel_model_ident('Display'))
+            responses.append(resp_wheel_model_ident(_DISPLAY_MODEL_NAME))
             return 'display_probe', responses
+
+        # ── 7C:23/27/1E display commands (host→wheel) ──────────────────
+        # One-way notifications — no response expected. Silent consume.
+        # 7C:23 = dashboard activate, 7C:27 = page cycle config,
+        # 7C:1E = display settings push (brightness/timeout/orientation — all models).
+        if cmd1 == 0x7C and cmd2 in (0x1E, 0x23, 0x27):
+            return 'display_cfg', responses
 
         # ── 7D:23 telemetry frame ─────────────────────────────────────────
         if cmd1 == 0x7D and cmd2 == 0x23 and len(payload) >= 10:
@@ -1043,16 +1130,16 @@ def render(sim: WheelSimulator, port: str):
     lines.append('')
     # Per-category counters in a stable order; omit tags never seen.
     tag_order = [
-        'session_open', 'session_data', 'session', 'display_probe', 'telemetry',
-        'plugin_probe', 'probe', 'identity', 'heartbeat', 'keepalive_43',
-        'wheel_write', 'replay', 'unhandled',
+        'session_open', 'session_data', 'session', 'display_probe', 'display_cfg',
+        'telemetry', 'plugin_probe', 'probe', 'identity', 'heartbeat',
+        'keepalive_43', 'wheel_write', 'replay', 'unhandled',
     ]
     short = {
         'session_open': 'sess_open', 'session_data': 'sess_data',
-        'session': 'sess', 'display_probe': 'disp', 'telemetry': 'telem',
-        'plugin_probe': 'plug', 'probe': 'probe', 'identity': 'ident',
-        'heartbeat': 'hb', 'keepalive_43': 'ka43', 'wheel_write': 'wwr',
-        'replay': 'replay', 'unhandled': 'unh',
+        'session': 'sess', 'display_probe': 'disp', 'display_cfg': 'dcfg',
+        'telemetry': 'telem', 'plugin_probe': 'plug', 'probe': 'probe',
+        'identity': 'ident', 'heartbeat': 'hb', 'keepalive_43': 'ka43',
+        'wheel_write': 'wwr', 'replay': 'replay', 'unhandled': 'unh',
     }
     parts = [f'{short[t]}={sim.cat_counts[t]}' for t in tag_order if sim.cat_counts.get(t)]
     # Catch any tag we didn't enumerate above (defensive; cheap).
@@ -1163,6 +1250,68 @@ def extract_device_catalog(path: str) -> Dict[int, List[bytes]]:
         chunks = by_session[sess_id]
         result[sess_id] = [chunks[s] for s in sorted(chunks)]
     return result
+
+
+def _chunk_catalog_message(session: int, message: bytes, start_seq: int) -> List[bytes]:
+    """Chunk a TLV message into 7C:00 session data frames (wheel→host).
+
+    Each chunk gets a CRC-32 trailer. Max 54 net bytes per chunk (58 with CRC).
+    Returns complete Moza wire frames ready to send.
+    """
+    MAX_NET = 54
+    frames: List[bytes] = []
+    offset = 0
+    seq = start_seq
+
+    while offset < len(message):
+        chunk_size = min(len(message) - offset, MAX_NET)
+        chunk = message[offset:offset + chunk_size]
+
+        crc = zlib.crc32(chunk) & 0xFFFFFFFF
+        payload = (bytes([0x7C, 0x00, session, SESSION_TYPE_DATA,
+                          seq & 0xFF, (seq >> 8) & 0xFF])
+                   + chunk + struct.pack('<I', crc))
+
+        frames.append(build_frame(GRP_WHEEL, DEV_WHEEL_RSP, payload))
+        offset += chunk_size
+        seq += 1
+
+    return frames
+
+
+def _build_session2_message(channel_urls: List[str]) -> bytes:
+    """Build session 2 channel catalog TLV from a sorted list of URLs."""
+    urls = sorted(channel_urls)
+    msg = bytearray()
+    msg.append(0xFF)
+    msg += bytes([0x03]) + struct.pack('<I', 4) + struct.pack('<I', 1)
+    for idx, url in enumerate(urls, start=1):
+        url_bytes = url.encode('ascii')
+        msg += bytes([0x04]) + struct.pack('<I', 1 + len(url_bytes))
+        msg.append(idx & 0xFF)
+        msg += url_bytes
+    msg += bytes([0x03]) + struct.pack('<I', 4) + struct.pack('<I', 2)
+    msg += bytes([0x06]) + struct.pack('<I', 4) + struct.pack('<I', len(urls))
+    return bytes(msg)
+
+
+def build_device_catalog(model: dict, channel_urls: List[str]) -> Dict[int, List[bytes]]:
+    """Build proactive device catalog from model profile + channel URLs.
+
+    Session 1: device description TLV (model-specific blob).
+    Session 2: channel catalog built from the provided URLs.
+    """
+    catalog: Dict[int, List[bytes]] = {}
+
+    s1_desc = model.get('session1_desc')
+    if s1_desc:
+        catalog[0x01] = _chunk_catalog_message(0x01, s1_desc, start_seq=4)
+
+    if channel_urls:
+        s2_msg = _build_session2_message(channel_urls)
+        catalog[0x02] = _chunk_catalog_message(0x02, s2_msg, start_seq=5)
+
+    return catalog
 
 
 # ── Text log parsing ─────────────────────────────────────────────────────────
@@ -1648,7 +1797,18 @@ def main():
                         help='Load a capture as responses, then feed every host frame from '
                              'that same capture through the sim and verify each gets a '
                              'response (via wheel handler or replay table).')
+    parser.add_argument('--model', choices=sorted(WHEEL_MODELS.keys()), default='vgs',
+                        help='Wheel model to simulate (default: vgs). '
+                             'Available: ' + ', '.join(sorted(WHEEL_MODELS.keys())))
     args = parser.parse_args()
+
+    # Populate global identity tables from selected model
+    global _PLUGIN_PROBE_RSP, _PITHOUSE_ID_RSP, _DISPLAY_MODEL_NAME
+    model = WHEEL_MODELS[args.model]
+    _PLUGIN_PROBE_RSP, _PITHOUSE_ID_RSP = _build_identity_tables(model)
+    _DISPLAY_MODEL_NAME = model.get('display', {}).get('name', 'Display')
+    print(f'[Model: {model["friendly"]} ({model["name"]}), Display: {_DISPLAY_MODEL_NAME}]',
+          file=sys.stderr)
 
     db = load_telemetry_db()
     if db:
@@ -1671,11 +1831,15 @@ def main():
             print(f'[Replay: loaded {added} new entries from {p}]', file=sys.stderr)
         print(f'[Replay table: {len(replay)} unique (group, device, payload) keys]',
               file=sys.stderr)
-        device_catalog = extract_device_catalog(replay_paths[0])
-        cat_total = sum(len(v) for v in device_catalog.values())
-        if cat_total:
-            print(f'[Device catalog: {cat_total} frames across sessions '
-                  f'{sorted(device_catalog.keys())}]', file=sys.stderr)
+
+    # Build device catalog from model profile + Telemetry.json channel URLs.
+    channel_urls = [v['url'] for v in db.values()] if db else []
+    device_catalog = build_device_catalog(model, channel_urls)
+    cat_total = sum(len(v) for v in device_catalog.values())
+    if cat_total:
+        print(f'[Device catalog: {cat_total} frames across sessions '
+              f'{sorted(device_catalog.keys())} ({len(channel_urls)} channels)]',
+              file=sys.stderr)
 
     if args.replay_self_test:
         sys.exit(cmd_replay_self_test(args.replay_self_test, db))

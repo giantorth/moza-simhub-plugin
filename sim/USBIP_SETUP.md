@@ -81,14 +81,25 @@ COM port or let it auto-detect.
 6. Extend the replay table:
    `python3 sim/wheel_sim.py --replay-handshake <new.pcapng>`
 
+## Status check
+
+```bash
+sudo bash sim/status_usbip_gadget.sh
+```
+
+Prints `[OK]`/`[FAIL]`/`[WARN]` for each component: kernel modules, configfs,
+UDC binding, VID/PID, ttyGS0, usbipd, TCP 3240, usbip binding, remote
+export, and real MOZA wheel conflict detection.
+
 ## Teardown
 
 ```bash
 sudo bash sim/teardown_usbip_gadget.sh
 ```
 
-Unbinds the gadget, removes configfs entries, stops `usbipd`. Safe to run
-multiple times.
+Unbinds usbip, removes configfs entries, stops `usbipd`, and unloads kernel
+modules (`libcomposite`, `dummy_hcd`). Safe to run multiple times. Full module
+unload ensures re-setup starts from clean state.
 
 ## Troubleshooting
 
@@ -99,6 +110,8 @@ multiple times.
 | `usbip list -r` from Windows hangs | Linux firewall blocking TCP 3240; `usbipd -D` running? |
 | PitHouse doesn't see the device | VID wrong (`cat $GADGET/idVendor` → `0x346e`)? Driver installed (Device Manager → Ports)? |
 | Sim logs `unhandled grp=0xNN dev=0x17` | PitHouse probe the sim doesn't answer; add to `_VGS_ID_RSP` or load a newer capture with `--replay-responses` |
+| Gadget stops working after plugging real MOZA wheel | Run `sudo bash sim/teardown_usbip_gadget.sh && sudo bash sim/setup_usbip_gadget.sh` — teardown now fully unloads modules to clear stale state |
+| Cannot diagnose issue | Run `sudo bash sim/status_usbip_gadget.sh` for a full health check |
 
 ## Reference
 

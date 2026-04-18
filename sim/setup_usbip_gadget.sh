@@ -18,15 +18,16 @@ fi
 
 GADGET=/sys/kernel/config/usb_gadget/moza
 
+# Clean up stale state before loading anything.
+if [[ -d "$GADGET" ]] || pgrep -x usbipd >/dev/null 2>&1; then
+    echo "Stale gadget or usbipd found — running teardown first..."
+    bash "$(dirname "$0")/teardown_usbip_gadget.sh"
+fi
+
 modprobe dummy_hcd
 modprobe libcomposite
 
 mountpoint -q /sys/kernel/config || mount -t configfs none /sys/kernel/config
-
-if [[ -d "$GADGET" ]]; then
-    echo "Gadget already exists at $GADGET — run teardown first." >&2
-    exit 1
-fi
 
 mkdir -p "$GADGET"
 echo 0x346E > "$GADGET/idVendor"
@@ -67,29 +68,41 @@ fi
 
 pkill -x usbipd 2>/dev/null || true
 usbipd -D
-sleep 0.5
-
-# Bind the gadget so remote hosts can see it via `usbip list -r <ip>`.
-# Must pick the busid whose sysfs path lives under dummy_hcd — a plain
-# `usbip list -l | awk` would grab the first USB device on the system
-# (often a random real peripheral). Also required because a real MOZA
-# wheel plugged into this machine shares VID:PID 346e:0006.
-BUSID=""
-for d in /sys/bus/usb/devices/*-*; do
-    [[ -e "$d/idVendor" ]] || continue
-    real=$(readlink -f "$d" 2>/dev/null) || continue
-    if [[ "$real" == *dummy_hcd* ]] \
-       && [[ "$(cat "$d/idVendor")" == "346e" ]] \
-       && [[ "$(cat "$d/idProduct")" == "0006" ]]; then
-        BUSID=$(basename "$d")
-        break
-    fi
+for _ in $(seq 1 10); do
+    ss -tlnp 2>/dev/null | grep -q ':3240 ' && break
+    sleep 0.3
 done
-if [[ -z "$BUSID" ]]; then
-    echo "Could not find gadget busid under dummy_hcd. Sysfs state:" >&2
-    ls -l /sys/bus/usb/devices/ >&2 || true
+if ! ss -tlnp 2>/dev/null | grep -q ':3240 '; then
+    echo "usbipd not listening on port 3240 after 3s" >&2
     exit 1
 fi
+
+# Wait for the gadget device to enumerate on the dummy_hcd host side.
+# After writing to UDC, the gadget-side (ttyGS0) appears quickly but the
+# host-side USB device (e.g. 8-1) can take longer to enumerate.
+BUSID=""
+for attempt in $(seq 1 20); do
+    for d in /sys/bus/usb/devices/*-*; do
+        [[ -e "$d/idVendor" ]] || continue
+        real=$(readlink -f "$d" 2>/dev/null) || continue
+        if [[ "$real" == *dummy_hcd* ]] \
+           && [[ "$(cat "$d/idVendor")" == "346e" ]] \
+           && [[ "$(cat "$d/idProduct")" == "0006" ]]; then
+            BUSID=$(basename "$d")
+            break 2
+        fi
+    done
+    sleep 0.3
+done
+if [[ -z "$BUSID" ]]; then
+    echo "Gadget device did not enumerate on dummy_hcd after 6s." >&2
+    echo "Sysfs state:" >&2
+    ls -l /sys/bus/usb/devices/ >&2 || true
+    echo "dmesg tail:" >&2
+    dmesg | tail -20 >&2 || true
+    exit 1
+fi
+echo "Gadget enumerated as busid $BUSID"
 usbip bind -b "$BUSID"
 
 echo
@@ -98,6 +111,15 @@ ls -l /dev/ttyGS0
 echo "UDC:   $UDC"
 echo "VID:   0x346E  PID:  0x0006"
 echo "BusID: $BUSID (bound)"
+echo
+
+if usbip list -r 127.0.0.1 2>/dev/null | grep -q "$BUSID"; then
+    echo "VERIFIED: gadget remotely exportable on busid $BUSID"
+else
+    echo "WARNING: gadget bound but NOT visible via remote list"
+    echo "  Debug: usbip list -r 127.0.0.1"
+fi
+
 echo
 echo "Exportable devices (from this host):"
 usbip list -r 127.0.0.1 || true
