@@ -199,13 +199,14 @@ The captures use `usbcom.data.out_payload` (host→device) and `usbcom.data.in_p
 - `--replay-handshake` / `--replay-self-test`: 0 missed replay hits on `moza-startup.pcapng`.
 - Live mode via tty0tty + Proton: known-working for SimHub plugin testing.
 - USBIP gadget scripts (`setup_usbip_gadget.sh`, `teardown_usbip_gadget.sh`) written and syntax-clean; **not yet validated end-to-end against real PitHouse on Windows**.
-- Hardcoded probe responses: plugin base/hub probes (`_PROBE_SYNTH`) and PitHouse VGS identity probes (`_VGS_ID_RSP`, 12 entries) live in `wheel_sim.py`.
+- Hardcoded probe responses: plugin base/hub probes (`_PROBE_SYNTH`) and PitHouse identity probes (`_PITHOUSE_ID_RSP`, built from `--model` selection) live in `wheel_sim.py`.
+- Multi-model support: `--model vgs` (default) or `--model csp`. Identity strings, capability flags, and hardware IDs are derived from the selected model profile (`WHEEL_MODELS` dict). CSP identity extracted from `usb-capture/CSP captures/pithouse-complete.txt`.
 - Plugin ack race condition: fixed in `Telemetry/TelemetrySender.cs`.
 
 ## Pending work
 
-1. **End-to-end USBIP validation**: run `setup_usbip_gadget.sh`, attach from a Windows host via `usbip-win2`, verify PitHouse enumerates the device and completes its startup probes. Extend `_VGS_ID_RSP` for any probe that shows up `unhandled`.
-2. **Dashboard display**: once PitHouse traffic is captured over USBIP, correlate PitHouse's display update commands with what the plugin currently sends and close the divergence.
+1. **End-to-end USBIP validation**: run `setup_usbip_gadget.sh`, attach from a Windows host via `usbip-win2`, verify PitHouse enumerates the device and completes its startup probes. Extend identity tables for any probe that shows up `unhandled`.
+2. **More wheel models**: add profiles to `WHEEL_MODELS` for other display-equipped wheels (KS Pro/W18, FSR V2, etc.) as captures become available.
 
 ---
 
@@ -221,6 +222,12 @@ python3 sim/wheel_sim.py --replay-handshake usb-capture/12-04-26/moza-startup.pc
 
 # Validate telemetry decode
 python3 sim/wheel_sim.py --validate usb-capture/12-04-26/moza-startup.pcapng
+
+# Live mode as VGS (default)
+python3 sim/wheel_sim.py /dev/tnt0
+
+# Live mode as CSP
+python3 sim/wheel_sim.py --model csp /dev/tnt0
 
 # Live mode (Linux with tty0tty loaded)
 sudo modprobe tty0tty

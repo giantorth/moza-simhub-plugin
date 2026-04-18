@@ -42,7 +42,7 @@ namespace MozaPlugin.Devices
         /// <summary>
         /// Expected wheel model prefix for this device instance.
         /// Null = unknown (don't connect). Empty string = generic fallback (any wheel).
-        /// Specific prefix (e.g. "CSP") = only connect when that model is detected.
+        /// Specific prefix (e.g. "W17") = only connect when that model is detected.
         /// </summary>
         public string? ExpectedModelPrefix { get; set; }
 

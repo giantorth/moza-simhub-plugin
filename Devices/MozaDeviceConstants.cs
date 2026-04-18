@@ -36,7 +36,7 @@ namespace MozaPlugin.Devices
         {
             { "GS V2P",  "68b2eb89-043e-4e29-be9c-4045c9636124" },
             { "CS V2.1", "cd485bdb-934d-4d06-8224-d24fb1f82bd7" },
-            { "CSP",     "503269ba-fc50-44d4-9844-8800da5f9f10" },
+            { "W17",     "503269ba-fc50-44d4-9844-8800da5f9f10" },  // CS Pro (firmware reports "W17", was "CSP")
             { "W18",     "14c84064-a968-43b9-ab92-a02f512632ce" },  // KS Pro (firmware reports "W18")
             { "FSR2",    "c4f0cf35-e68c-4756-a04a-b2f8b5d6dbf3" },
         };
