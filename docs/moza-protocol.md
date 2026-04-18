@@ -25,6 +25,28 @@ Command IDs that are arrays of integers must be provided sequentially in order. 
 
 The magic value 13 (`0x0D`) incorporates the USB endpoint (`0x02`), transfer type (`0x03` for URB_BULK), and a length constant (`0x08`). Changing the magic value causes devices to not respond — likely a firmware quirk rather than intentional.
 
+### Checksum escape (0x7E byte stuffing)
+
+When a frame's computed checksum equals `0x7E` (the start-of-frame marker), the sender **doubles it on the wire** — transmitting `0x7E 0x7E` instead of a single `0x7E`. The receiver must consume the extra byte after reading a frame whose checksum is `0x7E`. Without this, the escape byte is misinterpreted as the start of a new frame, desyncing all subsequent parsing.
+
+This applies to **both directions** (host → device and device → host). Confirmed from Wireshark USB captures (2026-04-18):
+
+```
+Host → device:  7e 06 3f 17 1a 01 3d 3f 00 00 7e 7e
+                └── frame (cksum=0x7e) ──────────┘ └─ escape byte
+
+Three 0x7E in a row (escaped checksum + next frame start):
+Device → host:  7e 07 8e 21 00 00 0b 00 00 00 32 7e 7e 7e 07 8e 91 ...
+                └── frame 1 (cksum=0x7e) ────────┘  │  └── frame 2 ─
+                                              escape ┘
+```
+
+In the three-`7E` case, the first `7E` is the checksum, the second is the escape, and the third is the start of the next frame.
+
+**Impact on buffer parsing:** When extracting frames from concatenated USB bulk data (pcapng captures, text logs), the parser must skip the escape byte between frames. Serial readers (byte-at-a-time) must consume one extra byte after receiving a frame with checksum `0x7E`. Failure to handle this causes the escape `0x7E` to be read as a frame start, with the next byte consumed as the length field — typically a large value (e.g. `N=0x7E`=126) that overshoots the buffer, silently dropping all subsequent frames in the transfer.
+
+Reference: [boxflat PR #131](https://github.com/Lawstorant/boxflat/pull/131) documents the same behavior.
+
 ### Responses
 
 | Field | Transform |

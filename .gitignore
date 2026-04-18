@@ -23,3 +23,5 @@ usb-capture/
 .venv/
 
 __pycache__
+
+sim/logs/

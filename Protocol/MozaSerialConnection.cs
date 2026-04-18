@@ -183,6 +183,11 @@ namespace MozaPlugin.Protocol
                             continue;
                         }
 
+                        // Checksum escape: when checksum == 0x7E, sender doubles it on the wire.
+                        // Consume the extra byte so it doesn't desync the next frame read.
+                        if (actual == MozaProtocol.MessageStart && port.BytesToRead > 0)
+                            port.ReadByte();
+
                         // Strip the checksum byte before passing to the parser
                         var data = new byte[needed - 1];
                         Array.Copy(raw, 0, data, 0, data.Length);
@@ -224,6 +229,11 @@ namespace MozaPlugin.Protocol
                         lock (_lock)
                         {
                             _port?.Write(msg, 0, msg.Length);
+                            // Checksum escape: when the last byte (checksum) is 0x7E,
+                            // double it on the wire so the receiver doesn't treat it
+                            // as the start of a new frame.
+                            if (msg[msg.Length - 1] == MozaProtocol.MessageStart)
+                                _port?.Write(new byte[] { MozaProtocol.MessageStart }, 0, 1);
                         }
                         writeCount++;
                         if (writeCount <= 5)
