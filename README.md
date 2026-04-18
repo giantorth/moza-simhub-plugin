@@ -43,6 +43,10 @@ Restart SimHub — the plugin appears under Settings > Plugins as "MOZA Control"
 
 **Device setup:** Connect your hardware and restart SimHub. The plugin auto-detects connected devices (wheel model, dashboard) and deploys matching device definitions. A banner in the plugin settings panel will prompt you to restart SimHub, after which the devices appear under Devices ready to add. Requires SimHub 9.11+.
 
+## Discord
+
+[Join the Discord](https://discord.gg/hBHrNeKWSm) if you want to discuss features or development of this plugin.
+
 ## Features
 
 ### SimHub Device Integration
