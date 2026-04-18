@@ -66,7 +66,8 @@ namespace MozaPlugin.Devices
         private void BuildColorSwatches()
         {
             if (_swatchesBuilt || _data == null) return;
-            BuildSwatchRow(WheelFlagColorPanel, _wheelFlagColorSwatches, 6, "wheel-flag-color", _data.WheelFlagColors);
+            // Flag LEDs live on the Meter sub-device (RS21 DB); swatch writes route via dash-flag-color*.
+            BuildSwatchRow(WheelFlagColorPanel, _wheelFlagColorSwatches, 6, "dash-flag-color", _data.WheelFlagColors);
             BuildSwatchRow(WheelButtonColorPanel, _wheelButtonColorSwatches, 14, "wheel-button-color", _data.WheelButtonColors);
             _swatchesBuilt = true;
         }
