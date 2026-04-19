@@ -403,7 +403,7 @@ namespace MozaPlugin.Devices
         /// When <paramref name="indexMap"/> is provided, each entry maps the source array
         /// position to the protocol LED index (for non-contiguous button layouts).
         /// </summary>
-        private static void SendColorChunks(MozaPlugin plugin, Color[] colors, int count,
+        internal static void SendColorChunks(MozaPlugin plugin, Color[] colors, int count,
             string command, int[]? indexMap = null)
         {
             int dataLen = count * 4;

@@ -29,29 +29,45 @@ namespace MozaPlugin.Devices
         private readonly Border[] _wheelFlagColorSwatches = new Border[6];
         private readonly Border[] _wheelButtonColorSwatches = new Border[14];
 
-        // Diagnostic LED panel state (keyed by slot: 2/3/4 = extended groups, 5 = Meter flags)
+        // Diagnostic LED panel state (keyed by slot: 0=Shift/RPM, 1=Button,
+        // 2/3/4=extended groups, 5=Meter flags)
         private readonly bool[] _extLedPanelBuilt = new bool[6];
         private readonly byte[] _extLedFillR = new byte[6];
         private readonly byte[] _extLedFillG = new byte[6];
         private readonly byte[] _extLedFillB = new byte[6];
         private readonly Border[] _extLedSwatches = new Border[6];
+        private readonly int[] _extLedRangeMin = new int[6];
+        private readonly int[] _extLedRangeMax = new int[6];
+        // Per-slot TextBox refs so LostFocus handlers + summary refresh can read current values
+        private readonly TextBox?[] _extLedMinBoxes = new TextBox?[6];
+        private readonly TextBox?[] _extLedMaxBoxes = new TextBox?[6];
 
         private class DiagLedCfg
         {
             public int Slot;
             public string Title = "";
             public int MaxLeds;
-            public string ColorCmdPrefix = "";  // "wheel-group2-color" → "wheel-group2-color{N}"
+            public string ColorCmdPrefix = "";  // "wheel-group2-color" → "wheel-group2-color{N}". Ignored when LiveColorCmd set.
             public string BrightnessCmd = "";
             public string? ModeCmd;             // null = skip mode row
+            // When both set, writes go through the live telemetry pipeline (bulk chunk + bitmask)
+            // instead of per-LED static EEPROM writes. Used for Button group where static writes
+            // only render in idle/constant mode; live writes hit the telemetry frame buffer.
+            public string? LiveColorCmd;
+            public string? LiveBitmaskCmd;
         }
 
         private static readonly DiagLedCfg[] DiagLedCfgs =
         {
-            new DiagLedCfg { Slot = 2, Title = "Group 2 — Single",  MaxLeds = 28, ColorCmdPrefix = "wheel-group2-color", BrightnessCmd = "wheel-group2-brightness", ModeCmd = "wheel-group2-mode" },
-            new DiagLedCfg { Slot = 3, Title = "Group 3 — Rotary",  MaxLeds = 56, ColorCmdPrefix = "wheel-group3-color", BrightnessCmd = "wheel-group3-brightness", ModeCmd = "wheel-group3-mode" },
-            new DiagLedCfg { Slot = 4, Title = "Group 4 — Ambient", MaxLeds = 12, ColorCmdPrefix = "wheel-group4-color", BrightnessCmd = "wheel-group4-brightness", ModeCmd = "wheel-group4-mode" },
-            new DiagLedCfg { Slot = 5, Title = "Flags (Meter device)", MaxLeds = 6, ColorCmdPrefix = "dash-flag-color", BrightnessCmd = "dash-flags-brightness", ModeCmd = null },
+            // Groups 0/1 mode skipped — wheel-telemetry-mode / idle-effect already drive this UI elsewhere.
+            new DiagLedCfg { Slot = 0, Title = "Group 0 — Shift/RPM", MaxLeds = 25, ColorCmdPrefix = "wheel-rpm-color",    BrightnessCmd = "wheel-rpm-brightness",     ModeCmd = null,
+                             LiveColorCmd = "wheel-telemetry-rpm-colors", LiveBitmaskCmd = "wheel-send-rpm-telemetry" },
+            new DiagLedCfg { Slot = 1, Title = "Group 1 — Button",   MaxLeds = 16, ColorCmdPrefix = "wheel-button-color", BrightnessCmd = "wheel-buttons-brightness", ModeCmd = null,
+                             LiveColorCmd = "wheel-telemetry-button-colors", LiveBitmaskCmd = "wheel-send-buttons-telemetry" },
+            new DiagLedCfg { Slot = 2, Title = "Group 2 — Single",   MaxLeds = 28, ColorCmdPrefix = "wheel-group2-color", BrightnessCmd = "wheel-group2-brightness",  ModeCmd = "wheel-group2-mode" },
+            new DiagLedCfg { Slot = 3, Title = "Group 3 — Rotary",   MaxLeds = 56, ColorCmdPrefix = "wheel-group3-color", BrightnessCmd = "wheel-group3-brightness",  ModeCmd = "wheel-group3-mode" },
+            new DiagLedCfg { Slot = 4, Title = "Group 4 — Ambient",  MaxLeds = 12, ColorCmdPrefix = "wheel-group4-color", BrightnessCmd = "wheel-group4-brightness",  ModeCmd = "wheel-group4-mode" },
+            new DiagLedCfg { Slot = 5, Title = "Flags (Meter device)", MaxLeds = 6, ColorCmdPrefix = "dash-flag-color",   BrightnessCmd = "dash-flags-brightness",    ModeCmd = null },
         };
 
         // ES wheel indicator: device 1=RPM, 2=Off, 3=On (1-based, -1 applied on read)
@@ -276,6 +292,7 @@ namespace MozaPlugin.Devices
             if (_plugin == null) return;
 
             bool any = false;
+            bool built = false;
             foreach (var cfg in DiagLedCfgs)
             {
                 bool present = IsDiagSlotPresent(cfg.Slot);
@@ -283,6 +300,7 @@ namespace MozaPlugin.Devices
                 {
                     BuildDiagLedPanel(cfg);
                     _extLedPanelBuilt[cfg.Slot] = true;
+                    built = true;
                 }
                 var panel = GetDiagLedPanel(cfg.Slot);
                 if (panel != null)
@@ -290,11 +308,74 @@ namespace MozaPlugin.Devices
                 any |= present;
             }
             ExtLedSection.Visibility = any ? Visibility.Visible : Visibility.Collapsed;
+            if (built)
+                RefreshExtendedLedSummary();
+        }
+
+        private void RefreshExtendedLedSummary()
+        {
+            if (_plugin == null) return;
+
+            var sb = new System.Text.StringBuilder();
+            var info = _plugin.WheelModelInfo;
+            string modelName = _data?.WheelModelName ?? "";
+            string friendly = string.IsNullOrEmpty(modelName) ? "Unknown wheel"
+                : $"{WheelModelInfo.GetFriendlyName(WheelModelInfo.ExtractPrefix(modelName))} ({modelName})";
+            sb.AppendLine($"{friendly} — wheel LED support");
+            if (info != null)
+                sb.AppendLine($"  WheelModelInfo: rpm={info.RpmLedCount}, buttons={info.ButtonLedCount}, flags={info.HasFlagLeds}");
+            sb.AppendLine();
+
+            foreach (var cfg in DiagLedCfgs)
+            {
+                if (!_extLedPanelBuilt[cfg.Slot]) continue;
+                int min = _extLedRangeMin[cfg.Slot];
+                int max = _extLedRangeMax[cfg.Slot];
+                int count = max - min + 1;
+                sb.AppendLine($"  {cfg.Title,-28} : {count,3} LEDs (indices {min}-{max} of 0-{cfg.MaxLeds - 1})");
+            }
+            ExtLedSummaryBox.Text = sb.ToString();
+        }
+
+        private void ExtLedRangeMin_LostFocus(object sender, RoutedEventArgs e) =>
+            ExtLedRangeChanged((TextBox)sender, isMax: false);
+
+        private void ExtLedRangeMax_LostFocus(object sender, RoutedEventArgs e) =>
+            ExtLedRangeChanged((TextBox)sender, isMax: true);
+
+        private void ExtLedRangeChanged(TextBox box, bool isMax)
+        {
+            var cfg = (DiagLedCfg)box.Tag;
+            if (!int.TryParse(box.Text, out int v))
+                v = isMax ? cfg.MaxLeds - 1 : 0;
+            v = Math.Max(0, Math.Min(v, cfg.MaxLeds - 1));
+
+            if (isMax)
+            {
+                if (v < _extLedRangeMin[cfg.Slot]) v = _extLedRangeMin[cfg.Slot];
+                _extLedRangeMax[cfg.Slot] = v;
+            }
+            else
+            {
+                if (v > _extLedRangeMax[cfg.Slot]) v = _extLedRangeMax[cfg.Slot];
+                _extLedRangeMin[cfg.Slot] = v;
+            }
+            box.Text = v.ToString();
+
+            if (_settings != null)
+            {
+                _settings.ExtLedDiagMin[cfg.Slot] = _extLedRangeMin[cfg.Slot];
+                _settings.ExtLedDiagMax[cfg.Slot] = _extLedRangeMax[cfg.Slot];
+                _plugin?.SaveSettings();
+            }
+            RefreshExtendedLedSummary();
         }
 
         private bool IsDiagSlotPresent(int slot)
         {
             if (_plugin == null) return false;
+            // Slots 0/1: Shift/RPM + Button — universally present on any new-protocol wheel.
+            if (slot == 0 || slot == 1) return _plugin.IsNewWheelDetected;
             // Slots 2..4: extended wheel groups detected via brightness-read probe.
             //   NOTE: probe can false-positive — firmware accepts the read even when
             //   no physical hardware is present. Keep surfacing so we can map support per model.
@@ -306,6 +387,8 @@ namespace MozaPlugin.Devices
 
         private StackPanel? GetDiagLedPanel(int slot) => slot switch
         {
+            0 => ExtLedGroup0Panel,
+            1 => ExtLedGroup1Panel,
             2 => ExtLedGroup2Panel,
             3 => ExtLedGroup3Panel,
             4 => ExtLedGroup4Panel,
@@ -327,7 +410,15 @@ namespace MozaPlugin.Devices
                 Margin = new Thickness(0, 6, 0, 4),
             });
 
-            // Fill color swatch + Fill-all / Clear buttons
+            // Load persisted min/max for this slot, defaulting to full range
+            int savedMin = _settings != null && _settings.ExtLedDiagMin.Length > cfg.Slot ? _settings.ExtLedDiagMin[cfg.Slot] : -1;
+            int savedMax = _settings != null && _settings.ExtLedDiagMax.Length > cfg.Slot ? _settings.ExtLedDiagMax[cfg.Slot] : -1;
+            _extLedRangeMin[cfg.Slot] = savedMin < 0 ? 0 : Math.Max(0, Math.Min(savedMin, cfg.MaxLeds - 1));
+            _extLedRangeMax[cfg.Slot] = savedMax < 0 ? cfg.MaxLeds - 1 : Math.Max(0, Math.Min(savedMax, cfg.MaxLeds - 1));
+            if (_extLedRangeMin[cfg.Slot] > _extLedRangeMax[cfg.Slot])
+                _extLedRangeMin[cfg.Slot] = _extLedRangeMax[cfg.Slot];
+
+            // Fill color swatch + Min/Max + Fill-all / Clear buttons
             var row1 = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 2) };
             row1.Children.Add(new TextBlock { Text = "Fill color:", Width = 80, VerticalAlignment = VerticalAlignment.Center });
 
@@ -348,6 +439,17 @@ namespace MozaPlugin.Devices
             swatch.MouseLeftButtonUp += ExtLedSwatch_Click;
             _extLedSwatches[cfg.Slot] = swatch;
             row1.Children.Add(swatch);
+
+            row1.Children.Add(new TextBlock { Text = "Range:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 4, 0) });
+            var minBox = new TextBox { Width = 40, Text = _extLedRangeMin[cfg.Slot].ToString(), Margin = new Thickness(0, 0, 2, 0), Tag = cfg, VerticalAlignment = VerticalAlignment.Center };
+            minBox.LostFocus += ExtLedRangeMin_LostFocus;
+            _extLedMinBoxes[cfg.Slot] = minBox;
+            row1.Children.Add(minBox);
+            row1.Children.Add(new TextBlock { Text = "–", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(2, 0, 2, 0) });
+            var maxBox = new TextBox { Width = 40, Text = _extLedRangeMax[cfg.Slot].ToString(), Margin = new Thickness(0, 0, 8, 0), Tag = cfg, VerticalAlignment = VerticalAlignment.Center };
+            maxBox.LostFocus += ExtLedRangeMax_LostFocus;
+            _extLedMaxBoxes[cfg.Slot] = maxBox;
+            row1.Children.Add(maxBox);
 
             var fillBtn = new Button { Content = "Fill all", Padding = new Thickness(8, 2, 8, 2), Margin = new Thickness(0, 0, 6, 0), Tag = cfg };
             fillBtn.Click += ExtLedFillAll_Click;
@@ -420,16 +522,30 @@ namespace MozaPlugin.Devices
             if (_device == null) return;
             var cfg = (DiagLedCfg)((Button)sender).Tag;
             byte r = _extLedFillR[cfg.Slot], g = _extLedFillG[cfg.Slot], b = _extLedFillB[cfg.Slot];
-            for (int i = 1; i <= cfg.MaxLeds; i++)
-                _device.WriteColor($"{cfg.ColorCmdPrefix}{i}", r, g, b);
+            int min = _extLedRangeMin[cfg.Slot], max = _extLedRangeMax[cfg.Slot];
+            if (cfg.LiveColorCmd != null)
+            {
+                int mask = RangeMask(min, max);
+                SendLiveFrame(cfg, fillColor: (r, g, b), activeMask: mask, rangeMin: min, rangeMax: max, onlyIdx: -1);
+                return;
+            }
+            for (int i = min; i <= max; i++)
+                _device.WriteColor($"{cfg.ColorCmdPrefix}{i + 1}", r, g, b);
         }
 
         private void ExtLedClearAll_Click(object sender, RoutedEventArgs e)
         {
             if (_device == null) return;
             var cfg = (DiagLedCfg)((Button)sender).Tag;
-            for (int i = 1; i <= cfg.MaxLeds; i++)
-                _device.WriteColor($"{cfg.ColorCmdPrefix}{i}", 0, 0, 0);
+            int min = _extLedRangeMin[cfg.Slot], max = _extLedRangeMax[cfg.Slot];
+            if (cfg.LiveColorCmd != null)
+            {
+                // Live pipeline: bitmask=0 removes live override. Firmware falls back to static or off.
+                SendLiveFrame(cfg, fillColor: (0, 0, 0), activeMask: 0, rangeMin: min, rangeMax: max, onlyIdx: -1);
+                return;
+            }
+            for (int i = min; i <= max; i++)
+                _device.WriteColor($"{cfg.ColorCmdPrefix}{i + 1}", 0, 0, 0);
         }
 
         private void ExtLedSendOne_Click(object sender, RoutedEventArgs e)
@@ -439,7 +555,49 @@ namespace MozaPlugin.Devices
             if (!int.TryParse(idxBox.Text, out int idx)) return;
             if (idx < 0 || idx >= cfg.MaxLeds) return;
             byte r = _extLedFillR[cfg.Slot], g = _extLedFillG[cfg.Slot], b = _extLedFillB[cfg.Slot];
+            if (cfg.LiveColorCmd != null)
+            {
+                SendLiveFrame(cfg, fillColor: (r, g, b), activeMask: 1 << idx, rangeMin: idx, rangeMax: idx, onlyIdx: idx);
+                return;
+            }
             _device.WriteColor($"{cfg.ColorCmdPrefix}{idx + 1}", r, g, b);
+        }
+
+        /// <summary>Build a bitmask with bits [min..max] (inclusive) set.</summary>
+        private static int RangeMask(int min, int max)
+        {
+            int mask = 0;
+            for (int i = min; i <= max; i++)
+                mask |= 1 << i;
+            return mask;
+        }
+
+        /// <summary>
+        /// Send one frame through the live telemetry pipeline: per-LED colors chunked via
+        /// <see cref="MozaLedDeviceManager.SendColorChunks"/>, then a 2-byte LE bitmask.
+        /// Frame buffer is volatile — firmware overwrites it on the next live update from
+        /// the telemetry sender or SimHub effects loop.
+        /// </summary>
+        private void SendLiveFrame(DiagLedCfg cfg, (byte r, byte g, byte b) fillColor,
+            int activeMask, int rangeMin, int rangeMax, int onlyIdx)
+        {
+            if (_device == null || _plugin == null || cfg.LiveColorCmd == null || cfg.LiveBitmaskCmd == null) return;
+
+            int n = cfg.MaxLeds;
+            var colors = new System.Drawing.Color[n];
+            var fill = System.Drawing.Color.FromArgb(fillColor.r, fillColor.g, fillColor.b);
+            for (int i = 0; i < n; i++)
+            {
+                bool paint = onlyIdx < 0
+                    ? (i >= rangeMin && i <= rangeMax)
+                    : i == onlyIdx;
+                colors[i] = paint ? fill : System.Drawing.Color.Black;
+            }
+
+            MozaLedDeviceManager.SendColorChunks(_plugin, colors, n, cfg.LiveColorCmd);
+
+            _device.WriteArray(cfg.LiveBitmaskCmd,
+                new byte[] { (byte)(activeMask & 0xFF), (byte)((activeMask >> 8) & 0xFF) });
         }
 
         private void ExtLedSendBrightness_Click(object sender, RoutedEventArgs e)

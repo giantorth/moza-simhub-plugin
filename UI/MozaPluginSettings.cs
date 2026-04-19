@@ -46,6 +46,11 @@ namespace MozaPlugin
         // Fixes flickering on some non-ES wheels. When false, respects SimHub's refresh cycle.
         public bool LimitWheelUpdates { get; set; } = true;
 
+        // Per-slot min/max index for the experimental diagnostic panels (slots 0..5).
+        // -1 sentinel = "use full range" (slot's MaxLeds-1 for max, 0 for min).
+        public int[] ExtLedDiagMin { get; set; } = new[] { -1, -1, -1, -1, -1, -1 };
+        public int[] ExtLedDiagMax { get; set; } = new[] { -1, -1, -1, -1, -1, -1 };
+
         // When true, resend LED state to wheel every ~1 second even if unchanged.
         // Some ES wheels need this to stay in telemetry mode.
         public bool WheelKeepalive { get; set; } = true;

@@ -173,12 +173,13 @@ namespace MozaPlugin.Protocol
             for (byte i = 0; i < 10; i++)
                 AddCommand($"wheel-rpm-value{i + 1}", "wheel", 64, 63, new byte[] { 24, i }, 2, "int");
 
-            // Wheel RPM LED colors (read group 64, write group 63, id [31, 0, 0xFF, index])
-            for (byte i = 0; i < 10; i++)
+            // Wheel RPM LED colors (read group 64, write group 63, id [31, 0, 0xFF, index]).
+            // Group 0 spec max = 25 LEDs. 11..25 beyond any shipping wheel, exposed for diagnostics.
+            for (byte i = 0; i < 25; i++)
                 AddCommand($"wheel-rpm-color{i + 1}", "wheel", 64, 63, new byte[] { 31, 0, 0xFF, i }, 3, "array");
 
-            // Wheel button colors (id [31, 1, 0xFF, index])
-            for (byte i = 0; i < 14; i++)
+            // Wheel button colors (id [31, 1, 0xFF, index]). Group 1 spec max = 16 LEDs.
+            for (byte i = 0; i < 16; i++)
                 AddCommand($"wheel-button-color{i + 1}", "wheel", 64, 63, new byte[] { 31, 1, 0xFF, i }, 3, "array");
 
             // Extended LED groups (2=Single/28 LEDs, 3=Rotary/56 LEDs, 4=Ambient/12 LEDs).
