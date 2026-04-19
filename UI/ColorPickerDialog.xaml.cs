@@ -58,5 +58,18 @@ namespace MozaPlugin
             SelectedB = 0;
             DialogResult = true;
         }
+
+        private void Preset_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        {
+            if (!(sender is System.Windows.Controls.Border b)) return;
+            var parts = ((string)b.Tag).Split(',');
+            if (parts.Length != 3) return;
+            if (!byte.TryParse(parts[0], out byte r)) return;
+            if (!byte.TryParse(parts[1], out byte g)) return;
+            if (!byte.TryParse(parts[2], out byte bl)) return;
+            RSlider.Value = r;
+            GSlider.Value = g;
+            BSlider.Value = bl;
+        }
     }
 }
