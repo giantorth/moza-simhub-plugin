@@ -234,6 +234,8 @@ namespace MozaPlugin.Telemetry
                 _sendTimer.Dispose();
                 _sendTimer = null;
             }
+            try { _ackReceived.Reset(); } catch (ObjectDisposedException) { }
+            try { _mgmtResponseEvent.Reset(); } catch (ObjectDisposedException) { }
             // Reset so StartTelemetryIfReady() won't skip us on re-enable
             _framesSent = 0;
         }
@@ -260,6 +262,20 @@ namespace MozaPlugin.Telemetry
             byte mgmtPort = 0;
             byte telemetryPort = 0;
             int portsFound = 0;
+
+            // Reclaim any sessions left open by a prior SimHub crash/kill. The wheel
+            // firmware holds session state across USB reconnects, so if End() didn't
+            // run last time, ports 0x01..N are still "open" from the wheel's view and
+            // SendSessionOpen would get ignored. Blasting type=0x00 end-markers
+            // forces them closed. No-op for sessions already closed.
+            SimHub.Logging.Current.Info("[Moza] Pre-probe: closing any stale sessions...");
+            for (byte port = 1; port <= MaxProbePort; port++)
+            {
+                if (!_connection.IsConnected) return;
+                SendSessionClose(port);
+            }
+            // Brief settle so the wheel processes the closes before we re-open.
+            System.Threading.Thread.Sleep(100);
 
             SimHub.Logging.Current.Info("[Moza] Probing for available SerialStream ports...");
 
@@ -808,6 +824,25 @@ namespace MozaPlugin.Telemetry
 
         // ── Session management ──────────────────────────────────────────────
 
+        /// <summary>
+        /// Send a type=0x00 end-marker on the given session. Used to reclaim sessions
+        /// left open after a previous SimHub crash/kill, where End() did not run.
+        /// If the session is already closed, the wheel silently ignores this frame.
+        /// </summary>
+        private void SendSessionClose(byte session)
+        {
+            var frame = new byte[]
+            {
+                MozaProtocol.MessageStart, 0x06,
+                MozaProtocol.TelemetrySendGroup, MozaProtocol.DeviceWheel,
+                0x7C, 0x00,
+                session, 0x00,          // type=0x00 (end marker)
+                0x00                    // checksum placeholder
+            };
+            frame[frame.Length - 1] = MozaProtocol.CalculateChecksum(frame);
+            _connection.Send(frame);
+        }
+
         private void SendSessionOpen(byte session, byte port)
         {
             var frame = new byte[]
@@ -1028,6 +1063,7 @@ namespace MozaPlugin.Telemetry
         {
             Stop();
             _ackReceived.Dispose();
+            _mgmtResponseEvent.Dispose();
         }
 
         private class TierState

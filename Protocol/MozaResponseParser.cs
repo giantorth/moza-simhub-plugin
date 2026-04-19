@@ -34,7 +34,8 @@ namespace MozaPlugin.Protocol
             byte group = MozaProtocol.ToggleBit7(responseGroup);
             byte deviceId = MozaProtocol.SwapNibbles(responseDeviceId);
 
-            // Filter firmware debug output (group 0x8E -> toggled 0x0E = 14, from main device 18)
+            // Filter firmware debug output. Firmware sends debug frames with raw wire
+            // group 0x0E (bit7 clear, so this is NOT a normal toggled response).
             // These are unsolicited status/log messages, not protocol responses.
             if (responseGroup == 0x0E)
                 return null;

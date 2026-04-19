@@ -46,6 +46,9 @@ namespace MozaPlugin
         // Guard against concurrent/duplicate telemetry Start() dispatch
         private int _telemetryStartRequested;
 
+        // Set during End() so in-flight callbacks can bail out.
+        internal static volatile bool IsShuttingDown;
+
         // Debounce disk writes during rapid slider changes
         private Timer? _saveDebounceTimer;
 
@@ -246,6 +249,9 @@ namespace MozaPlugin
 
         public void Init(PluginManager pluginManager)
         {
+            // Clear shutdown flag from any previous plugin instance in this process.
+            // SimHub may load+unload plugins without restarting, leaving this true.
+            IsShuttingDown = false;
             Instance = this;
             _pluginManager = pluginManager;
             _data = new MozaData();
@@ -307,26 +313,41 @@ namespace MozaPlugin
 
         public void DataUpdate(PluginManager pluginManager, ref GameData data)
         {
+            if (IsShuttingDown) return;
             _telemetrySender?.UpdateGameData(data.NewData);
         }
 
         public void End(PluginManager pluginManager)
         {
-            Instance = null;
+            IsShuttingDown = true;
             SimHub.Logging.Current.Info("[Moza] Shutting down plugin");
+
+            // 1. Stop timers first so no new callbacks fire against disposed state.
             _saveDebounceTimer?.Stop();
+            _pollTimer?.Stop();
+            _reconnectTimer?.Stop();
+
+            // 2. Persist settings and clear LEDs while connection is still alive.
+            try { this.SaveCommonSettings("MozaPluginSettings", _settings); } catch { }
+            try { ClearLedsOnHardware(); } catch { }
+
+            // 3. Stop telemetry send loop before tearing down connection.
+            _telemetrySender?.Stop();
+
+            // 4. Dispose I/O sources before dropping Instance so late callbacks
+            //    see a live (but shutting-down) instance, not null.
+            _hidReader?.Dispose();
+            _telemetrySender?.Dispose();
+            _connection?.Dispose();
+
+            // 5. Dispose timers after I/O is gone.
             _saveDebounceTimer?.Dispose();
             _saveDebounceTimer = null;
-            this.SaveCommonSettings("MozaPluginSettings", _settings);
-            ClearLedsOnHardware();
-            _telemetrySender?.Stop();
-            _telemetrySender?.Dispose();
-            _pollTimer?.Stop();
             _pollTimer?.Dispose();
-            _reconnectTimer?.Stop();
             _reconnectTimer?.Dispose();
-            _hidReader?.Dispose();
-            _connection?.Dispose();
+
+            // 6. Null Instance last so any straggler callback can still no-op via IsShuttingDown.
+            Instance = null;
         }
 
         internal MozaHidReader HidReader => _hidReader;

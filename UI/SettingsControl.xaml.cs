@@ -37,16 +37,29 @@ namespace MozaPlugin
 
             _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
             _refreshTimer.Tick += RefreshDisplay;
-            _refreshTimer.Start();
 
             _steeringAngleTimer = new DispatcherTimer(DispatcherPriority.Render)
             {
                 Interval = TimeSpan.FromMilliseconds(33)
             };
             _steeringAngleTimer.Tick += (s, e) => UpdateHidInputDisplays();
-            _steeringAngleTimer.Start();
+
+            Loaded   += OnLoadedStartTimers;
+            Unloaded += OnUnloadedStopTimers;
 
             RequestAllSettings();
+        }
+
+        private void OnLoadedStartTimers(object sender, RoutedEventArgs e)
+        {
+            _refreshTimer.Start();
+            _steeringAngleTimer.Start();
+        }
+
+        private void OnUnloadedStopTimers(object sender, RoutedEventArgs e)
+        {
+            _refreshTimer.Stop();
+            _steeringAngleTimer.Stop();
         }
 
         private MozaPluginSettings _settings => _plugin.Settings;
@@ -1152,7 +1165,7 @@ namespace MozaPlugin
             if (!_plugin.Settings.TelemetryEnabled)
             {
                 _plugin.ApplyTelemetrySettings();
-                ts.Start();
+                System.Threading.ThreadPool.QueueUserWorkItem(_ => ts.Start());
             }
             TelemetryTestStartBtn.IsEnabled = false;
             TelemetryTestStopBtn.IsEnabled = true;

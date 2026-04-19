@@ -437,7 +437,7 @@ namespace MozaPlugin.Devices
             if (!_plugin.Settings.TelemetryEnabled)
             {
                 _plugin.ApplyTelemetrySettings();
-                ts.Start();
+                System.Threading.ThreadPool.QueueUserWorkItem(_ => ts.Start());
             }
             TelemetryTestStartBtn.IsEnabled = false;
             TelemetryTestStopBtn.IsEnabled = true;

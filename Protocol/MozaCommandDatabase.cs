@@ -7,7 +7,8 @@ namespace MozaPlugin.Protocol
     /// </summary>
     public static class MozaCommandDatabase
     {
-        public static readonly Dictionary<string, MozaCommand> Commands = new Dictionary<string, MozaCommand>();
+        private static readonly Dictionary<string, MozaCommand> _commands = new Dictionary<string, MozaCommand>();
+        public static IReadOnlyDictionary<string, MozaCommand> Commands => _commands;
 
         static MozaCommandDatabase()
         {
@@ -268,13 +269,13 @@ namespace MozaPlugin.Protocol
         private static void AddCommand(string name, string device, byte readGroup, byte writeGroup,
             byte[] commandId, int payloadBytes, string payloadType)
         {
-            Commands[name] = new MozaCommand(name, device, readGroup, writeGroup,
+            _commands[name] = new MozaCommand(name, device, readGroup, writeGroup,
                 commandId, payloadBytes, payloadType);
         }
 
         public static MozaCommand? Get(string name)
         {
-            return Commands.TryGetValue(name, out var cmd) ? cmd : null;
+            return _commands.TryGetValue(name, out var cmd) ? cmd : null;
         }
     }
 }

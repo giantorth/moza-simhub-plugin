@@ -65,8 +65,23 @@ namespace MozaPlugin.Protocol
                 _running = true;
                 _readThread = new Thread(ReadLoop) { IsBackground = true, Name = "MozaSerialRead" };
                 _writeThread = new Thread(WriteLoop) { IsBackground = true, Name = "MozaSerialWrite" };
-                _readThread.Start();
-                _writeThread.Start();
+
+                try
+                {
+                    _readThread.Start();
+                    _writeThread.Start();
+                }
+                catch
+                {
+                    // If either start failed, tear down: signal stop, join whichever started,
+                    // close port, then rethrow so the outer catch logs it.
+                    _running = false;
+                    try { _readThread?.Join(500); } catch { }
+                    try { _writeThread?.Join(500); } catch { }
+                    try { _port?.Close(); } catch { }
+                    _port = null;
+                    throw;
+                }
 
                 _lastPortName = portName;
                 SimHub.Logging.Current.Info($"[Moza] Connected to {portName}");
@@ -92,7 +107,7 @@ namespace MozaPlugin.Protocol
                     try { _port.Close(); }
                     catch (Exception ex) { SimHub.Logging.Current.Debug($"[Moza] Port close: {ex.Message}"); }
                 }
-                _port = null!;
+                _port = null;
             }
         }
 
@@ -185,7 +200,11 @@ namespace MozaPlugin.Protocol
                         // Checksum escape: when checksum == 0x7E, sender doubles it on the wire.
                         // Consume the extra byte so it doesn't desync the next frame read.
                         if (actual == MozaProtocol.MessageStart && port.BytesToRead > 0)
-                            port.ReadByte();
+                        {
+                            try { port.ReadByte(); }
+                            catch (TimeoutException) { }
+                            catch (InvalidOperationException) { }
+                        }
 
                         // Strip the checksum byte before passing to the parser
                         var data = new byte[needed - 1];

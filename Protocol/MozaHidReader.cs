@@ -44,14 +44,18 @@ namespace MozaPlugin.Protocol
         private readonly MozaData _data;
         private Thread? _thread;
         private volatile bool _stop;
+        private long _hidParseErrorCount;
 
         public MozaHidReader(MozaData data)
         {
             _data = data;
         }
 
+        private bool _disposed;
+
         public void Start()
         {
+            if (_disposed) return;
             if (_thread != null) return;
             _stop = false;
             _thread = new Thread(Run)
@@ -64,6 +68,8 @@ namespace MozaPlugin.Protocol
 
         public void Dispose()
         {
+            if (_disposed) return;
+            _disposed = true;
             _stop = true;
             try { _thread?.Join(2000); } catch { }
             _thread = null;
@@ -99,16 +105,17 @@ namespace MozaPlugin.Protocol
                 }
 
                 var threads = new List<Thread>();
-                var streams = new List<HidStream>();
+                int openCount = 0;
 
                 try
                 {
                     foreach (var (device, usages) in devices)
                     {
                         if (!device.TryOpen(out HidStream stream)) continue;
-                        streams.Add(stream);
+                        openCount++;
 
                         bool isHandbrake = HandbrakePattern.IsMatch(device.GetFriendlyName() ?? "");
+                        // ReadDevice owns `stream` and disposes it before returning.
                         var t = new Thread(() => ReadDevice(device, stream, usages, isHandbrake))
                         {
                             IsBackground = true,
@@ -118,7 +125,7 @@ namespace MozaPlugin.Protocol
                         t.Start();
                     }
 
-                    if (streams.Count > 0)
+                    if (openCount > 0)
                         _data.IsHidConnected = true;
 
                     // Wait until stop or all threads exit
@@ -127,15 +134,17 @@ namespace MozaPlugin.Protocol
                         while (!_stop && t.IsAlive)
                             SleepInterruptible(250);
                     }
+
+                    // On stop: wait for ReadDevice threads to exit so they can dispose their streams.
+                    if (_stop)
+                    {
+                        foreach (var t in threads)
+                            try { t.Join(1000); } catch { }
+                    }
                 }
                 catch (Exception ex)
                 {
                     SimHub.Logging.Current.Info($"[Moza] HID error: {ex.Message}");
-                }
-                finally
-                {
-                    foreach (var s in streams)
-                        try { s.Dispose(); } catch { }
                 }
 
                 _data.IsHidConnected = false;
@@ -294,17 +303,37 @@ namespace MozaPlugin.Protocol
                             }
                         }
                     }
-                    catch { }
+                    catch (Exception ex)
+                    {
+                        long n = System.Threading.Interlocked.Increment(ref _hidParseErrorCount);
+                        // Log first, then every 1000th error to avoid spam.
+                        if (n == 1 || n % 1000 == 0)
+                            SimHub.Logging.Current.Debug($"[Moza] HID parse error #{n}: {ex.Message}");
+                    }
                 };
-                receiver.Stopped += (sender, e) => stopped.Set();
+                receiver.Stopped += (sender, e) =>
+                {
+                    try { stopped.Set(); } catch (ObjectDisposedException) { }
+                };
 
-                receiver.Start(stream);
-                SimHub.Logging.Current.Info(
-                    $"[Moza] HID device opened: {device.GetFriendlyName()} " +
-                    $"(VID {device.VendorID:X4} PID {device.ProductID:X4}, " +
-                    $"usages: {string.Join(", ", usages.Keys.Select(u => $"0x{u:X8}"))})");
+                try
+                {
+                    receiver.Start(stream);
+                    SimHub.Logging.Current.Info(
+                        $"[Moza] HID device opened: {device.GetFriendlyName()} " +
+                        $"(VID {device.VendorID:X4} PID {device.ProductID:X4}, " +
+                        $"usages: {string.Join(", ", usages.Keys.Select(u => $"0x{u:X8}"))})");
 
-                while (!_stop && !stopped.Wait(250)) { }
+                    while (!_stop && !stopped.Wait(250)) { }
+                }
+                finally
+                {
+                    // Dispose stream here so Stopped fires while `stopped` is still alive.
+                    try { stream.Dispose(); } catch { }
+                    // Give receiver a chance to drain Stopped before disposing the event.
+                    try { stopped.Wait(500); } catch { }
+                    stopped.Dispose();
+                }
             }
             catch (Exception ex)
             {
