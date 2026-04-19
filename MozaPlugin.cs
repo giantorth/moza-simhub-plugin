@@ -106,6 +106,9 @@ namespace MozaPlugin
             // Flag colors
             "wheel-flag-color1", "wheel-flag-color2", "wheel-flag-color3",
             "wheel-flag-color4", "wheel-flag-color5", "wheel-flag-color6",
+            // Extended LED group presence probes (Single/Rotary/Ambient).
+            // A brightness response flips IsWheelLedGroupPresent for that group.
+            "wheel-group2-brightness", "wheel-group3-brightness", "wheel-group4-brightness",
         };
 
         private static readonly string[] OldWheelSettingsReadCommands = new[]
@@ -166,6 +169,17 @@ namespace MozaPlugin
         internal bool IsNewWheelDetected => _newWheelDetected;
         internal bool IsOldWheelDetected => _oldWheelDetected;
         internal Devices.WheelModelInfo? WheelModelInfo { get; private set; }
+
+        /// <summary>
+        /// Extended LED groups detected on the connected wheel (indices 2..4 for Single,
+        /// Rotary, Ambient per rs21_parameter.db). A group is flagged true when the wheel
+        /// answers the group's brightness read during the post-connect probe.
+        /// Groups 0/1 (RPM/Buttons) are not tracked here — their presence is implied by
+        /// any new-protocol wheel.
+        /// </summary>
+        private readonly bool[] _wheelLedGroups = new bool[5];
+        internal bool IsWheelLedGroupPresent(int group) =>
+            group >= 2 && group <= 4 && _wheelLedGroups[group];
         /// <summary>
         /// When true, the device extension owns wheel LED settings via its own profile system.
         /// Plugin profile application skips wheel settings to avoid conflicts.
@@ -637,6 +651,7 @@ namespace MozaPlugin
             _oldWheelDetected = false;
             _dashDetected = false;
             WheelModelInfo = null;
+            for (int g = 0; g < _wheelLedGroups.Length; g++) _wheelLedGroups[g] = false;
             _data.ClearWheelIdentity();
             _deviceManager.ResetWheelDetection();
             _telemetrySender.DetectedDeviceMask = 0;
@@ -739,6 +754,18 @@ namespace MozaPlugin
             _data.UpdateFromCommand(r.Name, r.IntValue);
             if (r.ArrayValue != null)
                 _data.UpdateFromArray(r.Name, r.ArrayValue);
+
+            // Extended LED group presence — any response to groupN brightness/mode/color
+            // from this wheel proves the group exists in firmware.
+            if (r.Name != null && r.Name.StartsWith("wheel-group", StringComparison.Ordinal))
+            {
+                int g = r.Name.Length > 11 ? r.Name[11] - '0' : -1;
+                if (g >= 2 && g <= 4 && !_wheelLedGroups[g])
+                {
+                    _wheelLedGroups[g] = true;
+                    SimHub.Logging.Current.Info($"[Moza] Wheel LED group {g} detected");
+                }
+            }
 
             _deviceManager.MarkWheelResponse(r.DeviceId);
             DetectDevices(r.Name, r.IntValue, r.DeviceId);

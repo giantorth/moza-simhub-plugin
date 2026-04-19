@@ -29,6 +29,31 @@ namespace MozaPlugin.Devices
         private readonly Border[] _wheelFlagColorSwatches = new Border[6];
         private readonly Border[] _wheelButtonColorSwatches = new Border[14];
 
+        // Diagnostic LED panel state (keyed by slot: 2/3/4 = extended groups, 5 = Meter flags)
+        private readonly bool[] _extLedPanelBuilt = new bool[6];
+        private readonly byte[] _extLedFillR = new byte[6];
+        private readonly byte[] _extLedFillG = new byte[6];
+        private readonly byte[] _extLedFillB = new byte[6];
+        private readonly Border[] _extLedSwatches = new Border[6];
+
+        private class DiagLedCfg
+        {
+            public int Slot;
+            public string Title = "";
+            public int MaxLeds;
+            public string ColorCmdPrefix = "";  // "wheel-group2-color" → "wheel-group2-color{N}"
+            public string BrightnessCmd = "";
+            public string? ModeCmd;             // null = skip mode row
+        }
+
+        private static readonly DiagLedCfg[] DiagLedCfgs =
+        {
+            new DiagLedCfg { Slot = 2, Title = "Group 2 — Single",  MaxLeds = 28, ColorCmdPrefix = "wheel-group2-color", BrightnessCmd = "wheel-group2-brightness", ModeCmd = "wheel-group2-mode" },
+            new DiagLedCfg { Slot = 3, Title = "Group 3 — Rotary",  MaxLeds = 56, ColorCmdPrefix = "wheel-group3-color", BrightnessCmd = "wheel-group3-brightness", ModeCmd = "wheel-group3-mode" },
+            new DiagLedCfg { Slot = 4, Title = "Group 4 — Ambient", MaxLeds = 12, ColorCmdPrefix = "wheel-group4-color", BrightnessCmd = "wheel-group4-brightness", ModeCmd = "wheel-group4-mode" },
+            new DiagLedCfg { Slot = 5, Title = "Flags (Meter device)", MaxLeds = 6, ColorCmdPrefix = "dash-flag-color", BrightnessCmd = "dash-flags-brightness", ModeCmd = null },
+        };
+
         // ES wheel indicator: device 1=RPM, 2=Off, 3=On (1-based, -1 applied on read)
         // UI combo: 0="SimHub Mode", 1="Always On", 2="Off"
         private static readonly int[] EsIndicatorToDisplay = { 0, 2, 1 };
@@ -203,6 +228,8 @@ namespace MozaPlugin.Devices
 
                     UpdateSwatches(_wheelFlagColorSwatches, _data.WheelFlagColors, 6);
                     UpdateSwatches(_wheelButtonColorSwatches, _data.WheelButtonColors, 14);
+
+                    RefreshExtendedLedGroups();
                 }
 
                 if (oldWheel)
@@ -240,6 +267,195 @@ namespace MozaPlugin.Devices
             if (value < min) return min;
             if (value > max) return max;
             return value;
+        }
+
+        // ===== Experimental LED diagnostics (groups 2/3/4 + Meter flags) =====
+
+        private void RefreshExtendedLedGroups()
+        {
+            if (_plugin == null) return;
+
+            bool any = false;
+            foreach (var cfg in DiagLedCfgs)
+            {
+                bool present = IsDiagSlotPresent(cfg.Slot);
+                if (present && !_extLedPanelBuilt[cfg.Slot])
+                {
+                    BuildDiagLedPanel(cfg);
+                    _extLedPanelBuilt[cfg.Slot] = true;
+                }
+                var panel = GetDiagLedPanel(cfg.Slot);
+                if (panel != null)
+                    panel.Visibility = present ? Visibility.Visible : Visibility.Collapsed;
+                any |= present;
+            }
+            ExtLedSection.Visibility = any ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        private bool IsDiagSlotPresent(int slot)
+        {
+            if (_plugin == null) return false;
+            // Slots 2..4: extended wheel groups detected via brightness-read probe.
+            //   NOTE: probe can false-positive — firmware accepts the read even when
+            //   no physical hardware is present. Keep surfacing so we can map support per model.
+            if (slot >= 2 && slot <= 4) return _plugin.IsWheelLedGroupPresent(slot);
+            // Slot 5: Meter flag LEDs — show whenever the Meter sub-device is detected.
+            if (slot == 5) return _plugin.IsDashDetected;
+            return false;
+        }
+
+        private StackPanel? GetDiagLedPanel(int slot) => slot switch
+        {
+            2 => ExtLedGroup2Panel,
+            3 => ExtLedGroup3Panel,
+            4 => ExtLedGroup4Panel,
+            5 => ExtLedFlagsPanel,
+            _ => null,
+        };
+
+        private void BuildDiagLedPanel(DiagLedCfg cfg)
+        {
+            var panel = GetDiagLedPanel(cfg.Slot);
+            if (panel == null) return;
+
+            panel.Children.Clear();
+
+            panel.Children.Add(new TextBlock
+            {
+                Text = $"{cfg.Title} (up to {cfg.MaxLeds} LEDs)",
+                FontWeight = FontWeights.SemiBold,
+                Margin = new Thickness(0, 6, 0, 4),
+            });
+
+            // Fill color swatch + Fill-all / Clear buttons
+            var row1 = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 2) };
+            row1.Children.Add(new TextBlock { Text = "Fill color:", Width = 80, VerticalAlignment = VerticalAlignment.Center });
+
+            _extLedFillR[cfg.Slot] = 255;
+            _extLedFillG[cfg.Slot] = 0;
+            _extLedFillB[cfg.Slot] = 0;
+            var swatch = new Border
+            {
+                Width = 28, Height = 28,
+                BorderBrush = new SolidColorBrush(Color.FromRgb(85, 85, 85)),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(3),
+                Margin = new Thickness(0, 0, 8, 0),
+                Cursor = Cursors.Hand,
+                Background = new SolidColorBrush(Color.FromRgb(255, 0, 0)),
+                Tag = cfg.Slot,
+            };
+            swatch.MouseLeftButtonUp += ExtLedSwatch_Click;
+            _extLedSwatches[cfg.Slot] = swatch;
+            row1.Children.Add(swatch);
+
+            var fillBtn = new Button { Content = "Fill all", Padding = new Thickness(8, 2, 8, 2), Margin = new Thickness(0, 0, 6, 0), Tag = cfg };
+            fillBtn.Click += ExtLedFillAll_Click;
+            row1.Children.Add(fillBtn);
+
+            var clearBtn = new Button { Content = "All off", Padding = new Thickness(8, 2, 8, 2), Margin = new Thickness(0, 0, 6, 0), Tag = cfg };
+            clearBtn.Click += ExtLedClearAll_Click;
+            row1.Children.Add(clearBtn);
+            panel.Children.Add(row1);
+
+            // Single-LED write: index + Send
+            var row2 = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 2) };
+            row2.Children.Add(new TextBlock { Text = "LED index:", Width = 80, VerticalAlignment = VerticalAlignment.Center });
+            var idxBox = new TextBox { Width = 50, Text = "0", Margin = new Thickness(0, 0, 8, 0) };
+            row2.Children.Add(idxBox);
+            var sendOneBtn = new Button { Content = "Send one", Padding = new Thickness(8, 2, 8, 2), Tag = (cfg, idxBox) };
+            sendOneBtn.Click += ExtLedSendOne_Click;
+            row2.Children.Add(sendOneBtn);
+            panel.Children.Add(row2);
+
+            // Brightness slider + send
+            var row3 = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 2) };
+            row3.Children.Add(new TextBlock { Text = "Brightness:", Width = 80, VerticalAlignment = VerticalAlignment.Center });
+            var brightSlider = new Slider { Minimum = 0, Maximum = 100, Value = 50, Width = 200, IsSnapToTickEnabled = true, TickFrequency = 1, VerticalAlignment = VerticalAlignment.Center };
+            row3.Children.Add(brightSlider);
+            var brightLabel = new TextBlock { Width = 40, TextAlignment = TextAlignment.Right, Margin = new Thickness(6, 0, 8, 0), Text = "50", VerticalAlignment = VerticalAlignment.Center };
+            brightSlider.ValueChanged += (s, e) => brightLabel.Text = ((int)brightSlider.Value).ToString();
+            row3.Children.Add(brightLabel);
+            var sendBrightBtn = new Button { Content = "Send", Padding = new Thickness(8, 2, 8, 2), Tag = (cfg, brightSlider) };
+            sendBrightBtn.Click += ExtLedSendBrightness_Click;
+            row3.Children.Add(sendBrightBtn);
+            panel.Children.Add(row3);
+
+            // Mode byte (optional) — 0=off, 1=telemetry-active, 2=static (tentative)
+            if (cfg.ModeCmd != null)
+            {
+                var row4 = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 2) };
+                row4.Children.Add(new TextBlock { Text = "Mode:", Width = 80, VerticalAlignment = VerticalAlignment.Center });
+                var modeCombo = new ComboBox { Width = 60, Margin = new Thickness(0, 0, 8, 0) };
+                modeCombo.Items.Add("0");
+                modeCombo.Items.Add("1");
+                modeCombo.Items.Add("2");
+                modeCombo.SelectedIndex = 0;
+                row4.Children.Add(modeCombo);
+                var sendModeBtn = new Button { Content = "Send", Padding = new Thickness(8, 2, 8, 2), Tag = (cfg, modeCombo) };
+                sendModeBtn.Click += ExtLedSendMode_Click;
+                row4.Children.Add(sendModeBtn);
+                panel.Children.Add(row4);
+            }
+        }
+
+        private void ExtLedSwatch_Click(object sender, MouseButtonEventArgs e)
+        {
+            if (_plugin == null) return;
+            var border = (Border)sender;
+            int slot = (int)border.Tag;
+            var dialog = new ColorPickerDialog(_extLedFillR[slot], _extLedFillG[slot], _extLedFillB[slot]);
+            dialog.Owner = Window.GetWindow(this);
+            if (dialog.ShowDialog() == true)
+            {
+                _extLedFillR[slot] = dialog.SelectedR;
+                _extLedFillG[slot] = dialog.SelectedG;
+                _extLedFillB[slot] = dialog.SelectedB;
+                border.Background = new SolidColorBrush(Color.FromRgb(dialog.SelectedR, dialog.SelectedG, dialog.SelectedB));
+            }
+        }
+
+        private void ExtLedFillAll_Click(object sender, RoutedEventArgs e)
+        {
+            if (_device == null) return;
+            var cfg = (DiagLedCfg)((Button)sender).Tag;
+            byte r = _extLedFillR[cfg.Slot], g = _extLedFillG[cfg.Slot], b = _extLedFillB[cfg.Slot];
+            for (int i = 1; i <= cfg.MaxLeds; i++)
+                _device.WriteColor($"{cfg.ColorCmdPrefix}{i}", r, g, b);
+        }
+
+        private void ExtLedClearAll_Click(object sender, RoutedEventArgs e)
+        {
+            if (_device == null) return;
+            var cfg = (DiagLedCfg)((Button)sender).Tag;
+            for (int i = 1; i <= cfg.MaxLeds; i++)
+                _device.WriteColor($"{cfg.ColorCmdPrefix}{i}", 0, 0, 0);
+        }
+
+        private void ExtLedSendOne_Click(object sender, RoutedEventArgs e)
+        {
+            if (_device == null) return;
+            var (cfg, idxBox) = ((DiagLedCfg, TextBox))((Button)sender).Tag;
+            if (!int.TryParse(idxBox.Text, out int idx)) return;
+            if (idx < 0 || idx >= cfg.MaxLeds) return;
+            byte r = _extLedFillR[cfg.Slot], g = _extLedFillG[cfg.Slot], b = _extLedFillB[cfg.Slot];
+            _device.WriteColor($"{cfg.ColorCmdPrefix}{idx + 1}", r, g, b);
+        }
+
+        private void ExtLedSendBrightness_Click(object sender, RoutedEventArgs e)
+        {
+            if (_device == null) return;
+            var (cfg, slider) = ((DiagLedCfg, Slider))((Button)sender).Tag;
+            _device.WriteSetting(cfg.BrightnessCmd, (int)slider.Value);
+        }
+
+        private void ExtLedSendMode_Click(object sender, RoutedEventArgs e)
+        {
+            if (_device == null) return;
+            var (cfg, modeCombo) = ((DiagLedCfg, ComboBox))((Button)sender).Tag;
+            if (cfg.ModeCmd == null) return;
+            if (modeCombo.SelectedIndex < 0) return;
+            _device.WriteSetting(cfg.ModeCmd, modeCombo.SelectedIndex);
         }
 
         // ===== New wheel handlers =====

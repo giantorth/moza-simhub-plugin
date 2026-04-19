@@ -181,6 +181,17 @@ namespace MozaPlugin.Protocol
             for (byte i = 0; i < 14; i++)
                 AddCommand($"wheel-button-color{i + 1}", "wheel", 64, 63, new byte[] { 31, 1, 0xFF, i }, 3, "array");
 
+            // Extended LED groups (2=Single/28 LEDs, 3=Rotary/56 LEDs, 4=Ambient/12 LEDs).
+            // Per-LED color: [31, G, 0xFF, index] — same wire format as groups 0/1.
+            // Brightness: [27, G, 0xFF]. Mode: [28, G]. Presence probed via brightness read.
+            foreach (var (g, n) in new[] { ((byte)2, 28), ((byte)3, 56), ((byte)4, 12) })
+            {
+                AddCommand($"wheel-group{g}-brightness", "wheel", 64, 63, new byte[] { 27, g, 0xFF }, 1, "int");
+                AddCommand($"wheel-group{g}-mode",       "wheel", 64, 63, new byte[] { 28, g },       1, "int");
+                for (byte i = 0; i < n; i++)
+                    AddCommand($"wheel-group{g}-color{i + 1}", "wheel", 64, 63, new byte[] { 31, g, 0xFF, i }, 3, "array");
+            }
+
             // LEGACY: wheel-flag-color{1..6} on device 0x17 / write group 63 / id [21, 2, i].
             // RS21 parameter DB has no wheel-body flag commands; flag LEDs live on the
             // Meter sub-device (device 0x14 / write group 50). Use dash-flag-color{1..6}
