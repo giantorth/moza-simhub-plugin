@@ -32,6 +32,9 @@ namespace MozaPlugin.Devices
         private int _lastRpmBitmask = -1;
         private int _lastButtonBitmask = -1;
 
+        // Diagnostic: log rawColors shape once per distinct (length, non-empty pattern)
+        private string? _lastRawDiagKey;
+
         // Keepalive timer
         private DateTime _lastSendTime = DateTime.MinValue;
         private const double KeepaliveIntervalSeconds = 1.0;
@@ -177,6 +180,22 @@ namespace MozaPlugin.Devices
                 if (!isNewWheel && !isOldWheel)
                     return;
 
+                // Merge SimHub Individual-LED overrides (rawState channel) over the
+                // per-segment logical channels. Physical order per device.json:
+                // [telemetry 0..telemetryPhys-1][button 0..buttonPhys-1].
+                var modelInfo = plugin.WheelModelInfo;
+                if (rawColors.Length > 0)
+                {
+                    LogRawDiagnostic(rawColors, ledColors.Length, buttonColors.Length);
+
+                    int telemetryPhys = modelInfo != null
+                        ? modelInfo.RpmLedCount + (modelInfo.HasFlagLeds ? MozaDeviceConstants.FlagLedCount : 0)
+                        : ledColors.Length;
+                    int buttonPhys = modelInfo?.ButtonLedCount ?? buttonColors.Length;
+                    ledColors = ApplyOverrides(ledColors, rawColors, 0, telemetryPhys);
+                    buttonColors = ApplyOverrides(buttonColors, rawColors, telemetryPhys, buttonPhys);
+                }
+
                 // ES wheel wake-up: flash all LEDs on then off to enter telemetry mode
                 if (!_ledsAwake && isOldWheel)
                 {
@@ -193,7 +212,6 @@ namespace MozaPlugin.Devices
                 // Wheels with flag LEDs receive a single (rpmN + 6)-LED telemetry
                 // sequence from SimHub laid out as [flag 1..3][rpm 1..N][flag 4..6].
                 // Pre-detection (modelInfo null) we fall back to pure RPM handling.
-                var modelInfo = plugin.WheelModelInfo;
                 bool hasFlagLeds = isNewWheel && modelInfo?.HasFlagLeds == true;
                 int rpmN = modelInfo?.RpmLedCount ?? MozaDeviceConstants.RpmLedCount;
                 int flagLeft = hasFlagLeds ? 3 : 0;
@@ -431,6 +449,53 @@ namespace MozaPlugin.Devices
                 Array.Copy(colorData, pos, chunk, 0, 20);
                 plugin.DeviceManager.WriteArray(command, chunk);
             }
+        }
+
+        // Diagnostic: log rawColors length and per-slot state once per distinct pattern.
+        // Helps verify SimHub's Individual-LEDs output shape (physical-indexed vs other).
+        private void LogRawDiagnostic(Color[] rawColors, int ledsLen, int buttonsLen)
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.Append($"rawLen={rawColors.Length} leds={ledsLen} buttons={buttonsLen} nonEmpty=[");
+            for (int i = 0; i < rawColors.Length; i++)
+            {
+                var c = rawColors[i];
+                if (c.A != 0 || c.R != 0 || c.G != 0 || c.B != 0)
+                    sb.Append($"{i}:A{c.A}R{c.R}G{c.G}B{c.B} ");
+            }
+            sb.Append(']');
+            string key = sb.ToString();
+            if (key == _lastRawDiagKey) return;
+            _lastRawDiagKey = key;
+            SimHub.Logging.Current.Info($"[Moza] IndividualLEDs diag {key}");
+        }
+
+        // Merge physical-layer Individual-LED overrides onto a logical-channel array.
+        // A raw slot with Alpha != 0 replaces the corresponding dst slot.
+        // rawColors.Length is SimHub's max-end-position across Individual-LED
+        // entries, not the declared physical LED count — clip to the available
+        // window so short rawColors still apply overrides to the slots it covers.
+        internal static Color[] ApplyOverrides(Color[] dst, Color[] rawColors, int offset, int length)
+        {
+            if (length <= 0 || offset >= rawColors.Length) return dst;
+            int available = Math.Min(length, rawColors.Length - offset);
+
+            bool anyOverride = false;
+            for (int i = 0; i < available; i++)
+            {
+                if (rawColors[offset + i].A != 0) { anyOverride = true; break; }
+            }
+            if (!anyOverride) return dst;
+
+            int outLen = Math.Max(dst.Length, length);
+            var merged = new Color[outLen];
+            Array.Copy(dst, merged, Math.Min(dst.Length, outLen));
+            for (int i = 0; i < available; i++)
+            {
+                var r = rawColors[offset + i];
+                if (r.A != 0) merged[i] = Color.FromArgb(r.R, r.G, r.B);
+            }
+            return merged;
         }
     }
 }
