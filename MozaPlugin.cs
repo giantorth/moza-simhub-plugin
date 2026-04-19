@@ -396,6 +396,8 @@ namespace MozaPlugin
                 _deviceManager.ResetWheelDetection();
                 _telemetrySender.DetectedDeviceMask = 0;
                 Interlocked.Exchange(ref _telemetryStartRequested, 0);
+                _wheelPollMisses = 0;
+                _lastKnownWheelModel = "";
                 SimHub.Logging.Current.Info("[Moza] Connection disabled");
             }
         }
@@ -579,6 +581,11 @@ namespace MozaPlugin
 
             try
             {
+                // If we had a wheel detected before reconnecting, reset it.
+                // The serial port may have dropped during a wheel swap.
+                if (_newWheelDetected || _oldWheelDetected)
+                    ResetWheelDetection("Serial reconnecting — resetting wheel detection");
+
                 if (_connection.Connect())
                 {
                     _unmatched = 0;
@@ -597,9 +604,56 @@ namespace MozaPlugin
             }
         }
 
+        private int _wheelPollMisses;
+        private const int WheelMissThreshold = 3;
+        private volatile string _lastKnownWheelModel = "";
+
+        private void ResetWheelDetection(string reason)
+        {
+            SimHub.Logging.Current.Info($"[Moza] {reason}");
+            _telemetrySender.Stop();
+            _newWheelDetected = false;
+            _oldWheelDetected = false;
+            _dashDetected = false;
+            WheelModelInfo = null;
+            _data.ClearWheelIdentity();
+            _deviceManager.ResetWheelDetection();
+            _telemetrySender.DetectedDeviceMask = 0;
+            Interlocked.Exchange(ref _telemetryStartRequested, 0);
+            _wheelPollMisses = 0;
+            _lastKnownWheelModel = "";
+        }
+
         private void PollStatus(object sender, ElapsedEventArgs e)
         {
             if (!_connection.IsConnected) return;
+
+            // Hot-swap detection: track whether the locked wheel is still responding
+            // and periodically verify the model name hasn't changed.
+            if (_newWheelDetected || _oldWheelDetected)
+            {
+                if (_deviceManager.WheelRespondedSinceLastPoll)
+                {
+                    _wheelPollMisses = 0;
+                }
+                else
+                {
+                    _wheelPollMisses++;
+                    if (_wheelPollMisses >= WheelMissThreshold)
+                    {
+                        ResetWheelDetection(
+                            $"Wheel on ID {_deviceManager.WheelDeviceId} not responding " +
+                            $"({_wheelPollMisses} misses) — resetting for hot-swap");
+                    }
+                }
+                _deviceManager.ResetWheelResponseFlag();
+                _deviceManager.ReadSetting("wheel-model-name");
+
+                // Probe other wheel IDs for hot-swap detection.
+                // Handles ES → new-protocol case where the base keeps responding
+                // on the locked ID (19) so miss counter never fires.
+                _deviceManager.ProbeOtherWheelIds();
+            }
 
             _deviceManager.ReadSettings(StatusPollCommands);
 
@@ -665,6 +719,7 @@ namespace MozaPlugin
             if (r.ArrayValue != null)
                 _data.UpdateFromArray(r.Name, r.ArrayValue);
 
+            _deviceManager.MarkWheelResponse(r.DeviceId);
             DetectDevices(r.Name, r.IntValue, r.DeviceId);
         }
 
@@ -726,6 +781,13 @@ namespace MozaPlugin
                         SimHub.Logging.Current.Info($"[Moza] New-protocol wheel detected on ID {deviceId}");
                         StartTelemetryIfReady();
                     }
+                    else if (deviceId != _deviceManager.WheelDeviceId)
+                    {
+                        // Hot-swap: a wheel responded on a different ID than the locked one.
+                        ResetWheelDetection(
+                            $"New wheel responded on ID {deviceId} (was locked on " +
+                            $"{_deviceManager.WheelDeviceId}) — hot-swap detected");
+                    }
                     break;
 
                 case "wheel-model-name":
@@ -734,11 +796,32 @@ namespace MozaPlugin
                     // response is the base name, not the wheel name.
                     if (_newWheelDetected)
                     {
-                        WheelModelInfo = Devices.WheelModelInfo.FromModelName(_data.WheelModelName);
-                        SimHub.Logging.Current.Info(
-                            $"[Moza] Wheel model: {_data.WheelModelName} " +
-                            $"(rpm={WheelModelInfo.RpmLedCount}, buttons={WheelModelInfo.ButtonLedCount}, flags={WheelModelInfo.HasFlagLeds})");
-                        DeployDeviceDefinitionForModel(_data.WheelModelName);
+                        var currentModel = _data.WheelModelName;
+
+                        // Ignore empty/truncated responses — would falsely trigger reset.
+                        if (string.IsNullOrEmpty(currentModel))
+                            break;
+
+                        // Hot-swap: if model name changed, a different wheel was attached.
+                        if (!string.IsNullOrEmpty(_lastKnownWheelModel) &&
+                            _lastKnownWheelModel != currentModel)
+                        {
+                            ResetWheelDetection(
+                                $"Wheel model changed from '{_lastKnownWheelModel}' " +
+                                $"to '{currentModel}' — hot-swap detected");
+                            break;
+                        }
+
+                        // First time seeing this model — resolve LED layout and deploy
+                        if (string.IsNullOrEmpty(_lastKnownWheelModel))
+                        {
+                            _lastKnownWheelModel = currentModel;
+                            WheelModelInfo = Devices.WheelModelInfo.FromModelName(currentModel);
+                            SimHub.Logging.Current.Info(
+                                $"[Moza] Wheel model: {currentModel} " +
+                                $"(rpm={WheelModelInfo.RpmLedCount}, buttons={WheelModelInfo.ButtonLedCount}, flags={WheelModelInfo.HasFlagLeds})");
+                            DeployDeviceDefinitionForModel(currentModel);
+                        }
                     }
                     else
                     {
@@ -771,6 +854,12 @@ namespace MozaPlugin
                         DeployDeviceDefinitionForOldProto();
                         SimHub.Logging.Current.Info($"[Moza] Old-protocol wheel detected on ID {deviceId}");
                         StartTelemetryIfReady();
+                    }
+                    else if (deviceId != _deviceManager.WheelDeviceId)
+                    {
+                        ResetWheelDetection(
+                            $"New wheel responded on ID {deviceId} (was locked on " +
+                            $"{_deviceManager.WheelDeviceId}) — hot-swap detected");
                     }
                     break;
 
