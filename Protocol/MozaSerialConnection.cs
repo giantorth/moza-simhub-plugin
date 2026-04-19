@@ -19,6 +19,14 @@ namespace MozaPlugin.Protocol
         private volatile bool _running;
         private readonly object _lock = new object();
         private string? _lastPortName;
+        private volatile bool _shutdownRequested;
+
+        // Consecutive I/O error tracking. After sleep/resume the SerialPort handle
+        // stays .IsOpen==true but every read/write throws IOException("Not ready"),
+        // so nothing triggers reconnect. Count failures and force-close at threshold.
+        private int _consecutiveIoErrors;
+        private volatile bool _portFailureLogged;
+        private const int PortDeadThreshold = 10;
 
         public event Action<byte[]>? MessageReceived;
         public bool IsConnected => _port?.IsOpen == true;
@@ -31,12 +39,20 @@ namespace MozaPlugin.Protocol
 
         public bool Connect()
         {
+            if (_shutdownRequested)
+                return false;
+
+            // Tear down any stale threads/port from a previous dead session
+            // (e.g. after sleep/resume killed the tty but handle stayed open).
+            if (_running || _port != null)
+                Disconnect();
+
             // Try the last known port first to avoid re-probing (which
             // opens/closes the port and can reset the device under Wine).
             if (_lastPortName != null && TryOpen(_lastPortName))
                 return true;
 
-            var (portName, pid) = FindMozaPort();
+            var (portName, pid) = FindMozaPort(() => _shutdownRequested);
             if (portName == null)
                 return false;
 
@@ -84,6 +100,8 @@ namespace MozaPlugin.Protocol
                 }
 
                 _lastPortName = portName;
+                Interlocked.Exchange(ref _consecutiveIoErrors, 0);
+                _portFailureLogged = false;
                 SimHub.Logging.Current.Info($"[Moza] Connected to {portName}");
                 return true;
             }
@@ -115,6 +133,34 @@ namespace MozaPlugin.Protocol
         {
             if (message != null)
                 _writeQueue.Enqueue(message);
+        }
+
+        // Record an I/O failure. Throttles log spam and force-closes the port
+        // once the failure count crosses the threshold so the reconnect timer
+        // can reopen it (handles sleep/resume where .IsOpen stays true on dead tty).
+        private void HandleIoFailure(string label, Exception ex)
+        {
+            if (!_running) return;
+
+            int count = Interlocked.Increment(ref _consecutiveIoErrors);
+
+            if (!_portFailureLogged)
+            {
+                SimHub.Logging.Current.Error($"[Moza] {label} error: {ex.GetType().Name}: {ex.Message}");
+            }
+
+            if (count >= PortDeadThreshold && !_portFailureLogged)
+            {
+                _portFailureLogged = true;
+                SimHub.Logging.Current.Warn(
+                    $"[Moza] Port wedged after {count} consecutive I/O errors — closing for reconnect");
+                lock (_lock)
+                {
+                    try { _port?.Close(); } catch { }
+                    _port = null;
+                }
+                while (_writeQueue.TryDequeue(out _)) { }
+            }
         }
 
         private void ReadLoop()
@@ -217,6 +263,7 @@ namespace MozaPlugin.Protocol
                                 $"[Moza] Received msg #{messageCount}: len={payloadLength} " +
                                 $"group=0x{data[0]:X2} dev=0x{data[1]:X2} ({data.Length} bytes)");
                         }
+                        Interlocked.Exchange(ref _consecutiveIoErrors, 0);
                         MessageReceived?.Invoke(data);
                     }
                 }
@@ -226,8 +273,7 @@ namespace MozaPlugin.Protocol
                 }
                 catch (Exception ex)
                 {
-                    if (_running)
-                        SimHub.Logging.Current.Error($"[Moza] Read error: {ex.GetType().Name}: {ex.Message}");
+                    HandleIoFailure("Read", ex);
                     Thread.Sleep(100);
                 }
             }
@@ -257,6 +303,8 @@ namespace MozaPlugin.Protocol
                         if (writeCount <= 5)
                             SimHub.Logging.Current.Info($"[Moza] Sent cmd #{writeCount}: {msg.Length} bytes, group=0x{(msg.Length > 2 ? msg[2] : 0):X2}");
 
+                        Interlocked.Exchange(ref _consecutiveIoErrors, 0);
+
                         // Pace writes: Moza bases drop commands when flooded with rapid-fire
                         // settings writes (e.g. ApplyProfile sends 30+ commands in a burst).
                         // 4ms matches boxflat's proven timing for reliable device writes.
@@ -265,8 +313,7 @@ namespace MozaPlugin.Protocol
                     }
                     catch (Exception ex)
                     {
-                        if (_running)
-                            SimHub.Logging.Current.Error($"[Moza] Write error: {ex.Message}");
+                        HandleIoFailure("Write", ex);
                     }
                 }
                 else
@@ -276,7 +323,7 @@ namespace MozaPlugin.Protocol
             }
         }
 
-        private static (string? PortName, string? Pid) FindMozaPort()
+        private static (string? PortName, string? Pid) FindMozaPort(Func<bool>? cancel = null)
         {
             // Try WMI-based discovery first (native Windows), loaded optionally via reflection
             try
@@ -331,7 +378,13 @@ namespace MozaPlugin.Protocol
 
             foreach (var port in ports)
             {
-                if (ProbeMozaDevice(port))
+                if (cancel?.Invoke() == true) return (null, null);
+
+                // 600ms budget per port — SerialPort.Open can hang indefinitely
+                // under Wine if another process holds the tty (e.g. CustomSerialPlugin
+                // owns /dev/tnt1 → com35). Background-thread the probe so one bad
+                // port can't block all detection.
+                if (ProbeWithTimeout(port, 600))
                 {
                     SimHub.Logging.Current.Info($"[Moza] Found Moza device on {port} (probe)");
                     return (port, null);
@@ -363,6 +416,31 @@ namespace MozaPlugin.Protocol
             }
 
             return "0x" + pidHex.ToUpperInvariant();
+        }
+
+        /// <summary>
+        /// Run ProbeMozaDevice on a background thread with a hard time budget (ms).
+        /// If the probe doesn't finish in time (usually because SerialPort.Open is
+        /// blocked on a tty another process is holding), abandon the thread and
+        /// return false. The orphan thread stays background so it can't prevent
+        /// process exit and will eventually unblock or die with the process.
+        /// </summary>
+        private static bool ProbeWithTimeout(string portName, int timeoutMs)
+        {
+            bool result = false;
+            var t = new Thread(() =>
+            {
+                try { result = ProbeMozaDevice(portName); }
+                catch { result = false; }
+            })
+            { IsBackground = true, Name = $"MozaProbe-{portName}" };
+            t.Start();
+            if (!t.Join(timeoutMs))
+            {
+                SimHub.Logging.Current.Debug($"[Moza] Probe {portName}: timed out after {timeoutMs}ms, skipping");
+                return false;
+            }
+            return result;
         }
 
         /// <summary>
@@ -426,6 +504,7 @@ namespace MozaPlugin.Protocol
 
         public void Dispose()
         {
+            _shutdownRequested = true;
             Disconnect();
         }
     }
