@@ -72,7 +72,7 @@ jobs:
       - name: Publish pre-release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: dev
+          tag_name: dev-latest
           name: "Development Build (${{ steps.vars.outputs.dev_version }})"
           prerelease: true
           make_latest: false
@@ -88,4 +88,4 @@ jobs:
             **Built:** ${{ steps.vars.outputs.build_timestamp }}
             **Changes since ${{ steps.vars.outputs.latest_tag }}:** https://github.com/${{ github.repository }}/compare/${{ steps.vars.outputs.latest_tag }}...${{ github.sha }}
 
-            Download `MozaPlugin_dev.zip` for the stable URL, or `MozaPlugin_dev-<sha>.zip` to pin a specific build.
+            Download `MozaPlugin_dev.zip` for the latest build, or `MozaPlugin_dev-<sha>.zip` for a specific build.
