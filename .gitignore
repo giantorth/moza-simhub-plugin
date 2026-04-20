@@ -21,3 +21,7 @@ settings.local.json
 
 usb-capture/
 .venv/
+
+__pycache__
+
+sim/logs/

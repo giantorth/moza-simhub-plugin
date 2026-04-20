@@ -9,7 +9,15 @@ namespace MozaPlugin
     {
         // Connection status
         public volatile bool IsBaseConnected;
+        public volatile bool IsHubConnected;
         public volatile bool BaseSettingsRead;
+
+        /// <summary>
+        /// True when any Moza device is confirmed on the serial bus (base or hub).
+        /// Use this as the "can I send commands?" guard instead of IsBaseConnected,
+        /// which is only true when a wheelbase is present.
+        /// </summary>
+        public bool IsConnected => IsBaseConnected || IsHubConnected;
 
         // Wheel identity (populated after wheel detection, cleared on disconnect)
         // Volatile: written from serial read thread, read from UI thread.
@@ -42,6 +50,14 @@ namespace MozaPlugin
         public volatile int LeftPaddlePosition;     // 0-100
         public volatile int RightPaddlePosition;    // 0-100
         public volatile int CombinedPaddlePosition; // 0-100
+
+        // Button states from HID (0-based index, true = pressed)
+        public const int MaxButtons = 128;
+        public readonly bool[] ButtonStates = new bool[MaxButtons];
+        public volatile int ButtonCount;
+
+        // Handbrake button (separate HID device, only fires in button mode)
+        public volatile bool HandbrakeButtonPressed;
 
         // Core settings
         public volatile int Limit;
@@ -104,10 +120,13 @@ namespace MozaPlugin
         // True once at least one per-knob response has arrived, indicating firmware supports [42, N].
         public volatile bool WheelKnobSignalModeSupported;
         public volatile int WheelStickMode;
+        // True when firmware uses the new 1-byte stick mode (0=none,1=left,2=right,3=both).
+        // False when firmware uses old 2-byte format (left stick toggle only).
+        public volatile bool WheelDualStickSupported;
         public volatile int WheelRpmDisplayMode;
 
         // Wheel RPM colors (10 LEDs, [R, G, B] each)
-        public readonly byte[][] WheelRpmColors = InitRpmColorArray();
+        public readonly byte[][] WheelRpmColors = InitWheelRpmColorArray();
         public readonly byte[][] WheelRpmBlinkColors = InitRpmColorArray();
         public readonly byte[][] WheelButtonColors = InitColorArray(14);
         public readonly byte[][] WheelFlagColors = InitFlagColorArray();
@@ -171,6 +190,15 @@ namespace MozaPlugin
         // Handbrake output curve (values 0-100, stored as ints; device uses 4-byte floats)
         public readonly int[] HandbrakeCurve = new int[] { 20, 40, 60, 80, 100 };
 
+        // ===== Hub port power status (-1 = not read yet) =====
+        public volatile int HubBasePower = -1;
+        public volatile int HubPort1Power = -1;
+        public volatile int HubPort2Power = -1;
+        public volatile int HubPort3Power = -1;
+        public volatile int HubPedals1Power = -1;
+        public volatile int HubPedals2Power = -1;
+        public volatile int HubPedals3Power = -1;
+
         private static byte[][] InitColorArray(int count)
         {
             var arr = new byte[count][];
@@ -190,6 +218,17 @@ namespace MozaPlugin
                 new byte[] { 255, 0, 0 }, new byte[] { 255, 0, 0 }, new byte[] { 255, 0, 0 }, new byte[] { 255, 0, 0 },
                 new byte[] { 255, 0, 255 }, new byte[] { 255, 0, 255 }, new byte[] { 255, 0, 255 },
             };
+        }
+
+        // Wheels up to 25 RPM LEDs (KS Pro = 18). First 10 match legacy defaults; 11+ default black.
+        private const int WheelRpmLedMax = 25;
+        private static byte[][] InitWheelRpmColorArray()
+        {
+            var baseColors = InitRpmColorArray();
+            var arr = new byte[WheelRpmLedMax][];
+            for (int i = 0; i < WheelRpmLedMax; i++)
+                arr[i] = i < baseColors.Length ? baseColors[i] : new byte[] { 0, 0, 0 };
+            return arr;
         }
 
         /// <summary>
@@ -278,7 +317,7 @@ namespace MozaPlugin
                 case "wheel-knob-signal-mode2":      WheelKnobSignalModes[2] = value; WheelKnobSignalModeSupported = true; break;
                 case "wheel-knob-signal-mode3":      WheelKnobSignalModes[3] = value; WheelKnobSignalModeSupported = true; break;
                 case "wheel-knob-signal-mode4":      WheelKnobSignalModes[4] = value; WheelKnobSignalModeSupported = true; break;
-                case "wheel-stick-mode":             WheelStickMode = value / 256; break; // raw 0/256 → display 0/1
+                case "wheel-stick-mode":             WheelStickMode = value; break;
                 case "wheel-rpm-indicator-mode":     WheelRpmIndicatorMode = value - 1; break; // raw 1/2/3 → display 0/1/2
                 case "wheel-get-rpm-display-mode":  WheelRpmDisplayMode = value; break;
                 case "wheel-old-rpm-brightness":     WheelESRpmBrightness = value; break;
@@ -347,6 +386,15 @@ namespace MozaPlugin
                 case "handbrake-y3": HandbrakeCurve[2] = value; break;
                 case "handbrake-y4": HandbrakeCurve[3] = value; break;
                 case "handbrake-y5": HandbrakeCurve[4] = value; break;
+
+                // Hub port power status
+                case "hub-base-power":    HubBasePower    = value; IsHubConnected = true; break;
+                case "hub-port1-power":   HubPort1Power   = value; IsHubConnected = true; break;
+                case "hub-port2-power":   HubPort2Power   = value; break;
+                case "hub-port3-power":   HubPort3Power   = value; break;
+                case "hub-pedals1-power": HubPedals1Power = value; break;
+                case "hub-pedals2-power": HubPedals2Power = value; break;
+                case "hub-pedals3-power": HubPedals3Power = value; break;
             }
 
         }
@@ -363,7 +411,7 @@ namespace MozaPlugin
             if (commandName.StartsWith("wheel-rpm-color") && !commandName.Contains("blink"))
             {
                 int idx = ParseTrailingIndex(commandName, "wheel-rpm-color");
-                if (idx >= 0 && idx < 10 && data.Length >= 3)
+                if (idx >= 0 && idx < WheelRpmColors.Length && data.Length >= 3)
                     SetColor(WheelRpmColors[idx], data);
             }
             // Wheel button colors

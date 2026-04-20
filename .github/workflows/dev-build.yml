@@ -19,34 +19,73 @@ concurrency:
 jobs:
   build:
     runs-on: windows-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Setup .NET SDK
         uses: actions/setup-dotnet@v5
         with:
           dotnet-version: "8.0.x"
 
+      - name: Compute dev version
+        id: vars
+        shell: bash
+        run: |
+          short_sha="${GITHUB_SHA::7}"
+          latest_tag=$(git describe --tags --match 'v*' --abbrev=0 2>/dev/null || echo v0.0.0)
+          IFS=. read -r MAJ MIN PAT <<<"${latest_tag#v}"
+          next="${MAJ}.${MIN}.$((PAT+1))"
+          dev_version="${next}-dev.${short_sha}"
+          commit_subject=$(git log -1 --pretty=%s)
+          {
+            echo "short_sha=${short_sha}"
+            echo "latest_tag=${latest_tag}"
+            echo "dev_version=${dev_version}"
+            echo "commit_subject=${commit_subject}"
+            echo "build_timestamp=$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Restore dependencies
         run: dotnet restore
 
       - name: Build plugin DLL
-        run: dotnet build -c Release --no-restore
+        run: dotnet build -c Release --no-restore /p:Version=${{ steps.vars.outputs.dev_version }}
 
       - name: Run tests
         run: dotnet test MozaPlugin.Tests/MozaPlugin.Tests.csproj -c Release --no-build --verbosity normal
 
-      - name: Stage build files
+      - name: Stage and zip release files
+        shell: pwsh
         run: |
           $staging = "staging"
           New-Item -ItemType Directory -Path $staging -Force
           Copy-Item ./bin/x86/Release/MozaPlugin.dll $staging/
+          Compress-Archive -Path ./staging/* -DestinationPath ./MozaPlugin_dev.zip
+          Copy-Item ./MozaPlugin_dev.zip ./MozaPlugin_dev-${{ steps.vars.outputs.short_sha }}.zip
 
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+      - name: Publish pre-release
+        uses: softprops/action-gh-release@v2
         with:
-          name: MozaPlugin-dev-${{ github.sha }}
-          path: staging/
-          retention-days: 14
+          tag_name: dev-latest
+          name: "Development Build (${{ steps.vars.outputs.dev_version }})"
+          prerelease: true
+          make_latest: false
+          fail_on_unmatched_files: true
+          files: |
+            MozaPlugin_dev.zip
+            MozaPlugin_dev-${{ steps.vars.outputs.short_sha }}.zip
+          body: |
+            ⚠️ **Pre-release — expect rough edges.** Use the latest stable release if you need reliability.
+
+            **Version:** `${{ steps.vars.outputs.dev_version }}`
+            **Commit:** [`${{ steps.vars.outputs.short_sha }}`](https://github.com/${{ github.repository }}/commit/${{ github.sha }}) — ${{ steps.vars.outputs.commit_subject }}
+            **Built:** ${{ steps.vars.outputs.build_timestamp }}
+            **Changes since ${{ steps.vars.outputs.latest_tag }}:** https://github.com/${{ github.repository }}/compare/${{ steps.vars.outputs.latest_tag }}...${{ github.sha }}
+
+            Download `MozaPlugin_dev.zip` for the latest build, or `MozaPlugin_dev-<sha>.zip` for a specific build.

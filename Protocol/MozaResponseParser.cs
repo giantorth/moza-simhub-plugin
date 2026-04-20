@@ -8,6 +8,7 @@ namespace MozaPlugin.Protocol
         public int IntValue;
         public byte[] ArrayValue;
         public byte DeviceId;
+        public int PayloadLength;
     }
 
     /// <summary>
@@ -33,7 +34,8 @@ namespace MozaPlugin.Protocol
             byte group = MozaProtocol.ToggleBit7(responseGroup);
             byte deviceId = MozaProtocol.SwapNibbles(responseDeviceId);
 
-            // Filter firmware debug output (group 0x8E -> toggled 0x0E = 14, from main device 18)
+            // Filter firmware debug output. Firmware sends debug frames with raw wire
+            // group 0x0E (bit7 clear, so this is NOT a normal toggled response).
             // These are unsolicited status/log messages, not protocol responses.
             if (responseGroup == 0x0E)
                 return null;
@@ -80,7 +82,7 @@ namespace MozaPlugin.Protocol
                 var valueData = new byte[payload.Length - cmd.CommandId.Length];
                 Array.Copy(payload, cmd.CommandId.Length, valueData, 0, valueData.Length);
 
-                var result = new ParsedResponse { Name = kvp.Key, DeviceId = deviceId };
+                var result = new ParsedResponse { Name = kvp.Key, DeviceId = deviceId, PayloadLength = valueData.Length };
 
                 if (cmd.PayloadType == "array")
                 {
@@ -93,7 +95,8 @@ namespace MozaPlugin.Protocol
                 }
                 else
                 {
-                    result.IntValue = MozaCommand.ParseIntValue(valueData, cmd.PayloadBytes);
+                    result.IntValue = MozaCommand.ParseIntValue(valueData,
+                        Math.Min(valueData.Length, cmd.PayloadBytes));
                 }
 
                 return result;

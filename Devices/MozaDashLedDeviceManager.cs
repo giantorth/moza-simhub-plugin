@@ -105,11 +105,21 @@ namespace MozaPlugin.Devices
                     ledColors, buttonColors, encoderColors, matrixColors, rawColors,
                     rpmBrightness, buttonsBrightness, encodersBrightness, matrixBrightness);
 
+                // Merge SimHub Individual-LED overrides. Dashboard physical order:
+                // [rpm 0..9][flag 0..5] — flags surface on the `buttons` channel.
+                if (rawColors.Length > 0)
+                {
+                    ledColors = MozaLedDeviceManager.ApplyOverrides(
+                        ledColors, rawColors, 0, MozaDeviceConstants.RpmLedCount);
+                    buttonColors = MozaLedDeviceManager.ApplyOverrides(
+                        buttonColors, rawColors, MozaDeviceConstants.RpmLedCount, MozaDeviceConstants.FlagLedCount);
+                }
+
                 if (ledColors.Length == 0 && buttonColors.Length == 0)
                     return;
 
                 var plugin = MozaPlugin.Instance;
-                if (plugin == null || !plugin.Data.IsBaseConnected || !plugin.IsDashDetected)
+                if (plugin == null || !plugin.Data.IsConnected || !plugin.IsDashDetected)
                     return;
 
                 bool alwaysResendBitmask = plugin.Settings.AlwaysResendBitmask;

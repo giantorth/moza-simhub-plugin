@@ -20,6 +20,10 @@ namespace MozaPlugin.Devices
         /// <summary>Marker prefix returned by GetWheelModelPrefix for old-protocol devices.</summary>
         public const string OldProtocolMarker = "__old__";
 
+        /// <summary>
+        /// Fallback RPM LED count used pre-detection (before the wheel model name
+        /// is known). Known-model code paths should prefer <see cref="WheelModelInfo.RpmLedCount"/>.
+        /// </summary>
         public const int RpmLedCount = 10;
         public const int ButtonLedCount = 14;
         public const int FlagLedCount = 6;
@@ -32,8 +36,8 @@ namespace MozaPlugin.Devices
         {
             { "GS V2P",  "68b2eb89-043e-4e29-be9c-4045c9636124" },
             { "CS V2.1", "cd485bdb-934d-4d06-8224-d24fb1f82bd7" },
-            { "CSP",     "503269ba-fc50-44d4-9844-8800da5f9f10" },
-            { "KSP",     "14c84064-a968-43b9-ab92-a02f512632ce" },
+            { "W17",     "503269ba-fc50-44d4-9844-8800da5f9f10" },  // CS Pro (firmware reports "W17", was "CSP")
+            { "W18",     "14c84064-a968-43b9-ab92-a02f512632ce" },  // KS Pro (firmware reports "W18")
             { "FSR2",    "c4f0cf35-e68c-4756-a04a-b2f8b5d6dbf3" },
         };
 

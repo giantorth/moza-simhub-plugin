@@ -103,7 +103,7 @@ namespace MozaPlugin.Telemetry
         /// 0 = URL-based subscription (send channel URLs, wheel resolves compression).
         /// 2 = Compact numeric (send flag bytes, channel indices, compression codes, bit widths).
         /// </summary>
-        public int ProtocolVersion { get; set; } = 2;
+        public int ProtocolVersion { get; set; } = 0;
 
         /// <summary>Channel URLs reported by the wheel during session startup. Null until parsed.</summary>
         public System.Collections.Generic.IReadOnlyList<string>? WheelChannelCatalog => _wheelChannelCatalog;
@@ -234,6 +234,8 @@ namespace MozaPlugin.Telemetry
                 _sendTimer.Dispose();
                 _sendTimer = null;
             }
+            try { _ackReceived.Reset(); } catch (ObjectDisposedException) { }
+            try { _mgmtResponseEvent.Reset(); } catch (ObjectDisposedException) { }
             // Reset so StartTelemetryIfReady() won't skip us on re-enable
             _framesSent = 0;
         }
@@ -261,6 +263,20 @@ namespace MozaPlugin.Telemetry
             byte telemetryPort = 0;
             int portsFound = 0;
 
+            // Reclaim any sessions left open by a prior SimHub crash/kill. The wheel
+            // firmware holds session state across USB reconnects, so if End() didn't
+            // run last time, ports 0x01..N are still "open" from the wheel's view and
+            // SendSessionOpen would get ignored. Blasting type=0x00 end-markers
+            // forces them closed. No-op for sessions already closed.
+            SimHub.Logging.Current.Info("[Moza] Pre-probe: closing any stale sessions...");
+            for (byte port = 1; port <= MaxProbePort; port++)
+            {
+                if (!_connection.IsConnected) return;
+                SendSessionClose(port);
+            }
+            // Brief settle so the wheel processes the closes before we re-open.
+            System.Threading.Thread.Sleep(100);
+
             SimHub.Logging.Current.Info("[Moza] Probing for available SerialStream ports...");
 
             for (byte port = 1; port <= MaxProbePort && portsFound < 2; port++)
@@ -274,8 +290,34 @@ namespace MozaPlugin.Telemetry
                 // Send session open: session byte = port (they match for initial allocations)
                 SendSessionOpen(port, port);
 
-                // Wait for fc:00 ack
-                if (_ackReceived.Wait(ProbeTimeoutMs))
+                // Wait for an fc:00 ack whose session byte matches THIS port. The wheel
+                // can emit stray acks (late response to a prior probe, or an ack for a
+                // previously-opened session); attributing one of those to the current
+                // port would lock the plugin onto a session the wheel never agreed to
+                // and silently break all downstream tier-def / telemetry.
+                var deadline = DateTime.UtcNow.AddMilliseconds(ProbeTimeoutMs);
+                bool acked = false;
+                while (true)
+                {
+                    int remaining = (int)(deadline - DateTime.UtcNow).TotalMilliseconds;
+                    if (remaining <= 0 || !_ackReceived.Wait(remaining))
+                        break;
+
+                    if (_lastAckedSession == port)
+                    {
+                        acked = true;
+                        break;
+                    }
+
+                    // Stale ack (different session) — discard and keep waiting within the
+                    // remaining timeout in case the ack for THIS port is still in flight.
+                    SimHub.Logging.Current.Debug(
+                        $"[Moza] Probing port 0x{port:X2}: ignoring stale ack for session 0x{_lastAckedSession:X2}");
+                    _ackReceived.Reset();
+                    _lastAckedSession = 0;
+                }
+
+                if (acked)
                 {
                     portsFound++;
                     if (portsFound == 1)
@@ -782,6 +824,25 @@ namespace MozaPlugin.Telemetry
 
         // ── Session management ──────────────────────────────────────────────
 
+        /// <summary>
+        /// Send a type=0x00 end-marker on the given session. Used to reclaim sessions
+        /// left open after a previous SimHub crash/kill, where End() did not run.
+        /// If the session is already closed, the wheel silently ignores this frame.
+        /// </summary>
+        private void SendSessionClose(byte session)
+        {
+            var frame = new byte[]
+            {
+                MozaProtocol.MessageStart, 0x06,
+                MozaProtocol.TelemetrySendGroup, MozaProtocol.DeviceWheel,
+                0x7C, 0x00,
+                session, 0x00,          // type=0x00 (end marker)
+                0x00                    // checksum placeholder
+            };
+            frame[frame.Length - 1] = MozaProtocol.CalculateChecksum(frame);
+            _connection.Send(frame);
+        }
+
         private void SendSessionOpen(byte session, byte port)
         {
             var frame = new byte[]
@@ -969,15 +1030,24 @@ namespace MozaPlugin.Telemetry
             byte b4 = (byte)(0x03 + 2 * page);
             byte z  = (byte)(0x06 + 2 * page);
 
-            var frame1 = new byte[] { MozaProtocol.MessageStart, 0x0A, MozaProtocol.TelemetrySendGroup,
+            var configFrame = new byte[] { MozaProtocol.MessageStart, 0x0A, MozaProtocol.TelemetrySendGroup,
                 MozaProtocol.DeviceWheel, 0x7C, 0x27, 0x0F, 0x80, b2, 0x00, b4, 0x00, 0xFE, 0x01, 0x00 };
-            frame1[14] = MozaProtocol.CalculateChecksum(frame1);
-            _connection.Send(frame1);
+            configFrame[14] = MozaProtocol.CalculateChecksum(configFrame);
+            _connection.Send(configFrame);
 
-            var frame2 = new byte[] { MozaProtocol.MessageStart, 0x06, MozaProtocol.TelemetrySendGroup,
+            // 7C:23 dashboard-activate: tells the wheel which dashboard pages are
+            // active. PitHouse sends one per page interleaved with 7C:27 at ~1 Hz.
+            byte ab2 = (byte)(0x07 + 2 * page);
+            byte ab4 = (byte)(0x05 + 2 * page);
+            var activateFrame = new byte[] { MozaProtocol.MessageStart, 0x0A, MozaProtocol.TelemetrySendGroup,
+                MozaProtocol.DeviceWheel, 0x7C, 0x23, 0x46, 0x80, ab2, 0x00, ab4, 0x00, 0xFE, 0x01, 0x00 };
+            activateFrame[14] = MozaProtocol.CalculateChecksum(activateFrame);
+            _connection.Send(activateFrame);
+
+            var configFrame2 = new byte[] { MozaProtocol.MessageStart, 0x06, MozaProtocol.TelemetrySendGroup,
                 MozaProtocol.DeviceWheel, 0x7C, 0x27, 0x0F, 0x00, z, 0x00, 0x00 };
-            frame2[10] = MozaProtocol.CalculateChecksum(frame2);
-            _connection.Send(frame2);
+            configFrame2[10] = MozaProtocol.CalculateChecksum(configFrame2);
+            _connection.Send(configFrame2);
         }
 
         private void SendStatusPush()
@@ -993,6 +1063,7 @@ namespace MozaPlugin.Telemetry
         {
             Stop();
             _ackReceived.Dispose();
+            _mgmtResponseEvent.Dispose();
         }
 
         private class TierState

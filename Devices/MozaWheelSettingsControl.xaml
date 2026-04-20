@@ -50,7 +50,7 @@
                 <TextBlock Text="Searching for wheel..." Foreground="Gray" FontStyle="Italic" Margin="0,10"/>
             </StackPanel>
 
-            <!-- ===== DASHBOARD TELEMETRY (visible for all wheel types) ===== -->
+            <!-- ===== DASHBOARD TELEMETRY (new-protocol wheels only) ===== -->
             <StackPanel x:Name="TelemetrySection">
                 <TextBlock Text="Dashboard Telemetry" Style="{StaticResource SectionHeader}"/>
                 <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
@@ -100,6 +100,14 @@
                     </ComboBox>
                 </StackPanel>
 
+                <StackPanel x:Name="WheelRpmColorSection">
+                    <TextBlock Text="RPM LED Colors (Static)" Style="{StaticResource SectionHeader}"/>
+                    <TextBlock Text="Colors used when telemetry is not sending."
+                               Foreground="Gray" FontSize="11" Margin="0,0,0,4" TextWrapping="Wrap"/>
+                    <StackPanel x:Name="WheelRpmIndexPanel" Orientation="Horizontal" Margin="0,0,0,2"/>
+                    <StackPanel x:Name="WheelRpmColorPanel" Orientation="Horizontal" Margin="0,0,0,10"/>
+                </StackPanel>
+
                 <StackPanel x:Name="WheelFlagSection">
                     <TextBlock Text="Flag LED Colors" Style="{StaticResource SectionHeader}"/>
                     <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
@@ -108,11 +116,6 @@
                         <TextBlock Style="{StaticResource LedIndex}" Text="5"/><TextBlock Style="{StaticResource LedIndex}" Text="6"/>
                     </StackPanel>
                     <StackPanel x:Name="WheelFlagColorPanel" Orientation="Horizontal" Margin="0,0,0,10"/>
-                    <StackPanel Orientation="Horizontal" Margin="0,4">
-                        <TextBlock Text="Flags Brightness" Style="{StaticResource SliderLabel}"/>
-                        <Slider x:Name="WheelFlagsBrightnessSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="WheelFlagsBrightnessSlider_ValueChanged"/>
-                        <TextBlock x:Name="WheelFlagsBrightnessValue" Style="{StaticResource SliderValue}" Text="100"/>
-                    </StackPanel>
                 </StackPanel>
 
                 <TextBlock Text="Button LED Colors" Style="{StaticResource SectionHeader}"/>
@@ -124,6 +127,25 @@
                         <ComboBoxItem Content="Breathing"/><ComboBoxItem Content="Color Cycle"/>
                         <ComboBoxItem Content="Rainbow"/><ComboBoxItem Content="Sand Flow"/>
                     </ComboBox>
+                </StackPanel>
+
+                <!-- ===== EXTENDED LED GROUPS (experimental) ===== -->
+                <StackPanel x:Name="ExtLedSection" Visibility="Collapsed">
+                    <TextBlock Text="Extended LED groups (experimental)" Style="{StaticResource SectionHeader}"/>
+                    <TextBlock Text="Auto-detected led groups 2=Single (up to 28), 3=Rotary (up to 56), 4=Ambient (up to 12). Semantics on your wheel are unknown — use these controls to probe index layout and behaviour. Nothing is sent until you click a button."
+                               Foreground="Gray" TextWrapping="Wrap" Margin="0,0,0,8" FontSize="11"/>
+
+                    <TextBlock Text="Wheel support summary (copy-paste into bug reports):" Foreground="Gray" FontSize="11" Margin="0,4,0,2"/>
+                    <TextBox x:Name="ExtLedSummaryBox" IsReadOnly="True" FontFamily="Consolas" FontSize="11"
+                             TextWrapping="NoWrap" AcceptsReturn="True" VerticalScrollBarVisibility="Auto"
+                             Height="100" Margin="0,0,0,8"/>
+
+                    <StackPanel x:Name="ExtLedGroup0Panel" Visibility="Collapsed" Margin="0,4"/>
+                    <StackPanel x:Name="ExtLedGroup1Panel" Visibility="Collapsed" Margin="0,4"/>
+                    <StackPanel x:Name="ExtLedGroup2Panel" Visibility="Collapsed" Margin="0,4"/>
+                    <StackPanel x:Name="ExtLedGroup3Panel" Visibility="Collapsed" Margin="0,4"/>
+                    <StackPanel x:Name="ExtLedGroup4Panel" Visibility="Collapsed" Margin="0,4"/>
+                    <StackPanel x:Name="ExtLedFlagsPanel" Visibility="Collapsed" Margin="0,4"/>
                 </StackPanel>
 
             </StackPanel>

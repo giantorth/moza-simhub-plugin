@@ -73,5 +73,71 @@ namespace MozaPlugin.Tests.Protocol
             Assert.Equal("wheel-paddles-mode", parsed!.Value.Name);
             Assert.Equal(2, parsed.Value.IntValue);
         }
+
+        [Fact]
+        public void Parse_WheelStickMode_NewFirmware1Byte()
+        {
+            // New firmware returns 1 byte for cmd [5] (PayloadBytes=2 in DB).
+            // Value 1 = left stick as D-pad.
+            byte[] response = { 0xC0, 0x71, 0x05, 0x01 };
+            var parsed = MozaResponseParser.Parse(response);
+            Assert.NotNull(parsed);
+            Assert.Equal("wheel-stick-mode", parsed!.Value.Name);
+            Assert.Equal(1, parsed.Value.IntValue);
+            Assert.Equal(1, parsed.Value.PayloadLength);
+        }
+
+        [Fact]
+        public void Parse_WheelStickMode_OldFirmware2Bytes()
+        {
+            // Old firmware returns 2 bytes: 0x01 0x00 = 256 (left stick on via *256).
+            byte[] response = { 0xC0, 0x71, 0x05, 0x01, 0x00 };
+            var parsed = MozaResponseParser.Parse(response);
+            Assert.NotNull(parsed);
+            Assert.Equal("wheel-stick-mode", parsed!.Value.Name);
+            Assert.Equal(256, parsed.Value.IntValue);
+            Assert.Equal(2, parsed.Value.PayloadLength);
+        }
+
+        [Fact]
+        public void Parse_HubBasePower_GroupE4_MappedToHub()
+        {
+            // Group 0xE4 = 228, remapped to logical 100 with device hint "hub".
+            // hub-base-power: cmd [0x02], value 0x0001 → 1
+            byte[] response = { 0xE4, 0x00, 0x02, 0x00, 0x01 };
+            var parsed = MozaResponseParser.Parse(response);
+            Assert.NotNull(parsed);
+            Assert.Equal("hub-base-power", parsed!.Value.Name);
+            Assert.Equal(1, parsed.Value.IntValue);
+        }
+
+        [Fact]
+        public void Parse_HubBasePower_Group64_DirectMatch()
+        {
+            // Group 100 (0x64) matches hub commands directly with "hub" hint.
+            byte[] response = { 0x64, 0x00, 0x02, 0x00, 0x01 };
+            var parsed = MozaResponseParser.Parse(response);
+            Assert.NotNull(parsed);
+            Assert.Equal("hub-base-power", parsed!.Value.Name);
+        }
+
+        [Fact]
+        public void Parse_FirmwareDebugNoise_0x0E_FromAnyDevice()
+        {
+            // Debug frames filtered regardless of device id.
+            Assert.Null(MozaResponseParser.Parse(new byte[] { 0x0E, 0x12, 0xAA }));
+            Assert.Null(MozaResponseParser.Parse(new byte[] { 0x0E, 0x31, 0xBB, 0xCC }));
+            Assert.Null(MozaResponseParser.Parse(new byte[] { 0x0E, 0x81, 0x00, 0x01, 0x02 }));
+        }
+
+        [Fact]
+        public void Parse_DeviceHintGuards_WheelGroupDoesNotMatchBaseCommand()
+        {
+            // Group 64 (wheel read) only matches wheel-* commands. If only base cmds
+            // had cmd id matching, parser still rejects on device hint mismatch.
+            // Use wheel group with cmd id that could ambiguously match nothing, expect null.
+            byte[] response = { 0xC0, 0x71, 0xFE, 0xEE, 0xEE };
+            Assert.Null(MozaResponseParser.Parse(response));
+        }
     }
 }

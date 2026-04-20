@@ -480,11 +480,15 @@ Per-group commands (G = group ID 0–4, N = LED index):
 
 | Command | ID | Bytes | Type | Notes |
 |---------|----|-------|------|-------|
-| group-brightness | `1B [G] FF` | 1 | int | |
-| group-normal-mode | `1C [G]` | 1 | int | Telemetry-active mode |
-| group-standby-mode | `1D [G]` | 1 | int | Idle mode |
-| group-standby-interval | `1E [G] [2..6]` | 2 | int | 2=breath, 3=circular, 4=rainbow, 5=drift sand, 6=breath color |
-| group-led-color | `1F [G] FF [N]` | 3 | array | LED N static RGB |
+| group-brightness | `1B [G] FF` | 1 | int | Plugin command `wheel-group{G}-brightness` (G=2..4). Firmware answers even when hardware absent — cannot be used as a presence check |
+| group-normal-mode | `1C [G]` | 1 | int | Telemetry-active mode. Plugin command `wheel-group{G}-mode` |
+| group-standby-mode | `1D [G]` | 1 | int | Idle mode. Not yet exposed by plugin |
+| group-standby-interval | `1E [G] [2..6]` | 2 | int | 2=breath, 3=circular, 4=rainbow, 5=drift sand, 6=breath color. Not yet exposed by plugin |
+| group-led-color | `1F [G] FF [N]` | 3 | array | LED N static RGB. Plugin commands `wheel-rpm-color{1..25}` (G=0), `wheel-button-color{1..16}` (G=1), `wheel-group{G}-color{1..Nmax}` (G=2..4) |
+| group-live-colors | `19 [G]` | 20 | array | Bulk live telemetry frame (packed `[idx, R, G, B]` entries, 0xFF padding). **Only groups 0/1 confirmed** — 2/3/4 may or may not support. Plugin `wheel-telemetry-rpm-colors`, `wheel-telemetry-button-colors` |
+| group-live-bitmask | `1A [G]` | 2 | int | Per-frame active-LED bitmask (LE). Groups 0/1 only. Plugin `wheel-send-rpm-telemetry`, `wheel-send-buttons-telemetry` |
+
+**Static vs live paths**: groups 0/1 have two rendering pipelines. Static (`1F`) writes persist in EEPROM and render only when firmware is in idle/constant mode (`wheel-telemetry-mode=2`, `wheel-buttons-idle-effect=1`). Live (`19` + `1A`) writes a volatile frame buffer used while telemetry is active. Groups 2-4 have only the static path in documented commands.
 
 Additional newer wheel commands:
 

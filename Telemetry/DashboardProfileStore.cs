@@ -134,7 +134,10 @@ namespace MozaPlugin.Telemetry
                 if (children != null && children.Count > 0)
                     profile.PageCount = children.Count;
             }
-            catch { /* keep default of 1 */ }
+            catch (Exception ex)
+            {
+                SimHub.Logging.Current.Info($"[Moza] mzdash page-count parse failed for '{name}': {ex.Message}");
+            }
 
             return profile;
         }

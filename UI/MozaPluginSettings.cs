@@ -17,7 +17,7 @@ namespace MozaPlugin
         public int WheelPaddlesMode { get; set; } = -1; // display 0/1/2 (Buttons/Combined/Split)
         public int WheelClutchPoint { get; set; } = -1; // 0..100
         public int WheelKnobMode { get; set; } = -1;    // legacy 0=Buttons, 1=Knob
-        public int WheelStickMode { get; set; } = -1;   // 0=buttons, 1=D-pad
+        public int WheelStickMode { get; set; } = -1;   // new FW: 0=off,1=left,2=right,3=both; old FW: 0=off,1=left
 
         // ES/Old wheel mode settings (-1 = not yet saved)
         public int WheelRpmIndicatorMode { get; set; } = -1;
@@ -45,6 +45,11 @@ namespace MozaPlugin
         // When true, only send LED updates to wheel when data actually changed (ignores SimHub forceRefresh).
         // Fixes flickering on some non-ES wheels. When false, respects SimHub's refresh cycle.
         public bool LimitWheelUpdates { get; set; } = true;
+
+        // Per-slot min/max index for the experimental diagnostic panels (slots 0..5).
+        // -1 sentinel = "use full range" (slot's MaxLeds-1 for max, 0 for min).
+        public int[] ExtLedDiagMin { get; set; } = new[] { -1, -1, -1, -1, -1, -1 };
+        public int[] ExtLedDiagMax { get; set; } = new[] { -1, -1, -1, -1, -1, -1 };
 
         // When true, resend LED state to wheel every ~1 second even if unchanged.
         // Some ES wheels need this to stay in telemetry mode.
@@ -78,7 +83,7 @@ namespace MozaPlugin
         //     wheel firmware resolves compression internally)
         // 2 = Compact numeric (VGS-style — host sends flag bytes, channel indices,
         //     compression codes, and bit widths per tier)
-        public int TelemetryProtocolVersion { get; set; } = 2;
+        public int TelemetryProtocolVersion { get; set; } = 0;
 
         // How to assign flag bytes in tier definitions and telemetry frames.
         // We don't fully understand how the wheel uses flag bytes — Pithouse uses

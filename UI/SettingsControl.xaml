@@ -331,6 +331,11 @@
                             </StackPanel>
                         </StackPanel>
 
+                        <!-- Active Buttons -->
+                        <TextBlock Text="Buttons" Style="{StaticResource SectionHeader}" Margin="0,4,0,8"/>
+                        <TextBlock x:Name="ActiveButtonsText" FontFamily="Consolas" FontSize="12"
+                                   Foreground="Gray" Margin="0,0,0,10" TextWrapping="Wrap">None</TextBlock>
+
                         <!-- Paddle Settings -->
                         <TextBlock Text="Paddle Settings" Style="{StaticResource SectionHeader}"/>
                         <StackPanel Orientation="Horizontal" Margin="0,4">
@@ -388,9 +393,17 @@
                                 </ComboBox>
                             </StackPanel>
                         </StackPanel>
-                        <StackPanel Orientation="Horizontal" Margin="0,8">
+                        <StackPanel x:Name="StickModeOldPanel" Orientation="Horizontal" Margin="0,8" Visibility="Collapsed">
                             <TextBlock Text="Stick as D-Pad" Style="{StaticResource SliderLabel}"/>
                             <CheckBox x:Name="StickModeCheck" VerticalAlignment="Center" Click="StickModeCheck_Click"/>
+                        </StackPanel>
+                        <StackPanel x:Name="StickModeNewPanel" Orientation="Horizontal" Margin="0,8" Visibility="Collapsed">
+                            <TextBlock Text="Joystick Assignment" Style="{StaticResource SliderLabel}"/>
+                            <ComboBox x:Name="StickModeCombo" Width="120" SelectionChanged="StickModeCombo_Changed">
+                                <ComboBoxItem Content="None"/>
+                                <ComboBoxItem Content="Left"/>
+                                <ComboBoxItem Content="Right"/>
+                            </ComboBox>
                         </StackPanel>
 
                         <TextBlock TextWrapping="Wrap" Foreground="Gray" FontSize="11" Margin="0,12,0,0"
@@ -406,12 +419,14 @@
 
                         <!-- Live Input -->
                         <TextBlock Text="Handbrake" Style="{StaticResource SectionHeader}"/>
-                        <StackPanel Margin="0,0,0,10">
+                        <StackPanel x:Name="HandbrakeAxisPanel" Margin="0,0,0,10">
                             <StackPanel Width="100" HorizontalAlignment="Left">
                                 <TextBlock Text="Position" Foreground="Gray" FontSize="11"/>
                                 <ProgressBar x:Name="HandbrakeBar" Height="14" Minimum="0" Maximum="100" Value="0"/>
                             </StackPanel>
                         </StackPanel>
+                        <TextBlock x:Name="HandbrakeButtonStatus" FontFamily="Consolas" FontSize="14"
+                                   FontWeight="Normal" Margin="0,0,0,10" Visibility="Collapsed">Released</TextBlock>
 
                         <TextBlock Text="Handbrake Settings" Style="{StaticResource SectionHeader}"/>
 
@@ -677,6 +692,45 @@
                         <StackPanel Orientation="Horizontal" Margin="0,8">
                             <Button x:Name="ClutchCalStartButton" Content="Start Calibration" Padding="12,4" Margin="0,0,10,0" Click="ClutchCalStartButton_Click"/>
                             <Button x:Name="ClutchCalStopButton" Content="Stop Calibration" Padding="12,4" Click="ClutchCalStopButton_Click"/>
+                        </StackPanel>
+
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <!-- ==================== HUB TAB ==================== -->
+            <TabItem x:Name="HubTab" Header="Hub" Visibility="Collapsed">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="10">
+                    <StackPanel Margin="5">
+
+                        <TextBlock Text="Universal Hub" Style="{StaticResource SectionHeader}"/>
+                        <TextBlock Text="Port connection status reported by the hub. Polled every 2 seconds."
+                                   Foreground="Gray" FontSize="11" Margin="0,0,0,12" TextWrapping="Wrap"/>
+
+                        <!-- Pedals Port -->
+                        <TextBlock Text="Pedals" Style="{StaticResource SectionHeader}" Margin="0,4,0,8"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <Ellipse x:Name="HubPedals1Dot" Style="{StaticResource ConnectionDot}" Fill="Gray"/>
+                            <TextBlock Text="Pedals Port" Style="{StaticResource SliderLabel}"/>
+                            <TextBlock x:Name="HubPedals1Label" Text="--" FontFamily="Consolas"/>
+                        </StackPanel>
+
+                        <!-- Accessory Ports -->
+                        <TextBlock Text="Accessories" Style="{StaticResource SectionHeader}" Margin="0,12,0,8"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <Ellipse x:Name="HubPort1Dot" Style="{StaticResource ConnectionDot}" Fill="Gray"/>
+                            <TextBlock Text="Port 1" Style="{StaticResource SliderLabel}"/>
+                            <TextBlock x:Name="HubPort1Label" Text="--" FontFamily="Consolas"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <Ellipse x:Name="HubPort2Dot" Style="{StaticResource ConnectionDot}" Fill="Gray"/>
+                            <TextBlock Text="Port 2" Style="{StaticResource SliderLabel}"/>
+                            <TextBlock x:Name="HubPort2Label" Text="--" FontFamily="Consolas"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <Ellipse x:Name="HubPort3Dot" Style="{StaticResource ConnectionDot}" Fill="Gray"/>
+                            <TextBlock Text="Port 3" Style="{StaticResource SliderLabel}"/>
+                            <TextBlock x:Name="HubPort3Label" Text="--" FontFamily="Consolas"/>
                         </StackPanel>
 
                     </StackPanel>

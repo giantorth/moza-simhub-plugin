@@ -17,6 +17,10 @@
 | Payload | N | Command ID (1+ bytes) followed by value bytes |
 | Checksum | 1 | See below |
 
+**N (payload length)** is bounded: valid range is 1–64. Values outside this range indicate corruption or a desync — discard and rescan for the next `0x7E` start byte.
+
+**Frame synchronization:** receivers scan the byte stream for `0x7E`, discarding all non-`0x7E` bytes. Once found, the next byte is read as N. If N is out of range or the checksum doesn't match, the frame is dropped and scanning resumes. This makes the protocol self-synchronizing after any corruption or mid-stream connection.
+
 Command IDs that are arrays of integers must be provided sequentially in order. Values are big-endian. Multiple frames can be concatenated in a single USB bulk transfer.
 
 ### Checksum
@@ -24,6 +28,30 @@ Command IDs that are arrays of integers must be provided sequentially in order. 
 `checksum = (0x0D + sum of all preceding bytes including 0x7E) % 256`
 
 The magic value 13 (`0x0D`) incorporates the USB endpoint (`0x02`), transfer type (`0x03` for URB_BULK), and a length constant (`0x08`). Changing the magic value causes devices to not respond — likely a firmware quirk rather than intentional.
+
+### Checksum escape (0x7E byte stuffing)
+
+When a frame's computed checksum equals `0x7E` (the start-of-frame marker), the sender **doubles it on the wire** — transmitting `0x7E 0x7E` instead of a single `0x7E`. The receiver must consume the extra byte after reading a frame whose checksum is `0x7E`. Without this, the escape byte is misinterpreted as the start of a new frame, desyncing all subsequent parsing.
+
+This applies to **both directions** (host → device and device → host). Confirmed from Wireshark USB captures (2026-04-18):
+
+```
+Host → device:  7e 06 3f 17 1a 01 3d 3f 00 00 7e 7e
+                └── frame (cksum=0x7e) ──────────┘ └─ escape byte
+
+Three 0x7E in a row (escaped checksum + next frame start):
+Device → host:  7e 07 8e 21 00 00 0b 00 00 00 32 7e 7e 7e 07 8e 91 ...
+                └── frame 1 (cksum=0x7e) ────────┘  │  └── frame 2 ─
+                                              escape ┘
+```
+
+In the three-`7E` case, the first `7E` is the checksum, the second is the escape, and the third is the start of the next frame.
+
+**Impact on buffer parsing:** When extracting frames from concatenated USB bulk data (pcapng captures, text logs), the parser must skip the escape byte between frames. Serial readers (byte-at-a-time) must consume one extra byte after receiving a frame with checksum `0x7E`. Failure to handle this causes the escape `0x7E` to be read as a frame start, with the next byte consumed as the length field — typically a large value (e.g. `N=0x7E`=126) that overshoots the buffer, silently dropping all subsequent frames in the transfer.
+
+**Scope:** in the known protocol space, group IDs (0x07–0x64), device IDs (0x12–0x1E), and their response transforms (group | 0x80, nibble-swapped device) never equal `0x7E`. Payload bytes are unconstrained but `0x7E` has not been observed in payload data in any capture. Only the checksum byte can equal `0x7E` in practice, so implementations only need to stuff/unstuff the checksum position. The simulator's parser (`parse_frames`) defensively handles `0x7E` anywhere in the body as a safety margin.
+
+Reference: [boxflat PR #131](https://github.com/Lawstorant/boxflat/pull/131) documents the same behavior.
 
 ### Responses
 
@@ -303,7 +331,8 @@ Pit House sends several concurrent command streams when telemetry is active. Ana
 | RPM LED position | ~4/s | wheel (0x17) | `0x3F/1A:00` | LED bar position | Separate feature |
 | Telemetry mode | ~3/s | wheel (0x17) | `0x40/28:02` data=`01:00` | Set/poll multi-channel mode | Likely |
 | Dash keepalive | ~1.5/s | dash (0x14), 0x15, wheel (0x17) | `0x43` n=1, data=`00` | Keep-alive for dash and wheel sub-devices | Yes — Pithouse sends to all three |
-| Display config | ~1/s | wheel (0x17) | `0x43/7C:27` | Page-cycled display params | TBD |
+| Display config | ~1/s | wheel (0x17) | `0x43/7C:27` | Page-cycled display params | Yes |
+| Dashboard activate | ~1/s | wheel (0x17) | `0x43/7C:23` | Declares active dashboard pages | Yes |
 | Status push | ~1/s | wheel (0x17) | `0x43/FC:00` | Session ack with session=FlagByte and current ack seq (NOT zeros) | Yes — Pithouse uses real session/seq |
 | Settings block | ~1/s | wheel (0x17) | `0x43/7C:00` | Config sync | No (file transfer) |
 | Button LED | ~1/s | wheel (0x17) | `0x3F/1A:01` | Button LED state | Separate feature |
@@ -420,7 +449,7 @@ The plugin replicates Pithouse's observed preamble with probe-based port allocat
 11. Begin `0x41/FD:DE` enable signal (~30+ Hz)
 12. Begin `0x43/7D:23` bit-packed telemetry (flags 0x00/0x01/0x02, ~30 Hz per tier)
 13. Begin `0x2D/F5:31` sequence counter (~30 Hz)
-14. Begin periodic streams at ~1 Hz: heartbeats, dash keepalives (0x43 to dev 0x14, 0x15, 0x17), display config (7C:27), session ack (FC:00 with session=FlagByte and current ack seq)
+14. Begin periodic streams at ~1 Hz: heartbeats, dash keepalives (0x43 to dev 0x14, 0x15, 0x17), display config (7C:27) + dashboard activate (7C:23) interleaved per page, session ack (FC:00 with session=FlagByte and current ack seq)
 15. Begin `0x40/28:02` telemetry mode polling (~3 Hz)
 
 The RPM LEDs (`0x3F/1A:00`) and button LEDs (`0x3F/1A:01`) are handled separately by `MozaDashLedDeviceManager` and `MozaLedDeviceManager` and work with zero preamble.
@@ -506,7 +535,8 @@ Sent once during dashboard config burst. Payload: `13 04 4C` (device 0x13, value
 | `[0xFC, 0x00]` | 3 bytes | varies | Session acknowledgment (`session + ack_seq`) |
 | `[0x7C, 0x00]` | varies | varies | Session-based file transfer / RPC (see Dashboard upload protocol) |
 | `[0x7C, 0x27]` | 4–8 bytes | ~1/s | Periodic display config push (page-cycled; see § Dashboard upload) |
-| `[0x7C, 0x23]` | 8 bytes | once | Dashboard activation notification |
+| `[0x7C, 0x23]` | 8 bytes | ~1/s | Dashboard activate — declares active pages, interleaved with 7C:27 (see § Dashboard upload) |
+| `[0x7C, 0x1E]` | 8 bytes | ~1/s | Display settings push — brightness/timeout/orientation (all models; see § Dashboard upload) |
 
 ### Group 0x43 broadcast (devices 0x14, 0x15)
 
@@ -699,7 +729,12 @@ After the file is transferred, Pit House sends a burst of `0x40` commands to con
 | `28:00` | `00` | Query active dashboard mode (wheel retains across power cycles) |
 | `28:01` | `00` | Query active page number |
 | `28:02` | `01 00` | Set multi-channel telemetry mode (01=multi, 00=RPM only) |
-| various | — | Display settings (`0a`, `0b`, `05`, `1b`, `20`, `21`, `24`, etc.) |
+| `1b:00`/`1b:01` | `FF value` | Brightness per page (value `64`=100%) |
+| `1f:00`/`1f:01` | `FF idx 00 00 00` | LED color read per index (`idx`=`0a`–`0f` observed) |
+| `27:00`–`27:03` | `00/01 00 00 00` | Page/dashboard config (sub-IDs 0–3, variants with `01`) |
+| `29:00` | `00` | Display settings (TBD) |
+| `2a:03` | `00` | Display settings (TBD) |
+| various | — | Other display settings (`0a`, `0b`, `05`, `20`, `21`, `24`, etc.) |
 
 **4. Periodic display config (group 0x43, cmd `7c:27`)**
 
@@ -714,7 +749,29 @@ Sent ~1/s after the dashboard is active. Two payloads per page, cycling through 
 
 Bytes `0f`, `80`/`00`, `fe 01` are constant. The page count equals the mzdash `children` array length.
 
-A one-shot `7c:23` command is sent when a dashboard is first activated, with 8 bytes of display parameters.
+**5. Dashboard activate (group 0x43, cmd `7c:23`)**
+
+Sent ~1/s alongside `7c:27`, interleaved per page (one `7c:27` then one `7c:23` per page). Declares which dashboard pages are active. Observed in PitHouse captures with 3-page F1 dashboard:
+
+| Page `p` | 8-byte payload |
+|-----------|---------------|
+| 0 | `46 80 07 00 05 00 fe 01` |
+| 1 | `46 80 09 00 07 00 fe 01` |
+| 2 | `46 80 0b 00 09 00 fe 01` |
+| Formula | `46 80 (7+2p) 00 (5+2p) 00 fe 01` |
+
+Byte `46` and `80`, `fe 01` are constant. No second short-form frame (unlike `7c:27`). The wheel→host direction (group 0xC3) uses `7c:23` with a different byte layout to advertise the channel catalog before session opens — see § Handshake sequence.
+
+**6. Display settings push (group 0x43, cmd `7c:1e`)**
+
+Sent ~1/s by PitHouse to all wheel models (not VGS-specific). Pushes current display settings (brightness, timeout, orientation). Same frame structure as `7c:23`/`7c:27` but with constant byte `6c`:
+
+| Observed payload | Context |
+|------------------|---------|
+| `6c 80 0c 00 0a 00 fe 01` | With active dashboard pages (7c:27/7c:23 also cycling) |
+| `6c 80 06 00 04 00 fe 01` | After dashboard switch / settings change (7c:27/7c:23 stop) |
+
+The b2/b4 values are sequence counters (same as 7c:27/7c:23), not display settings. The actual brightness/timeout values are written via `grp 0x40` settings commands (`cmd 0x1b` = brightness, `cmd 0x1e` = timeout — see § Wheel connection initialization).
 
 ### Wheel connection initialization (from `cs-to-vgs-wheel.ndjson`)
 
@@ -1181,7 +1238,7 @@ The plugin sends steps 1-10 during the preamble. The 0x87 response with model na
 - **Dashboard upload: seq=2 assumes port=1** — Data chunks on the mgmt session start at seq=2, assuming session open used seq=1 (i.e. mgmtPort=1). The session open frame uses seq=port, so data should start at port+1. Since the serial port is exclusive (PitHouse cannot run simultaneously), port probing always finds ports 1 and 2, making seq=2 correct in practice. Same assumption exists in tier definition code (seq=3, assumes telemetry port=2). If this ever changes (e.g. multi-client over network), both need to use `port + 1` instead of hardcoded values.
 - **EEPROM direct access** — group 10 protocol found in rs21_parameter.db but never observed in USB captures; needs live verification
 - **Base ambient LEDs** — groups 32/34 commands found in rs21_parameter.db; not captured in USB traces (requires base with LED strips)
-- **Wheel LED groups 2-4** — Single, Rotary, and Ambient groups found in rs21_parameter.db with up to 56 LEDs; only groups 0 (Shift/RPM) and 1 (Button) confirmed in captures so far
+- **Wheel LED groups 2-4** — Single (28), Rotary (56), Ambient (12) groups found in rs21_parameter.db; only groups 0 (Shift/RPM) and 1 (Button) confirmed in captures so far. **Partial plugin support (2026-04-19)**: commands added for `1F [G] FF [N]` per-LED color, `1B [G] FF` brightness, `1C [G]` mode; experimental Wheel Settings panel exposes per-slot Range (min/max) + Fill/Clear/Send-one/Brightness/Mode controls for groups 0-4 plus Meter flag LEDs (slot 5). Brightness-read probe lights groups 2/3/4 panels when firmware answers — **probe is unreliable** (firmware acknowledges reads for parameters with no physical hardware; confirmed on base KS wheel which has no rotary/ambient hardware but responds to all three probes). Use the panel's summary TextBox to record per-wheel support and feed back into `WheelModelInfo`. No live telemetry equivalent (`25 G` / `26 G` bulk+bitmask) found for groups 2-4 — diagnostic uses static per-LED writes only
 - **Group 0x09 semantics** — presence/ready check sent first during probe. Response `00 01` may indicate sub-device count (VGS has 1 Display sub-device). Needs verification with other wheel models
 - **Group 0x28 / 0x29 purpose** — group 0x28 queries base for per-device parameters (values 450, 1000 seen); group 0x29 sets a base parameter (value 1100). Possibly FFB or calibration related
 - ~~0x40/28:02 response discrepancy~~ — **RESOLVED (2026-04-14)**: Wheel responds `00:00` to `28:02 data=01:00` — this is normal behavior, not a failure. The plugin sends 28:02 during the preamble and telemetry flows regardless of the response value

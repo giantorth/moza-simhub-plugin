@@ -19,15 +19,21 @@ namespace MozaPlugin.Devices
     {
         private Color[]? _lastLeds;
         private Color[]? _lastButtons;
+        private readonly Color[] _lastFlagColors = new Color[MozaDeviceConstants.FlagLedCount];
+        private bool _lastFlagColorsPrimed;
         private LedDeviceState _lastState = new LedDeviceState(
             Array.Empty<Color>(), Array.Empty<Color>(), Array.Empty<Color>(),
             Array.Empty<Color>(), Array.Empty<Color>(), 1.0, 1.0, 1.0, 1.0);
         private double _lastBrightness = -1;
         private double _lastButtonsBrightness = -1;
+        private double _lastFlagsBrightness = -1;
 
         // Per-component bitmask tracking (avoid redundant bitmask sends)
         private int _lastRpmBitmask = -1;
         private int _lastButtonBitmask = -1;
+
+        // Diagnostic: log rawColors shape once per distinct (length, non-empty pattern)
+        private string? _lastRawDiagKey;
 
         // Keepalive timer
         private DateTime _lastSendTime = DateTime.MinValue;
@@ -39,7 +45,7 @@ namespace MozaPlugin.Devices
         /// <summary>
         /// Expected wheel model prefix for this device instance.
         /// Null = unknown (don't connect). Empty string = generic fallback (any wheel).
-        /// Specific prefix (e.g. "CSP") = only connect when that model is detected.
+        /// Specific prefix (e.g. "W17") = only connect when that model is detected.
         /// </summary>
         public string? ExpectedModelPrefix { get; set; }
 
@@ -76,10 +82,12 @@ namespace MozaPlugin.Devices
                 // Reset cached state so everything re-initializes on reconnect
                 _lastLeds = null;
                 _lastButtons = null;
+                _lastFlagColorsPrimed = false;
                 _lastRpmBitmask = -1;
                 _lastButtonBitmask = -1;
                 _lastBrightness = -1;
                 _lastButtonsBrightness = -1;
+                _lastFlagsBrightness = -1;
                 _ledsAwake = false;
                 OnDisconnect?.Invoke(this, EventArgs.Empty);
             }
@@ -163,13 +171,30 @@ namespace MozaPlugin.Devices
                     return;
 
                 var plugin = MozaPlugin.Instance;
-                if (plugin == null || !plugin.Data.IsBaseConnected)
+                if (plugin == null || !plugin.Data.IsConnected)
                     return;
 
-                bool isNewWheel = plugin.IsNewWheelDetected;
-                bool isOldWheel = plugin.IsOldWheelDetected;
+                bool isOldWheel = ExpectedModelPrefix == MozaDeviceConstants.OldProtocolMarker
+                    && plugin.IsOldWheelDetected;
+                bool isNewWheel = !isOldWheel && plugin.IsNewWheelDetected;
                 if (!isNewWheel && !isOldWheel)
                     return;
+
+                // Merge SimHub Individual-LED overrides (rawState channel) over the
+                // per-segment logical channels. Physical order per device.json:
+                // [telemetry 0..telemetryPhys-1][button 0..buttonPhys-1].
+                var modelInfo = plugin.WheelModelInfo;
+                if (rawColors.Length > 0)
+                {
+                    LogRawDiagnostic(rawColors, ledColors.Length, buttonColors.Length);
+
+                    int telemetryPhys = modelInfo != null
+                        ? modelInfo.RpmLedCount + (modelInfo.HasFlagLeds ? MozaDeviceConstants.FlagLedCount : 0)
+                        : ledColors.Length;
+                    int buttonPhys = modelInfo?.ButtonLedCount ?? buttonColors.Length;
+                    ledColors = ApplyOverrides(ledColors, rawColors, 0, telemetryPhys);
+                    buttonColors = ApplyOverrides(buttonColors, rawColors, telemetryPhys, buttonPhys);
+                }
 
                 // ES wheel wake-up: flash all LEDs on then off to enter telemetry mode
                 if (!_ledsAwake && isOldWheel)
@@ -184,27 +209,45 @@ namespace MozaPlugin.Devices
                 bool alwaysResendBitmask = plugin.Settings.AlwaysResendBitmask;
                 bool anySent = false;
 
+                // Wheels with flag LEDs receive a single (rpmN + 6)-LED telemetry
+                // sequence from SimHub laid out as [flag 1..3][rpm 1..N][flag 4..6].
+                // Pre-detection (modelInfo null) we fall back to pure RPM handling.
+                bool hasFlagLeds = isNewWheel && modelInfo?.HasFlagLeds == true;
+                int rpmN = modelInfo?.RpmLedCount ?? MozaDeviceConstants.RpmLedCount;
+                int flagLeft = hasFlagLeds ? 3 : 0;
+
+                Color[] rpmColors;
+                if (hasFlagLeds && ledColors.Length >= flagLeft + rpmN)
+                {
+                    rpmColors = new Color[rpmN];
+                    Array.Copy(ledColors, flagLeft, rpmColors, 0, rpmN);
+                }
+                else
+                {
+                    rpmColors = ledColors;
+                }
+
                 // --- RPM LEDs ---
-                bool rpmChanged = _lastLeds == null || !ledColors.SequenceEqual(_lastLeds);
+                bool rpmChanged = _lastLeds == null || !rpmColors.SequenceEqual(_lastLeds);
                 bool shouldSendRpm = rpmChanged || (!limitUpdates && forceRefresh);
 
                 if (shouldSendRpm)
                 {
-                    _lastLeds = (Color[])ledColors.Clone();
+                    _lastLeds = (Color[])rpmColors.Clone();
 
-                    int count = Math.Min(ledColors.Length, MozaDeviceConstants.RpmLedCount);
+                    int count = Math.Min(rpmColors.Length, rpmN);
 
                     // Build bitmask: bit i set if LED i has any color
                     int bitmask = 0;
                     for (int i = 0; i < count; i++)
                     {
-                        if (ledColors[i].R > 0 || ledColors[i].G > 0 || ledColors[i].B > 0)
+                        if (rpmColors[i].R > 0 || rpmColors[i].G > 0 || rpmColors[i].B > 0)
                             bitmask |= (1 << i);
                     }
 
                     if (isNewWheel)
                     {
-                        SendColorChunks(plugin, ledColors, count, "wheel-telemetry-rpm-colors");
+                        SendColorChunks(plugin, rpmColors, count, "wheel-telemetry-rpm-colors");
 
                         if (alwaysResendBitmask || bitmask != _lastRpmBitmask)
                         {
@@ -226,12 +269,36 @@ namespace MozaPlugin.Devices
                     }
                 }
 
+                // --- Flag LEDs ---
+                // Wheels with 3/N/3 flag layout: SimHub indices 0..2 drive flag 1..3,
+                // indices rpmN+3..rpmN+5 drive flag 4..6. Per-LED static color writes
+                // with change detection keep wire traffic low.
+                // Flag LEDs live on the Meter sub-device (device 0x14) per RS21 DB;
+                // gate on dash detection so writes only fire once that sub-device answers.
+                if (hasFlagLeds && plugin.IsDashDetected && ledColors.Length >= flagLeft + rpmN + 3)
+                {
+                    for (int i = 0; i < MozaDeviceConstants.FlagLedCount; i++)
+                    {
+                        int srcIdx = i < 3 ? i : rpmN + i;  // 0,1,2, rpmN+3, rpmN+4, rpmN+5
+                        var c = ledColors[srcIdx];
+                        bool changed = !_lastFlagColorsPrimed || _lastFlagColors[i] != c;
+                        if (changed || (!limitUpdates && forceRefresh))
+                        {
+                            _lastFlagColors[i] = c;
+                            plugin.DeviceManager.WriteArray(
+                                $"dash-flag-color{i + 1}",
+                                new byte[] { c.R, c.G, c.B });
+                            anySent = true;
+                        }
+                    }
+                    _lastFlagColorsPrimed = true;
+                }
+
                 // --- Button LEDs (new-protocol wheels only) ---
                 // Gate on WheelModelInfo being known: sending with the fallback mapping
                 // before the model-name response arrives would push wrong-index state that
                 // the cache then treats as current, leaving the wheel misaligned until a
                 // power cycle or forced color change.
-                var modelInfo = plugin.WheelModelInfo;
                 if (isNewWheel && buttonColors.Length > 0 && modelInfo != null)
                 {
                     bool buttonsChanged = _lastButtons == null || !buttonColors.SequenceEqual(_lastButtons);
@@ -275,6 +342,16 @@ namespace MozaPlugin.Devices
                     anySent = true;
                 }
 
+                // Flag brightness is slaved to RPM brightness on wheels with flag LEDs —
+                // the 3/N/3 layout is a single logical strip, so one master knob controls all.
+                // Routed through the Meter sub-device via dash-flags-brightness; gated on dash detect.
+                if (hasFlagLeds && plugin.IsDashDetected && rpmBrightness != _lastFlagsBrightness)
+                {
+                    _lastFlagsBrightness = rpmBrightness;
+                    plugin.DeviceManager.WriteSetting("dash-flags-brightness", (int)(rpmBrightness * 100));
+                    anySent = true;
+                }
+
                 if (isNewWheel && buttonsBrightness != _lastButtonsBrightness)
                 {
                     _lastButtonsBrightness = buttonsBrightness;
@@ -310,7 +387,9 @@ namespace MozaPlugin.Devices
         {
             if (_lastLeds == null) return;
 
-            int count = Math.Min(_lastLeds.Length, MozaDeviceConstants.RpmLedCount);
+            var modelInfo = plugin.WheelModelInfo;
+            int rpmN = modelInfo?.RpmLedCount ?? MozaDeviceConstants.RpmLedCount;
+            int count = Math.Min(_lastLeds.Length, rpmN);
 
             if (isNewWheel)
             {
@@ -318,6 +397,17 @@ namespace MozaPlugin.Devices
                 if (_lastRpmBitmask >= 0)
                     plugin.DeviceManager.WriteArray("wheel-send-rpm-telemetry",
                         new byte[] { (byte)(_lastRpmBitmask & 0xFF), (byte)((_lastRpmBitmask >> 8) & 0xFF) });
+
+                if (modelInfo?.HasFlagLeds == true && plugin.IsDashDetected && _lastFlagColorsPrimed)
+                {
+                    for (int i = 0; i < MozaDeviceConstants.FlagLedCount; i++)
+                    {
+                        var c = _lastFlagColors[i];
+                        plugin.DeviceManager.WriteArray(
+                            $"dash-flag-color{i + 1}",
+                            new byte[] { c.R, c.G, c.B });
+                    }
+                }
             }
             else if (isOldWheel)
             {
@@ -331,7 +421,7 @@ namespace MozaPlugin.Devices
         /// When <paramref name="indexMap"/> is provided, each entry maps the source array
         /// position to the protocol LED index (for non-contiguous button layouts).
         /// </summary>
-        private static void SendColorChunks(MozaPlugin plugin, Color[] colors, int count,
+        internal static void SendColorChunks(MozaPlugin plugin, Color[] colors, int count,
             string command, int[]? indexMap = null)
         {
             int dataLen = count * 4;
@@ -359,6 +449,53 @@ namespace MozaPlugin.Devices
                 Array.Copy(colorData, pos, chunk, 0, 20);
                 plugin.DeviceManager.WriteArray(command, chunk);
             }
+        }
+
+        // Diagnostic: log rawColors length and per-slot state once per distinct pattern.
+        // Helps verify SimHub's Individual-LEDs output shape (physical-indexed vs other).
+        private void LogRawDiagnostic(Color[] rawColors, int ledsLen, int buttonsLen)
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.Append($"rawLen={rawColors.Length} leds={ledsLen} buttons={buttonsLen} nonEmpty=[");
+            for (int i = 0; i < rawColors.Length; i++)
+            {
+                var c = rawColors[i];
+                if (c.A != 0 || c.R != 0 || c.G != 0 || c.B != 0)
+                    sb.Append($"{i}:A{c.A}R{c.R}G{c.G}B{c.B} ");
+            }
+            sb.Append(']');
+            string key = sb.ToString();
+            if (key == _lastRawDiagKey) return;
+            _lastRawDiagKey = key;
+            SimHub.Logging.Current.Info($"[Moza] IndividualLEDs diag {key}");
+        }
+
+        // Merge physical-layer Individual-LED overrides onto a logical-channel array.
+        // A raw slot with Alpha != 0 replaces the corresponding dst slot.
+        // rawColors.Length is SimHub's max-end-position across Individual-LED
+        // entries, not the declared physical LED count — clip to the available
+        // window so short rawColors still apply overrides to the slots it covers.
+        internal static Color[] ApplyOverrides(Color[] dst, Color[] rawColors, int offset, int length)
+        {
+            if (length <= 0 || offset >= rawColors.Length) return dst;
+            int available = Math.Min(length, rawColors.Length - offset);
+
+            bool anyOverride = false;
+            for (int i = 0; i < available; i++)
+            {
+                if (rawColors[offset + i].A != 0) { anyOverride = true; break; }
+            }
+            if (!anyOverride) return dst;
+
+            int outLen = Math.Max(dst.Length, length);
+            var merged = new Color[outLen];
+            Array.Copy(dst, merged, Math.Min(dst.Length, outLen));
+            for (int i = 0; i < available; i++)
+            {
+                var r = rawColors[offset + i];
+                if (r.A != 0) merged[i] = Color.FromArgb(r.R, r.G, r.B);
+            }
+            return merged;
         }
     }
 }

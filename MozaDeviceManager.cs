@@ -15,10 +15,12 @@ namespace MozaPlugin
 
         // Wheel device ID detection
         // ES wheels may be on ID 21 instead of 23; R5 ES wheels share base ID 19
-        private byte _wheelDeviceId = MozaProtocol.DeviceWheel; // starts at 23
-        private bool _wheelDetected;
+        private volatile byte _wheelDeviceId = MozaProtocol.DeviceWheel; // starts at 23
+        private volatile bool _wheelDetected;
+        private volatile bool _wheelRespondedSinceLastPoll;
 
         public byte WheelDeviceId => _wheelDeviceId;
+        public bool WheelRespondedSinceLastPoll => _wheelRespondedSinceLastPoll;
 
         /// <summary>
         /// Reset wheel detection state so ProbeWheelDetection() will probe again.
@@ -28,6 +30,18 @@ namespace MozaPlugin
         {
             _wheelDetected = false;
             _wheelDeviceId = MozaProtocol.DeviceWheel;
+            _wheelRespondedSinceLastPoll = false;
+        }
+
+        public void MarkWheelResponse(byte deviceId)
+        {
+            if (_wheelDetected && deviceId == _wheelDeviceId)
+                _wheelRespondedSinceLastPoll = true;
+        }
+
+        public void ResetWheelResponseFlag()
+        {
+            _wheelRespondedSinceLastPoll = false;
         }
 
         public MozaDeviceManager(MozaSerialConnection connection)
@@ -48,6 +62,23 @@ namespace MozaPlugin
 
             foreach (var id in WheelIdCandidates)
             {
+                ReadSettingForDevice("wheel-telemetry-mode", id);
+                ReadSettingForDevice("wheel-rpm-value1", id);
+            }
+        }
+
+        /// <summary>
+        /// Probe wheel IDs OTHER than the currently locked one.
+        /// Used for hot-swap detection: if a new wheel attaches on a different ID
+        /// (e.g., new-protocol wheel after ES wheel was on ID 19), it'll respond.
+        /// </summary>
+        public void ProbeOtherWheelIds()
+        {
+            if (!_wheelDetected) return;
+
+            foreach (var id in WheelIdCandidates)
+            {
+                if (id == _wheelDeviceId) continue;
                 ReadSettingForDevice("wheel-telemetry-mode", id);
                 ReadSettingForDevice("wheel-rpm-value1", id);
             }

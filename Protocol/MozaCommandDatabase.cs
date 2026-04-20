@@ -7,7 +7,8 @@ namespace MozaPlugin.Protocol
     /// </summary>
     public static class MozaCommandDatabase
     {
-        public static readonly Dictionary<string, MozaCommand> Commands = new Dictionary<string, MozaCommand>();
+        private static readonly Dictionary<string, MozaCommand> _commands = new Dictionary<string, MozaCommand>();
+        public static IReadOnlyDictionary<string, MozaCommand> Commands => _commands;
 
         static MozaCommandDatabase()
         {
@@ -125,13 +126,14 @@ namespace MozaPlugin.Protocol
             AddCommand("pedals-clutch-output",   "pedals", 37, 0xFF, new byte[] { 3 }, 2, "int");
 
             // ===== HUB (read group 100, read-only) =====
-            AddCommand("hub-base-power",    "hub", 100, 0xFF, new byte[] { 1 }, 2, "int");
-            AddCommand("hub-port1-power",   "hub", 100, 0xFF, new byte[] { 2 }, 2, "int");
-            AddCommand("hub-port2-power",   "hub", 100, 0xFF, new byte[] { 3 }, 2, "int");
-            AddCommand("hub-port3-power",   "hub", 100, 0xFF, new byte[] { 4 }, 2, "int");
-            AddCommand("hub-pedals1-power", "hub", 100, 0xFF, new byte[] { 5 }, 2, "int");
-            AddCommand("hub-pedals2-power", "hub", 100, 0xFF, new byte[] { 6 }, 2, "int");
-            AddCommand("hub-pedals3-power", "hub", 100, 0xFF, new byte[] { 7 }, 2, "int");
+            // Command IDs match foxblat/boxflat serial.yml
+            AddCommand("hub-base-power",    "hub", 100, 0xFF, new byte[] { 2 },    2, "int");
+            AddCommand("hub-port1-power",   "hub", 100, 0xFF, new byte[] { 3 },    2, "int");
+            AddCommand("hub-port2-power",   "hub", 100, 0xFF, new byte[] { 4 },    2, "int");
+            AddCommand("hub-port3-power",   "hub", 100, 0xFF, new byte[] { 5, 1 }, 1, "int");
+            AddCommand("hub-pedals1-power", "hub", 100, 0xFF, new byte[] { 6 },    2, "int");
+            AddCommand("hub-pedals2-power", "hub", 100, 0xFF, new byte[] { 7 },    2, "int");
+            AddCommand("hub-pedals3-power", "hub", 100, 0xFF, new byte[] { 8 },    2, "int");
 
             // ===== TELEMETRY OUTPUT =====
             AddCommand("dash-send-telemetry",           "dash",  0xFF, 65, new byte[] { 253, 222 }, 4, "int");
@@ -154,6 +156,7 @@ namespace MozaPlugin.Protocol
             AddCommand("wheel-paddles-mode",       "wheel", 64, 63, new byte[] { 3 },          1, "int");
             AddCommand("wheel-rpm-indicator-mode", "wheel", 64, 63, new byte[] { 4 },          1, "int");
             AddCommand("wheel-stick-mode",         "wheel", 64, 63, new byte[] { 5 },          2, "int");
+            AddCommand("wheel-stick-mode-new",     "wheel", 0xFF, 63, new byte[] { 5 },        1, "int");
             AddCommand("wheel-set-rpm-display-mode","wheel",0xFF,63, new byte[] { 7 },         1, "int");
             AddCommand("wheel-get-rpm-display-mode","wheel", 64, 0xFF, new byte[] { 8 },       1, "int");
             AddCommand("wheel-clutch-point",       "wheel", 64, 63, new byte[] { 9 },          1, "int");
@@ -170,17 +173,33 @@ namespace MozaPlugin.Protocol
             for (byte i = 0; i < 10; i++)
                 AddCommand($"wheel-rpm-value{i + 1}", "wheel", 64, 63, new byte[] { 24, i }, 2, "int");
 
-            // Wheel RPM LED colors (read group 64, write group 63, id [31, 0, 0xFF, index])
-            for (byte i = 0; i < 10; i++)
+            // Wheel RPM LED colors (read group 64, write group 63, id [31, 0, 0xFF, index]).
+            // Group 0 spec max = 25 LEDs. 11..25 beyond any shipping wheel, exposed for diagnostics.
+            for (byte i = 0; i < 25; i++)
                 AddCommand($"wheel-rpm-color{i + 1}", "wheel", 64, 63, new byte[] { 31, 0, 0xFF, i }, 3, "array");
 
-            // Wheel button colors (id [31, 1, 0xFF, index])
-            for (byte i = 0; i < 14; i++)
+            // Wheel button colors (id [31, 1, 0xFF, index]). Group 1 spec max = 16 LEDs.
+            for (byte i = 0; i < 16; i++)
                 AddCommand($"wheel-button-color{i + 1}", "wheel", 64, 63, new byte[] { 31, 1, 0xFF, i }, 3, "array");
 
-            // Wheel flag colors (id [21, 2, index])
-            for (byte i = 0; i < 6; i++)
-                AddCommand($"wheel-flag-color{i + 1}", "wheel", 64, 63, new byte[] { 21, 2, i }, 3, "array");
+            // Extended LED groups (2=Single/28 LEDs, 3=Rotary/56 LEDs, 4=Ambient/12 LEDs).
+            // Per-LED color: [31, G, 0xFF, index] — same wire format as groups 0/1.
+            // Brightness: [27, G, 0xFF]. Mode: [28, G]. Presence probed via brightness read.
+            foreach (var (g, n) in new[] { ((byte)2, 28), ((byte)3, 56), ((byte)4, 12) })
+            {
+                AddCommand($"wheel-group{g}-brightness", "wheel", 64, 63, new byte[] { 27, g, 0xFF }, 1, "int");
+                AddCommand($"wheel-group{g}-mode",       "wheel", 64, 63, new byte[] { 28, g },       1, "int");
+                for (byte i = 0; i < n; i++)
+                    AddCommand($"wheel-group{g}-color{i + 1}", "wheel", 64, 63, new byte[] { 31, g, 0xFF, i }, 3, "array");
+            }
+
+            // LEGACY: wheel-flag-color{1..6} on device 0x17 / write group 63 / id [21, 2, i].
+            // RS21 parameter DB has no wheel-body flag commands; flag LEDs live on the
+            // Meter sub-device (device 0x14 / write group 50). Use dash-flag-color{1..6}
+            // (defined below at line ~238) instead — same wire bytes as MeterSetCfg_SetFlagGroupColor.
+            // Kept commented for reference / rollback on very old firmware.
+            // for (byte i = 0; i < 6; i++)
+            //     AddCommand($"wheel-flag-color{i + 1}", "wheel", 64, 63, new byte[] { 21, 2, i }, 3, "array");
 
             // Wheel RPM blink colors (write-only, id [15, index])
             for (byte i = 0; i < 10; i++)
@@ -189,7 +208,9 @@ namespace MozaPlugin.Protocol
             // Wheel brightness (by zone: 0=rpm, 1=buttons, 2=flags)
             AddCommand("wheel-rpm-brightness",     "wheel", 64, 63, new byte[] { 27, 0, 0xFF }, 1, "int");
             AddCommand("wheel-buttons-brightness",  "wheel", 64, 63, new byte[] { 27, 1, 0xFF }, 1, "int");
-            AddCommand("wheel-flags-brightness",    "wheel", 64, 63, new byte[] { 27, 2, 0xFF }, 1, "int");
+            // LEGACY: wheel-flags-brightness on device 0x17. Replaced by dash-flags-brightness
+            // (Meter sub-device, write group 50, id [10, 2] — MeterSetCfg_SetFlagGroupBrightness_o).
+            // AddCommand("wheel-flags-brightness",    "wheel", 64, 63, new byte[] { 27, 2, 0xFF }, 1, "int");
 
             // Wheel telemetry mode and idle effects
             AddCommand("wheel-telemetry-mode",          "wheel", 64, 63, new byte[] { 28, 0 },  1, "int");
@@ -260,13 +281,13 @@ namespace MozaPlugin.Protocol
         private static void AddCommand(string name, string device, byte readGroup, byte writeGroup,
             byte[] commandId, int payloadBytes, string payloadType)
         {
-            Commands[name] = new MozaCommand(name, device, readGroup, writeGroup,
+            _commands[name] = new MozaCommand(name, device, readGroup, writeGroup,
                 commandId, payloadBytes, payloadType);
         }
 
         public static MozaCommand? Get(string name)
         {
-            return Commands.TryGetValue(name, out var cmd) ? cmd : null;
+            return _commands.TryGetValue(name, out var cmd) ? cmd : null;
         }
     }
 }

@@ -28,6 +28,7 @@ namespace MozaPlugin
         private MozaPluginSettings _settings = null!;
         private Timer _pollTimer = null!;
         private Timer _reconnectTimer = null!;
+        private int _connectingFlag;
         private MozaHidReader _hidReader = null!;
         private PluginManager _pluginManager = null!;
         private TelemetrySender _telemetrySender = null!;
@@ -40,9 +41,13 @@ namespace MozaPlugin
         private bool _oldWheelDetected;
         private bool _handbrakeDetected;
         private bool _pedalsDetected;
+        private bool _hubDetected;
 
         // Guard against concurrent/duplicate telemetry Start() dispatch
         private int _telemetryStartRequested;
+
+        // Set during End() so in-flight callbacks can bail out.
+        internal static volatile bool IsShuttingDown;
 
         // Debounce disk writes during rapid slider changes
         private Timer? _saveDebounceTimer;
@@ -87,11 +92,13 @@ namespace MozaPlugin
             // Per-encoder signal mode probe — silent on firmware without [42, N] support
             "wheel-knob-signal-mode0", "wheel-knob-signal-mode1", "wheel-knob-signal-mode2",
             "wheel-knob-signal-mode3", "wheel-knob-signal-mode4",
-            // RPM colors
+            // RPM colors (up to 18 — KS Pro max)
             "wheel-rpm-color1", "wheel-rpm-color2", "wheel-rpm-color3",
             "wheel-rpm-color4", "wheel-rpm-color5", "wheel-rpm-color6",
             "wheel-rpm-color7", "wheel-rpm-color8", "wheel-rpm-color9",
-            "wheel-rpm-color10",
+            "wheel-rpm-color10", "wheel-rpm-color11", "wheel-rpm-color12",
+            "wheel-rpm-color13", "wheel-rpm-color14", "wheel-rpm-color15",
+            "wheel-rpm-color16", "wheel-rpm-color17", "wheel-rpm-color18",
             // Button colors
             "wheel-button-color1",  "wheel-button-color2",  "wheel-button-color3",
             "wheel-button-color4",  "wheel-button-color5",  "wheel-button-color6",
@@ -101,6 +108,9 @@ namespace MozaPlugin
             // Flag colors
             "wheel-flag-color1", "wheel-flag-color2", "wheel-flag-color3",
             "wheel-flag-color4", "wheel-flag-color5", "wheel-flag-color6",
+            // Extended LED group presence probes (Single/Rotary/Ambient).
+            // A brightness response flips IsWheelLedGroupPresent for that group.
+            "wheel-group2-brightness", "wheel-group3-brightness", "wheel-group4-brightness",
         };
 
         private static readonly string[] OldWheelSettingsReadCommands = new[]
@@ -143,6 +153,12 @@ namespace MozaPlugin
             "pedals-clutch-y1", "pedals-clutch-y2", "pedals-clutch-y3", "pedals-clutch-y4", "pedals-clutch-y5",
         };
 
+        private static readonly string[] HubReadCommands = new[]
+        {
+            "hub-base-power", "hub-port1-power", "hub-port2-power", "hub-port3-power",
+            "hub-pedals1-power", "hub-pedals2-power", "hub-pedals3-power",
+        };
+
         public PluginManager PluginManager { set => _pluginManager = value; }
         public ImageSource? PictureIcon => null;
         public string LeftMenuTitle => "MOZA";
@@ -155,6 +171,17 @@ namespace MozaPlugin
         internal bool IsNewWheelDetected => _newWheelDetected;
         internal bool IsOldWheelDetected => _oldWheelDetected;
         internal Devices.WheelModelInfo? WheelModelInfo { get; private set; }
+
+        /// <summary>
+        /// Extended LED groups detected on the connected wheel (indices 2..4 for Single,
+        /// Rotary, Ambient per rs21_parameter.db). A group is flagged true when the wheel
+        /// answers the group's brightness read during the post-connect probe.
+        /// Groups 0/1 (RPM/Buttons) are not tracked here — their presence is implied by
+        /// any new-protocol wheel.
+        /// </summary>
+        private readonly bool[] _wheelLedGroups = new bool[5];
+        internal bool IsWheelLedGroupPresent(int group) =>
+            group >= 2 && group <= 4 && _wheelLedGroups[group];
         /// <summary>
         /// When true, the device extension owns wheel LED settings via its own profile system.
         /// Plugin profile application skips wheel settings to avoid conflicts.
@@ -227,6 +254,7 @@ namespace MozaPlugin
         internal bool IsDashDetected => _dashDetected;
         internal bool IsHandbrakeDetected => _handbrakeDetected;
         internal bool IsPedalsDetected => _pedalsDetected;
+        internal bool IsHubDetected => _hubDetected;
 
         /// <summary>True if the wheel's internal Display sub-device responded to probe.</summary>
         internal bool IsDisplayDetected => _telemetrySender?.DisplayDetected ?? false;
@@ -237,6 +265,9 @@ namespace MozaPlugin
 
         public void Init(PluginManager pluginManager)
         {
+            // Clear shutdown flag from any previous plugin instance in this process.
+            // SimHub may load+unload plugins without restarting, leaving this true.
+            IsShuttingDown = false;
             Instance = this;
             _pluginManager = pluginManager;
             _data = new MozaData();
@@ -270,9 +301,6 @@ namespace MozaPlugin
 
             _deviceManager = new MozaDeviceManager(_connection);
 
-            if (_settings.ConnectionEnabled)
-                TryConnect();
-
             _pollTimer = new Timer(2000);
             _pollTimer.Elapsed += PollStatus;
             _pollTimer.AutoReset = true;
@@ -301,26 +329,41 @@ namespace MozaPlugin
 
         public void DataUpdate(PluginManager pluginManager, ref GameData data)
         {
+            if (IsShuttingDown) return;
             _telemetrySender?.UpdateGameData(data.NewData);
         }
 
         public void End(PluginManager pluginManager)
         {
-            Instance = null;
+            IsShuttingDown = true;
             SimHub.Logging.Current.Info("[Moza] Shutting down plugin");
+
+            // 1. Stop timers first so no new callbacks fire against disposed state.
             _saveDebounceTimer?.Stop();
+            _pollTimer?.Stop();
+            _reconnectTimer?.Stop();
+
+            // 2. Persist settings and clear LEDs while connection is still alive.
+            try { this.SaveCommonSettings("MozaPluginSettings", _settings); } catch { }
+            try { ClearLedsOnHardware(); } catch { }
+
+            // 3. Stop telemetry send loop before tearing down connection.
+            _telemetrySender?.Stop();
+
+            // 4. Dispose I/O sources before dropping Instance so late callbacks
+            //    see a live (but shutting-down) instance, not null.
+            _hidReader?.Dispose();
+            _telemetrySender?.Dispose();
+            _connection?.Dispose();
+
+            // 5. Dispose timers after I/O is gone.
             _saveDebounceTimer?.Dispose();
             _saveDebounceTimer = null;
-            this.SaveCommonSettings("MozaPluginSettings", _settings);
-            ClearLedsOnHardware();
-            _telemetrySender?.Stop();
-            _telemetrySender?.Dispose();
-            _pollTimer?.Stop();
             _pollTimer?.Dispose();
-            _reconnectTimer?.Stop();
             _reconnectTimer?.Dispose();
-            _hidReader?.Dispose();
-            _connection?.Dispose();
+
+            // 6. Null Instance last so any straggler callback can still no-op via IsShuttingDown.
+            Instance = null;
         }
 
         internal MozaHidReader HidReader => _hidReader;
@@ -367,8 +410,6 @@ namespace MozaPlugin
             if (enabled)
             {
                 _reconnectTimer.Start();
-                if (!_connection.IsConnected)
-                    TryConnect();
                 SimHub.Logging.Current.Info("[Moza] Connection enabled");
             }
             else
@@ -378,6 +419,7 @@ namespace MozaPlugin
                 _telemetrySender.Stop();
                 _connection?.Disconnect();
                 _data.IsBaseConnected = false;
+                _data.IsHubConnected = false;
                 _data.ClearWheelIdentity();
                 _baseDetected = false;
                 _data.BaseSettingsRead = false;
@@ -387,9 +429,12 @@ namespace MozaPlugin
                 WheelModelInfo = null;
                 _handbrakeDetected = false;
                 _pedalsDetected = false;
+                _hubDetected = false;
                 _deviceManager.ResetWheelDetection();
                 _telemetrySender.DetectedDeviceMask = 0;
                 Interlocked.Exchange(ref _telemetryStartRequested, 0);
+                _wheelPollMisses = 0;
+                _lastKnownWheelModel = "";
                 SimHub.Logging.Current.Info("[Moza] Connection disabled");
             }
         }
@@ -568,23 +613,85 @@ namespace MozaPlugin
 
         private void TryConnect()
         {
-            if (_connection.Connect())
+            if (Interlocked.CompareExchange(ref _connectingFlag, 1, 0) != 0)
+                return;
+
+            try
             {
-                _unmatched = 0;
-                SimHub.Logging.Current.Info("[Moza] Connected to MOZA device");
-                // Only send detection probes — device-specific settings are read
-                // after each device is confirmed present in DetectDevices().
-                _deviceManager.ReadSettings(StatusPollCommands);
-                _deviceManager.ProbeWheelDetection();
-                _deviceManager.ReadSetting("dash-rpm-indicator-mode");
-                _deviceManager.ReadSetting("handbrake-direction");
-                _deviceManager.ReadSetting("pedals-throttle-dir");
+                // If we had a wheel detected before reconnecting, reset it.
+                // The serial port may have dropped during a wheel swap.
+                if (_newWheelDetected || _oldWheelDetected)
+                    ResetWheelDetection("Serial reconnecting — resetting wheel detection");
+
+                if (_connection.Connect())
+                {
+                    _unmatched = 0;
+                    SimHub.Logging.Current.Info("[Moza] Connected to MOZA device");
+                    _deviceManager.ReadSettings(StatusPollCommands);
+                    _deviceManager.ProbeWheelDetection();
+                    _deviceManager.ReadSetting("dash-rpm-indicator-mode");
+                    _deviceManager.ReadSetting("handbrake-direction");
+                    _deviceManager.ReadSetting("pedals-throttle-dir");
+                    _deviceManager.ReadSetting("hub-port1-power");
+                }
             }
+            finally
+            {
+                Interlocked.Exchange(ref _connectingFlag, 0);
+            }
+        }
+
+        private int _wheelPollMisses;
+        private const int WheelMissThreshold = 3;
+        private volatile string _lastKnownWheelModel = "";
+
+        private void ResetWheelDetection(string reason)
+        {
+            SimHub.Logging.Current.Info($"[Moza] {reason}");
+            _telemetrySender.Stop();
+            _newWheelDetected = false;
+            _oldWheelDetected = false;
+            _dashDetected = false;
+            WheelModelInfo = null;
+            for (int g = 0; g < _wheelLedGroups.Length; g++) _wheelLedGroups[g] = false;
+            _data.ClearWheelIdentity();
+            _deviceManager.ResetWheelDetection();
+            _telemetrySender.DetectedDeviceMask = 0;
+            Interlocked.Exchange(ref _telemetryStartRequested, 0);
+            _wheelPollMisses = 0;
+            _lastKnownWheelModel = "";
         }
 
         private void PollStatus(object sender, ElapsedEventArgs e)
         {
             if (!_connection.IsConnected) return;
+
+            // Hot-swap detection: track whether the locked wheel is still responding
+            // and periodically verify the model name hasn't changed.
+            if (_newWheelDetected || _oldWheelDetected)
+            {
+                if (_deviceManager.WheelRespondedSinceLastPoll)
+                {
+                    _wheelPollMisses = 0;
+                }
+                else
+                {
+                    _wheelPollMisses++;
+                    if (_wheelPollMisses >= WheelMissThreshold)
+                    {
+                        ResetWheelDetection(
+                            $"Wheel on ID {_deviceManager.WheelDeviceId} not responding " +
+                            $"({_wheelPollMisses} misses) — resetting for hot-swap");
+                    }
+                }
+                _deviceManager.ResetWheelResponseFlag();
+                _deviceManager.ReadSetting("wheel-model-name");
+
+                // Probe other wheel IDs for hot-swap detection.
+                // Handles ES → new-protocol case where the base keeps responding
+                // on the locked ID (19) so miss counter never fires.
+                _deviceManager.ProbeOtherWheelIds();
+            }
 
             _deviceManager.ReadSettings(StatusPollCommands);
 
@@ -597,6 +704,12 @@ namespace MozaPlugin
                 _deviceManager.ReadSetting("handbrake-direction");
             if (!_pedalsDetected)
                 _deviceManager.ReadSetting("pedals-throttle-dir");
+            if (!_hubDetected)
+                _deviceManager.ReadSetting("hub-port1-power");
+
+            // Poll hub port status while hub is connected (read-only, no settings to save)
+            if (_hubDetected)
+                _deviceManager.ReadSettings(HubReadCommands);
         }
 
         private volatile int _unmatched;
@@ -624,10 +737,39 @@ namespace MozaPlugin
             }
 
             var r = result.Value;
+
+            // Normalize stick-mode: old firmware sends 2-byte value (0 or 256),
+            // new firmware sends 1-byte enum (0=none, 1=left, 2=right, 3=both).
+            if (r.Name == "wheel-stick-mode")
+            {
+                if (r.PayloadLength <= 1)
+                {
+                    _data.WheelDualStickSupported = true;
+                }
+                else
+                {
+                    // Old 2-byte format: 0x0100 (256) = left D-pad on
+                    r.IntValue = r.IntValue >= 256 ? 1 : 0;
+                }
+            }
+
             _data.UpdateFromCommand(r.Name, r.IntValue);
             if (r.ArrayValue != null)
                 _data.UpdateFromArray(r.Name, r.ArrayValue);
 
+            // Extended LED group presence — any response to groupN brightness/mode/color
+            // from this wheel proves the group exists in firmware.
+            if (r.Name != null && r.Name.StartsWith("wheel-group", StringComparison.Ordinal))
+            {
+                int g = r.Name.Length > 11 ? r.Name[11] - '0' : -1;
+                if (g >= 2 && g <= 4 && !_wheelLedGroups[g])
+                {
+                    _wheelLedGroups[g] = true;
+                    SimHub.Logging.Current.Info($"[Moza] Wheel LED group {g} detected");
+                }
+            }
+
+            _deviceManager.MarkWheelResponse(r.DeviceId);
             DetectDevices(r.Name, r.IntValue, r.DeviceId);
         }
 
@@ -674,7 +816,7 @@ namespace MozaPlugin
                     break;
 
                 case "wheel-telemetry-mode":
-                    if (!_newWheelDetected)
+                    if (!_newWheelDetected && !_oldWheelDetected)
                     {
                         _newWheelDetected = true;
                         _deviceManager.LockWheelId(deviceId);
@@ -689,6 +831,13 @@ namespace MozaPlugin
                         SimHub.Logging.Current.Info($"[Moza] New-protocol wheel detected on ID {deviceId}");
                         StartTelemetryIfReady();
                     }
+                    else if (deviceId != _deviceManager.WheelDeviceId)
+                    {
+                        // Hot-swap: a wheel responded on a different ID than the locked one.
+                        ResetWheelDetection(
+                            $"New wheel responded on ID {deviceId} (was locked on " +
+                            $"{_deviceManager.WheelDeviceId}) — hot-swap detected");
+                    }
                     break;
 
                 case "wheel-model-name":
@@ -697,11 +846,32 @@ namespace MozaPlugin
                     // response is the base name, not the wheel name.
                     if (_newWheelDetected)
                     {
-                        WheelModelInfo = Devices.WheelModelInfo.FromModelName(_data.WheelModelName);
-                        SimHub.Logging.Current.Info(
-                            $"[Moza] Wheel model: {_data.WheelModelName} " +
-                            $"(buttons={WheelModelInfo.ButtonLedCount}, flags={WheelModelInfo.HasFlagLeds})");
-                        DeployDeviceDefinitionForModel(_data.WheelModelName);
+                        var currentModel = _data.WheelModelName;
+
+                        // Ignore empty/truncated responses — would falsely trigger reset.
+                        if (string.IsNullOrEmpty(currentModel))
+                            break;
+
+                        // Hot-swap: if model name changed, a different wheel was attached.
+                        if (!string.IsNullOrEmpty(_lastKnownWheelModel) &&
+                            _lastKnownWheelModel != currentModel)
+                        {
+                            ResetWheelDetection(
+                                $"Wheel model changed from '{_lastKnownWheelModel}' " +
+                                $"to '{currentModel}' — hot-swap detected");
+                            break;
+                        }
+
+                        // First time seeing this model — resolve LED layout and deploy
+                        if (string.IsNullOrEmpty(_lastKnownWheelModel))
+                        {
+                            _lastKnownWheelModel = currentModel;
+                            WheelModelInfo = Devices.WheelModelInfo.FromModelName(currentModel);
+                            SimHub.Logging.Current.Info(
+                                $"[Moza] Wheel model: {currentModel} " +
+                                $"(rpm={WheelModelInfo.RpmLedCount}, buttons={WheelModelInfo.ButtonLedCount}, flags={WheelModelInfo.HasFlagLeds})");
+                            DeployDeviceDefinitionForModel(currentModel);
+                        }
                     }
                     else
                     {
@@ -735,6 +905,12 @@ namespace MozaPlugin
                         SimHub.Logging.Current.Info($"[Moza] Old-protocol wheel detected on ID {deviceId}");
                         StartTelemetryIfReady();
                     }
+                    else if (deviceId != _deviceManager.WheelDeviceId)
+                    {
+                        ResetWheelDetection(
+                            $"New wheel responded on ID {deviceId} (was locked on " +
+                            $"{_deviceManager.WheelDeviceId}) — hot-swap detected");
+                    }
                     break;
 
                 case "handbrake-direction":
@@ -754,6 +930,15 @@ namespace MozaPlugin
                         ApplySavedPedalSettings();
                         _deviceManager.ReadSettings(PedalsSettingsReadCommands);
                         SimHub.Logging.Current.Info("[Moza] Pedals detected");
+                    }
+                    break;
+
+                case "hub-port1-power":
+                    if (!_hubDetected)
+                    {
+                        _hubDetected = true;
+                        _deviceManager.ReadSettings(HubReadCommands);
+                        SimHub.Logging.Current.Info("[Moza] Universal Hub detected");
                     }
                     break;
             }
@@ -808,7 +993,11 @@ namespace MozaPlugin
             // Brightness
             _deviceManager.WriteSetting("wheel-rpm-brightness", _settings.WheelRpmBrightness);
             _deviceManager.WriteSetting("wheel-buttons-brightness", _settings.WheelButtonsBrightness);
-            _deviceManager.WriteSetting("wheel-flags-brightness", _settings.WheelFlagsBrightness);
+            // Flag brightness routes to the Meter sub-device via dash-flags-brightness
+            // (RS21 DB: MeterSetCfg_SetFlagGroupBrightness_o). Only write when the dash
+            // sub-device has responded; otherwise the write targets a device that's not present.
+            if (_dashDetected)
+                _deviceManager.WriteSetting("dash-flags-brightness", _settings.WheelFlagsBrightness);
             _deviceManager.WriteSetting("wheel-old-rpm-brightness", _settings.WheelESRpmBrightness);
         }
 
@@ -826,6 +1015,12 @@ namespace MozaPlugin
             // Brightness
             _deviceManager.WriteSetting("dash-rpm-brightness", _settings.DashRpmBrightness);
             _deviceManager.WriteSetting("dash-flags-brightness", _settings.DashFlagsBrightness);
+
+            // Enable flag indicator mode (0=Off, 1=Flags, 2=On). Firmware default is 0,
+            // which silently drops all flag colour/bitmask writes. Set to 1 so the plugin's
+            // bitmask-driven LEDs actually display. Subsequent read of dash-flags-indicator-mode
+            // (via DashSettingsReadCommands) refreshes _data for the UI combo.
+            _deviceManager.WriteSetting("dash-flags-indicator-mode", 1);
         }
 
         /// <summary>
@@ -1151,7 +1346,7 @@ namespace MozaPlugin
             }
 
             // --- Write to device if connected ---
-            if (_data.IsBaseConnected)
+            if (_data.IsConnected)
             {
                 WriteProfileWheelSettingsToDevice(profile);
                 WriteProfileColorsToDevice(profile);
@@ -1220,8 +1415,9 @@ namespace MozaPlugin
                         _deviceManager.WriteSetting("wheel-rpm-brightness", profile.WheelRpmBrightness);
                     if (profile.WheelButtonsBrightness >= 0)
                         _deviceManager.WriteSetting("wheel-buttons-brightness", profile.WheelButtonsBrightness);
-                    if (profile.WheelFlagsBrightness >= 0)
-                        _deviceManager.WriteSetting("wheel-flags-brightness", profile.WheelFlagsBrightness);
+                    // Flag brightness → Meter sub-device (dash-flags-brightness). Gate on dash detected.
+                    if (profile.WheelFlagsBrightness >= 0 && _dashDetected)
+                        _deviceManager.WriteSetting("dash-flags-brightness", profile.WheelFlagsBrightness);
                 }
 
                 // ES/Old wheel settings
@@ -1251,10 +1447,12 @@ namespace MozaPlugin
             // New-protocol wheel colors
             if (!DeviceExtensionActive && _newWheelDetected)
             {
-                WriteColorArray(profile.WheelRpmColors, "wheel-rpm-color", 10);
+                WriteColorArray(profile.WheelRpmColors, "wheel-rpm-color", 18);
                 WriteColorArray(profile.WheelRpmBlinkColors, "wheel-rpm-blink-color", 10);
                 WriteColorArray(profile.WheelButtonColors, "wheel-button-color", 14);
-                WriteColorArray(profile.WheelFlagColors, "wheel-flag-color", 6);
+                // Flag colors route to Meter sub-device via dash-flag-color*. Gate on dash detection.
+                if (_dashDetected)
+                    WriteColorArray(profile.WheelFlagColors, "dash-flag-color", 6);
                 if (profile.WheelIdleColor != null && profile.WheelIdleColor.Length > 0)
                 {
                     var rgb = MozaProfile.UnpackColor(profile.WheelIdleColor[0]);
@@ -1303,7 +1501,7 @@ namespace MozaPlugin
             _settings.WheelRpmBlinkColors = extSettings.WheelRpmBlinkColors;
 
             // Write to hardware if connected
-            if (_data.IsBaseConnected)
+            if (_data.IsConnected)
             {
                 // Wheel mode/brightness settings
                 if (_newWheelDetected)
@@ -1318,8 +1516,9 @@ namespace MozaPlugin
                         _deviceManager.WriteSetting("wheel-rpm-brightness", extSettings.WheelRpmBrightness);
                     if (extSettings.WheelButtonsBrightness >= 0)
                         _deviceManager.WriteSetting("wheel-buttons-brightness", extSettings.WheelButtonsBrightness);
-                    if (extSettings.WheelFlagsBrightness >= 0)
-                        _deviceManager.WriteSetting("wheel-flags-brightness", extSettings.WheelFlagsBrightness);
+                    // Flag brightness → Meter sub-device (dash-flags-brightness). Gate on dash detected.
+                    if (extSettings.WheelFlagsBrightness >= 0 && _dashDetected)
+                        _deviceManager.WriteSetting("dash-flags-brightness", extSettings.WheelFlagsBrightness);
                 }
 
                 if (_oldWheelDetected)
@@ -1333,10 +1532,12 @@ namespace MozaPlugin
                 }
 
                 // Colors
-                WriteColorArray(extSettings.WheelRpmColors, "wheel-rpm-color", 10);
+                WriteColorArray(extSettings.WheelRpmColors, "wheel-rpm-color", 18);
                 WriteColorArray(extSettings.WheelRpmBlinkColors, "wheel-rpm-blink-color", 10);
                 WriteColorArray(extSettings.WheelButtonColors, "wheel-button-color", 14);
-                WriteColorArray(extSettings.WheelFlagColors, "wheel-flag-color", 6);
+                // Flag colors → Meter sub-device (dash-flag-color*). Gate on dash detection.
+                if (_dashDetected)
+                    WriteColorArray(extSettings.WheelFlagColors, "dash-flag-color", 6);
                 if (extSettings.WheelIdleColor != null && extSettings.WheelIdleColor.Length > 0)
                 {
                     var rgb = MozaProfile.UnpackColor(extSettings.WheelIdleColor[0]);
@@ -1377,7 +1578,7 @@ namespace MozaPlugin
             _settings.DashRpmBlinkColors = extSettings.DashRpmBlinkColors;
 
             // Write to hardware if connected
-            if (_data.IsBaseConnected && _dashDetected)
+            if (_data.IsConnected && _dashDetected)
             {
                 if (extSettings.DashRpmBrightness >= 0)
                     _deviceManager.WriteSetting("dash-rpm-brightness", extSettings.DashRpmBrightness);
@@ -1413,10 +1614,10 @@ namespace MozaPlugin
             var modelInfo = WheelModelInfo.FromModelName(modelName);
             var deviceName = "MOZA " + friendlyName;
 
-            DeployGeneratedWheelDefinition(deviceName, guid, friendlyName, modelInfo.ButtonLedCount);
+            DeployGeneratedWheelDefinition(deviceName, guid, friendlyName, modelInfo.RpmLedCount, modelInfo.HasFlagLeds, modelInfo.ButtonLedCount);
         }
 
-        private void DeployGeneratedWheelDefinition(string deviceName, string guid, string productName, int buttonCount)
+        private void DeployGeneratedWheelDefinition(string deviceName, string guid, string productName, int rpmCount, bool hasFlagLeds, int buttonCount)
         {
             try
             {
@@ -1425,19 +1626,44 @@ namespace MozaPlugin
                 var deviceDir = Path.Combine(userDefsDir, deviceName);
                 var deviceJsonPath = Path.Combine(deviceDir, "device.json");
 
-                if (File.Exists(deviceJsonPath))
-                    return;
+                int expectedTelemetryCount = rpmCount + (hasFlagLeds ? 6 : 0);
+                bool fileExists = File.Exists(deviceJsonPath);
+                bool stale = false;
+
+                if (fileExists)
+                {
+                    // Compare existing LogicalTelemetryLeds.LedCount + LogicalButtonsSection.Items
+                    // against expected. Mismatch = layout changed in a plugin update; rewrite.
+                    try
+                    {
+                        var existing = JObject.Parse(File.ReadAllText(deviceJsonPath));
+                        int existingLed = existing.SelectToken("LedsFeature.LogicalTelemetryLeds.LedCount")?.Value<int>() ?? -1;
+                        int existingButtons = (existing.SelectToken("LedsFeature.LogicalButtonsSection.Items") as JArray)?.Count ?? -1;
+                        stale = existingLed != expectedTelemetryCount || existingButtons != buttonCount;
+                    }
+                    catch (Exception parseEx)
+                    {
+                        SimHub.Logging.Current.Warn(
+                            $"[Moza] Could not parse existing device.json for '{deviceName}', rewriting: {parseEx.Message}");
+                        stale = true;
+                    }
+
+                    if (!stale)
+                        return;
+                }
 
                 Directory.CreateDirectory(deviceDir);
 
                 var pid = _connection.DiscoveredPid ?? "0x0004";
-                var json = GenerateWheelDeviceJson(guid, productName, buttonCount, pid);
+                var json = GenerateWheelDeviceJson(guid, productName, rpmCount, hasFlagLeds, buttonCount, pid);
                 File.WriteAllText(deviceJsonPath, json);
 
                 DeviceDefinitionDeployed = true;
+                string action = stale ? "Refreshed" : "Deployed";
                 SimHub.Logging.Current.Info(
-                    $"[Moza] Deployed device definition: {deviceName} " +
-                    $"(guid={guid}, buttons={buttonCount}, pid={pid}, restart SimHub to add it)");
+                    $"[Moza] {action} device definition: {deviceName} " +
+                    $"(guid={guid}, telemetryLeds={expectedTelemetryCount}, rpm={rpmCount}, flags={hasFlagLeds}, " +
+                    $"buttons={buttonCount}, pid={pid}, restart SimHub to pick up changes)");
             }
             catch (Exception ex)
             {
@@ -1445,19 +1671,22 @@ namespace MozaPlugin
             }
         }
 
-        private static string GenerateWheelDeviceJson(string guid, string productName, int buttonCount, string pid)
+        private static string GenerateWheelDeviceJson(string guid, string productName, int rpmCount, bool hasFlagLeds, int buttonCount, string pid)
         {
             var physItems = new JArray();
 
-            // RPM LEDs: 10 slots (first has the mapping, rest are empty continuations)
+            // Telemetry LEDs: single contiguous sequence. When the wheel has flag LEDs
+            // they are 3-on-each-side of the RPM strip, so SimHub sees (rpmCount + 6)
+            // LEDs as one logical run: [flag 1..3][rpm 1..N][flag 4..6].
+            int telemetryCount = rpmCount + (hasFlagLeds ? 6 : 0);
             physItems.Add(new JObject
             {
                 ["SourceRole"] = 1,
                 ["SourceIndex"] = 0,
-                ["RepeatCount"] = MozaDeviceConstants.RpmLedCount,
+                ["RepeatCount"] = telemetryCount,
                 ["RepeatMode"] = 1
             });
-            for (int i = 1; i < MozaDeviceConstants.RpmLedCount; i++)
+            for (int i = 1; i < telemetryCount; i++)
                 physItems.Add(new JObject());
 
             // Button LEDs: buttonCount slots
@@ -1498,8 +1727,10 @@ namespace MozaPlugin
                     ["PhysicalLedsMappings"] = new JObject { ["Items"] = physItems },
                     ["LogicalTelemetryLeds"] = new JObject
                     {
-                        ["LedCount"] = MozaDeviceConstants.RpmLedCount,
-                        ["Segments"] = new JArray(),
+                        ["LedCount"] = telemetryCount,
+                        ["Segments"] = hasFlagLeds
+                            ? new JArray(new JObject { ["Size"] = 3 })
+                            : new JArray(),
                         ["IsEnabled"] = true
                     },
                     ["LogicalButtonsSection"] = new JObject
