@@ -1,5 +1,11 @@
 # MOZA Plugin for SimHub
 
+[![Release](https://img.shields.io/github/v/release/giantorth/moza-simhub-plugin)](https://github.com/giantorth/moza-simhub-plugin/releases/latest)
+[![Build](https://img.shields.io/github/actions/workflow/status/giantorth/moza-simhub-plugin/build.yml?branch=main&label=build)](https://github.com/giantorth/moza-simhub-plugin/actions/workflows/build.yml)
+[![Dev Release](https://img.shields.io/badge/dynamic/json?url=https://api.github.com/repos/giantorth/moza-simhub-plugin/releases/tags/dev-latest&query=%24.name&label=dev&color=orange)](https://github.com/giantorth/moza-simhub-plugin/releases/tag/dev-latest)
+[![License: GPL v3](https://img.shields.io/github/license/giantorth/moza-simhub-plugin)](LICENSE)
+[![Discord](https://img.shields.io/discord/1494517781016608888?label=Discord&logo=discord&logoColor=white&color=5865F2)](https://discord.gg/J4enw43e62)
+
 A SimHub plugin that communicates directly with MOZA Racing hardware over serial, providing full hardware configuration and LED control through SimHub's native device and effects system.
 
 Built using the amazing work of [Boxflat](https://github.com/Lawstorant/boxflat) that reverse-engineered the [MOZA serial protocol](docs/moza-protocol.md).
@@ -60,6 +66,7 @@ MOZA wheels and dashboards register as native SimHub devices, appearing in SimHu
 - **Per-Game Device Profiles** — SimHub's device profile system saves and restores LED effect configurations per game
 - **Model-Aware Connection** — Only the device matching the currently connected wheel reports as connected. Swap wheels and the correct device activates automatically
 - **Separate Wheel & Dashboard Devices** — Each registers independently with its own profile and LED configuration
+- **Individual LED Effects (Combined mode)** — SimHub per-LED effects are supported when the wheel device is set to Combined paddle mode. The virtual driver exposes RPM + button LEDs as one contiguous sequence (telemetry first, then buttons) so per-LED effects can target the whole strip
 
 ![LED Effects Configuration](docs/Leds.png)
 
@@ -73,10 +80,10 @@ Tested:
 - Old-protocol wheels (ES series)
 - R5 Base
 - Moza handbrake (directly attached)
-- New-protocol wheels (Vision GS/CS V2P/TSW)
+- New-protocol wheels (Vision GS / GS V2P / TSW / KS Pro / CS Pro)
 
 TBD:
-- Other New-Protocol wheels (FSR/RS) (**testers needed**)
+- Other New-Protocol wheels (FSR / RS) (**testers needed**)
 
 Untested:
 - Dashboard (**testers needed**)
@@ -90,13 +97,17 @@ Each wheel model has a dedicated SimHub device definition with the correct LED l
 |-------------|:------------:|:---:|:-------:|:-----:|----------------|
 | MOZA GS V2 Pro | GS V2P | 10 | 10 | No | Contiguous (5 left + 5 right) |
 | MOZA CS V2 | CS V2.1 | 10 | 6 | No | Non-contiguous: positions 1,2,4,7,9,10 |
-| MOZA CS Pro | CSP | 10 | 14 | Yes | Contiguous |
-| MOZA KS Pro | KSP | 10 | 14 | Yes | Contiguous |
+| MOZA CS Pro | W17 | 10 | 14 | Yes | Contiguous |
+| MOZA KS Pro | W18 | 18 | 14 | No | RPM strip 3/12/3 (flags merged into RPM sequence) |
 | MOZA KS | KS | 10 | 10 | No | Contiguous |
 | MOZA FSR V2 | FSR2 | 10 | 14 | Yes | Contiguous |
+| MOZA Vision GS | VGS | 10 | 8 | No | Contiguous |
+| MOZA TSW | TSW | 10 | 14 | No | Contiguous |
 | MOZA Racing Wheel | *(generic)* | 10 | 14 | No | Contiguous (fallback for unknown models) |
 | MOZA Old Protocol Wheel | *(ES wheels)* | 10 | 0 | No | RPM LEDs only |
 | MOZA Dashboard | — | 10 | 0 | Yes | RPM + flag LEDs |
+
+On wheels with flag LEDs (CS Pro, FSR V2), SimHub sees a single combined telemetry strip laid out as `[flag 1-3][RPM 1-N][flag 4-6]`. Configure flag zones in SimHub's effects UI on those slots.
 
 If your wheel model isn't listed or incorrect, the generic "MOZA Racing Wheel" definition is deployed. Check the SimHub log for the `[Moza] Wheel model:` line and report the model name string so a dedicated definition can be added.
 
@@ -308,18 +319,20 @@ Streams game data (speed, RPM, gear, lap times, fuel, tyre wear, etc.) to the wh
 > [!WARNING]
 > **Dashboard telemetry streaming is a work in progress.** It may not work correctly with all wheel/dashboard combinations. If you'd like to help test and improve this feature, please open an issue with your hardware details and any observations.
 
-**New-Protocol Wheels (GS/FSR/CS/RS/TSW)**
+**New-Protocol Wheels (GS/FSR/CS/KS/TSW)**
 
 | Setting | Range | Notes |
 |---------|-------|-------|
 | Telemetry Mode | Off / Telemetry / Static | |
 | Idle Effect | Off / Constant / Breathing / Color Cycle / Rainbow / Sand Flow | |
-| Flag LED Colors | 6 RGB color pickers | Only shown for models with flag LEDs (CSP, KSP, FSR2) |
-| Flags Brightness | 0-100 | Only shown for models with flag LEDs |
+| RPM LED Colors (Static) | Per-model RGB color pickers | Colors used when telemetry is not sending. Count adapts to detected wheel model |
+| Flag LED Colors | 6 RGB color pickers | Only shown for models with flag LEDs (CS Pro, FSR V2). Routed to the Meter sub-device |
 | Button LED Colors | Per-model RGB color pickers | Count and mapping adapt to detected wheel model |
 | Button Idle Effect | Off / Constant / Breathing / Color Cycle / Rainbow / Sand Flow | |
 | Knob Mode | Mode 0-3 | |
 | Stick as D-Pad | On/Off | |
+
+**Extended LED groups (experimental)** — Auto-detected panel that surfaces additional LED groups reported by the firmware (Group 2 Single up to 28, Group 3 Rotary up to 56, Group 4 Ambient up to 12, plus Meter flags). Semantics vary per wheel and are still being mapped — use the per-group fill / single-LED / brightness / mode controls to probe index layout. Nothing is sent until you click a button. Copy the summary box contents into bug reports to help expand model support.
 
 **ES Wheels (Old Protocol)**
 
