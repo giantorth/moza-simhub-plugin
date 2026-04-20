@@ -38,7 +38,8 @@ jobs:
         shell: bash
         run: |
           short_sha="${GITHUB_SHA::7}"
-          latest_tag=$(git describe --tags --match 'v*' --abbrev=0 2>/dev/null || echo v0.0.0)
+          latest_tag=$(git tag --list 'v*' --sort=-v:refname | head -n1)
+          latest_tag=${latest_tag:-v0.0.0}
           IFS=. read -r MAJ MIN PAT <<<"${latest_tag#v}"
           next="${MAJ}.${MIN}.$((PAT+1))"
           dev_version="${next}-dev.${short_sha}"
