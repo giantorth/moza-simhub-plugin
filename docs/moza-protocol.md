@@ -49,7 +49,9 @@ In the three-`7E` case, the first `7E` is the checksum, the second is the escape
 
 **Impact on buffer parsing:** When extracting frames from concatenated USB bulk data (pcapng captures, text logs), the parser must skip the escape byte between frames. Serial readers (byte-at-a-time) must consume one extra byte after receiving a frame with checksum `0x7E`. Failure to handle this causes the escape `0x7E` to be read as a frame start, with the next byte consumed as the length field — typically a large value (e.g. `N=0x7E`=126) that overshoots the buffer, silently dropping all subsequent frames in the transfer.
 
-**Scope:** in the known protocol space, group IDs (0x07–0x64), device IDs (0x12–0x1E), and their response transforms (group | 0x80, nibble-swapped device) never equal `0x7E`. Payload bytes are unconstrained but `0x7E` has not been observed in payload data in any capture. Only the checksum byte can equal `0x7E` in practice, so implementations only need to stuff/unstuff the checksum position. The simulator's parser (`parse_frames`) defensively handles `0x7E` anywhere in the body as a safety margin.
+**Scope:** Group IDs (0x07–0x64), device IDs (0x12–0x1E), and their response transforms (group | 0x80, nibble-swapped device) never equal `0x7E`. However, **payload bytes CAN be `0x7E`** — observed in zlib-compressed session data (dashboard uploads) and device catalog frames. The host escapes every `0x7E` in the body on the wire by doubling it (`0x7E` → `0x7E 0x7E`), exactly as it does for the checksum byte. A frame boundary is always 1 or 3 bytes of `0x7E` (single start byte, or escaped checksum + next start), never 2 — so `0x7E 0x7E` in the middle of a frame is always an escaped body/checksum byte, not a boundary.
+
+**Checksum computation is on wire bytes (after escaping).** The host computes `(0x0D + sum)` over the escaped representation. Each `0x7E` in the decoded body (positions 2 through end-1) adds an extra `0x7E` to the wire-level sum. Receivers must account for this: `verify(frame)` adds `frame[2:-1].count(0x7E) * 0x7E` to the computed checksum. `build_frame()` does the same when computing the outgoing checksum.
 
 Reference: [boxflat PR #131](https://github.com/Lawstorant/boxflat/pull/131) documents the same behavior.
 
@@ -563,9 +565,11 @@ session(1)  type(1)  seq_lo(1)  seq_hi(1)  payload(≤58)
 | seq | 2 LE | Sequence number (monotonic within session) |
 | payload | ≤58 | Net data per chunk; **non-last data chunks have a 4-byte CRC-32 trailer** |
 
-Net payload per full data chunk: **54 bytes** (58 minus 4-byte CRC). The last chunk in a transfer has no CRC trailer.
+Net payload per full data chunk: **54 bytes** (58 minus 4-byte CRC). All data chunks include the CRC-32 trailer, including the final chunk (verified across multiple PitHouse captures — the earlier assumption that the last chunk omits CRC was incorrect).
 
 Acknowledgment packets use `fc:00` with 3 bytes: `session(1) + ack_seq(2 LE)`. The session ID in the ack identifies the **ack sender's** session, not the data sender's. Linked session pairs (e.g. 0x03↔0x0A) use cross-session acks.
+
+**Session-open ACK must echo the host's open_seq.** When the host sends a type=0x81 session open with `seq_lo:seq_hi`, the wheel's `fc:00` ack must carry the same seq value. PitHouse maintains a monotonic port counter that increments on each disconnect/reconnect; if the wheel always replies with `ack_seq=0`, PitHouse treats it as stale and retries the session open endlessly (observed: 552 retries over 2.5 minutes). The counter starts at 1 on first power-on but increments across sessions, so the ACK must always reflect the actual received seq.
 
 ### CRC algorithm
 
