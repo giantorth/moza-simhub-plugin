@@ -314,10 +314,13 @@ Streams game data (speed, RPM, gear, lap times, fuel, tyre wear, etc.) to the wh
 |---------|-------------|
 | Enable dashboard telemetry | Toggle telemetry streaming to the dashboard |
 | Dashboard profile | Select a builtin profile or load a `.mzdash` file |
+| Upload dashboard on connect | Pushes the selected `.mzdash` to the wheel via the session 0x04 file-transfer protocol (path registration + zlib content + MD5). Skipped automatically when the wheel's reported hash matches the local file |
 | Test pattern | Send cycling test data (gear 1-6, brake 0-100%, speed 0-200 km/h) for verifying dashboard display |
 
 > [!WARNING]
 > **Dashboard telemetry streaming is a work in progress.** It may not work correctly with all wheel/dashboard combinations. If you'd like to help test and improve this feature, please open an issue with your hardware details and any observations.
+
+The plugin implements the full PitHouse session protocol for 2025-11 firmware: it accepts device-initiated session opens (0x04 file transfer, 0x06/0x08/0x0A keepalives, 0x09 configJson RPC), advertises its built-in dashboard library to the wheel via `configJson()` on session 0x09, and uploads `.mzdash` files via session 0x04 sub-message 1/2 exchange. See [docs/moza-protocol.md](docs/moza-protocol.md) for wire-format details.
 
 **New-Protocol Wheels (GS/FSR/CS/KS/TSW)**
 

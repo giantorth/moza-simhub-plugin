@@ -395,6 +395,8 @@ Pithouse's telemetry system runs over `MOZA::Protocol::SerialStreamManager`, a T
 
 Key insight: the **session byte** (chunk header) and **port number** (payload) are different for session 0x03 — the session byte is a host-local identifier, the port is globally allocated. For sessions 0x01 and 0x02 they happen to match because those are the first allocations after power-on.
 
+**2025-11 firmware note** (from `usb-capture/latestcaps/automobilista2-wheel-connect-dash-change.pcapng`): the global monotonic port counter observation **no longer holds**. Host opens session 0x03 with port 0x0003 (not 0x000a as in 2026-04). Session byte and port now match for every session on both sides. Device-opened sessions 0x04/0x06/0x08/0x09/0x0A all use `port == session`. Implementations should not assume wheel-side port allocation; just use port=session for everything.
+
 **Observed flag bytes across captures (confirmed from raw JSON, not ndjson):**
 
 | Capture | Flag | Verified from |
@@ -600,22 +602,41 @@ flags(1)  comp_sz(4 LE)  uncomp_sz(4 LE)  [zlib data...]
 
 The zlib stream uses standard deflate (`78 9c` magic). Reassembly: strip the 4-byte CRC from each non-last chunk, concatenate all chunk payloads (excluding session/type/seq headers), then parse the 9-byte header and decompress `comp_sz` bytes.
 
-### Concurrent session map (observed in `dash-upload.ndjson`)
+### Concurrent session map
 
-8 concurrent sessions run during a single dashboard upload:
+Up to 9 concurrent sessions run during dashboard management. **Who opens which session is not arbitrary** — confirmed across 4 captures (moza-startup, connect-wheel-start-game, moza-unplug-plug-wheel-to-base, automobilista2-wheel-connect-dash-change):
 
-| Session | Duration | Role | Description |
-|---------|----------|------|-------------|
-| 0x01 | 8.5s | Management | Bidirectional RPCs with `0xFF`-prefixed messages (see below) |
-| 0x02 | 6.9s | Keepalive | Dev→host, empty `00 00 00 00`, ~3.4s interval |
-| 0x03 | 6.9s | Keepalive | Host→dev, linked to 0x0A via cross-session acks |
-| 0x04 | 3.0s | **File transfer** | Path exchange + mzdash upload (75 data + 28 ack chunks) |
-| 0x06 | 6.9s | Keepalive | Alternating directions, ~3.4s |
-| 0x08 | 6.9s | Keepalive | Alternating directions, ~3.4s |
-| 0x09 | 5.8s | **configJson RPC** | Dev sends dashboard state; host responds with dashboard list |
-| 0x0A | 6.9s | Keepalive | Dev→host, linked to 0x03 |
+| Session | Opened by | Role | Description |
+|---------|-----------|------|-------------|
+| 0x01 | **host** | Management | Wheel identity / log push; `0xFF`-prefixed messages |
+| 0x02 | **host** | Telemetry | Tier definition, FF-prefixed settings push |
+| 0x03 | **host** | Aux config | Tile-server / settings push (zlib-compressed) |
+| 0x04 | **device** | **File transfer** | Bidirectional: host uploads `.mzdash`; device sends root directory listing |
+| 0x06 | device | Keepalive | Alternating directions, ~3.4s |
+| 0x08 | device | Keepalive | Alternating directions, ~3.4s |
+| 0x09 | device | **configJson RPC** | Device pushes dashboard state; host responds with canonical dashboard list |
+| 0x0A | device | Keepalive | Dev→host, ~3.4s interval |
+
+**Opening order** (from cold-start captures):
+1. Host opens 0x01, 0x02 (mgmt + telemetry) within ~1 ms of each other (t=0).
+2. Host opens 0x03 ~150–450 ms later (port 0x03 in new firmware; port 0x0a in older).
+3. Device opens 0x04, 0x06 ~40–400 ms after host 0x02.
+4. Device opens 0x08, 0x09 ~1.5–2.5 s later (retransmitted every 1 s for up to 3 tries until host ACKs).
+5. Device opens 0x0A last, variably (t=38s or later).
+
+**Sessions 0x08 and 0x09 are retransmitted** until the host sends the fc:00 ack. The real wheel sends each up to 3 times at 1 s intervals. Sim implementations should do the same if the host doesn't ACK immediately.
 
 Additionally, bare `0x43` frames (no cmd bytes, n=1, payload=`0x00`) are sent to devices 0x17/0x14/0x15 every ~1.1s as connection-level keepalive pings. Device replies `0x80`.
+
+### Device-initiated session open format
+
+Device opens sessions 0x04, 0x06, 0x08, 0x09, 0x0A via type=0x81 with a 6-byte payload (not the 4-byte form used by host opens):
+
+```
+7E 0A C3 71 7C 00 [session] 81 [port_lo] [port_hi] [port_lo] [port_hi] FD 02 [cksum]
+```
+
+The port field is duplicated (observed in every device-initiated open across 4 captures). `port` equals the session byte for every device-opened session (0x04→4, 0x06→6, 0x08→8, 0x09→9, 0x0A→10). `FD 02` trailer is constant.
 
 ### Session 1 — management messages
 
@@ -704,20 +725,59 @@ Device                                     Host
   │ ──── type=0x00 end marker ───────────→   │
 ```
 
-**2. Dashboard config RPC (session 9, compressed transfer)**
+**2. Dashboard config RPC (session 0x09, compressed transfer)**
 
-Host sends a `configJson()` message listing all dashboards:
+Chunk format for session 0x09 is the standard 9-byte compressed envelope (`flag + comp_sz + uncomp_sz + zlib`). Both directions use zlib-compressed JSON.
+
+**Schema differs between firmware versions.** Two variants observed:
+
+**2026-04 firmware** (from `usb-capture/09-04-26/dash-upload.pcapng`):
+
+Host → device `configJson()` canonical library list:
 ```json
-{"configJson()":{"dashboards":["Formula 1","GT V01",...,"rpm-only"],
-  "dashboardRootDir":"","fontRootDir":"","fonts":[],"imageRootDir":"","sortTags":0},"id":11}
+{"configJson()":{"dashboards":["DNR endurance","Formula 1","GT V01","GT V02","GT V03","JDM Gauge Style 01","JDM Gauge Style 02","JDM Gauge Style 03","Lovely Dashboard for Vision GS","Rally V01","m Formula 1","rpm-only"],"dashboardRootDir":"","fontRootDir":"","fonts":[],"imageRootDir":"","sortTags":0},"id":11}
 ```
 
-Device responds with dashboard management state:
+Device → host state (sent as 3 sequential blobs: `disabledManager` first, cleared mid state, then `enabledManager`):
 ```json
-{"TitleId":4,"disabledManager":{"deletedDashboards":[],
-  "updateDashboards":[{"createTime":"...","dirName":"rpm-only",
-  "hash":"..."}]}}
+{"TitleId":4,"disabledManager":{"deletedDashboards":[],"updateDashboards":[{"createTime":"...","dirName":"rpm-only","hash":"...","id":"{uuid}","idealDeviceInfos":[{"deviceId":16,"hardwareVersion":"RS21-W08-HW SM-DU-V14","networkId":1,"productType":"Display"}],"lastModified":"...","previewImageFilePaths":[],"resouceImageFilePaths":[],"title":"rpm-only"}]},"enabledManager":{"deletedDashboards":[],"updateDashboards":[]},"imagePath":[{"md5":"...","modify":"...","url":"..."},...]}
 ```
+
+**2025-11 firmware** (from `usb-capture/latestcaps/automobilista2-wheel-connect-dash-change.pcapng`) — renamed keys, different structure:
+
+Host → device `configJson()` canonical library list:
+```json
+{"configJson()":{"dashboards":["Core","Grids","Mono","Nebula","Pulse","Rally V1","Rally V2","Rally V3","Rally V4","Rally V5","Rally V6"],"dashboardRootDir":"","fontRootDir":"","fonts":[],"imageRootDir":"","sortTags":0},"id":11}
+```
+
+Device → host state (single blob, no 3-sequence split):
+```json
+{"TitleId":1,"configJsonList":["Core","Grids",...,"Rally V6"],"disableManager":{"dashboards":[],"imageRefMap":{"MD5/abc.png":1,...},"rootPath":"/home/moza/resource/dashes"},"displayVersion":11,"enableManager":{"dashboards":[{"createTime":"","dirName":"Rally V1","hash":"...","id":"...","idealDeviceInfos":[{"deviceId":17,"hardwareVersion":"RS21-W08-HW SM-DU-V14","networkId":1,"productType":"W17 Display"}],"lastModified":"2025-11-21T07:45:36Z","previewImageFilePaths":["/home/moza/resource/dashes/Rally V1/Rally V1.mzdash_v2_10_3_05.png"],"resouceImageFilePaths":[],"title":"Rally V1"},...],"imageRefMap":{},"rootPath":"/home/moza/resource/dashes"}}
+```
+
+Key schema differences:
+
+| Field | 2026-04 | 2025-11 |
+|-------|---------|---------|
+| Manager keys | `disabledManager` / `enabledManager` (with "d") | `disableManager` / `enableManager` (no "d") |
+| Dashboard array | `updateDashboards` | `dashboards` |
+| Also has | `deletedDashboards`, `imagePath` (top-level) | `imageRefMap` (nested), `rootPath`, `displayVersion`, `configJsonList` |
+| `productType` | `"Display"` | `"W17 Display"` |
+| `deviceId` | 16 | 17 |
+| State blobs | 3 sequential (disable, empty, enable) | 1 blob |
+| `TitleId` | 4 | 1 |
+
+Both schemas list the same kind of per-dashboard metadata: `title`, `dirName`, `hash`, `id`, `idealDeviceInfos`, `lastModified`, `previewImageFilePaths`. Simulators need to emit the schema matching the firmware the host expects.
+
+**Session 0x04 device → host root directory listing (2025-11 firmware)**
+
+Shortly after session 0x04 opens, the device also pushes a filesystem root listing (zlib-compressed JSON, same 9-byte envelope) so the host can see what's on the wheel before choosing to re-upload:
+
+```json
+{"children":[{"children":[],"createTime":-28800000,"fileSize":0,"md5":"d41d8cd98f00b204e9800998ecf8427e","modifyTime":1755251038000,"name":"temp"}],"createTime":-28800000,"fileSize":0,"md5":"","modifyTime":1755251038000,"name":"root"}
+```
+
+Children nest recursively. `createTime` of `-28800000` (–8 h in ms) is the UTC epoch offset marker the wheel firmware ships with.
 
 **3. Channel configuration burst (group 0x40, after file transfer)**
 
@@ -1236,6 +1296,9 @@ The plugin sends steps 1-10 during the preamble. The 0x87 response with model na
 - ~~Wheel channel catalog parsing~~ — **RESOLVED (2026-04-13)**: The plugin now buffers incoming 7c:00 tag 0x04 URL data during the preamble and parses the wheel's channel catalog. Detected channels are displayed in the UI and logged. Could be used to auto-build profiles or validate the active dashboard
 - ~~Compression codes for non-F1 types~~ — **RESOLVED (2026-04-14)**: All 19 compression codes are implemented in TierDefinitionBuilder.cs. 8 codes confirmed from F1 dashboard capture (bool, uint3, int30, uint16_t, float, float_001, float_6000_1, percent_1); 11 additional codes (brake_temp_1, tyre_temp_1, tyre_pressure_1, track_temp_1, oil_pressure_1, float_600_2, location_t, int32_t, uint32_t, double, uint8_t) are inferred and functional. CSP uses version 0 (URL-based) which doesn't need compression codes — the wheel firmware resolves them by URL
 - ~~Dashboard upload as telemetry prerequisite~~ — **IMPLEMENTED (2026-04-13)**: Plugin now uploads the `.mzdash` dashboard file on session 0x01 using the FF-prefixed sub-message framing (3 fields: device tokens, protocol constant, zlib-compressed mzdash content). CRC-32 verified format. Controlled by `TelemetryUploadDashboard` setting. The `configJson()` RPC (session 0x09) is not yet implemented — add if upload alone is not sufficient.
+- ~~configJson schema version~~ — **RESOLVED (2026-04-19)**: 2025-11 firmware uses a renamed schema: `disableManager`/`enableManager` (no trailing "d"), `dashboards` array (not `updateDashboards`), plus top-level `configJsonList`, `displayVersion`, and `imageRefMap`/`rootPath` nested under each manager. 2026-04 firmware uses the older `disabledManager`/`enabledManager` + `updateDashboards` + top-level `imagePath`. State is now a single blob (not 3 sequential blobs). `deviceId`/`productType` changed from 16/"Display" to 17/"W17 Display". See § Dashboard config RPC for full schemas.
+- ~~Device-initiated session opens~~ — **RESOLVED (2026-04-19)**: Sessions 0x04, 0x06, 0x08, 0x09, 0x0A are **opened by the device**, not the host. Host opens only 0x01/0x02/0x03. Device opens trigger ~40–400 ms after host's mgmt+telem opens. 0x08/0x09 retransmit every 1 s for up to 3 tries until acked. Wire format: `7E 0A C3 71 7C 00 [session] 81 [port_lo] [port_hi] [port_lo] [port_hi] FD 02 [cksum]` — port duplicated, trailer `FD 02` constant. Confirmed across 4 captures. Wheel simulator implementations MUST proactively open these or PitHouse's configJson UI will be empty.
+- ~~Session 0x04 device → host direction~~ — **RESOLVED (2026-04-19)**: Session 0x04 is not just host-direction upload. The device also pushes a zlib-compressed root filesystem listing (`{children, createTime, fileSize, md5, modifyTime, name:"root"}`) shortly after the session opens, so PitHouse knows what's already on the wheel before deciding whether to re-upload. Uses the same 9-byte `flag + comp_sz + uncomp_sz + zlib` envelope as session 0x09.
 - ~~Dashboard upload: field 0 remaining semantics~~ — **RESOLVED (2026-04-14)**: Field 0 remaining = total bytes of subsequent fields (field 1 block + field 2 block). The value `7200` observed in captures corresponds to dashboards like "Formula Racing V1-Mission R" (7170B compressed + 38B framing = 7208). Verified by computing zlib-compressed sizes of all 47 PitHouse dashboards — the formula `38 + compressed_size` produces values matching captures. `0x1C20` is NOT a hardcoded constant (confirmed by searching the PE .text section). Field 1 remaining = `3` in all captures — this is NOT a byte count (field 2 is much larger). Semantics unknown; possibly a field count or message type constant.
 - ~~Dashboard upload: field 0 device tokens~~ — **RESOLVED (2026-04-14)**: The 16-byte field 0 payload is two 8-byte LE values: token 1 = `[random_u32 | 0x00000002]`, token 2 = `[unix_timestamp | 0x00000000]`. Confirmed from 8 sessions across VGS and CSP: token 2 is always a Unix timestamp of session start; token 1 high 32 bits are always `0x00000002` (protocol version or request type); token 1 low 32 bits are CSPRNG output (no deterministic relationship to timestamp — tested CRC-32, FNV-1a, DJB2, MurmurHash3, mt19937, 12 LCG variants, crypto hashes, all negative). These are correlation IDs, not validated by the wheel. PitHouse's `Sync_DashboardManager` uses `mcUid` (STM32 MCU hardware UID, read via `MainMcuUidCommand`) as a per-device routing key, but mcUid is NOT encoded in the upload tokens.
 - **Dashboard upload: per-field pacing** — Plugin sends all upload chunks (across all 3 FF-prefixed fields) in a single burst, then waits for ack. PitHouse may instead pace by field: send field 0 chunks → wait for ack → send field 1 → wait → send field 2. The burst approach matches how tier definitions are sent (also tight-loop, working). If large dashboards fail while small ones succeed, try adding per-field ack waits.

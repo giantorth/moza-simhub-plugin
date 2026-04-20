@@ -537,6 +537,17 @@ namespace MozaPlugin
             _telemetrySender.Profile = profile;
             _telemetrySender.MzdashContent = mzdashContent;
             _telemetrySender.MzdashName = mzdashName;
+
+            // Advertise our built-in dashboard library to the wheel on session
+            // 0x09. Wheel echoes these names in its next configJson state blob
+            // (seen in usb-capture/latestcaps); PitHouse reads them for UI
+            // filtering. List matches the plugin's built-in profile set.
+            var libraryNames = new System.Collections.Generic.List<string>();
+            foreach (var p in DashProfileStore.BuiltinProfiles)
+                libraryNames.Add(p.Name);
+            if (!string.IsNullOrEmpty(mzdashName) && !libraryNames.Contains(mzdashName))
+                libraryNames.Add(mzdashName);
+            _telemetrySender.CanonicalDashboardList = libraryNames;
         }
 
         /// <summary>

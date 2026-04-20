@@ -54,9 +54,40 @@ namespace MozaPlugin.Telemetry
         private volatile byte _lastAckedSession;  // Set by OnMessageDuringPreamble when fc:00 arrives
         private readonly ManualResetEventSlim _ackReceived = new ManualResetEventSlim(false);
 
-        // Upload handshake state
+        // Upload handshake state (legacy, kept for test harness)
         private int _mgmtAckSeq;
         private readonly ManualResetEventSlim _mgmtResponseEvent = new ManualResetEventSlim(false);
+
+        // Session 0x04 file-transfer state. The device initiates session 0x04 with
+        // type=0x81 before we send sub-msg 1; it echoes paths back (sub-msg 1 rsp),
+        // then acks the content push (sub-msg 2 rsp), then sends type=0x00 end.
+        private readonly SessionRegistry _sessions = new SessionRegistry();
+        private readonly ManualResetEventSlim _session04Opened = new ManualResetEventSlim(false);
+        private readonly ManualResetEventSlim _session04SubMsg1Response = new ManualResetEventSlim(false);
+        private readonly ManualResetEventSlim _session04SubMsg2Response = new ManualResetEventSlim(false);
+        private readonly ManualResetEventSlim _session04EndReceived = new ManualResetEventSlim(false);
+        private int _session04InboundSeq;
+        private int _session04OutboundSeq;
+        private int _session04InboundMsgCount;
+
+        // Session 0x09 configJson RPC state. Device proactively pushes its
+        // dashboard state blob; we reply with the canonical dashboard library
+        // list so the wheel updates its configJsonList (PitHouse's UI uses this
+        // for library filtering / update-availability checks).
+        private readonly ConfigJsonClient _configJson = new ConfigJsonClient();
+        private int _session09InboundSeq;
+        private int _session09OutboundSeq;
+        private bool _session09ReplySent;
+        public WheelDashboardState? WheelState => _configJson.LastState;
+
+        /// <summary>
+        /// Canonical dashboard library PitHouse would advertise to the wheel on
+        /// session 0x09. Populated by the host from its known profile list. The
+        /// wheel echoes these names back in its next state blob's
+        /// <c>configJsonList</c>. Empty list disables the proactive reply.
+        /// </summary>
+        public System.Collections.Generic.IReadOnlyList<string> CanonicalDashboardList { get; set; }
+            = System.Array.Empty<string>();
 
         // Display sub-device detection
         private volatile bool _displayDetected;
@@ -236,6 +267,17 @@ namespace MozaPlugin.Telemetry
             }
             try { _ackReceived.Reset(); } catch (ObjectDisposedException) { }
             try { _mgmtResponseEvent.Reset(); } catch (ObjectDisposedException) { }
+            try { _session04Opened.Reset(); } catch (ObjectDisposedException) { }
+            try { _session04SubMsg1Response.Reset(); } catch (ObjectDisposedException) { }
+            try { _session04SubMsg2Response.Reset(); } catch (ObjectDisposedException) { }
+            try { _session04EndReceived.Reset(); } catch (ObjectDisposedException) { }
+            _sessions.Reset();
+            _session04InboundSeq = 0;
+            _session04OutboundSeq = 0;
+            _session04InboundMsgCount = 0;
+            _session09InboundSeq = 0;
+            _session09OutboundSeq = 0;
+            _session09ReplySent = false;
             // Reset so StartTelemetryIfReady() won't skip us on re-enable
             _framesSent = 0;
         }
@@ -454,69 +496,173 @@ namespace MozaPlugin.Telemetry
         /// - 0x82 data=02 → product type
         /// </summary>
         /// <summary>
-        /// Upload the .mzdash dashboard file to the wheel on session 0x01.
-        /// PitHouse does this on every connection. The upload uses FF-prefixed
-        /// sub-message framing with CRC-32 verification.
+        /// Upload the .mzdash dashboard file via the session 0x04 file-transfer
+        /// protocol (2025-11 firmware). Wheel opens session 0x04 from its own
+        /// side shortly after the host brings up mgmt + telemetry; we wait up
+        /// to 2 s for that open, then send:
+        ///
+        ///   1. Sub-msg 1 (path registration) — wait for device echo (~6 chunks)
+        ///   2. Sub-msg 2 (file content push) — wait for device ack (~6 chunks)
+        ///   3. Type=0x00 end marker — wait for device end reply
+        ///
+        /// Sizing follows PitHouse's observed 64-byte max chunk size; CRC32 per
+        /// chunk via <see cref="TierDefinitionBuilder.ChunkMessage"/>.
         /// </summary>
         private void SendDashboardUpload()
         {
             var content = MzdashContent;
-            if (content == null || content.Length == 0)
+            if (content == null || content.Length == 0) return;
+            if (!_connection.IsConnected) return;
+
+            // Wait for the device to open session 0x04. Real wheel opens it
+            // ~40–400 ms after we open session 0x02. If we don't see it within
+            // 2 s the device probably doesn't support file transfer — bail.
+            if (!_session04Opened.Wait(2000))
+            {
+                SimHub.Logging.Current.Warn(
+                    "[Moza] Dashboard upload: device did not open session 0x04 within 2s — skipping upload");
                 return;
-            if (!_connection.IsConnected || _mgmtPort == 0)
+            }
+
+            // Skip-if-unchanged: if the wheel already reported this dashboard
+            // as loaded (via session 0x09 state) and the MD5 matches, don't
+            // re-upload. Saves ~1 s of handshake per reconnect.
+            if (CanSkipUpload(content))
+            {
+                SimHub.Logging.Current.Info(
+                    $"[Moza] Dashboard \"{MzdashName}\" already loaded on wheel (hash match) — skipping upload");
                 return;
+            }
 
-            // Field 0 tokens: PitHouse sends [random_u32 | 0x00000002] [unix_timestamp | 0x00000000].
-            // Token 1: random nonce in low 32 bits, constant 0x02 in high 32 bits.
-            // Token 2: Unix timestamp in low 32 bits, zero in high 32 bits.
-            // These are correlation IDs — the wheel doesn't validate them.
-            uint nonce = (uint)Environment.TickCount ^ (uint)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            ulong token1 = ((ulong)0x00000002 << 32) | nonce;
-            ulong token2 = (ulong)DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-
-            byte[] message = DashboardUploader.BuildUploadMessage(content, token1, token2);
-
-            int seq = 2; // Session 0x01 starts at seq 2 (seq 0-1 used by session open)
-            var frames = TierDefinitionBuilder.ChunkMessage(message, _mgmtPort, ref seq);
+            string dashboardName = !string.IsNullOrEmpty(MzdashName) ? MzdashName : "dashboard";
+            uint token = DashboardUploader.PickToken();
+            long tsMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            var upload = DashboardUploader.BuildUpload(content, dashboardName, token, tsMs);
 
             SimHub.Logging.Current.Info(
-                $"[Moza] Uploading dashboard \"{MzdashName}\": " +
-                $"{content.Length} bytes raw, {message.Length} bytes wire, " +
-                $"{frames.Count} chunks on session 0x{_mgmtPort:X2}");
+                $"[Moza] Uploading dashboard \"{dashboardName}\" via session 0x04: " +
+                $"raw={upload.UncompressedSize}B md5={upload.Md5Hex} token=0x{token:X8}");
 
-            // Reset handshake state
-            _mgmtAckSeq = 0;
-            _mgmtResponseEvent.Reset();
+            _session04SubMsg1Response.Reset();
+            _session04SubMsg2Response.Reset();
+            _session04EndReceived.Reset();
+            _session04InboundMsgCount = 0;
 
-            // Send all upload chunks
+            // Sub-msg 1: path registration.
+            int seq1 = _session04OutboundSeq + 1;
+            var subMsg1Frames = TierDefinitionBuilder.ChunkMessage(
+                upload.SubMsg1PathRegistration, 0x04, ref seq1);
+            foreach (var frame in subMsg1Frames)
+            {
+                if (!_enabled || !_connection.IsConnected) return;
+                _connection.Send(frame);
+            }
+            _session04OutboundSeq = seq1;
+
+            // Wait for device's path echo (capture shows ~6 chunks, arrives within ~200ms).
+            if (!_session04SubMsg1Response.Wait(2000))
+                SimHub.Logging.Current.Warn("[Moza] Session 0x04 sub-msg 1 response timeout");
+
+            // Sub-msg 2: file content push.
+            _session04InboundMsgCount = 0; // reset so next threshold triggers sub-msg 2 event
+            int seq2 = _session04OutboundSeq + 1;
+            var subMsg2Frames = TierDefinitionBuilder.ChunkMessage(
+                upload.SubMsg2FileContent, 0x04, ref seq2);
+            foreach (var frame in subMsg2Frames)
+            {
+                if (!_enabled || !_connection.IsConnected) return;
+                _connection.Send(frame);
+            }
+            _session04OutboundSeq = seq2;
+
+            if (!_session04SubMsg2Response.Wait(3000))
+                SimHub.Logging.Current.Warn("[Moza] Session 0x04 sub-msg 2 response timeout");
+
+            // End marker on session 0x04.
+            SendSessionEnd(0x04, (ushort)_session04OutboundSeq);
+
+            if (_session04EndReceived.Wait(1000))
+                SimHub.Logging.Current.Info("[Moza] Dashboard upload complete (session 0x04 closed by device)");
+            else
+                SimHub.Logging.Current.Info("[Moza] Dashboard upload finished; device did not echo end marker within 1s");
+        }
+
+        /// <summary>
+        /// Compare the active mzdash MD5 against the wheel's reported hash from
+        /// its last session 0x09 state blob. Wheel stores hash as ASCII-hex of
+        /// ASCII-hex of MD5 (observed: `33 63 31 64 ...` = ASCII of
+        /// "3c1d..."). Returns true when the wheel already has this exact
+        /// dashboard loaded in enableManager.
+        /// </summary>
+        private bool CanSkipUpload(byte[] content)
+        {
+            var state = _configJson.LastState;
+            if (state == null || state.EnabledDashboards.Count == 0) return false;
+            byte[] md5 = FileTransferBuilder.ComputeMd5(content);
+            string md5Hex = FileTransferBuilder.Md5Hex(md5);
+            string wireHash = AsciiHexOfAsciiHex(md5Hex);
+            foreach (var entry in state.EnabledDashboards)
+            {
+                if (string.Equals(entry.Hash, wireHash, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+            return false;
+        }
+
+        private static string AsciiHexOfAsciiHex(string ascii)
+        {
+            var sb = new System.Text.StringBuilder(ascii.Length * 2);
+            foreach (var c in ascii) sb.Append(((byte)c).ToString("x2"));
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// Fire once per session: reply to the device's session 0x09 state blob
+        /// with a <c>configJson()</c> canonical library list. Wheel uses this to
+        /// refresh its <c>configJsonList</c> field, which PitHouse reads back
+        /// from <see cref="WheelDashboardState.ConfigJsonList"/>. Sent as
+        /// chunked 7c:00 data on session 0x09 with per-chunk CRC32.
+        /// </summary>
+        private void MaybeSendConfigJsonReply(WheelDashboardState state)
+        {
+            if (_session09ReplySent) return;
+            if (CanonicalDashboardList == null || CanonicalDashboardList.Count == 0)
+            {
+                // Fall back to whatever the wheel currently reports — that
+                // way the wheel's configJsonList survives at least one more
+                // connect cycle unchanged. Skip if wheel sent nothing.
+                if (state.ConfigJsonList == null || state.ConfigJsonList.Count == 0) return;
+                CanonicalDashboardList = state.ConfigJsonList;
+            }
+
+            byte[] reply = ConfigJsonClient.BuildConfigJsonReply(CanonicalDashboardList);
+            int seq = _session09OutboundSeq + 1;
+            var frames = TierDefinitionBuilder.ChunkMessage(reply, 0x09, ref seq);
             foreach (var frame in frames)
             {
                 if (!_enabled || !_connection.IsConnected) return;
                 _connection.Send(frame);
             }
+            _session09OutboundSeq = seq;
+            _session09ReplySent = true;
+            SimHub.Logging.Current.Info(
+                $"[Moza] Sent configJson() reply on session 0x09: " +
+                $"{CanonicalDashboardList.Count} dashboards, {frames.Count} chunks");
+        }
 
-            // Wait for the wheel to respond (ack or echo the upload)
-            // PitHouse waits for device response between sub-messages.
-            // We send everything and then wait for any response within 2 seconds.
-            if (_enabled)
-            {
-                if (_mgmtResponseEvent.Wait(2000))
-                    SimHub.Logging.Current.Info($"[Moza] Dashboard upload acknowledged (ack seq={_mgmtAckSeq})");
-                else
-                    SimHub.Logging.Current.Warn("[Moza] Dashboard upload: no response from wheel within 2s");
-            }
-
-            // Send type=0x00 end marker on the mgmt session
-            var endMarker = new byte[]
+        private void SendSessionEnd(byte session, ushort seq)
+        {
+            var end = new byte[]
             {
                 MozaProtocol.MessageStart, 0x06,
                 MozaProtocol.TelemetrySendGroup, MozaProtocol.DeviceWheel,
                 0x7C, 0x00,
-                _mgmtPort, 0x00, // type=0x00 (end marker)
+                session, 0x00,
+                (byte)(seq & 0xFF), (byte)((seq >> 8) & 0xFF),
                 0x00
             };
-            endMarker[endMarker.Length - 1] = MozaProtocol.CalculateChecksum(endMarker);
-            _connection.Send(endMarker);
+            end[end.Length - 1] = MozaProtocol.CalculateChecksum(end);
+            _connection.Send(end);
         }
 
         private void SendDisplayProbe()
@@ -600,9 +746,25 @@ namespace MozaPlugin.Telemetry
                 byte session = data[4];
                 byte type = data[5];
 
+                // Device-initiated session open (type=0x81). Real wheel opens
+                // 0x04/0x06/0x08/0x09/0x0A — mark as seen, ack the open, and
+                // trigger any waiters that need that session up before sending.
+                if (type == 0x81)
+                {
+                    int openSeq = data.Length >= 8 ? data[6] | (data[7] << 8) : 0;
+                    var info = _sessions.GetOrCreate(session);
+                    info.DeviceInitiated = true;
+                    info.Port = (byte)(openSeq & 0xFF);
+                    SendSessionAck(session, (ushort)openSeq);
+                    if (session == 0x04) _session04Opened.Set();
+                    return;
+                }
+
                 if (type == 0x01)
                 {
                     int seq = data[6] | (data[7] << 8);
+                    byte[] chunkPayload = new byte[data.Length - 8];
+                    Array.Copy(data, 8, chunkPayload, 0, chunkPayload.Length);
 
                     // Ack on the telemetry session
                     if (session == FlagByte)
@@ -619,6 +781,36 @@ namespace MozaPlugin.Telemetry
                             _mgmtAckSeq = seq;
                         SendSessionAck(_mgmtPort, (ushort)_mgmtAckSeq);
                         _mgmtResponseEvent.Set();
+                    }
+
+                    // Session 0x04 file transfer: ack + count responses. Capture shows
+                    // device sends sub-msg 1 echo (6 chunks) then sub-msg 2 ack
+                    // (6 chunks) — simplest heuristic is to wait for a quiet period
+                    // after some chunks, but sub-msg events fire once enough chunks
+                    // arrive to assume the device replied.
+                    if (session == 0x04)
+                    {
+                        SendSessionAck(0x04, (ushort)seq);
+                        _session04InboundSeq = seq;
+                        _session04InboundMsgCount++;
+                        // After ~5 chunks on session 0x04 from the device, assume a
+                        // sub-msg reply has fully arrived (capture shows 6 chunks).
+                        if (_session04InboundMsgCount >= 5 && !_session04SubMsg1Response.IsSet)
+                            _session04SubMsg1Response.Set();
+                        else if (_session04InboundMsgCount >= 10 && !_session04SubMsg2Response.IsSet)
+                            _session04SubMsg2Response.Set();
+                    }
+
+                    // Session 0x09 configJson state blob. Parsing may return the
+                    // freshly-decoded state when the reassembler completes a
+                    // full blob; that's our trigger to send the host→device
+                    // configJson() reply advertising our dashboard library.
+                    if (session == 0x09)
+                    {
+                        SendSessionAck(0x09, (ushort)seq);
+                        _session09InboundSeq = seq;
+                        var state = _configJson.OnChunk(chunkPayload);
+                        if (state != null) MaybeSendConfigJsonReply(state);
                     }
 
                     // Buffer the chunk payload (strip CRC) for channel catalog parsing.
@@ -638,10 +830,11 @@ namespace MozaPlugin.Telemetry
                     }
                 }
 
-                // Type 0x00 = end marker (upload complete signal from wheel)
-                if (type == 0x00 && session == _mgmtPort)
+                // Type 0x00 = end marker
+                if (type == 0x00)
                 {
-                    _mgmtResponseEvent.Set();
+                    if (session == _mgmtPort) _mgmtResponseEvent.Set();
+                    if (session == 0x04) _session04EndReceived.Set();
                 }
 
                 return;

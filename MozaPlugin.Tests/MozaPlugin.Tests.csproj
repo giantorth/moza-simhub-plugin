@@ -24,6 +24,11 @@
     <Compile Include="..\Telemetry\TelemetryFrameBuilder.cs" Link="Src\Telemetry\TelemetryFrameBuilder.cs" />
     <Compile Include="..\Telemetry\TierDefinitionBuilder.cs" Link="Src\Telemetry\TierDefinitionBuilder.cs" />
     <Compile Include="..\Telemetry\DashboardUploader.cs" Link="Src\Telemetry\DashboardUploader.cs" />
+    <Compile Include="..\Telemetry\FileTransferBuilder.cs" Link="Src\Telemetry\FileTransferBuilder.cs" />
+    <Compile Include="..\Telemetry\ConfigJsonClient.cs" Link="Src\Telemetry\ConfigJsonClient.cs" />
+    <Compile Include="..\Telemetry\WheelDashboardState.cs" Link="Src\Telemetry\WheelDashboardState.cs" />
+    <Compile Include="..\Telemetry\SessionDataReassembler.cs" Link="Src\Telemetry\SessionDataReassembler.cs" />
+    <Compile Include="..\Telemetry\SessionRegistry.cs" Link="Src\Telemetry\SessionRegistry.cs" />
     <Compile Include="..\Telemetry\TelemetryDiagnostics.cs" Link="Src\Telemetry\TelemetryDiagnostics.cs" />
   </ItemGroup>
 
