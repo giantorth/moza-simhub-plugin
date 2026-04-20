@@ -28,6 +28,9 @@ namespace MozaPlugin.Devices
         // Color swatch references
         private readonly Border[] _wheelFlagColorSwatches = new Border[6];
         private readonly Border[] _wheelButtonColorSwatches = new Border[14];
+        private const int WheelRpmSwatchMax = 25;
+        private readonly Border[] _wheelRpmColorSwatches = new Border[WheelRpmSwatchMax];
+        private readonly TextBlock[] _wheelRpmIndexLabels = new TextBlock[WheelRpmSwatchMax];
 
         // Diagnostic LED panel state (keyed by slot: 0=Shift/RPM, 1=Button,
         // 2/3/4=extended groups, 5=Meter flags)
@@ -110,7 +113,22 @@ namespace MozaPlugin.Devices
             // Flag LEDs live on the Meter sub-device (RS21 DB); swatch writes route via dash-flag-color*.
             BuildSwatchRow(WheelFlagColorPanel, _wheelFlagColorSwatches, 6, "dash-flag-color", _data.WheelFlagColors);
             BuildSwatchRow(WheelButtonColorPanel, _wheelButtonColorSwatches, 14, "wheel-button-color", _data.WheelButtonColors);
+            BuildRpmSwatches();
             _swatchesBuilt = true;
+        }
+
+        private void BuildRpmSwatches()
+        {
+            if (_data == null) return;
+            int count = Math.Min(WheelRpmSwatchMax, _data.WheelRpmColors.Length);
+            var indexStyle = TryFindResource("LedIndex") as Style;
+            for (int i = 0; i < count; i++)
+            {
+                var idxLabel = new TextBlock { Text = (i + 1).ToString(), Style = indexStyle };
+                WheelRpmIndexPanel.Children.Add(idxLabel);
+                _wheelRpmIndexLabels[i] = idxLabel;
+            }
+            BuildSwatchRow(WheelRpmColorPanel, _wheelRpmColorSwatches, count, "wheel-rpm-color", _data.WheelRpmColors);
         }
 
         private void BuildSwatchRow(StackPanel panel, Border[] swatches, int count,
@@ -242,8 +260,17 @@ namespace MozaPlugin.Devices
                                 ? Visibility.Visible : Visibility.Collapsed;
                     }
 
+                    int rpmCount = modelInfo?.RpmLedCount ?? 10;
+                    for (int i = 0; i < WheelRpmSwatchMax; i++)
+                    {
+                        var vis = i < rpmCount ? Visibility.Visible : Visibility.Collapsed;
+                        if (_wheelRpmColorSwatches[i] != null) _wheelRpmColorSwatches[i].Visibility = vis;
+                        if (_wheelRpmIndexLabels[i] != null) _wheelRpmIndexLabels[i].Visibility = vis;
+                    }
+
                     UpdateSwatches(_wheelFlagColorSwatches, _data.WheelFlagColors, 6);
                     UpdateSwatches(_wheelButtonColorSwatches, _data.WheelButtonColors, 14);
+                    UpdateSwatches(_wheelRpmColorSwatches, _data.WheelRpmColors, rpmCount);
 
                     RefreshExtendedLedGroups();
                 }

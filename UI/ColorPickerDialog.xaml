@@ -1,27 +1,22 @@
 <Window x:Class="MozaPlugin.ColorPickerDialog"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Pick LED Color" Width="320" Height="380"
+        Title="Pick LED Color" Width="320" Height="410"
         WindowStartupLocation="CenterOwner" ResizeMode="NoResize">
     <StackPanel Margin="15">
         <!-- Presets -->
         <TextBlock Text="Presets" Margin="0,0,0,4" FontWeight="Bold"/>
-        <UniformGrid Rows="2" Columns="6" Margin="0,0,0,10">
+        <UniformGrid Rows="2" Columns="7" Margin="0,0,0,10">
+            <!-- Row 1: rainbow -->
             <Border Height="24" Margin="2" CornerRadius="3" BorderBrush="#555" BorderThickness="1"
                     Cursor="Hand" Tag="255,0,0" ToolTip="Red"
                     Background="#FF0000" MouseLeftButtonUp="Preset_Click"/>
             <Border Height="24" Margin="2" CornerRadius="3" BorderBrush="#555" BorderThickness="1"
-                    Cursor="Hand" Tag="255,80,0" ToolTip="Orange"
-                    Background="#FF5000" MouseLeftButtonUp="Preset_Click"/>
-            <Border Height="24" Margin="2" CornerRadius="3" BorderBrush="#555" BorderThickness="1"
-                    Cursor="Hand" Tag="255,160,0" ToolTip="Amber"
-                    Background="#FFA000" MouseLeftButtonUp="Preset_Click"/>
+                    Cursor="Hand" Tag="255,128,0" ToolTip="Orange"
+                    Background="#FF8000" MouseLeftButtonUp="Preset_Click"/>
             <Border Height="24" Margin="2" CornerRadius="3" BorderBrush="#555" BorderThickness="1"
                     Cursor="Hand" Tag="255,255,0" ToolTip="Yellow"
                     Background="#FFFF00" MouseLeftButtonUp="Preset_Click"/>
-            <Border Height="24" Margin="2" CornerRadius="3" BorderBrush="#555" BorderThickness="1"
-                    Cursor="Hand" Tag="128,255,0" ToolTip="Lime"
-                    Background="#80FF00" MouseLeftButtonUp="Preset_Click"/>
             <Border Height="24" Margin="2" CornerRadius="3" BorderBrush="#555" BorderThickness="1"
                     Cursor="Hand" Tag="0,255,0" ToolTip="Green"
                     Background="#00FF00" MouseLeftButtonUp="Preset_Click"/>
@@ -29,21 +24,42 @@
                     Cursor="Hand" Tag="0,255,255" ToolTip="Cyan"
                     Background="#00FFFF" MouseLeftButtonUp="Preset_Click"/>
             <Border Height="24" Margin="2" CornerRadius="3" BorderBrush="#555" BorderThickness="1"
-                    Cursor="Hand" Tag="0,80,255" ToolTip="Blue"
-                    Background="#0050FF" MouseLeftButtonUp="Preset_Click"/>
+                    Cursor="Hand" Tag="0,0,255" ToolTip="Blue"
+                    Background="#0000FF" MouseLeftButtonUp="Preset_Click"/>
             <Border Height="24" Margin="2" CornerRadius="3" BorderBrush="#555" BorderThickness="1"
                     Cursor="Hand" Tag="128,0,255" ToolTip="Purple"
                     Background="#8000FF" MouseLeftButtonUp="Preset_Click"/>
+            <!-- Row 2: accents + utility -->
             <Border Height="24" Margin="2" CornerRadius="3" BorderBrush="#555" BorderThickness="1"
                     Cursor="Hand" Tag="255,0,255" ToolTip="Magenta"
                     Background="#FF00FF" MouseLeftButtonUp="Preset_Click"/>
             <Border Height="24" Margin="2" CornerRadius="3" BorderBrush="#555" BorderThickness="1"
-                    Cursor="Hand" Tag="255,80,160" ToolTip="Pink"
-                    Background="#FF50A0" MouseLeftButtonUp="Preset_Click"/>
+                    Cursor="Hand" Tag="255,0,128" ToolTip="Pink"
+                    Background="#FF0080" MouseLeftButtonUp="Preset_Click"/>
+            <Border Height="24" Margin="2" CornerRadius="3" BorderBrush="#555" BorderThickness="1"
+                    Cursor="Hand" Tag="128,255,0" ToolTip="Lime"
+                    Background="#80FF00" MouseLeftButtonUp="Preset_Click"/>
+            <Border Height="24" Margin="2" CornerRadius="3" BorderBrush="#555" BorderThickness="1"
+                    Cursor="Hand" Tag="255,160,0" ToolTip="Amber"
+                    Background="#FFA000" MouseLeftButtonUp="Preset_Click"/>
+            <Border Height="24" Margin="2" CornerRadius="3" BorderBrush="#555" BorderThickness="1"
+                    Cursor="Hand" Tag="255,220,160" ToolTip="Warm White"
+                    Background="#FFDCA0" MouseLeftButtonUp="Preset_Click"/>
             <Border Height="24" Margin="2" CornerRadius="3" BorderBrush="#555" BorderThickness="1"
                     Cursor="Hand" Tag="255,255,255" ToolTip="White"
                     Background="#FFFFFF" MouseLeftButtonUp="Preset_Click"/>
+            <Border Height="24" Margin="2" CornerRadius="3" BorderBrush="#888" BorderThickness="1"
+                    Cursor="Hand" Tag="0,0,0" ToolTip="Off (Black)"
+                    Background="#000000" MouseLeftButtonUp="Preset_Click"/>
         </UniformGrid>
+
+        <!-- Last used color -->
+        <StackPanel x:Name="LastColorPanel" Orientation="Horizontal" Margin="0,0,0,8" Visibility="Collapsed">
+            <TextBlock Text="Last Used" VerticalAlignment="Center" Margin="0,0,8,0" FontWeight="Bold"/>
+            <Border x:Name="LastColorSwatch" Height="24" Width="32" CornerRadius="3"
+                    BorderBrush="#555" BorderThickness="1" Cursor="Hand"
+                    Background="#000000" Tag="0,0,0" MouseLeftButtonUp="Preset_Click"/>
+        </StackPanel>
 
         <!-- Preview -->
         <Border x:Name="ColorPreview" Height="50" CornerRadius="5" Margin="0,0,0,15"
@@ -78,7 +94,6 @@
 
         <!-- Buttons -->
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,15,0,0">
-            <Button Content="Off" Width="50" Margin="0,0,8,0" Click="Off_Click"/>
             <Button Content="Cancel" Width="60" Margin="0,0,8,0" Click="Cancel_Click"/>
             <Button Content="OK" Width="60" IsDefault="True" Click="Ok_Click"/>
         </StackPanel>

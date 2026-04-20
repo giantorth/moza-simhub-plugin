@@ -92,11 +92,13 @@ namespace MozaPlugin
             // Per-encoder signal mode probe — silent on firmware without [42, N] support
             "wheel-knob-signal-mode0", "wheel-knob-signal-mode1", "wheel-knob-signal-mode2",
             "wheel-knob-signal-mode3", "wheel-knob-signal-mode4",
-            // RPM colors
+            // RPM colors (up to 18 — KS Pro max)
             "wheel-rpm-color1", "wheel-rpm-color2", "wheel-rpm-color3",
             "wheel-rpm-color4", "wheel-rpm-color5", "wheel-rpm-color6",
             "wheel-rpm-color7", "wheel-rpm-color8", "wheel-rpm-color9",
-            "wheel-rpm-color10",
+            "wheel-rpm-color10", "wheel-rpm-color11", "wheel-rpm-color12",
+            "wheel-rpm-color13", "wheel-rpm-color14", "wheel-rpm-color15",
+            "wheel-rpm-color16", "wheel-rpm-color17", "wheel-rpm-color18",
             // Button colors
             "wheel-button-color1",  "wheel-button-color2",  "wheel-button-color3",
             "wheel-button-color4",  "wheel-button-color5",  "wheel-button-color6",
@@ -1445,7 +1447,7 @@ namespace MozaPlugin
             // New-protocol wheel colors
             if (!DeviceExtensionActive && _newWheelDetected)
             {
-                WriteColorArray(profile.WheelRpmColors, "wheel-rpm-color", 10);
+                WriteColorArray(profile.WheelRpmColors, "wheel-rpm-color", 18);
                 WriteColorArray(profile.WheelRpmBlinkColors, "wheel-rpm-blink-color", 10);
                 WriteColorArray(profile.WheelButtonColors, "wheel-button-color", 14);
                 // Flag colors route to Meter sub-device via dash-flag-color*. Gate on dash detection.
@@ -1530,7 +1532,7 @@ namespace MozaPlugin
                 }
 
                 // Colors
-                WriteColorArray(extSettings.WheelRpmColors, "wheel-rpm-color", 10);
+                WriteColorArray(extSettings.WheelRpmColors, "wheel-rpm-color", 18);
                 WriteColorArray(extSettings.WheelRpmBlinkColors, "wheel-rpm-blink-color", 10);
                 WriteColorArray(extSettings.WheelButtonColors, "wheel-button-color", 14);
                 // Flag colors → Meter sub-device (dash-flag-color*). Gate on dash detection.

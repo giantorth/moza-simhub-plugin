@@ -126,7 +126,7 @@ namespace MozaPlugin
         public volatile int WheelRpmDisplayMode;
 
         // Wheel RPM colors (10 LEDs, [R, G, B] each)
-        public readonly byte[][] WheelRpmColors = InitRpmColorArray();
+        public readonly byte[][] WheelRpmColors = InitWheelRpmColorArray();
         public readonly byte[][] WheelRpmBlinkColors = InitRpmColorArray();
         public readonly byte[][] WheelButtonColors = InitColorArray(14);
         public readonly byte[][] WheelFlagColors = InitFlagColorArray();
@@ -218,6 +218,17 @@ namespace MozaPlugin
                 new byte[] { 255, 0, 0 }, new byte[] { 255, 0, 0 }, new byte[] { 255, 0, 0 }, new byte[] { 255, 0, 0 },
                 new byte[] { 255, 0, 255 }, new byte[] { 255, 0, 255 }, new byte[] { 255, 0, 255 },
             };
+        }
+
+        // Wheels up to 25 RPM LEDs (KS Pro = 18). First 10 match legacy defaults; 11+ default black.
+        private const int WheelRpmLedMax = 25;
+        private static byte[][] InitWheelRpmColorArray()
+        {
+            var baseColors = InitRpmColorArray();
+            var arr = new byte[WheelRpmLedMax][];
+            for (int i = 0; i < WheelRpmLedMax; i++)
+                arr[i] = i < baseColors.Length ? baseColors[i] : new byte[] { 0, 0, 0 };
+            return arr;
         }
 
         /// <summary>
@@ -400,7 +411,7 @@ namespace MozaPlugin
             if (commandName.StartsWith("wheel-rpm-color") && !commandName.Contains("blink"))
             {
                 int idx = ParseTrailingIndex(commandName, "wheel-rpm-color");
-                if (idx >= 0 && idx < 10 && data.Length >= 3)
+                if (idx >= 0 && idx < WheelRpmColors.Length && data.Length >= 3)
                     SetColor(WheelRpmColors[idx], data);
             }
             // Wheel button colors

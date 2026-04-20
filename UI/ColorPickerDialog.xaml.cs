@@ -6,6 +6,9 @@ namespace MozaPlugin
 {
     public partial class ColorPickerDialog : Window
     {
+        private static byte s_lastR, s_lastG, s_lastB;
+        private static bool s_hasLastColor;
+
         public byte SelectedR { get; private set; }
         public byte SelectedG { get; private set; }
         public byte SelectedB { get; private set; }
@@ -17,6 +20,13 @@ namespace MozaPlugin
             GSlider.Value = g;
             BSlider.Value = b;
             UpdatePreview();
+
+            if (s_hasLastColor)
+            {
+                LastColorSwatch.Background = new SolidColorBrush(Color.FromRgb(s_lastR, s_lastG, s_lastB));
+                LastColorSwatch.Tag = $"{s_lastR},{s_lastG},{s_lastB}";
+                LastColorPanel.Visibility = Visibility.Visible;
+            }
         }
 
         private void Slider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -43,20 +53,16 @@ namespace MozaPlugin
             SelectedR = (byte)RSlider.Value;
             SelectedG = (byte)GSlider.Value;
             SelectedB = (byte)BSlider.Value;
+            s_lastR = SelectedR;
+            s_lastG = SelectedG;
+            s_lastB = SelectedB;
+            s_hasLastColor = true;
             DialogResult = true;
         }
 
         private void Cancel_Click(object sender, RoutedEventArgs e)
         {
             DialogResult = false;
-        }
-
-        private void Off_Click(object sender, RoutedEventArgs e)
-        {
-            SelectedR = 0;
-            SelectedG = 0;
-            SelectedB = 0;
-            DialogResult = true;
         }
 
         private void Preset_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)
