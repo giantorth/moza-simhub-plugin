@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "wheel-sim": {
+      "command": ".venv/bin/python3",
+      "args": ["sim/wheel_sim.py", "--mcp", "/dev/ttyGS0"],
+      "cwd": "."
+    }
+  }
+}

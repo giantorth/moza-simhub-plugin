@@ -103,22 +103,45 @@ if [[ -z "$BUSID" ]]; then
     exit 1
 fi
 echo "Gadget enumerated as busid $BUSID"
-usbip bind -b "$BUSID"
+
+# Bind gadget to usbip-host. CDC ACM creates two interfaces (comms + data);
+# usbip must claim both or the device won't be exportable. If the first bind
+# leaves interfaces unbound (known usbip/cdc_acm race), unbind, re-probe the
+# interfaces so the kernel re-attaches drivers, then rebind.
+_usbip_bind() {
+    usbip bind -b "$BUSID" 2>/dev/null || true
+    sleep 0.3
+    if usbip list -r 127.0.0.1 2>/dev/null | grep -q "$BUSID"; then
+        return 0
+    fi
+    echo "Bind did not export device — forcing interface re-probe..."
+    usbip unbind -b "$BUSID" 2>/dev/null || true
+    for iface in /sys/bus/usb/devices/"$BUSID":*; do
+        echo "$(basename "$iface")" > /sys/bus/usb/drivers_probe 2>/dev/null || true
+    done
+    sleep 0.3
+    usbip bind -b "$BUSID" 2>/dev/null || true
+    sleep 0.3
+    usbip list -r 127.0.0.1 2>/dev/null | grep -q "$BUSID"
+}
+
+if ! _usbip_bind; then
+    echo "FATAL: gadget bound but NOT remotely exportable after retry." >&2
+    echo "  Interfaces:" >&2
+    for iface in /sys/bus/usb/devices/"$BUSID":*; do
+        drv=$(readlink "$iface/driver" 2>/dev/null || echo "none")
+        echo "    $(basename "$iface") → $drv" >&2
+    done
+    echo "  Debug: usbip list -r 127.0.0.1" >&2
+    exit 1
+fi
 
 echo
 echo "── gadget ready ──"
 ls -l /dev/ttyGS0
 echo "UDC:   $UDC"
 echo "VID:   0x346E  PID:  0x0006"
-echo "BusID: $BUSID (bound)"
-echo
-
-if usbip list -r 127.0.0.1 2>/dev/null | grep -q "$BUSID"; then
-    echo "VERIFIED: gadget remotely exportable on busid $BUSID"
-else
-    echo "WARNING: gadget bound but NOT visible via remote list"
-    echo "  Debug: usbip list -r 127.0.0.1"
-fi
+echo "BusID: $BUSID (bound + verified exportable)"
 
 echo
 echo "Exportable devices (from this host):"

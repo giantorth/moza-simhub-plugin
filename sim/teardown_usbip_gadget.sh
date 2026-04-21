@@ -26,6 +26,12 @@ for d in /sys/bus/usb/devices/*-*; do
 done
 if [[ -n "$BUSID" ]]; then
     usbip unbind -b "$BUSID" 2>/dev/null || true
+    # Ensure all interfaces are released (CDC ACM has two).
+    for iface in /sys/bus/usb/devices/"$BUSID":*; do
+        iname=$(basename "$iface")
+        drv=$(readlink "$iface/driver" 2>/dev/null) || continue
+        echo "$iname" > "$(dirname "$drv")/unbind" 2>/dev/null || true
+    done
 fi
 
 # Step 2: stop daemon (after unbind).
