@@ -734,6 +734,16 @@ namespace MozaPlugin
             var result = MozaResponseParser.Parse(data);
             if (!result.HasValue)
             {
+                // Known wheel write echoes that have no command DB entry: silently
+                // treat as a keepalive from the wheel device id. Avoids unmatched-log
+                // spam and keeps wheel-alive tracking accurate for LED/page-config
+                // writes that firmware echoes verbatim (see MozaProtocol.WheelEchoPrefixes).
+                if (MozaProtocol.IsWheelEcho(data))
+                {
+                    _deviceManager.MarkWheelResponse(MozaProtocol.SwapNibbles(data[1]));
+                    return;
+                }
+
                 _unmatched++;
                 if (_unmatched <= 20 && data.Length >= 2)
                 {

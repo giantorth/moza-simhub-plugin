@@ -96,6 +96,24 @@ namespace MozaPlugin.Telemetry
         // Wheel channel catalog (parsed from incoming 7c:00 session data during preamble)
         private System.Collections.Generic.List<byte> _incomingSessionBuffer = new();
         private volatile System.Collections.Generic.List<string>? _wheelChannelCatalog;
+        private volatile int _channelBufferLastActivityMs;
+
+        // Session 0x04 inbound dir-listing buffer. After upload, wheel pushes a
+        // fresh directory listing on 0x04 which lets us detect when the upload
+        // is actually live on the device (rather than just transmitted).
+        private readonly SessionDataReassembler _session04Inbox = new();
+        private volatile bool _session04DirListingRefreshed;
+        public bool Session04DirListingRefreshed => _session04DirListingRefreshed;
+
+        // RPC on 0x09/0x0a (host→device management RPCs such as completelyRemove).
+        // Replies come back from device in same zlib envelope as configJson state.
+        private int _rpcNextId = 1000;
+        private readonly object _rpcLock = new object();
+        private readonly System.Collections.Generic.Dictionary<int, ManualResetEventSlim> _rpcWaiters
+            = new System.Collections.Generic.Dictionary<int, ManualResetEventSlim>();
+        private readonly System.Collections.Generic.Dictionary<int, byte[]> _rpcReplies
+            = new System.Collections.Generic.Dictionary<int, byte[]>();
+        private readonly SessionDataReassembler _session0aInbox = new();
 
         /// <summary>
         /// True if the wheel's internal Display sub-device responded to identity probe.
@@ -231,6 +249,17 @@ namespace MozaPlugin.Telemetry
                 SendDashboardUpload();
 
             if (!_enabled) return;
+
+            // Open session 0x03 (doc [moza-protocol.md:620-625]: host opens 0x03
+            // 150-450ms after 0x01/0x02 on new firmware). Sim stubs this but real
+            // hardware expects it. Fire-and-forget: we don't rely on its ack.
+            SendSessionOpen(0x03, 0x03);
+
+            // Wait for wheel's pre-tier-def channel registration dump to quiet
+            // down before transmitting our tier definition. Sim/real wheel pushes
+            // channel URLs on session 0x02 between session-open and tier-def;
+            // sending tier def mid-dump risks the wheel rejecting it.
+            WaitForChannelCatalogQuiet(quietMs: 200, timeoutMs: 2000);
 
             // Send the tier definition message on the telemetry session.
             // This tells the wheel how to decode each flag byte's bit-packed data:
@@ -418,6 +447,84 @@ namespace MozaPlugin.Telemetry
         private byte TierFlagBase =>
             FlagByteMode == 1 ? FlagByte : (byte)0x00;
 
+        /// <summary>
+        /// Wait for the wheel's pre-tier-def channel registration burst to stop
+        /// arriving. Polls <see cref="_channelBufferLastActivityMs"/> — once the
+        /// last activity is older than <paramref name="quietMs"/>, we assume the
+        /// wheel is done pushing its channel URLs.
+        /// </summary>
+        private void WaitForChannelCatalogQuiet(int quietMs, int timeoutMs)
+        {
+            int deadline = Environment.TickCount + timeoutMs;
+            while (Environment.TickCount < deadline)
+            {
+                if (!_enabled || !_connection.IsConnected) return;
+                int lastAct = _channelBufferLastActivityMs;
+                int idle = lastAct == 0 ? 0 : Environment.TickCount - lastAct;
+                int bufCount;
+                lock (_incomingSessionBuffer) bufCount = _incomingSessionBuffer.Count;
+                if (bufCount > 0 && idle >= quietMs)
+                    return;
+                Thread.Sleep(20);
+            }
+        }
+
+        /// <summary>
+        /// Build a new <see cref="MultiStreamProfile"/> with only the channels
+        /// whose <c>Url</c> appears in <paramref name="catalog"/>. Tiers that
+        /// end up empty are dropped. URL match is case-insensitive and also
+        /// accepts catalog entries matching the last path segment (the wheel
+        /// sometimes advertises bare names where the profile uses a full URL).
+        /// </summary>
+        private static MultiStreamProfile FilterProfileToCatalog(
+            MultiStreamProfile profile,
+            System.Collections.Generic.IReadOnlyList<string> catalog)
+        {
+            var set = new System.Collections.Generic.HashSet<string>(
+                StringComparer.OrdinalIgnoreCase);
+            foreach (var entry in catalog)
+            {
+                if (string.IsNullOrEmpty(entry)) continue;
+                set.Add(entry);
+                int slash = entry.LastIndexOf('/');
+                if (slash >= 0 && slash < entry.Length - 1)
+                    set.Add(entry.Substring(slash + 1));
+            }
+
+            bool ChannelMatches(ChannelDefinition ch)
+            {
+                if (set.Contains(ch.Url)) return true;
+                int slash = ch.Url.LastIndexOf('/');
+                if (slash >= 0 && slash < ch.Url.Length - 1
+                    && set.Contains(ch.Url.Substring(slash + 1))) return true;
+                return false;
+            }
+
+            var result = new MultiStreamProfile
+            {
+                Name = profile.Name,
+                PageCount = profile.PageCount,
+            };
+            foreach (var tier in profile.Tiers)
+            {
+                var kept = new System.Collections.Generic.List<ChannelDefinition>();
+                foreach (var ch in tier.Channels)
+                    if (ChannelMatches(ch)) kept.Add(ch);
+                if (kept.Count == 0) continue;
+                result.Tiers.Add(new DashboardProfile
+                {
+                    Name = tier.Name,
+                    Channels = kept,
+                    PackageLevel = tier.PackageLevel,
+                    TotalBits = tier.TotalBits,
+                    TotalBytes = tier.TotalBytes,
+                });
+            }
+            // If filter removed everything, fall back to the original rather
+            // than shipping an empty tier def (wheel would reject it anyway).
+            return result.Tiers.Count == 0 ? profile : result;
+        }
+
         private void SendTierDefinition()
         {
             var profile = _profile;
@@ -425,6 +532,25 @@ namespace MozaPlugin.Telemetry
                 return;
             if (!_connection.IsConnected)
                 return;
+
+            // Intersect profile channels with wheel's advertised catalog so we
+            // don't reference channels the wheel can't decode. Older firmware
+            // rejects the entire tier-def on unknown channels; 2025-11 drops
+            // them silently but still wastes frame bits. No-op when catalog is
+            // empty (parse failure or wheel didn't push registrations).
+            var catalog = _wheelChannelCatalog;
+            if (catalog != null && catalog.Count > 0)
+            {
+                var filtered = FilterProfileToCatalog(profile, catalog);
+                int originalCh = 0, filteredCh = 0;
+                foreach (var t in profile.Tiers) originalCh += t.Channels.Count;
+                foreach (var t in filtered.Tiers) filteredCh += t.Channels.Count;
+                if (filteredCh < originalCh)
+                    SimHub.Logging.Current.Info(
+                        $"[Moza] Tier def filtered to wheel catalog: " +
+                        $"{filteredCh}/{originalCh} channels retained");
+                profile = filtered;
+            }
 
             int seq = 3; // Match Pithouse's starting seq for config data
 
@@ -585,6 +711,18 @@ namespace MozaPlugin.Telemetry
                 SimHub.Logging.Current.Info("[Moza] Dashboard upload complete (session 0x04 closed by device)");
             else
                 SimHub.Logging.Current.Info("[Moza] Dashboard upload finished; device did not echo end marker within 1s");
+
+            // Wheel's 2025-11 firmware fires a post-upload state refresh on
+            // session 0x04 (updated directory listing) and session 0x09 (updated
+            // configJson state blob including the newly-uploaded dashboard).
+            // Continue pumping so OnMessageDuringPreamble can ack + consume those
+            // chunks before the preamble phase ends and the handler detaches.
+            int preRefreshCount = _session04InboundMsgCount;
+            Thread.Sleep(500);
+            int refreshChunks = _session04InboundMsgCount - preRefreshCount;
+            if (refreshChunks > 0)
+                SimHub.Logging.Current.Info(
+                    $"[Moza] Session 0x04 post-upload state refresh: {refreshChunks} chunks");
         }
 
         /// <summary>
@@ -648,6 +786,135 @@ namespace MozaPlugin.Telemetry
             SimHub.Logging.Current.Info(
                 $"[Moza] Sent configJson() reply on session 0x09: " +
                 $"{CanonicalDashboardList.Count} dashboards, {frames.Count} chunks");
+        }
+
+        private int _session0aOutboundSeq;
+
+        /// <summary>
+        /// Send a host→wheel JSON RPC call on session 0x0a and optionally wait
+        /// for the wheel's reply. Wire format matches configJson: 9-byte
+        /// envelope ([flag=0x00][comp_size:u32 LE][uncomp_size:u32 LE]) wrapping
+        /// a zlib stream of `{"<method>()": arg, "id": N}`. Reply has shape
+        /// `{"id": N, "result": ...}` and is decoded by HandleRpcReply.
+        /// Returns the decoded reply bytes on success, null on timeout.
+        /// </summary>
+        public byte[]? SendRpcCall(string method, object arg, int timeoutMs = 2000)
+        {
+            if (!_connection.IsConnected) return null;
+            int id;
+            var waiter = new ManualResetEventSlim(false);
+            lock (_rpcLock)
+            {
+                id = _rpcNextId++;
+                _rpcWaiters[id] = waiter;
+            }
+            byte[] envelope = BuildRpcCallEnvelope(method, arg, id);
+            int seq = _session0aOutboundSeq + 1;
+            var frames = TierDefinitionBuilder.ChunkMessage(envelope, 0x0a, ref seq);
+            foreach (var frame in frames)
+            {
+                if (!_enabled || !_connection.IsConnected) { CleanupRpcWaiter(id); return null; }
+                _connection.Send(frame);
+            }
+            _session0aOutboundSeq = seq;
+            bool acked = waiter.Wait(timeoutMs);
+            byte[]? reply = null;
+            lock (_rpcLock)
+            {
+                _rpcReplies.TryGetValue(id, out reply);
+                _rpcReplies.Remove(id);
+                _rpcWaiters.Remove(id);
+            }
+            waiter.Dispose();
+            return acked ? reply : null;
+        }
+
+        private void CleanupRpcWaiter(int id)
+        {
+            lock (_rpcLock)
+            {
+                if (_rpcWaiters.TryGetValue(id, out var w))
+                {
+                    _rpcWaiters.Remove(id);
+                    try { w.Dispose(); } catch { }
+                }
+            }
+        }
+
+        private static byte[] BuildRpcCallEnvelope(string method, object arg, int id)
+        {
+            var root = new Newtonsoft.Json.Linq.JObject();
+            root[$"{method}()"] = Newtonsoft.Json.Linq.JToken.FromObject(arg);
+            root["id"] = id;
+            string json = root.ToString(Newtonsoft.Json.Formatting.None);
+            byte[] uncompressed = System.Text.Encoding.UTF8.GetBytes(json);
+            byte[] compressed = ZlibCompress(uncompressed);
+            var env = new byte[9 + compressed.Length];
+            env[0] = 0x00;
+            uint c = (uint)compressed.Length;
+            env[1] = (byte)(c & 0xFF); env[2] = (byte)((c >> 8) & 0xFF);
+            env[3] = (byte)((c >> 16) & 0xFF); env[4] = (byte)((c >> 24) & 0xFF);
+            uint u = (uint)uncompressed.Length;
+            env[5] = (byte)(u & 0xFF); env[6] = (byte)((u >> 8) & 0xFF);
+            env[7] = (byte)((u >> 16) & 0xFF); env[8] = (byte)((u >> 24) & 0xFF);
+            Array.Copy(compressed, 0, env, 9, compressed.Length);
+            return env;
+        }
+
+        private static byte[] ZlibCompress(byte[] data)
+        {
+            using var output = new System.IO.MemoryStream();
+            output.WriteByte(0x78);
+            output.WriteByte(0x9C);
+            using (var deflate = new System.IO.Compression.DeflateStream(
+                output, System.IO.Compression.CompressionLevel.Optimal, leaveOpen: true))
+                deflate.Write(data, 0, data.Length);
+            uint a = 1, b = 0;
+            for (int i = 0; i < data.Length; i++)
+            {
+                a = (a + data[i]) % 65521;
+                b = (b + a) % 65521;
+            }
+            uint adler = (b << 16) | a;
+            output.WriteByte((byte)((adler >> 24) & 0xFF));
+            output.WriteByte((byte)((adler >> 16) & 0xFF));
+            output.WriteByte((byte)((adler >> 8) & 0xFF));
+            output.WriteByte((byte)(adler & 0xFF));
+            return output.ToArray();
+        }
+
+        private void HandleRpcReply(byte[] uncompressed)
+        {
+            try
+            {
+                string json = System.Text.Encoding.UTF8.GetString(uncompressed);
+                var obj = Newtonsoft.Json.Linq.JObject.Parse(json);
+                var idTok = obj["id"];
+                if (idTok == null) return;
+                int id = (int)idTok;
+                lock (_rpcLock)
+                {
+                    _rpcReplies[id] = uncompressed;
+                    if (_rpcWaiters.TryGetValue(id, out var waiter))
+                        waiter.Set();
+                }
+            }
+            catch (Exception ex)
+            {
+                SimHub.Logging.Current.Debug($"[Moza] RPC reply parse failed: {ex.Message}");
+            }
+        }
+
+        private static int CountOccurrences(string haystack, string needle)
+        {
+            if (string.IsNullOrEmpty(haystack) || string.IsNullOrEmpty(needle)) return 0;
+            int count = 0, idx = 0;
+            while ((idx = haystack.IndexOf(needle, idx, StringComparison.Ordinal)) != -1)
+            {
+                count++;
+                idx += needle.Length;
+            }
+            return count;
         }
 
         private void SendSessionEnd(byte session, ushort seq)
@@ -799,6 +1066,31 @@ namespace MozaPlugin.Telemetry
                             _session04SubMsg1Response.Set();
                         else if (_session04InboundMsgCount >= 10 && !_session04SubMsg2Response.IsSet)
                             _session04SubMsg2Response.Set();
+
+                        // 2025-11 firmware also pushes a zlib-compressed directory
+                        // listing on session 0x04 (initial + post-upload refresh).
+                        // Reassemble + decompress so the plugin can confirm the
+                        // upload landed in the wheel's FS. Same 9-byte envelope
+                        // as session 0x09 configJson state.
+                        _session04Inbox.AddChunk(chunkPayload);
+                        byte[]? dirBlob = _session04Inbox.TryDecompress();
+                        if (dirBlob != null)
+                        {
+                            _session04Inbox.Clear();
+                            _session04DirListingRefreshed = true;
+                            try
+                            {
+                                string json = System.Text.Encoding.UTF8.GetString(dirBlob);
+                                SimHub.Logging.Current.Info(
+                                    $"[Moza] Session 0x04 dir listing: {dirBlob.Length} bytes, " +
+                                    $"children≈{CountOccurrences(json, "\"name\"")}");
+                            }
+                            catch (Exception ex)
+                            {
+                                SimHub.Logging.Current.Debug(
+                                    $"[Moza] Session 0x04 dir listing decode: {ex.Message}");
+                            }
+                        }
                     }
 
                     // Session 0x09 configJson state blob. Parsing may return the
@@ -813,6 +1105,28 @@ namespace MozaPlugin.Telemetry
                         if (state != null) MaybeSendConfigJsonReply(state);
                     }
 
+                    // Session 0x0a: RPC reply channel. Host sends `{method(): arg, id}`
+                    // calls, wheel replies with `{id, result}` in the same zlib
+                    // envelope. Reassemble and hand off to RPC waiters.
+                    if (session == 0x0a)
+                    {
+                        SendSessionAck(0x0a, (ushort)seq);
+                        _session0aInbox.AddChunk(chunkPayload);
+                        byte[]? replyBlob = _session0aInbox.TryDecompress();
+                        if (replyBlob != null)
+                        {
+                            _session0aInbox.Clear();
+                            HandleRpcReply(replyBlob);
+                        }
+                    }
+
+                    // Session 0x03: host opens this per doc (new FW) but plugin
+                    // has no workload on it yet. Ack any unsolicited chunks so
+                    // wheel doesn't retransmit 3× and stall. Purpose unknown
+                    // until real-wheel capture diffs PitHouse 0x03 traffic.
+                    if (session == 0x03)
+                        SendSessionAck(0x03, (ushort)seq);
+
                     // Buffer the chunk payload (strip CRC) for channel catalog parsing.
                     if (session == FlagByte && data.Length > 12 && !_preambleComplete)
                     {
@@ -826,6 +1140,7 @@ namespace MozaPlugin.Telemetry
                                 for (int k = 0; k < netLen; k++)
                                     _incomingSessionBuffer.Add(raw[k]);
                             }
+                            _channelBufferLastActivityMs = Environment.TickCount;
                         }
                     }
                 }
@@ -890,10 +1205,7 @@ namespace MozaPlugin.Telemetry
                     // Channel URL: [ch_index:u8] [url:ASCII]
                     int urlLen = (int)param - 1;
                     string url = System.Text.Encoding.ASCII.GetString(buffer, i + 6, urlLen);
-                    // Extract just the suffix after the last /
-                    int slash = url.LastIndexOf('/');
-                    string name = slash >= 0 ? url.Substring(slash + 1) : url;
-                    channels.Add(name);
+                    channels.Add(url);
                     i += 5 + (int)param;
                 }
                 else if (tag == 0x06)
@@ -948,7 +1260,12 @@ namespace MozaPlugin.Telemetry
                     if (_tickCounter >= _preambleTickTarget)
                     {
                         _preambleComplete = true;
-                        _connection.MessageReceived -= OnMessageDuringPreamble;
+                        // Handler stays subscribed: sessions 0x04/0x09/0x0a keep
+                        // receiving data post-preamble (dir refresh, configJson
+                        // updates, RPC replies). Detaching here broke RPC round
+                        // trips that fire after the 1s preamble window.
+                        // Channel-catalog buffer is guarded by !_preambleComplete
+                        // so it stops accumulating automatically.
 
                         // Parse the wheel's channel catalog from buffered session data
                         ParseWheelChannelCatalog();

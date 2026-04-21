@@ -95,11 +95,38 @@ namespace MozaPlugin.Telemetry
         {
             byte[] buf = Snapshot();
             if (buf.Length < 9) return null;
-            if (buf[0] != 0x00) return null;   // flag byte must be 0
-            uint compSize = (uint)(buf[1] | (buf[2] << 8) | (buf[3] << 16) | (buf[4] << 24));
-            // uncompSize is buf[5..8] but we don't need it — zlib knows.
-            if (buf.Length < 9 + compSize) return null;
-            return DecompressZlib(buf, 9);
+            if (buf[0] == 0x00)
+            {
+                uint compSize = (uint)(buf[1] | (buf[2] << 8) | (buf[3] << 16) | (buf[4] << 24));
+                if (buf.Length >= 9 + compSize)
+                {
+                    byte[]? r = DecompressZlib(buf, 9);
+                    if (r != null) return r;
+                }
+            }
+            // Fallback: mzdash bodies embed raw 0x7E bytes that interact with
+            // the wire-level escape rules (see docs/moza-protocol.md:31-54).
+            // If envelope-offset decode failed, scan for zlib magic (78 9c / 78 da)
+            // and try each candidate — mirrors sim/wheel_sim.py:1742-1770.
+            return TryDecompressByMagic(buf);
+        }
+
+        /// <summary>
+        /// Scan <paramref name="buf"/> for zlib magic bytes (78 9c / 78 da) and
+        /// trial-decompress each hit. Returns the first stream that inflates
+        /// without error. Used as a fallback when envelope-offset decoding
+        /// fails because embedded 0x7E in mzdash JSON corrupted the header.
+        /// </summary>
+        public static byte[]? TryDecompressByMagic(byte[] buf)
+        {
+            for (int i = 0; i + 2 <= buf.Length; i++)
+            {
+                if (buf[i] != 0x78) continue;
+                if (buf[i + 1] != 0x9c && buf[i + 1] != 0xda) continue;
+                byte[]? r = DecompressZlib(buf, i);
+                if (r != null && r.Length > 0) return r;
+            }
+            return null;
         }
 
         /// <summary>

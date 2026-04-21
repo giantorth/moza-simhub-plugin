@@ -65,6 +65,23 @@ Reference: [boxflat PR #131](https://github.com/Lawstorant/boxflat/pull/131) doc
 
 Write requests: response mirrors the request payload. Read requests: response contains the full stored value regardless of how many bytes the request sent (a 1-byte read probe returns a full 16-byte string).
 
+### Known wheel write echoes
+
+Certain writes to device `0x17` (wheel) are echoed verbatim by the firmware even though they carry no read-back semantics (LED index, brightness level, channel CC, etc. vary per call so a payload-keyed replay table in a sim can't cover them). Plugin recognizes these echoes via `MozaProtocol.WheelEchoPrefixes` / `IsWheelEcho()` and treats them as wheel-alive signals without logging them as "unmatched". Mirror of `sim/wheel_sim.py:_WHEEL_ECHO_PREFIXES`:
+
+| Group | Device | Prefix (first bytes of payload) | Purpose |
+|-------|--------|---------------------------------|---------|
+| 0x3F | 0x17 | `1f 00` / `1f 01` | Per-LED color page 0/1 |
+| 0x3F | 0x17 | `1e 00` / `1e 01` | Channel CC enable page 0/1 |
+| 0x3F | 0x17 | `1b 00` / `1b 01` | Brightness page 0/1 |
+| 0x3F | 0x17 | `1c 00` / `1d 00` / `1d 01` | Page config |
+| 0x3F | 0x17 | `27 00..03` | LED display config (4 pages) |
+| 0x3F | 0x17 | `2a 00..03` | Unknown paged commands |
+| 0x3F | 0x17 | `0a 00`, `24 ff`, `20 01` | Mode / display / idle-mode |
+| 0x3F | 0x17 | `1a 00` | RPM LED telemetry write |
+| 0x3F | 0x17 | `19 00` / `19 01` | RPM / button LED color write |
+| 0x3E | 0x17 | `0b` | Newer-wheel LED command (1-byte prefix) |
+
 ### Command chaining
 
 Multiple commands can be sent at once. Responses are **not guaranteed in request order** — match by group number.
@@ -1222,7 +1239,27 @@ The plugin supports both versions, selectable via `TelemetryProtocolVersion` set
 
 Dashboard upload is controlled by `TelemetryUploadDashboard` setting (UI: Telemetry > Advanced > Upload dashboard, default: on). When enabled, the plugin uploads the `.mzdash` file to the wheel on session 0x01 (management port) using the FF-prefixed sub-message framing before sending tier definitions. The mzdash content is loaded from the user-selected file or from an embedded resource matching the active profile name.
 
-The plugin parses the wheel's incoming channel catalog (session 0x02 tag 0x04 URLs) during the preamble phase and displays the detected channels in the UI. This confirms which channels the currently loaded dashboard subscribes to.
+The plugin parses the wheel's incoming channel catalog (session 0x02 tag 0x04 URLs) during the preamble phase and displays the detected channels in the UI. This confirms which channels the currently loaded dashboard subscribes to. The catalog is also used to **filter the tier definition** (`FilterProfileToCatalog`) before sending — channels in the profile whose URL doesn't appear in the wheel's advertised set are dropped, along with any tier that ends up empty. Match is case-insensitive on full URL, with a last-path-segment fallback. Falls back to the unfiltered profile if filtering removes everything.
+
+Before transmitting the tier definition, the plugin calls `WaitForChannelCatalogQuiet(quietMs=200, timeoutMs=2000)` so the wheel's pre-tier-def channel-registration burst (session 0x02 tag 0x04 entries) finishes arriving first. Without this wait, fast connections can race the tier def against the wheel's own catalog push and the wheel rejects the tier def.
+
+### Session opens by the plugin
+
+The plugin opens sessions 0x01 (management), 0x02 (telemetry), and 0x03 (aux config) during port probe. Session 0x03 is opened fire-and-forget for doc compliance — the plugin never writes on 0x03, but any unsolicited device data on 0x03 is ACKed to avoid wheel-retransmit stalls.
+
+Device-initiated sessions (0x04/0x06/0x08/0x09/0x0a) are accepted via `OnMessageDuringPreamble` handling type=0x81 frames: the plugin echoes the host's `open_seq` (payload bytes 6-7) in an `fc:00` ACK with the same session byte. The handler stays subscribed for the entire active connection so session 0x04 post-upload directory refresh, session 0x09 configJson state updates, and session 0x0a RPC replies keep flowing beyond the ~1 s preamble window.
+
+### Session 0x0a RPC (host → device)
+
+Plugin exposes `TelemetrySender.SendRpcCall(method, arg, timeoutMs)` to send JSON RPCs on session 0x0a in the same 9-byte `[flag=0x00][comp_size:u32 LE][uncomp_size:u32 LE][zlib]` envelope used by `configJson` on session 0x09. Request shape `{"<method>()": <arg>, "id": <N>}`, reply shape `{"id": <N>, "result": <value>}`. Known method: `completelyRemove(dashboardId)`. Replies are routed by `id` via a dictionary of waiters so multiple in-flight RPCs can be tracked concurrently.
+
+### Session 0x04 device → host directory listing
+
+After each upload (and on initial connection), the wheel pushes a zlib-compressed root directory listing on session 0x04 using the same 9-byte envelope as configJson. Plugin reassembles via a second `SessionDataReassembler` instance (`_session04Inbox`), decompresses the JSON, and logs the child count. `_session04DirListingRefreshed` flips true on each complete listing. Post-upload, `SendDashboardUpload` sleeps 500 ms after the END marker so the state-refresh burst arrives before the upload phase returns.
+
+### Zlib magic-byte fallback
+
+`SessionDataReassembler.TryDecompress` first tries the offset-based 9-byte envelope. If that fails (e.g. because embedded 0x7E bytes in a mzdash JSON payload have shifted the header), it falls back to `TryDecompressByMagic` which scans for `78 9c` / `78 da` zlib magic bytes and trial-decompresses each hit. Mirrors `sim/wheel_sim.py`'s `_scan` approach.
 
 Session 0x01 carries different data in each direction. The wheel sends a short identity record (tag 0x07 version, tag 0x0c device hash — ~42 bytes). The plugin sends the compressed `.mzdash` dashboard file via `DashboardUploader.BuildUploadMessage()`, chunked with `TierDefinitionBuilder.ChunkMessage()`.
 
