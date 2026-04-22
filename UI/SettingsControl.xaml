@@ -835,25 +835,15 @@
                                    Text="PitHouse uploads the dashboard file to the wheel on every connection. Disable to test telemetry without upload."/>
                         <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
                             <TextBlock Text="Protocol version:" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                            <ComboBox x:Name="ProtocolVersionCombo" Width="260"
+                            <ComboBox x:Name="ProtocolVersionCombo" Width="320"
                                       SelectionChanged="ProtocolVersion_Changed">
-                                <ComboBoxItem Content="2 — Compact numeric (VGS-style)"/>
                                 <ComboBoxItem Content="0 — URL subscription (CSP-style)"/>
+                                <ComboBoxItem Content="2 — Compact numeric (VGS-style)"/>
+                                <ComboBoxItem Content="3 — Compact numeric, two-batch (PitHouse)"/>
                             </ComboBox>
                         </StackPanel>
                         <TextBlock TextWrapping="Wrap" Foreground="Gray" FontSize="11" Margin="0,2,0,8"
-                                   Text="Tier definition format. Version 2 sends compression codes; version 0 sends channel URLs. Telemetry restarts automatically on change."/>
-                        <StackPanel x:Name="FlagByteModePanel" Orientation="Horizontal" Margin="0,0,0,4">
-                            <TextBlock Text="Flag byte mode:" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                            <ComboBox x:Name="FlagByteModeCombo" Width="260"
-                                      SelectionChanged="FlagByteMode_Changed">
-                                <ComboBoxItem Content="0 — Zero-based (0x00+)"/>
-                                <ComboBoxItem Content="1 — Session port-based"/>
-                                <ComboBoxItem Content="2 — Two-batch (Pithouse-style)"/>
-                            </ComboBox>
-                        </StackPanel>
-                        <TextBlock TextWrapping="Wrap" Foreground="Gray" FontSize="11" Margin="0,2,0,8"
-                                   Text="How tier flag bytes are assigned (version 2 only). Default 0 if unsure."/>
+                                   Text="Tier definition format. Version 3 (default) matches PitHouse's probe-then-def sequence. 2 is single-batch compact numeric; 0 sends URLs for the wheel to resolve. Telemetry restarts automatically on change."/>
 
                     </StackPanel>
                 </ScrollViewer>

@@ -1107,10 +1107,7 @@ namespace MozaPlugin
             {
                 var s = _plugin.Settings;
                 UploadDashboardCheck.IsChecked = s.TelemetryUploadDashboard;
-                int protoVer = s.TelemetryProtocolVersion;
-                ProtocolVersionCombo.SelectedIndex = protoVer == 0 ? 1 : 0;
-                FlagByteModeCombo.SelectedIndex = Math.Max(0, Math.Min(2, s.TelemetryFlagByteMode));
-                FlagByteModePanel.IsEnabled = protoVer != 0;
+                ProtocolVersionCombo.SelectedIndex = ProtocolVersionToIndex(s.TelemetryProtocolVersion);
             }
             finally
             {
@@ -1193,19 +1190,31 @@ namespace MozaPlugin
         private void ProtocolVersion_Changed(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
         {
             if (_suppressEvents) return;
-            int version = ProtocolVersionCombo.SelectedIndex == 1 ? 0 : 2;
-            _plugin.Settings.TelemetryProtocolVersion = version;
-            FlagByteModePanel.IsEnabled = version != 0;
+            _plugin.Settings.TelemetryProtocolVersion = ProtocolVersionFromIndex(ProtocolVersionCombo.SelectedIndex);
             _plugin.SaveSettings();
             _plugin.RestartTelemetry();
         }
 
-        private void FlagByteMode_Changed(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+        private static int ProtocolVersionToIndex(int version)
         {
-            if (_suppressEvents) return;
-            _plugin.Settings.TelemetryFlagByteMode = FlagByteModeCombo.SelectedIndex;
-            _plugin.SaveSettings();
-            _plugin.RestartTelemetry();
+            switch (version)
+            {
+                case 0: return 0;
+                case 2: return 1;
+                case 3: return 2;
+                default: return 2;
+            }
+        }
+
+        private static int ProtocolVersionFromIndex(int index)
+        {
+            switch (index)
+            {
+                case 0: return 0;
+                case 1: return 2;
+                case 2: return 3;
+                default: return 3;
+            }
         }
 
         private void TelemetryExportLog_Click(object sender, RoutedEventArgs e)

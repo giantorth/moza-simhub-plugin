@@ -434,27 +434,28 @@ Key insight: the **session byte** (chunk header) and **port number** (payload) a
 Pithouse opens **two sessions simultaneously** (0x01 and 0x02) in the same USB packet. The wheel responds with `fc:00` acks for both. The `fc:00` session bytes in steady state track the **session ack protocol** (incrementing ack_seq for each 7c:00 data chunk received), NOT the telemetry flag byte.
 
 **Current plugin approach:** The plugin implements the observed Pithouse preamble sequence:
-1. Probes for available ports (type=0x81 from port 1 upward, ~80ms per probe)
-2. First two acked ports become management + telemetry sessions; telemetry port = FlagByte
-3. Sends sub-message 1 preamble (14-byte `07...03...` message) on the telemetry session
-4. Sends tier definition as 7c:00 data chunks on the telemetry session (flags 0x00+, NOT FlagByte+)
-5. Sends Display sub-device identity probe via 0x43
-6. Subscribes to incoming `MessageReceived` to ack telemetry session channel data with fc:00
-7. Waits ~1 second for the session data exchange to complete (heartbeats only during this period)
-8. Sends 0x40 channel config burst (1E enables, 28:00, 28:01, 09:00, 28:02)
-9. Begins 0x41 enable signal and 7d:23 telemetry with flags 0x00, 0x01, 0x02
+1. Opens sessions 0x01 (mgmt) and 0x02 (telem) directly, PitHouse-style
+2. Sends sub-message 1 preamble (14-byte `07...03...` message) on the telemetry session
+3. Sends tier definition as 7c:00 data chunks on the telemetry session (flags 0x00+, NOT FlagByte+)
+4. Sends Display sub-device identity probe via 0x43
+5. Subscribes to incoming `MessageReceived` to ack telemetry session channel data with fc:00
+6. Waits ~1 second for the session data exchange to complete (heartbeats only during this period)
+7. Sends 0x40 channel config burst (1E enables, 28:00, 28:01, 09:00, 28:02)
+8. Begins 0x41 enable signal and 7d:23 telemetry with flags 0x00, 0x01, 0x02
 
 This matches Pithouse's observed timing: session opens first, sub-message 1 + tier def, ~1s of session data exchange with acks, then channel config, then telemetry+enable. The ~1s preamble delay is required — Pithouse does not send 0x41 or 0x40 until after the session exchange.
 
-**Port probing:** The plugin probes for available ports by sending type=0x81 session opens starting from port 1, waiting ~80ms for an fc:00 ack on each. The first two ports that respond become the management and telemetry sessions. The telemetry session's port (FlagByte) is used only for 7c:00 session framing and fc:00 acks — NOT for the tier flag bytes in telemetry frames. This handles any counter state — whether the wheel was just powered on (ports 1-2 available) or SimHub's built-in support has consumed ports 1-N (the next free port is found automatically). The probe adds ~100-400ms to startup depending on how many ports must be skipped. `Start()` is dispatched to a background thread so the serial read thread stays free to deliver the fc:00 ack responses.
+**Session allocation:** The plugin opens sessions 0x01 (mgmt) and 0x02 (telem) directly — same layout PitHouse uses after a power-cycle. Before the opens, the plugin sends type=0x00 end markers on ports 0x01..0x10 to reclaim any sessions left open by a previous SimHub crash; without this, a stale session would cause the fresh open to be silently ignored. Each open waits up to 500ms for an fc:00 ack. If both acks arrive, the handshake takes ~200ms total. If the wheel does not ack, the plugin proceeds anyway with the PitHouse defaults (mgmt=0x01, telem=0x02 = FlagByte) — real wheels silently accept data on these sessions even without an explicit ack. `Start()` is dispatched to a background thread so the serial read thread stays free to deliver the fc:00 ack responses.
+
+**Session close frame format:** The type=0x00 end marker is a **6-byte payload**: `7C 00 [session] 00 [ack_lo] [ack_hi]` (ack_seq may be zero when simply reclaiming a stale session). The length byte must equal 6 to match. A 4-byte payload advertised as length 6 causes the wheel (and `sim/wheel_sim.py`) to over-read into the next frame and de-sync the stream.
 
 ### Plugin startup sequence
 
-The plugin replicates Pithouse's observed preamble with probe-based port allocation:
+The plugin replicates Pithouse's observed preamble with direct session allocation:
 
-**Phase 0 — Port probe + config** (~100-400ms, before timer starts):
-1. Send type=0x81 session opens from port 1 upward, wait ~80ms for fc:00 ack
-2. First two acked ports become management (`_mgmtPort`, session 0x01) and telemetry (`FlagByte`, session 0x02) sessions
+**Phase 0 — Session open + config** (~200ms–1.2s, before timer starts):
+1. Send type=0x00 end markers on ports 0x01..0x10 to reclaim any stale sessions, sleep 100ms
+2. Send type=0x81 session opens for 0x01 (mgmt) and 0x02 (telem = `FlagByte`), waiting up to 500ms for each fc:00 ack; proceed with defaults if neither acks
 3. If `TelemetryUploadDashboard` is enabled, upload the `.mzdash` file on the management session via `DashboardUploader.BuildUploadMessage()` → `TierDefinitionBuilder.ChunkMessage()`. Wait up to 2s for wheel acknowledgment, then send type=0x00 end marker
 4. Send sub-message 1 preamble (`07 04 00 00 00 02 00 00 00 03 00 00 00 00`) as 7c:00 data on the telemetry session — prepares the wheel's tier config parser
 5. Send tier definition as 7c:00 data chunks on the telemetry session (channel indices, compression codes, bit widths — see § Tier definition protocol). **Flag bytes are 0x00-based, NOT session-port-based.**
@@ -734,13 +735,47 @@ Device                                     Host
   │ ←─── fc:00 ACK ──────────────────────    │
   │ ←─── Sub-msg 1: path registration ───    │  7 chunks
   │ ──── fc:00 ACKs ─────────────────────→   │
-  │ ──── Sub-msg 1 response (echo paths) ─→  │  6 chunks
+  │ ──── Sub-msg 1 response (file ack) ───→  │  6 chunks
   │ ←─── Sub-msg 2: file content push ───    │  32 chunks
   │ ──── fc:00 ACKs ─────────────────────→   │
-  │ ──── Sub-msg 2 response ─────────────→   │  6 chunks
+  │ ──── Sub-msg 2 response (file ack) ───→  │  6 chunks
   │ ←─── type=0x00 end marker ───────────    │
   │ ──── type=0x00 end marker ───────────→   │
 ```
+
+**Sub-msg 1 / sub-msg 2 response format (device → host, ~318B, 6 chunks)**
+
+Verified against `usb-capture/09-04-26/dash-upload.pcapng` (2026-04 firmware, CSP, 1355-byte mzdash upload). Both sub-msg responses share the same 8-byte-header + TLV-paths + trailing-metadata structure. Only the `role` byte, the `bytes_written` field, and a trailing status byte differ between sub-msg 1 and sub-msg 2.
+
+| Offset | Size | Field | Value (sub-msg 1) | Value (sub-msg 2) |
+|--------|------|-------|-------------------|-------------------|
+| 0 | 1 | `role` | `0x01` | `0x11` |
+| 1 | 1 | `max_chunk` | `0x38` (56) | `0x38` (56) |
+| 2 | 1 | `ttype` | `0x01` (file transfer) | `0x01` |
+| 3–7 | 5 | reserved | zeros | zeros |
+| 8 | 1 | TLV marker | `0x84` (remote) | `0x84` |
+| 9 | 1 | TLV separator | `0x00` | `0x00` |
+| 10…R-2 | N | remote path | UTF-16LE NUL-term: `/home/root/_moza_filetransfer_md5_{md5hex}` | same |
+| R | 1 | TLV marker | `0x8C` (local) | `0x8C` |
+| R+1 | 1 | TLV separator | `0x00` | `0x00` |
+| R+2…L-2 | M | local path | UTF-16LE NUL-term: host temp path | same |
+| L | 1 | metadata flag | `0x10` | `0x10` |
+| L+1 | 16 | MD5 | MD5 of received content | same |
+| L+17 | 4 | `bytes_written` (BE u32) | `0x00000000` | `0x0000054B` (= total) |
+| L+21 | 4 | `total_size` (BE u32) | `0x0000054B` (= uncompressed mzdash size) | same |
+| L+25 | 4 | marker | `0xFFFFFFFF` | `0xFFFFFFFF` |
+| L+29 | 1 | trailer / status | `0x6B` (in-progress) | `0x25` (complete) |
+
+Interpretation:
+- **Sub-msg 1 response** = "ack path registration; I am expecting `total_size` bytes, received 0 so far." Host uses this to confirm the wheel is ready and proceeds with sub-msg 2.
+- **Sub-msg 2 response** = "ack file content; received all `total_size` bytes, MD5 matches." Host uses this to confirm the upload landed before sending the type=0x00 end marker.
+- `bytes_written` = `total_size` on sub-msg 2 response is how the wheel confirms the whole file arrived.
+- The MD5 in the metadata tail matches the `{md5hex}` embedded in the remote-path filename — it's the content hash, computed by the wheel over the decompressed mzdash after receipt.
+- Trailer byte `0x6B` vs `0x25`: not fully decoded. Stable across repeated uploads of the same file — probably a status code (in-progress / complete) rather than a CRC.
+
+Both response structures are chunked via the standard `7c:00 type=0x01` SerialStream data chunks on session 0x04 with per-chunk CRC-32 trailers. A sim / reference implementation builds the full ~318-byte message once, then pushes it through `ChunkMessage(msg, session=0x04, seq)` to get the 6 wire chunks.
+
+**2025-11 firmware note:** `usb-capture/latestcaps/automobilista2-wheel-connect-dash-change.pcapng` shows the 2025-11 firmware's initial filesystem push on session 0x04 uses a DIFFERENT structure (role=`0x0A`, `ttype=0x00`, 14-byte length header + UTF-16LE `/home/root` + 0xFF padding + zlib directory listing). That burst is NOT an upload response — it's the root directory listing described in § Session 0x04 device → host root directory listing below. Under 2025-11, confirmation of a fresh upload arrives as the post-upload dir-listing refresh on session 0x04 (and as an updated configJson state blob on session 0x09), not as a sub-msg 1/2 response with the 2026-04 format above. When implementing a wheel sim, emit both paths based on `ttype`: `0x01` for per-sub-msg acks (2026-04 style), a secondary root-listing refresh on END for 2025-11 parity.
 
 **2. Dashboard config RPC (session 0x09, compressed transfer)**
 
@@ -1245,7 +1280,7 @@ Before transmitting the tier definition, the plugin calls `WaitForChannelCatalog
 
 ### Session opens by the plugin
 
-The plugin opens sessions 0x01 (management), 0x02 (telemetry), and 0x03 (aux config) during port probe. Session 0x03 is opened fire-and-forget for doc compliance — the plugin never writes on 0x03, but any unsolicited device data on 0x03 is ACKed to avoid wheel-retransmit stalls.
+The plugin opens sessions 0x01 (management), 0x02 (telemetry), and 0x03 (aux config) directly with type=0x81 frames. Sessions 0x01 and 0x02 wait up to 500ms each for an fc:00 ack; the plugin proceeds with the PitHouse defaults (mgmt=0x01, telem=0x02 = FlagByte) even if no ack arrives. Session 0x03 is opened fire-and-forget for doc compliance — the plugin never writes on 0x03, but any unsolicited device data on 0x03 is ACKed to avoid wheel-retransmit stalls. Before opening, the plugin sends type=0x00 end markers on 0x01..0x10 to reclaim any sessions left open by a previous SimHub crash.
 
 Device-initiated sessions (0x04/0x06/0x08/0x09/0x0a) are accepted via `OnMessageDuringPreamble` handling type=0x81 frames: the plugin echoes the host's `open_seq` (payload bytes 6-7) in an `fc:00` ACK with the same session byte. The handler stays subscribed for the entire active connection so session 0x04 post-upload directory refresh, session 0x09 configJson state updates, and session 0x0a RPC replies keep flowing beyond the ~1 s preamble window.
 
@@ -1319,7 +1354,7 @@ The plugin sends steps 1-10 during the preamble. The 0x87 response with model na
 - ~~Value scaling for specialized types~~ — **RESOLVED**: All conversion formulas determined. Key insight: the `percent_1` scale factor is exactly 10.0 (not 10.22 as previously estimated from capture data)
 - ~~CRC algorithm~~ — **RESOLVED (corrected 2026-04-12)**: Standard CRC-32 (ISO 3309), same as `zlib.crc32()`. Little-endian, covers per-chunk net data only. **ALL chunks have CRC-32 trailers, including the final chunk** — verified by computing CRC-32 against every chunk in multiple captures. Previous assumption that the last chunk omitted CRC was wrong.
 - ~~File transfer header format~~ — **RESOLVED**: 8-byte header: role(1) + max_chunk_size(1) + transfer_type(1) + reserved(5). TLV paths use markers 0x8C (local) and 0x84 (remote) with UTF-16LE. See § Session 4 wire format in pithouse-re.md.
-- ~~Session lifecycle~~ — **RESOLVED (2026-04-12, corrected)**: Sessions are opened via type=0x81 frames with port numbers from a global monotonic counter. Both host and device can open sessions. The host probes for available ports by sending type=0x81 and waiting for fc:00 acks. See § SerialStream telemetry port.
+- ~~Session lifecycle~~ — **RESOLVED (2026-04-12, corrected; simplified 2026-04-21)**: Sessions are opened via type=0x81 frames with port numbers from a global monotonic counter. Both host and device can open sessions. The plugin opens 0x01 (mgmt) and 0x02 (telem) directly — same layout PitHouse uses after a power cycle; the old 48-port probe was removed because it saturated the write queue long enough for the wheel-alive watchdog to fire mid-handshake. Stale sessions from a prior SimHub crash are reclaimed by sending type=0x00 end markers on 0x01..0x10 before opening. See § SerialStream telemetry port.
 - ~~Protocol identity~~ — **RESOLVED**: The 0x43/7c:00 framing is `MOZA::Protocol::SerialStreamManager`, a proprietary TCP-like reliable stream. NOT CoAP. CoAP (libcoap 4.3.4) is a separate layer for device parameter management.
 - ~~Flag byte / SerialStream port~~ — **PARTIALLY RESOLVED (2026-04-12, corrected 2026-04-13)**: The session port (FlagByte) is used for 7c:00 framing. The flag byte in tier definitions and telemetry frames is a separate value. Pithouse uses a monotonic counter starting at 0x00 for a "probe" batch, then higher values for actual dashboard tiers. Cross-capture verification (7 pcapng files) shows the wheel accepts flags at 0x00, 0x02, 0x07, 0x0a, 0x13 — the value doesn't matter as long as the tier definition matches the telemetry frames. The exact mapping between enable entry offsets and tier flag bytes is **not fully understood**. The plugin exposes `FlagByteMode` (0=zero-based, 1=session-port, 2=two-batch) for empirical testing. The CRC-32 fix (all chunks) was likely the critical change; the flag byte value change may have been incidental.
 - ~~Session ID / port allocation~~ — **RESOLVED (2026-04-12)**: Session IDs (chunk header byte) and port numbers (payload) are **independent**. Port counter is global and monotonic within a power cycle. Plugin probes from port 1 upward.
@@ -1349,3 +1384,118 @@ The plugin sends steps 1-10 during the preamble. The 0x87 response with model na
 - ~~Display sub-device identity probe~~ — **RESOLVED (2026-04-12)**: Pithouse probes a Display sub-module inside the wheel via 0x43 frames at ~t=9.97s (AFTER telemetry starts at t=9.88, so not a prerequisite). The plugin now sends the same probe during the preamble and detects the "Display" model name from the 0x87 response. Used to gate dashboard telemetry features in the UI. See § Display sub-device probe below
 - ~~SerialStream SYN handshake~~ — **RESOLVED (2026-04-14)**: The three-way handshake (SYN1/SYN2/SYN3) exists in binary strings but is never needed. Type=0x81 session opens work without it — the SYN handshake is a lower-level connection layer already established when the serial port opens
 - ~~Group 0x0E debug poll~~ — **RESOLVED (2026-04-12)**: Parameter table reader + firmware debug console. Pithouse reads EEPROM params sequentially at ~9Hz and receives ASCII debug log output (NRF radio stats, EEPROM write confirmations). Diagnostic only — not required for telemetry. See § Group 0x0E
+
+## SimHub plugin vs PitHouse wire divergence (2026-04-21)
+
+Side-by-side capture with both clients connected to independent wheel_sim instances (SimHub on `/dev/tnt0`, PitHouse on `/dev/ttyGS0`, VGS model). Frames observed by sim = frames **sent by the client**. Divergences below are expected, missing, or potentially buggy.
+
+### Functional split (expected divergence)
+
+PitHouse is the dashboard/config manager. SimHub plugin is the telemetry feeder. Each owns distinct protocol paths; neither does the full set.
+
+| Behaviour | PitHouse (42s window) | SimHub (746s window) | Notes |
+|-----------|----------------------|----------------------|-------|
+| Telemetry frames pushed (0x43/7D23) | 0 | 18501 | SimHub-only job |
+| `0x41/FDDE` dash-telemetry-enable (~100 Hz) | 0 | 17473 | SimHub-only, documented § Dash telemetry enable |
+| `0x2D/F531` base sequence counter (~50 Hz) | 0 | 17335 | SimHub-only, documented § Group 0x2D |
+| Uploaded zlib blobs (tile_server maps + UTF-16 display strings) | 5 (sessions 0x02, 0x03) | 0 | PitHouse-only — config push |
+| Catalog frames back from wheel (`catalog_sent`) | true | false | PitHouse triggers wheel to return channel catalog; SimHub never requests it |
+| Identity handshake frames | 7 | 0 | PitHouse probes wheel identity every connect; SimHub skips |
+| `fw_debug` subscription (group 0x0E dev 0x17) | 522 frames (incrementing seq) | 0 | Documented diagnostic-only, § Group 0x0E. SimHub correctly skips |
+
+### Probe frame differences
+
+| Probe | PitHouse | SimHub plugin | Documented? |
+|-------|----------|---------------|-------------|
+| Base probe (group 0x2B dev 0x13) | `7E 03 2B 13 02 00 00 CE` | `7E 03 2B 13 01 00 01 CE` | § Group 0x2B documents `02 00 00` (PitHouse pattern). SimHub's `01 00 01` is the plugin's own detection probe in `MozaSerialConnection.BaseProbeFrame`. Same checksum because bytes sum equally. Not a bug, but diverges from documented PitHouse wire arg |
+| Hub probe (group 0x64 dev 0x12) | not sent | `7E 03 64 12 03 00 00 07` | `(0x64, 0x12, 03)` documented in `sim/wheel_sim.py` + `sim/README.md` as "hub-port1-power probe" and in `MozaSerialConnection.HubProbeFrame`. PitHouse does not use this probe — SimHub plugin-specific |
+
+### Periodic polling not done by PitHouse
+
+SimHub plugin sends these at ~0.36 Hz (270 in 746 s) — PitHouse does none:
+
+| Frame | Sim label |
+|-------|-----------|
+| `7E .. 40 15 1C 00 ..` | wheel settings read cmd=1c 00 dev=0x15 |
+| `7E .. 40 15 18 00 ..` | wheel settings read cmd=18 00 dev=0x15 |
+| `7E .. 40 13 1C 00 ..` | wheel settings read cmd=1c 00 dev=0x13 |
+| `7E .. 40 13 18 00 ..` | wheel settings read cmd=18 00 dev=0x13 |
+| `7E .. 5B 1B 01 00 ..` | handbrake-direction probe |
+| `7E .. 23 19 01 00 ..` | pedals-throttle-dir probe |
+
+The wheel sim tags these as unhandled. They are plugin-side settings-panel polls (present in `Devices/` code paths). They don't have PitHouse equivalents on the wire during a normal session.
+
+### One-shot writes unique to SimHub
+
+Seen once each in 746 s, tagged unhandled by sim — plugin issued them, no PitHouse counterpart:
+
+- `0x1F 0x12 cmd 33 00` / `0x1F 0x12 cmd 08 00` — main hub settings
+- `0x3F 0x17 cmd 04 01` / `0x3F 0x17 cmd 07 00` / `0x3F 0x17 cmd 14 00` — wheel RPM/LED telemetry reads
+- `0x33 0x14 cmd 0b/0a/07/11` variants + `0x32 0x14 cmd 0a/0b/11` variants — dash settings reads/writes
+
+Most trace to the per-device settings controls under `Devices/` being exercised when the wheel is first detected.
+
+### Session counts
+
+| Metric | PitHouse (142 s) | SimHub (746 s) | Rate ratio |
+|--------|-----------------|----------------|-----------|
+| `session_open` count | 3 | 7 | SimHub opens more sessions over time |
+| `session_end` count | 9 | 33 | Both reset sessions repeatedly; SimHub higher |
+| `proactive_sent` (sim→client) | 415 (~2.9/s) | 812 (~1.1/s) | Sim fires more proactive opens at PitHouse — suggests SimHub is not fully acking or not driving state that causes wheel to open more |
+| `session_ack_in` | 41 | 797 | SimHub acks much more traffic (reflects telemetry volume) |
+
+### What SimHub is missing vs PitHouse
+
+If dashboard-management parity with PitHouse is ever a goal:
+
+1. **Identity handshake** — SimHub never probes wheel identity via group 0x43. PitHouse does every connect (7 frames: heartbeat, presence, HW ID, serial, product, FW, model, FW parts). Plugin already issues Display sub-device probe (§ Display sub-device probe) but not the top-level wheel identity probe.
+2. **Wheel-returned channel catalog** — SimHub never triggers the wheel to send its channel catalog back. `catalog_sent=false` in sim status. PitHouse completes this exchange within seconds.
+3. **Config blob upload on session 0x02/0x03** — PitHouse uploads UTF-16 display-string tables and tile-server map JSON during startup. SimHub uploads none. This is the `.mzdash` + display-config path; plugin currently uploads only the `.mzdash` via session 0x01 (per § Dashboard upload).
+4. **fw_debug / EEPROM parameter reader** — diagnostic only, can stay unimplemented.
+
+### Items likely worth fixing in SimHub
+
+- ~~**Base probe arg mismatch**~~ — **FIXED (2026-04-21)**: `BaseProbeFrame` in `MozaSerialConnection.cs:469` changed from `2B 13 01 00 01` to the documented PitHouse pattern `2B 13 02 00 00`. Both arg patterns produce the same checksum (`CE`) because the byte sums are equal, so on-wire checksum is unchanged.
+- ~~**Missing identity handshake**~~ — **FIXED (2026-04-21)**: `MozaDeviceManager.SendPithouseIdentityProbe(deviceId)` added. Fires the 7 PitHouse identity frames that existing `ReadSetting` calls don't cover: `0x09` (presence/ready), `0x02` (device presence), `0x04` (device type, 4 zero bytes), `0x05` (capabilities, 4 zero bytes), `0x06` (hardware ID), `0x08 cmd=02` (HW sub-version), `0x11 cmd=04` (identity-11). Called at the wheel-detection point in `MozaPlugin.cs` for both new-protocol and old-protocol branches, alongside the 5 existing identity reads (model-name, sw-version, hw-version, serial-a, serial-b). Brings SimHub to 12-frame PitHouse identity parity on connect.
+- **Periodic settings polls** (not a bug): the `0.36 Hz` rate observed was panel-timer-gated — `MozaWheelSettingsControl` uses a `DispatcherTimer(500ms)` started on `Loaded`, stopped on `Unloaded`. Similar gating in `MozaDashSettingsControl`. No fix needed; polls only flow while those panels are visible.
+- **One-shot dash-settings writes on connect** (not a bug): legitimate UI initialisation triggered by `MozaDashSettingsControl.RefreshDash()` on first panel open. Reads current state, writes defaults if unset.
+
+### Phase 3 — dashboard/config upload blobs (NOT implemented in SimHub)
+
+PitHouse uploads 5 zlib-compressed blobs during connect that SimHub does not send. These populate the wheel's native dashboard UI (channel-name lookup tables + map tiles). SimHub is a telemetry feeder, not a dashboard manager, so telemetry works without them. Implementation would be ~multi-day RE with limited benefit unless SimHub takes over the "native wheel UI" role.
+
+**Session 0x02, blob 1 (~7.2 KB)** — channel-name dictionary
+- UTF-16LE strings, length-prefixed, tagged entries
+- Content observed: `RpmAbsolute1..10`, `RpmPercent1..N`, and similar telemetry-channel display names in alphabetical order
+- Each entry appears to be `[tag_u16_le] [string_id_u16_le] [utf16_len_u16_le] [utf16le_bytes] [null_u16]` — exact layout not fully reversed
+- Preamble: 59-byte offset (matches PitHouse FF-prefixed upload framing from `Dashboard upload protocol` § above)
+- Purpose: lets the wheel's dashboard UI render channel names without embedding them in firmware; supports localisation and channel additions without FW updates
+
+**Session 0x02, blob 2 (~9.9 KB)** — input-action-name dictionary
+- Same UTF-16LE tagged layout
+- Content observed: action/command names — `decrementEqualizerGain1..6`, `decrementGameForceFeedbackFilter`, and similar wheel-action identifiers
+- Purpose: label pickable actions in the wheel's button-binding UI
+
+**Session 0x03, blob 1 (~775 B)** — empty tile-server map metadata
+- zlib-compressed JSON: `{"map":{"ats":"<inner_json_string>","ets2":"<inner_json_string>"},"root":"...","version":...}`
+- Inner `ats`/`ets2` values are JSON-escaped strings with fields `bg, ext_files, file_type, layers, levels, map_version, name, pm_support, pmtiles_exists, root, support_games, tile_size, version, x_max/min, y_max/min`
+- Empty/default state: all zero / empty arrays. PitHouse sends this when no map tiles are installed
+- `root` field is the host-side tile-server path (e.g. `C:/Users/giant/AppData/Local/Temp/tile_server/ats`)
+
+**Session 0x03, blobs 2+3 (~3 KB and ~6.3 KB)** — populated map metadata
+- Same JSON schema as blob 1
+- `layers` array populated with per-zoom-level tile counts, `ext_files: ["cities.json","file_map.json"]`, `file_type: "png"`, `bg: "#ff303030"`
+- Sent once tile data exists on the host for the respective game (ATS or ETS2)
+- Purpose: wheel's integrated map display for American Truck / Euro Truck Simulator 2; driven from PitHouse's local tile_server directory
+
+**Decision (2026-04-21)**: Deferred. To implement, would need:
+1. Full tagged-UTF-16 binary layout reversed (bit-level) from multiple captures
+2. Complete channel-name + action-name enumeration (can source from `rs21_parameter.db` for action names; channel names come from `Telemetry.json`)
+3. Tile-server JSON schema lock-in (mostly visible already, but `version` field semantics unclear)
+4. Wiring into existing `Dashboard upload protocol` framing (session 0x02 / 0x03 chunked writes with CRC-32 per chunk)
+
+Punt until there is a concrete use case for SimHub driving the wheel's native dashboard UI. The `.mzdash` upload path (already implemented on session 0x01) covers the dashboard-body case; these blobs are purely cosmetic UI metadata on top.
+
+### Phase 4 — fw_debug subscription (NOT implemented, intentionally)
+
+PitHouse subscribes to `group 0x0E dev 0x17` and receives ~522 incrementing-seq debug frames per session. Content is ASCII firmware log output (NRF radio stats, EEPROM write confirmations). Documented as diagnostic-only in § Group 0x0E; not required for telemetry. Skipping is the correct choice for SimHub.

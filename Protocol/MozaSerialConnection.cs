@@ -187,7 +187,9 @@ namespace MozaPlugin.Protocol
                         continue;
                     }
 
-                    // Read until we find the start byte
+                    // Read until we find the start byte. Raw 0x7E may also appear
+                    // stuffed (as a payload byte from a prior frame we de-synced on);
+                    // accept any 0x7E as a candidate frame start.
                     int b = port.ReadByte();
                     if (b != MozaProtocol.MessageStart)
                         continue;
@@ -205,67 +207,84 @@ namespace MozaPlugin.Protocol
                     if (payloadLength < 2 || payloadLength > 64)
                         continue;
 
-                    // Wait for remaining bytes: group + device_id + payload + checksum
+                    // Read N+3 decoded bytes (group + device + payload + checksum),
+                    // collapsing 0x7E 0x7E wire pairs back to a single 0x7E byte.
+                    // Moza byte-stuffing: every 0x7E after the start+len header is
+                    // doubled on the wire. Sim and real firmware both emit this;
+                    // without decoding, any 0x7E inside a payload (common in zlib
+                    // blobs, telemetry data, seq counters) corrupts the read stream.
                     int needed = payloadLength + 3;
-                    waitMs = 0;
-                    while (port.BytesToRead < needed && waitMs < 200)
-                    {
-                        Thread.Sleep(1);
-                        waitMs++;
-                    }
-
-                    int available = port.BytesToRead;
-                    if (available < needed) continue;
-
                     var raw = new byte[needed];
-                    int totalRead = 0;
-                    while (totalRead < raw.Length)
+                    int decoded = 0;
+                    bool frameError = false;
+                    while (decoded < needed)
                     {
-                        int read = port.Read(raw, totalRead, raw.Length - totalRead);
-                        if (read <= 0) break;
-                        totalRead += read;
+                        waitMs = 0;
+                        while (port.BytesToRead < 1 && waitMs < 200)
+                        {
+                            Thread.Sleep(1);
+                            waitMs++;
+                        }
+                        if (port.BytesToRead < 1) { frameError = true; break; }
+
+                        int wb = port.ReadByte();
+                        if (wb == MozaProtocol.MessageStart)
+                        {
+                            // Stuffed byte: expect a second 0x7E. Anything else means
+                            // the sender began a new frame mid-transfer — abandon
+                            // this one so the outer loop can re-sync on the 0x7E.
+                            waitMs = 0;
+                            while (port.BytesToRead < 1 && waitMs < 200)
+                            {
+                                Thread.Sleep(1);
+                                waitMs++;
+                            }
+                            if (port.BytesToRead < 1) { frameError = true; break; }
+                            int esc = port.ReadByte();
+                            if (esc != MozaProtocol.MessageStart)
+                            {
+                                frameError = true;
+                                break;
+                            }
+                            raw[decoded++] = (byte)MozaProtocol.MessageStart;
+                        }
+                        else
+                        {
+                            raw[decoded++] = (byte)wb;
+                        }
                     }
 
-                    if (totalRead == raw.Length)
+                    if (frameError || decoded != needed)
+                        continue;
+
+                    // Validate checksum: rebuild the full decoded frame for calculation
+                    var wireFrame = new byte[2 + payloadLength + 2];
+                    wireFrame[0] = MozaProtocol.MessageStart;
+                    wireFrame[1] = (byte)payloadLength;
+                    Array.Copy(raw, 0, wireFrame, 2, payloadLength + 2);
+                    byte expected = MozaProtocol.CalculateChecksum(wireFrame);
+                    byte actual = raw[raw.Length - 1];
+
+                    if (expected != actual)
                     {
-                        // Validate checksum: rebuild the full wire frame for calculation
-                        var wireFrame = new byte[2 + payloadLength + 2];
-                        wireFrame[0] = MozaProtocol.MessageStart;
-                        wireFrame[1] = (byte)payloadLength;
-                        Array.Copy(raw, 0, wireFrame, 2, payloadLength + 2);
-                        byte expected = MozaProtocol.CalculateChecksum(wireFrame);
-                        byte actual = raw[raw.Length - 1];
-
-                        if (expected != actual)
-                        {
-                            SimHub.Logging.Current.Debug(
-                                $"[Moza] Checksum mismatch: expected=0x{expected:X2} actual=0x{actual:X2}, dropping message");
-                            continue;
-                        }
-
-                        // Checksum escape: when checksum == 0x7E, sender doubles it on the wire.
-                        // Consume the extra byte so it doesn't desync the next frame read.
-                        if (actual == MozaProtocol.MessageStart && port.BytesToRead > 0)
-                        {
-                            try { port.ReadByte(); }
-                            catch (TimeoutException) { }
-                            catch (InvalidOperationException) { }
-                        }
-
-                        // Strip the checksum byte before passing to the parser
-                        var data = new byte[needed - 1];
-                        Array.Copy(raw, 0, data, 0, data.Length);
-
-                        messageCount++;
-                        if (messageCount <= 5)
-                        {
-                            SimHub.Logging.Current.Info(
-                                $"[Moza] Received msg #{messageCount}: len={payloadLength} " +
-                                $"group=0x{data[0]:X2} dev=0x{data[1]:X2} ({data.Length} bytes)");
-                        }
-                        Interlocked.Exchange(ref _consecutiveIoErrors, 0);
-                        MessageReceived?.Invoke(data);
+                        SimHub.Logging.Current.Debug(
+                            $"[Moza] Checksum mismatch: expected=0x{expected:X2} actual=0x{actual:X2}, dropping message");
+                        continue;
                     }
+
+                    // Strip the checksum byte before passing to the parser
+                    var data = new byte[needed - 1];
+                    Array.Copy(raw, 0, data, 0, data.Length);
+
+                    messageCount++;
+                    if (messageCount <= 5)
+                    {
+                        SimHub.Logging.Current.Info(
+                            $"[Moza] Received msg #{messageCount}: len={payloadLength} " +
+                            $"group=0x{data[0]:X2} dev=0x{data[1]:X2} ({data.Length} bytes)");
+                    }
+                    Interlocked.Exchange(ref _consecutiveIoErrors, 0);
+                    MessageReceived?.Invoke(data);
                 }
                 catch (TimeoutException)
                 {
@@ -292,12 +311,19 @@ namespace MozaPlugin.Protocol
                     {
                         lock (_lock)
                         {
-                            _port?.Write(msg, 0, msg.Length);
-                            // Checksum escape: when the last byte (checksum) is 0x7E,
-                            // double it on the wire so the receiver doesn't treat it
-                            // as the start of a new frame.
-                            if (msg[msg.Length - 1] == MozaProtocol.MessageStart)
-                                _port?.Write(new byte[] { MozaProtocol.MessageStart }, 0, 1);
+                            // Moza byte-stuffing: header (start + len) goes raw; every
+                            // 0x7E byte after that is doubled on the wire so the
+                            // receiver doesn't treat it as a new frame start. Applies
+                            // to group, device, payload, and checksum alike.
+                            if (msg.Length >= 2)
+                                _port?.Write(msg, 0, 2);
+                            byte stuff = MozaProtocol.MessageStart;
+                            for (int i = 2; i < msg.Length; i++)
+                            {
+                                _port?.Write(msg, i, 1);
+                                if (msg[i] == MozaProtocol.MessageStart)
+                                    _port?.Write(new byte[] { stuff }, 0, 1);
+                            }
                         }
                         writeCount++;
                         if (writeCount <= 5)
@@ -376,17 +402,37 @@ namespace MozaPlugin.Protocol
                 return nb.CompareTo(na); // Descending - check high ports first
             });
 
+            // Two-pass probe: bases first, then hubs. v0.7.0 sent both probes per port
+            // and returned the first port with any 0x7E reply, which mis-selected the
+            // hub when both base + hub were present, or when probe-cycle timing left
+            // the base unresponsive after the wrong message hit it.
+            //
+            // 600ms budget per port — SerialPort.Open can hang indefinitely under Wine
+            // if another process holds the tty. Background-thread the probe so one bad
+            // port can't block all detection.
+            var unreachable = new HashSet<string>();
             foreach (var port in ports)
             {
                 if (cancel?.Invoke() == true) return (null, null);
 
-                // 600ms budget per port — SerialPort.Open can hang indefinitely
-                // under Wine if another process holds the tty (e.g. CustomSerialPlugin
-                // owns /dev/tnt1 → com35). Background-thread the probe so one bad
-                // port can't block all detection.
-                if (ProbeWithTimeout(port, 600))
+                var (responded, reachable) = ProbeWithTimeout(port, 600, baseProbe: true);
+                if (responded)
                 {
-                    SimHub.Logging.Current.Info($"[Moza] Found Moza device on {port} (probe)");
+                    SimHub.Logging.Current.Info($"[Moza] Found Moza base on {port} (probe)");
+                    return (port, null);
+                }
+                if (!reachable) unreachable.Add(port);
+            }
+
+            foreach (var port in ports)
+            {
+                if (cancel?.Invoke() == true) return (null, null);
+                if (unreachable.Contains(port)) continue;
+
+                var (responded, _) = ProbeWithTimeout(port, 600, baseProbe: false);
+                if (responded)
+                {
+                    SimHub.Logging.Current.Info($"[Moza] Found Moza hub on {port} (probe)");
                     return (port, null);
                 }
             }
@@ -418,37 +464,49 @@ namespace MozaPlugin.Protocol
             return "0x" + pidHex.ToUpperInvariant();
         }
 
+        // Pre-built probe frames. Base targets group 43, device 19, cmd id 2 (state-change probe).
+        // Hub targets group 100, device 18, cmd id 3 (port1 power).
+        // Base probe arg matches PitHouse wire pattern (documented § Group 0x2B) so device
+        // responses stay consistent across clients.
+        private static readonly byte[] BaseProbeFrame = BuildProbe(new byte[] { 0x7E, 0x03, 0x2B, 0x13, 0x02, 0x00, 0x00, 0x00 });
+        private static readonly byte[] HubProbeFrame  = BuildProbe(new byte[] { 0x7E, 0x03, 0x64, 0x12, 0x03, 0x00, 0x00, 0x00 });
+
+        private static byte[] BuildProbe(byte[] frame)
+        {
+            frame[frame.Length - 1] = MozaProtocol.CalculateChecksum(frame, frame.Length - 1);
+            return frame;
+        }
+
         /// <summary>
         /// Run ProbeMozaDevice on a background thread with a hard time budget (ms).
-        /// If the probe doesn't finish in time (usually because SerialPort.Open is
-        /// blocked on a tty another process is holding), abandon the thread and
-        /// return false. The orphan thread stays background so it can't prevent
-        /// process exit and will eventually unblock or die with the process.
+        /// Returns (responded, reachable). reachable=false means open/timeout failed
+        /// — caller can skip this port in subsequent passes.
         /// </summary>
-        private static bool ProbeWithTimeout(string portName, int timeoutMs)
+        private static (bool responded, bool reachable) ProbeWithTimeout(string portName, int timeoutMs, bool baseProbe)
         {
-            bool result = false;
+            bool responded = false;
+            bool reachable = false;
             var t = new Thread(() =>
             {
-                try { result = ProbeMozaDevice(portName); }
-                catch { result = false; }
+                try { (responded, reachable) = ProbeMozaDevice(portName, baseProbe); }
+                catch { responded = false; reachable = false; }
             })
             { IsBackground = true, Name = $"MozaProbe-{portName}" };
             t.Start();
             if (!t.Join(timeoutMs))
             {
                 SimHub.Logging.Current.Debug($"[Moza] Probe {portName}: timed out after {timeoutMs}ms, skipping");
-                return false;
+                return (false, false);
             }
-            return result;
+            return (responded, reachable);
         }
 
         /// <summary>
-        /// Try to open a port and send Moza read commands to the base and hub.
-        /// If we get a valid response starting with 0x7E, it's a Moza device.
-        /// Sends both probes so hub-only setups (no wheelbase) are also discovered.
+        /// Open port, send a single base-or-hub probe, wait for any 0x7E reply.
+        /// Single-message probe avoids the v0.7.0 issue where back-to-back base+hub
+        /// writes left the device in a state where it stopped answering after reopen.
         /// </summary>
-        private static bool ProbeMozaDevice(string portName)
+        private static (bool responded, bool reachable) ProbeMozaDevice(string portName, bool baseProbe)
         {
             try
             {
@@ -461,34 +519,26 @@ namespace MozaPlugin.Protocol
                     probe.Open();
                     probe.DiscardInBuffer();
 
-                    // Send a read request for base-state (read group 43, device base 19, cmd id 1)
-                    var baseMsg = new byte[] { 0x7E, 0x03, 0x2B, 0x13, 0x01, 0x00, 0x01, 0x00 };
-                    baseMsg[baseMsg.Length - 1] = MozaProtocol.CalculateChecksum(baseMsg, baseMsg.Length - 1);
-                    probe.Write(baseMsg, 0, baseMsg.Length);
+                    var msg = baseProbe ? BaseProbeFrame : HubProbeFrame;
+                    probe.Write(msg, 0, msg.Length);
 
-                    // Also probe the hub (read group 100, device hub 18, cmd id 3 = port1)
-                    // Hub-only setups have no base to respond to the first probe.
-                    var hubMsg = new byte[] { 0x7E, 0x03, 0x64, 0x12, 0x03, 0x00, 0x00, 0x00 };
-                    hubMsg[hubMsg.Length - 1] = MozaProtocol.CalculateChecksum(hubMsg, hubMsg.Length - 1);
-                    probe.Write(hubMsg, 0, hubMsg.Length);
-
-                    // Wait briefly for a response from either device
                     System.Threading.Thread.Sleep(100);
 
+                    bool responded = false;
                     if (probe.BytesToRead > 0)
                     {
                         int first = probe.ReadByte();
-                        probe.Close();
-                        return first == MozaProtocol.MessageStart;
+                        responded = first == MozaProtocol.MessageStart;
                     }
                     probe.Close();
+                    return (responded, true);
                 }
             }
             catch (Exception ex)
             {
                 SimHub.Logging.Current.Debug($"[Moza] Probe {portName}: {ex.GetType().Name}");
+                return (false, false);
             }
-            return false;
         }
 
         private static int ExtractPortNumber(string portName)

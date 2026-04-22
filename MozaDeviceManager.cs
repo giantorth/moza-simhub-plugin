@@ -53,6 +53,41 @@ namespace MozaPlugin
         private static readonly byte[] WheelIdCandidates = { 23, 21, 19 };
 
         /// <summary>
+        /// Send the PitHouse-style wheel identity probe sequence that the existing
+        /// ReadSetting calls don't cover. PitHouse fires 12 identity frames on connect;
+        /// "wheel-model-name"/"wheel-sw-version"/"wheel-hw-version"/"wheel-serial-a"/
+        /// "wheel-serial-b" account for 5 of them. This method sends the remaining 7
+        /// so the wheel sees the full PitHouse init handshake.
+        /// Groups: 0x09 presence, 0x02 device-presence, 0x04 device-type,
+        ///         0x05 capabilities, 0x06 hardware-id, 0x08 HW sub-version, 0x11 identity-11.
+        /// </summary>
+        public void SendPithouseIdentityProbe(byte deviceId)
+        {
+            if (!_connection.IsConnected) return;
+            SendRawProbe(0x09, deviceId, null);                                   // presence/ready
+            SendRawProbe(0x02, deviceId, null);                                   // device presence
+            SendRawProbe(0x04, deviceId, new byte[] { 0x00, 0x00, 0x00, 0x00 }); // device type
+            SendRawProbe(0x05, deviceId, new byte[] { 0x00, 0x00, 0x00, 0x00 }); // capability flags
+            SendRawProbe(0x06, deviceId, null);                                   // hardware ID
+            SendRawProbe(0x08, deviceId, new byte[] { 0x02 });                   // HW sub-version
+            SendRawProbe(0x11, deviceId, new byte[] { 0x04 });                   // identity-11
+        }
+
+        private void SendRawProbe(byte group, byte deviceId, byte[]? payload)
+        {
+            int payloadLen = payload?.Length ?? 0;
+            var frame = new byte[4 + payloadLen + 1];
+            frame[0] = MozaProtocol.MessageStart;
+            frame[1] = (byte)payloadLen;
+            frame[2] = group;
+            frame[3] = deviceId;
+            if (payload != null)
+                System.Buffer.BlockCopy(payload, 0, frame, 4, payloadLen);
+            frame[frame.Length - 1] = MozaProtocol.CalculateChecksum(frame);
+            _connection.Send(frame);
+        }
+
+        /// <summary>
         /// Send detection probes for all candidate wheel IDs simultaneously.
         /// Much faster than cycling through IDs one at a time (~2s vs ~12s worst case).
         /// </summary>

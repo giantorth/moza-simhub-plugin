@@ -23,10 +23,10 @@ namespace MozaPlugin.Telemetry
     /// TelemetrySender.SendTierDefinition. A parser scanning the session buffer must
     /// therefore treat unknown top-level tags as generic TLV and skip by param_size.
     ///
-    /// In FlagByteMode=2 the plugin sends two messages back-to-back on the same
-    /// session: a probe batch (BuildProbeBatch, ends with total_channels=0) followed
-    /// by the real tier def. A robust reassembler must not break on the first 0x06
-    /// end marker — the second message starts immediately after it.
+    /// In ProtocolVersion=3 (two-batch) the plugin sends two messages back-to-back
+    /// on the same session: a probe batch (BuildProbeBatch, ends with total_channels=0)
+    /// followed by the real tier def. A robust reassembler must not break on the first
+    /// 0x06 end marker — the second message starts immediately after it.
     ///
     /// Channel indices are 1-based, assigned alphabetically by URL across all tiers,
     /// so indices within any single tier are NOT consecutive when a channel's URL

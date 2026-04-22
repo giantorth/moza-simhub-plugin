@@ -795,8 +795,11 @@ namespace MozaPlugin.Devices
             {
                 _plugin.Settings.TelemetryProfileName = selected;
                 _plugin.Settings.TelemetryMzdashPath = "";
-                _plugin.ApplyTelemetrySettings();
                 _plugin.SaveSettings();
+                // Restart so the wheel receives the new tier def + mzdash upload.
+                // Without a restart, the wheel keeps the old tier def and decodes
+                // the new frame layout as garbage.
+                _plugin.RestartTelemetry();
                 UpdateTelemetryProfileInfo();
             }
         }
@@ -814,8 +817,9 @@ namespace MozaPlugin.Devices
 
             _plugin.Settings.TelemetryMzdashPath = dlg.FileName;
             _plugin.Settings.TelemetryProfileName = "";
-            _plugin.ApplyTelemetrySettings();
             _plugin.SaveSettings();
+            // Restart so the wheel receives the new tier def + mzdash upload.
+            _plugin.RestartTelemetry();
 
             _suppressEvents = true;
             string label = "[Custom: " + System.IO.Path.GetFileName(dlg.FileName) + "]";

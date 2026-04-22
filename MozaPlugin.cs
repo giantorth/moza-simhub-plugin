@@ -277,6 +277,7 @@ namespace MozaPlugin
             if (_settings.ProfileStore == null)
                 _settings.ProfileStore = new MozaProfileStore();
 
+
             // Restore blink colors from settings (write-only, can't be polled from device)
             MozaProfile.UnpackColorsInto(_settings.WheelRpmBlinkColors, _data.WheelRpmBlinkColors);
             MozaProfile.UnpackColorsInto(_settings.DashRpmBlinkColors, _data.DashRpmBlinkColors);
@@ -493,7 +494,6 @@ namespace MozaPlugin
             var s = _settings;
 
             _telemetrySender.ProtocolVersion = s.TelemetryProtocolVersion;
-            _telemetrySender.FlagByteMode = s.TelemetryFlagByteMode;
             _telemetrySender.UploadDashboard = s.TelemetryUploadDashboard;
 
             // Resolve the active multi-stream profile and raw mzdash content
@@ -848,6 +848,9 @@ namespace MozaPlugin
                         _deviceManager.ReadSetting("wheel-hw-version");
                         _deviceManager.ReadSetting("wheel-serial-a");
                         _deviceManager.ReadSetting("wheel-serial-b");
+                        // Match PitHouse's full 12-frame identity handshake (adds the 7 probes
+                        // ReadSetting doesn't cover: 0x09/0x02/0x04/0x05/0x06/0x08-sub2/0x11).
+                        _deviceManager.SendPithouseIdentityProbe(deviceId);
                         _deviceManager.ReadSettingsPaced(NewWheelSettingsReadCommands);
                         SimHub.Logging.Current.Info($"[Moza] New-protocol wheel detected on ID {deviceId}");
                         StartTelemetryIfReady();
@@ -921,6 +924,7 @@ namespace MozaPlugin
                         _deviceManager.ReadSetting("wheel-hw-version");
                         _deviceManager.ReadSetting("wheel-serial-a");
                         _deviceManager.ReadSetting("wheel-serial-b");
+                        _deviceManager.SendPithouseIdentityProbe(deviceId);
                         _deviceManager.ReadSettingsPaced(OldWheelSettingsReadCommands);
                         DeployDeviceDefinitionForOldProto();
                         SimHub.Logging.Current.Info($"[Moza] Old-protocol wheel detected on ID {deviceId}");

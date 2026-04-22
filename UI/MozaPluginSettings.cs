@@ -78,21 +78,14 @@ namespace MozaPlugin
         // PitHouse does this on every connection — the wheel may require it.
         public bool TelemetryUploadDashboard { get; set; } = false;
 
-        // Tier definition protocol version.
-        // 0 = URL-based subscription (CSP-style — host sends channel URLs,
-        //     wheel firmware resolves compression internally)
-        // 2 = Compact numeric (VGS-style — host sends flag bytes, channel indices,
-        //     compression codes, and bit widths per tier)
-        public int TelemetryProtocolVersion { get; set; } = 0;
-
-        // How to assign flag bytes in tier definitions and telemetry frames.
-        // We don't fully understand how the wheel uses flag bytes — Pithouse uses
-        // a monotonic counter and the wheel accepts values from 0x00 to 0x13+.
-        // Options:
-        //   0 = Zero-based (0x00, 0x01, 0x02) — matches Pithouse's initial probe batch
-        //   1 = Session-port-based (FlagByte+0, +1, +2) — matches Pithouse's mid-session behavior
-        //   2 = Two-batch (probe at 0x00 then real at FlagByte) — matches Pithouse's full sequence
-        public int TelemetryFlagByteMode { get; set; } = 2;
+        // Tier definition protocol variant.
+        //   0 = URL-based subscription (CSP-style — host sends channel URLs,
+        //       wheel firmware resolves compression internally)
+        //   2 = Compact numeric, single batch (host sends flag bytes, channel
+        //       indices, compression codes, bit widths per tier)
+        //   3 = Compact numeric, two batch (probe batch at 0x00 followed by
+        //       real def at FlagByte — matches PitHouse's observed sequence)
+        public int TelemetryProtocolVersion { get; set; } = 3;
 
         // Telemetry send rate in Hz
         public int TelemetrySendRateHz { get; set; } = 20;
