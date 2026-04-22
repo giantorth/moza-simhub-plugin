@@ -158,6 +158,14 @@ namespace MozaPlugin.Telemetry
         /// <summary>Whether to upload the dashboard to the wheel on startup.</summary>
         public bool UploadDashboard { get; set; } = true;
 
+        /// <summary>
+        /// Resolver invoked per frame for channels with a non-empty
+        /// <see cref="ChannelDefinition.SimHubProperty"/>. Set by MozaPlugin before
+        /// assigning <see cref="Profile"/>; bound into each TelemetryFrameBuilder at
+        /// profile-assign time so there is no per-frame lookup cost.
+        /// </summary>
+        public Func<string, double>? PropertyResolver { get; set; }
+
         public MultiStreamProfile? Profile
         {
             get => _profile;
@@ -180,7 +188,7 @@ namespace MozaPlugin.Telemetry
                     int tickInterval = Math.Max(1, tier.PackageLevel / _baseTickMs);
                     _tiers[i] = new TierState
                     {
-                        Builder = new TelemetryFrameBuilder(tier),
+                        Builder = new TelemetryFrameBuilder(tier, PropertyResolver),
                         TickInterval = tickInterval,
                     };
                 }

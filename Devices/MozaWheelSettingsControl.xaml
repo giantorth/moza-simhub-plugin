@@ -73,6 +73,39 @@
                     <TextBlock x:Name="TelemetryStatusLabel" Foreground="Gray" FontSize="11"
                                VerticalAlignment="Center" Margin="12,0,0,0" Text="Disabled"/>
                 </StackPanel>
+                <Expander x:Name="TelemetryMappingsExpander" Header="Channel mappings"
+                          IsExpanded="False" Margin="0,4,0,0"
+                          Expanded="TelemetryMappingsExpander_Expanded">
+                    <StackPanel Margin="0,8,0,0">
+                        <TextBlock Text="Assign SimHub properties to each dashboard channel. Blank falls back to the URL default."
+                                   Foreground="Gray" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,6"/>
+                        <DataGrid x:Name="TelemetryChannelGrid" AutoGenerateColumns="False"
+                                  HeadersVisibility="Column" CanUserAddRows="False" CanUserDeleteRows="False"
+                                  GridLinesVisibility="Horizontal" MaxHeight="400" Margin="0,0,0,6">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Channel"     Binding="{Binding Name}"         IsReadOnly="True" Width="120"/>
+                                <DataGridTextColumn Header="URL"         Binding="{Binding Url}"          IsReadOnly="True" Width="*"/>
+                                <DataGridTextColumn Header="Tier (ms)"   Binding="{Binding PackageLevel}" IsReadOnly="True" Width="70"/>
+                                <DataGridTextColumn Header="Compression" Binding="{Binding Compression}"  IsReadOnly="True" Width="110"/>
+                                <DataGridTemplateColumn Header="SimHub property" Width="2*">
+                                    <DataGridTemplateColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <ComboBox IsEditable="True"
+                                                      ItemsSource="{Binding KnownProperties}"
+                                                      Text="{Binding SimHubProperty, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay}"/>
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellTemplate>
+                                </DataGridTemplateColumn>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                        <StackPanel Orientation="Horizontal">
+                            <Button Content="Apply mappings"    Click="TelemetryApplyMappings_Click" Padding="6,2" Margin="0,0,8,0"/>
+                            <Button Content="Reset to defaults" Click="TelemetryResetMappings_Click" Padding="6,2"/>
+                            <TextBlock x:Name="TelemetryMappingStatus" Foreground="Gray" FontSize="11"
+                                       VerticalAlignment="Center" Margin="12,0,0,0"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Expander>
             </StackPanel>
 
             <!-- ===== NEW WHEEL (GS/FSR/CS/RS/TSW) ===== -->

@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.RegularExpressions;
 using Newtonsoft.Json.Linq;
 
@@ -43,6 +45,32 @@ namespace MozaPlugin.Telemetry
             ["TyreWearFrontRight"] = SimHubField.TyreWearFrontRight,
             ["TyreWearRearLeft"]   = SimHubField.TyreWearRearLeft,
             ["TyreWearRearRight"]  = SimHubField.TyreWearRearRight,
+        };
+
+        /// <summary>
+        /// Canonical SimHub property path for each built-in field. Used to seed
+        /// the UI's channel mapping so defaults route through the same
+        /// <c>GetPropertyValue</c> path as user overrides.
+        /// </summary>
+        public static readonly IReadOnlyDictionary<SimHubField, string> DefaultPropertyPaths =
+            new Dictionary<SimHubField, string>
+        {
+            [SimHubField.SpeedKmh]              = "DataCorePlugin.GameData.SpeedKmh",
+            [SimHubField.Rpms]                  = "DataCorePlugin.GameData.Rpms",
+            [SimHubField.Gear]                  = "DataCorePlugin.GameData.Gear",
+            [SimHubField.Throttle]              = "DataCorePlugin.GameData.Throttle",
+            [SimHubField.Brake]                 = "DataCorePlugin.GameData.Brake",
+            [SimHubField.BestLapTimeSeconds]    = "DataCorePlugin.GameData.BestLapTime",
+            [SimHubField.CurrentLapTimeSeconds] = "DataCorePlugin.GameData.CurrentLapTime",
+            [SimHubField.LastLapTimeSeconds]    = "DataCorePlugin.GameData.LastLapTime",
+            [SimHubField.DeltaToSessionBest]    = "DataCorePlugin.GameData.DeltaToSessionBest",
+            [SimHubField.FuelPercent]           = "DataCorePlugin.GameData.FuelPercent",
+            [SimHubField.DrsEnabled]            = "DataCorePlugin.GameData.DRSEnabled",
+            [SimHubField.ErsPercent]            = "DataCorePlugin.GameData.ERSPercent",
+            [SimHubField.TyreWearFrontLeft]     = "DataCorePlugin.GameData.TyreWearFrontLeft",
+            [SimHubField.TyreWearFrontRight]    = "DataCorePlugin.GameData.TyreWearFrontRight",
+            [SimHubField.TyreWearRearLeft]      = "DataCorePlugin.GameData.TyreWearRearLeft",
+            [SimHubField.TyreWearRearRight]     = "DataCorePlugin.GameData.TyreWearRearRight",
         };
 
         public IReadOnlyList<MultiStreamProfile> BuiltinProfiles
@@ -140,6 +168,55 @@ namespace MozaPlugin.Telemetry
             }
 
             return profile;
+        }
+
+        /// <summary>
+        /// Apply a per-channel user mapping to a loaded profile, overriding
+        /// <see cref="ChannelDefinition.SimHubProperty"/> by channel URL. Entries
+        /// with an empty/whitespace value clear any existing property (reverts to
+        /// the SimHubField fallback). Unknown URLs are ignored.
+        /// </summary>
+        public static void ApplyUserMappings(MultiStreamProfile? profile,
+            IReadOnlyDictionary<string, string>? overrides)
+        {
+            if (profile == null || overrides == null || overrides.Count == 0) return;
+
+            foreach (var tier in profile.Tiers)
+            {
+                foreach (var ch in tier.Channels)
+                {
+                    if (overrides.TryGetValue(ch.Url, out var path))
+                        ch.SimHubProperty = string.IsNullOrWhiteSpace(path) ? "" : path.Trim();
+                }
+            }
+        }
+
+        /// <summary>
+        /// Build a stable identity for a dashboard so mappings can be keyed per-dashboard.
+        /// Builtin profiles (no file path) use <c>"builtin:&lt;name&gt;"</c>. User-loaded
+        /// .mzdash files use <c>"file:&lt;filename&gt;:&lt;sha1-first-8&gt;"</c> so identically-named
+        /// files with different contents don't share mappings.
+        /// </summary>
+        public static string GetDashboardKey(string? loadedPath, MultiStreamProfile profile)
+        {
+            if (string.IsNullOrEmpty(loadedPath))
+                return "builtin:" + (profile?.Name ?? "");
+
+            string filename = Path.GetFileName(loadedPath);
+            string hash;
+            try
+            {
+                using var sha = SHA1.Create();
+                byte[] digest = sha.ComputeHash(File.ReadAllBytes(loadedPath));
+                var sb = new StringBuilder(8);
+                for (int i = 0; i < 4; i++) sb.Append(digest[i].ToString("x2"));
+                hash = sb.ToString();
+            }
+            catch
+            {
+                hash = "nohash";
+            }
+            return "file:" + filename + ":" + hash;
         }
 
         /// <summary>

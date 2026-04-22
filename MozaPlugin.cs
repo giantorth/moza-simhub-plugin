@@ -537,6 +537,21 @@ namespace MozaPlugin
                 }
             }
 
+            // Apply user channel mappings for the selected dashboard (overrides
+            // each channel's SimHubProperty string by URL). Must run before
+            // assigning Profile so the frame builder binds resolvers correctly.
+            if (profile != null)
+            {
+                string dashboardKey = DashboardProfileStore.GetDashboardKey(
+                    s.TelemetryMzdashPath, profile);
+                if (s.TelemetryChannelMappings != null &&
+                    s.TelemetryChannelMappings.TryGetValue(dashboardKey, out var overrides))
+                {
+                    DashboardProfileStore.ApplyUserMappings(profile, overrides);
+                }
+            }
+
+            _telemetrySender.PropertyResolver = ResolvePropertyAsDouble;
             _telemetrySender.Profile = profile;
             _telemetrySender.MzdashContent = mzdashContent;
             _telemetrySender.MzdashName = mzdashName;
@@ -551,6 +566,63 @@ namespace MozaPlugin
             if (!string.IsNullOrEmpty(mzdashName) && !libraryNames.Contains(mzdashName))
                 libraryNames.Add(mzdashName);
             _telemetrySender.CanonicalDashboardList = libraryNames;
+        }
+
+        /// <summary>
+        /// Per-frame resolver for channels with a user-mapped SimHubProperty.
+        /// Reads the live value from SimHub and coerces to double. Bound into
+        /// the TelemetrySender so each frame builder binds a per-channel closure
+        /// at profile-assign time — no hot-path dictionary lookup.
+        /// </summary>
+        private double ResolvePropertyAsDouble(string path)
+            => PropertyCoercion.Coerce(
+                _pluginManager?.GetPropertyValue(path), path);
+
+        /// <summary>Stable identity key for the currently-loaded dashboard.</summary>
+        internal string CurrentDashboardKey()
+        {
+            var profile = _telemetrySender?.Profile;
+            if (profile == null) return "";
+            return DashboardProfileStore.GetDashboardKey(
+                _settings.TelemetryMzdashPath, profile);
+        }
+
+        /// <summary>Set or clear a per-channel SimHub property override for the current dashboard.</summary>
+        internal void SetChannelMapping(string channelUrl, string propertyPath)
+        {
+            if (string.IsNullOrEmpty(channelUrl)) return;
+            string key = CurrentDashboardKey();
+            if (string.IsNullOrEmpty(key)) return;
+
+            _settings.TelemetryChannelMappings ??=
+                new System.Collections.Generic.Dictionary<string,
+                    System.Collections.Generic.Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
+
+            if (!_settings.TelemetryChannelMappings.TryGetValue(key, out var inner))
+            {
+                inner = new System.Collections.Generic.Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                _settings.TelemetryChannelMappings[key] = inner;
+            }
+
+            string trimmed = (propertyPath ?? "").Trim();
+            if (string.IsNullOrEmpty(trimmed))
+                inner.Remove(channelUrl);
+            else
+                inner[channelUrl] = trimmed;
+
+            SaveSettings();
+        }
+
+        /// <summary>Clear all per-channel overrides for the currently-loaded dashboard.</summary>
+        internal void ClearCurrentDashboardMappings()
+        {
+            string key = CurrentDashboardKey();
+            if (string.IsNullOrEmpty(key)) return;
+            if (_settings.TelemetryChannelMappings != null &&
+                _settings.TelemetryChannelMappings.Remove(key))
+            {
+                SaveSettings();
+            }
         }
 
         /// <summary>

@@ -1,3 +1,6 @@
+using System;
+using System.Collections.Generic;
+
 namespace MozaPlugin
 {
     /// <summary>
@@ -93,5 +96,12 @@ namespace MozaPlugin
 
         // Whether to send the 0x2D/F5:31 sequence counter to the base (~30 Hz)
         public bool TelemetrySendSequenceCounter { get; set; } = true;
+
+        // Per-dashboard user channel mappings. Outer key = DashboardProfileStore.GetDashboardKey
+        // (e.g. "builtin:Formula 1" or "file:custom.mzdash:a1b2c3d4"). Inner key =
+        // channel URL (e.g. "v1/gameData/Rpm"). Value = SimHub property path
+        // (e.g. "DataCorePlugin.GameData.Rpms"). Empty value clears the override.
+        public Dictionary<string, Dictionary<string, string>> TelemetryChannelMappings { get; set; }
+            = new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
     }
 }

@@ -20,6 +20,9 @@
     <Compile Include="..\Telemetry\TelemetryEncoder.cs" Link="Src\Telemetry\TelemetryEncoder.cs" />
     <Compile Include="..\Telemetry\TelemetryBitWriter.cs" Link="Src\Telemetry\TelemetryBitWriter.cs" />
     <Compile Include="..\Telemetry\DashboardProfile.cs" Link="Src\Telemetry\DashboardProfile.cs" />
+    <Compile Include="..\Telemetry\DashboardProfileStore.cs" Link="Src\Telemetry\DashboardProfileStore.cs" />
+    <Compile Include="..\Telemetry\PropertyCoercion.cs" Link="Src\Telemetry\PropertyCoercion.cs" />
+    <Compile Include="..\Telemetry\KnownSimHubProperties.cs" Link="Src\Telemetry\KnownSimHubProperties.cs" />
     <Compile Include="..\Telemetry\GameDataSnapshot.cs" Link="Src\Telemetry\GameDataSnapshot.cs" />
     <Compile Include="..\Telemetry\TelemetryFrameBuilder.cs" Link="Src\Telemetry\TelemetryFrameBuilder.cs" />
     <Compile Include="..\Telemetry\TierDefinitionBuilder.cs" Link="Src\Telemetry\TierDefinitionBuilder.cs" />

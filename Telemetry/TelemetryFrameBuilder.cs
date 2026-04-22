@@ -18,17 +18,46 @@ namespace MozaPlugin.Telemetry
         private const int ChecksumLen = 1;
 
         private readonly DashboardProfile _profile;
+        private readonly Func<GameDataSnapshot, double>[] _resolvers;
 
         // Pre-allocated buffers reused every frame to avoid GC pressure
         private readonly byte[] _frameBuffer;
         private readonly TelemetryBitWriter? _bitWriter;
 
         public TelemetryFrameBuilder(DashboardProfile profile)
+            : this(profile, propertyResolver: null) { }
+
+        /// <summary>
+        /// Build a frame builder. If <paramref name="propertyResolver"/> is supplied,
+        /// channels with a non-empty <see cref="ChannelDefinition.SimHubProperty"/>
+        /// read their value via that resolver. Channels with an empty property fall
+        /// back to <see cref="GameDataSnapshot.GetField"/>.
+        /// </summary>
+        public TelemetryFrameBuilder(DashboardProfile profile, Func<string, double>? propertyResolver)
         {
             _profile = profile;
 
             int dataLen = profile.TotalBytes;
             _frameBuffer = new byte[HeaderLen + dataLen + ChecksumLen];
+
+            // Bind one resolver per channel. Per-frame cost is one delegate invoke
+            // instead of a dictionary lookup.
+            _resolvers = new Func<GameDataSnapshot, double>[profile.Channels.Count];
+            for (int i = 0; i < profile.Channels.Count; i++)
+            {
+                var ch = profile.Channels[i];
+                if (!string.IsNullOrEmpty(ch.SimHubProperty) && propertyResolver != null)
+                {
+                    var path = ch.SimHubProperty;
+                    var resolver = propertyResolver;
+                    _resolvers[i] = _ => resolver(path);
+                }
+                else
+                {
+                    var field = ch.SimHubField;
+                    _resolvers[i] = s => s.GetField(field);
+                }
+            }
 
             // Write the static header bytes once
             _frameBuffer[0] = MozaProtocol.MessageStart;       // 7E
@@ -63,9 +92,10 @@ namespace MozaPlugin.Telemetry
             {
                 _bitWriter.Reset();
 
-                foreach (var ch in _profile.Channels)
+                for (int i = 0; i < _profile.Channels.Count; i++)
                 {
-                    double value = snapshot.GetField(ch.SimHubField);
+                    var ch = _profile.Channels[i];
+                    double value = _resolvers[i](snapshot);
 
                     if (TelemetryEncoder.IsFloat(ch.Compression))
                         _bitWriter.WriteFloat((float)value);
