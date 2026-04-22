@@ -68,7 +68,6 @@ jobs:
           New-Item -ItemType Directory -Path $staging -Force
           Copy-Item ./bin/x86/Release/MozaPlugin.dll $staging/
           Compress-Archive -Path ./staging/* -DestinationPath ./MozaPlugin_dev.zip
-          Copy-Item ./MozaPlugin_dev.zip ./MozaPlugin_dev-${{ steps.vars.outputs.short_sha }}.zip
 
       - name: Delete previous dev-latest release
         env:
@@ -86,7 +85,6 @@ jobs:
           fail_on_unmatched_files: true
           files: |
             MozaPlugin_dev.zip
-            MozaPlugin_dev-${{ steps.vars.outputs.short_sha }}.zip
           body: |
             ⚠️ **Pre-release — expect rough edges.** Use the latest stable release if you need reliability.
 
@@ -95,4 +93,4 @@ jobs:
             **Built:** ${{ steps.vars.outputs.build_timestamp }}
             **Changes since ${{ steps.vars.outputs.latest_tag }}:** https://github.com/${{ github.repository }}/compare/${{ steps.vars.outputs.latest_tag }}...${{ github.sha }}
 
-            Download `MozaPlugin_dev.zip` for the latest build, or `MozaPlugin_dev-<sha>.zip` for a specific build.
+            Download `MozaPlugin_dev.zip` for the latest build.
