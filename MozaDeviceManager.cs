@@ -83,7 +83,7 @@ namespace MozaPlugin
             frame[3] = deviceId;
             if (payload != null)
                 System.Buffer.BlockCopy(payload, 0, frame, 4, payloadLen);
-            frame[frame.Length - 1] = MozaProtocol.CalculateChecksum(frame);
+            frame[frame.Length - 1] = MozaProtocol.CalculateWireChecksum(frame);
             _connection.Send(frame);
         }
 

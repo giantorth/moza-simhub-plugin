@@ -72,7 +72,13 @@ namespace MozaPlugin.Protocol
                 _port = new SerialPort(portName, MozaProtocol.BaudRate)
                 {
                     ReadTimeout = 500,
-                    WriteTimeout = 500
+                    WriteTimeout = 500,
+                    // Larger buffers cushion bursts under Wine/tty0tty where
+                    // the kernel-side pty queue can hold multiple concurrent
+                    // device-session chunks (session 0x09 configJson state
+                    // burst is up to 7 × 68B = ~500B in under 40ms).
+                    ReadBufferSize = 65536,
+                    WriteBufferSize = 16384,
                 };
                 _port.Open();
                 _port.DiscardInBuffer();
@@ -167,12 +173,19 @@ namespace MozaPlugin.Protocol
         {
             SimHub.Logging.Current.Info("[Moza] Read thread started");
             int messageCount = 0;
+            // Bulk read buffer — drains all available bytes from the OS read
+            // buffer in one SerialPort.Read() call, then parses frames from
+            // this byte array in memory. Per-byte ReadByte() under Wine/tty0tty
+            // had ~100μs per-call overhead, causing plugin to fall behind sim's
+            // bursted session 0x09 state pushes and silently lose chunks 1-6
+            // of 7 (seen 2026-04-22). Bulk read eliminates the overhead.
+            var rx = new List<byte>(capacity: 8192);
+            var tmp = new byte[4096];
 
             while (_running)
             {
                 try
                 {
-                    // Snapshot _port to avoid race with Disconnect() nullifying the field
                     var port = _port;
                     if (port == null || !port.IsOpen)
                     {
@@ -180,111 +193,158 @@ namespace MozaPlugin.Protocol
                         continue;
                     }
 
-                    // Poll for available data (works better under Wine than blocking ReadByte)
-                    if (port.BytesToRead == 0)
+                    // Wine's SerialPort.Read blocks for full count (doesn't
+                    // return early when fewer bytes available), so we can't use
+                    // a plain blocking Read. Instead poll BytesToRead and pull
+                    // whatever is available. 2 ms sleep when idle keeps CPU
+                    // usage negligible while still draining the pty buffer
+                    // promptly — observed 1-15 bytes per pull at 115200 baud.
+                    int avail = port.BytesToRead;
+                    if (avail == 0)
                     {
                         Thread.Sleep(2);
                         continue;
                     }
-
-                    // Read until we find the start byte. Raw 0x7E may also appear
-                    // stuffed (as a payload byte from a prior frame we de-synced on);
-                    // accept any 0x7E as a candidate frame start.
-                    int b = port.ReadByte();
-                    if (b != MozaProtocol.MessageStart)
-                        continue;
-
-                    // Wait for payload length byte
-                    int waitMs = 0;
-                    while (port.BytesToRead < 1 && waitMs < 200)
-                    {
-                        Thread.Sleep(1);
-                        waitMs++;
-                    }
-                    if (port.BytesToRead < 1) continue;
-
-                    int payloadLength = port.ReadByte();
-                    if (payloadLength < 2 || payloadLength > 64)
-                        continue;
-
-                    // Read N+3 decoded bytes (group + device + payload + checksum),
-                    // collapsing 0x7E 0x7E wire pairs back to a single 0x7E byte.
-                    // Moza byte-stuffing: every 0x7E after the start+len header is
-                    // doubled on the wire. Sim and real firmware both emit this;
-                    // without decoding, any 0x7E inside a payload (common in zlib
-                    // blobs, telemetry data, seq counters) corrupts the read stream.
-                    int needed = payloadLength + 3;
-                    var raw = new byte[needed];
-                    int decoded = 0;
-                    bool frameError = false;
-                    while (decoded < needed)
-                    {
-                        waitMs = 0;
-                        while (port.BytesToRead < 1 && waitMs < 200)
-                        {
-                            Thread.Sleep(1);
-                            waitMs++;
-                        }
-                        if (port.BytesToRead < 1) { frameError = true; break; }
-
-                        int wb = port.ReadByte();
-                        if (wb == MozaProtocol.MessageStart)
-                        {
-                            // Stuffed byte: expect a second 0x7E. Anything else means
-                            // the sender began a new frame mid-transfer — abandon
-                            // this one so the outer loop can re-sync on the 0x7E.
-                            waitMs = 0;
-                            while (port.BytesToRead < 1 && waitMs < 200)
-                            {
-                                Thread.Sleep(1);
-                                waitMs++;
-                            }
-                            if (port.BytesToRead < 1) { frameError = true; break; }
-                            int esc = port.ReadByte();
-                            if (esc != MozaProtocol.MessageStart)
-                            {
-                                frameError = true;
-                                break;
-                            }
-                            raw[decoded++] = (byte)MozaProtocol.MessageStart;
-                        }
-                        else
-                        {
-                            raw[decoded++] = (byte)wb;
-                        }
-                    }
-
-                    if (frameError || decoded != needed)
-                        continue;
-
-                    // Validate checksum: rebuild the full decoded frame for calculation
-                    var wireFrame = new byte[2 + payloadLength + 2];
-                    wireFrame[0] = MozaProtocol.MessageStart;
-                    wireFrame[1] = (byte)payloadLength;
-                    Array.Copy(raw, 0, wireFrame, 2, payloadLength + 2);
-                    byte expected = MozaProtocol.CalculateChecksum(wireFrame);
-                    byte actual = raw[raw.Length - 1];
-
-                    if (expected != actual)
-                    {
-                        SimHub.Logging.Current.Debug(
-                            $"[Moza] Checksum mismatch: expected=0x{expected:X2} actual=0x{actual:X2}, dropping message");
-                        continue;
-                    }
-
-                    // Strip the checksum byte before passing to the parser
-                    var data = new byte[needed - 1];
-                    Array.Copy(raw, 0, data, 0, data.Length);
-
-                    messageCount++;
-                    if (messageCount <= 5)
-                    {
-                        SimHub.Logging.Current.Info(
-                            $"[Moza] Received msg #{messageCount}: len={payloadLength} " +
-                            $"group=0x{data[0]:X2} dev=0x{data[1]:X2} ({data.Length} bytes)");
-                    }
+                    if (avail > tmp.Length) avail = tmp.Length;
+                    int n = port.Read(tmp, 0, avail);
+                    if (n <= 0) continue;
+                    for (int i = 0; i < n; i++)
+                        rx.Add(tmp[i]);
                     Interlocked.Exchange(ref _consecutiveIoErrors, 0);
-                    MessageReceived?.Invoke(data);
+
+                    // Parse as many complete frames from `rx` as possible, then
+                    // keep any trailing partial frame for the next bulk read.
+                    int cursor = 0;
+                    while (cursor < rx.Count)
+                    {
+                        int frameStart = cursor;
+                        // Scan for frame start 0x7E
+                        while (frameStart < rx.Count && rx[frameStart] != MozaProtocol.MessageStart)
+                            frameStart++;
+                        if (frameStart >= rx.Count)
+                        {
+                            // No start byte found at all — discard junk.
+                            cursor = rx.Count;
+                            break;
+                        }
+                        // Need at least start + length byte to proceed.
+                        if (frameStart + 1 >= rx.Count)
+                        {
+                            cursor = frameStart;
+                            break;
+                        }
+                        int payloadLength = rx[frameStart + 1];
+                        if (payloadLength < 2 || payloadLength > 64)
+                        {
+                            // Invalid length — skip this start byte and resync on
+                            // the next 0x7E. Common at connect when junk precedes
+                            // real frames.
+                            cursor = frameStart + 1;
+                            continue;
+                        }
+                        int needed = payloadLength + 3; // group + device + payload + checksum
+                        // Walk wire bytes starting after [start, len], collapsing
+                        // 0x7E 0x7E wire pairs back to a single 0x7E body byte.
+                        var raw = new byte[needed];
+                        int decoded = 0;
+                        int wirePos = frameStart + 2;
+                        bool frameError = false;
+                        bool needMoreData = false;
+                        while (decoded < needed)
+                        {
+                            if (wirePos >= rx.Count) { needMoreData = true; break; }
+                            byte wb = rx[wirePos++];
+                            if (wb == MozaProtocol.MessageStart)
+                            {
+                                if (wirePos >= rx.Count) { needMoreData = true; break; }
+                                byte esc = rx[wirePos++];
+                                if (esc != MozaProtocol.MessageStart)
+                                {
+                                    frameError = true;
+                                    break;
+                                }
+                                raw[decoded++] = MozaProtocol.MessageStart;
+                            }
+                            else
+                            {
+                                raw[decoded++] = wb;
+                            }
+                        }
+                        if (needMoreData)
+                        {
+                            // Frame straddles buffer end; wait for more bytes.
+                            cursor = frameStart;
+                            break;
+                        }
+                        if (frameError || decoded != needed)
+                        {
+                            int nn = Math.Min(8, Math.Max(0, decoded));
+                            string first8a = nn > 0 ? BitConverter.ToString(raw, 0, nn) : "(empty)";
+                            SimHub.Logging.Current.Info(
+                                $"[Moza] DROP frame-error: decoded={decoded}/{needed} len={payloadLength} first8={first8a}");
+                            // Skip past the bad start byte and try to resync.
+                            cursor = frameStart + 1;
+                            continue;
+                        }
+
+                        // Validate wire-level checksum (includes 0x7E escape
+                        // accounting per doc § 54).
+                        var wireFrame = new byte[2 + payloadLength + 2];
+                        wireFrame[0] = MozaProtocol.MessageStart;
+                        wireFrame[1] = (byte)payloadLength;
+                        Array.Copy(raw, 0, wireFrame, 2, payloadLength + 2);
+                        byte expected = MozaProtocol.CalculateWireChecksum(wireFrame);
+                        byte actual = raw[raw.Length - 1];
+                        if (expected != actual)
+                        {
+                            int nn = Math.Min(8, raw.Length);
+                            string first8a = nn > 0 ? BitConverter.ToString(raw, 0, nn) : "(empty)";
+                            SimHub.Logging.Current.Info(
+                                $"[Moza] DROP checksum mismatch: expected=0x{expected:X2} actual=0x{actual:X2} " +
+                                $"len={payloadLength} group=0x{raw[0]:X2} dev=0x{raw[1]:X2} first8={first8a}");
+                            cursor = frameStart + 1;
+                            continue;
+                        }
+
+                        // Strip the checksum byte before passing to the parser.
+                        var data = new byte[needed - 1];
+                        Array.Copy(raw, 0, data, 0, data.Length);
+
+                        messageCount++;
+                        if (messageCount <= 5)
+                        {
+                            SimHub.Logging.Current.Info(
+                                $"[Moza] Received msg #{messageCount}: len={payloadLength} " +
+                                $"group=0x{data[0]:X2} dev=0x{data[1]:X2} ({data.Length} bytes)");
+                        }
+                        // Diagnostic: per-chunk log for 0xC3/71/7C/00 SerialStream
+                        // frames so we can verify session 0x09 chunk reception.
+                        if (data.Length >= 8 && data[0] == 0xC3 && data[1] == 0x71 &&
+                            data[2] == 0x7C && data[3] == 0x00)
+                        {
+                            byte sess = data[4];
+                            byte type = data[5];
+                            int seqWire = data[6] | (data[7] << 8);
+                            int bodyLen = data.Length - 8;
+                            string first8 = bodyLen > 0
+                                ? BitConverter.ToString(data, 8, Math.Min(8, bodyLen))
+                                : "(empty)";
+                            SimHub.Logging.Current.Info(
+                                $"[Moza] WIRE sess=0x{sess:X2} type=0x{type:X2} seq={seqWire} " +
+                                $"totalLen={data.Length} payload={bodyLen}B first8={first8}");
+                        }
+                        MessageReceived?.Invoke(data);
+                        // Move cursor past the consumed wire bytes.
+                        cursor = wirePos;
+                    }
+                    // Drop consumed bytes so `rx` doesn't grow unbounded.
+                    if (cursor > 0)
+                    {
+                        if (cursor >= rx.Count)
+                            rx.Clear();
+                        else
+                            rx.RemoveRange(0, cursor);
+                    }
                 }
                 catch (TimeoutException)
                 {

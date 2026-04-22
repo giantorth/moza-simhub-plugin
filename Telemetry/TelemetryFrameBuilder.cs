@@ -76,7 +76,7 @@ namespace MozaPlugin.Telemetry
                 }
             }
 
-            _frameBuffer[_frameBuffer.Length - 1] = MozaProtocol.CalculateChecksum(
+            _frameBuffer[_frameBuffer.Length - 1] = MozaProtocol.CalculateWireChecksum(
                 _frameBuffer, _frameBuffer.Length - 1);
 
             // Return a copy: the write queue holds a reference until the write thread drains it,
@@ -106,7 +106,7 @@ namespace MozaPlugin.Telemetry
             frame[9] = 0x32;
             frame[10] = flagByte;
             frame[11] = 0x20;
-            frame[12] = MozaProtocol.CalculateChecksum(frame, 12);
+            frame[12] = MozaProtocol.CalculateWireChecksum(frame, 12);
             return frame;
         }
     }

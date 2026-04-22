@@ -147,8 +147,18 @@ namespace MozaPlugin.Protocol
             AddCommand("wheel-model-name",  "wheel",  7, 0xFF, new byte[] { 1 }, 0, "array");
             AddCommand("wheel-sw-version",  "wheel", 15, 0xFF, new byte[] { 1 }, 0, "array");
             AddCommand("wheel-hw-version",  "wheel",  8, 0xFF, new byte[] { 1 }, 0, "array");
+            AddCommand("wheel-hw-sub",      "wheel",  8, 0xFF, new byte[] { 2 }, 0, "array");
             AddCommand("wheel-serial-a",    "wheel", 16, 0xFF, new byte[] { 0 }, 0, "array");
             AddCommand("wheel-serial-b",    "wheel", 16, 0xFF, new byte[] { 1 }, 0, "array");
+            // PitHouse-style extended identity probes (groups 0x02/0x04/0x05/0x06/0x09/0x11).
+            // Empty-cmd requests (cmd_id=[], bytes=0) hit the request-as-probe path;
+            // non-empty cmds use standard cmd_id prefix. Read-only, write_group=0xFF.
+            AddCommand("wheel-presence",       "wheel",  9, 0xFF, new byte[] { },                 0, "array"); // 0x09 → reply `00 01` (1 sub-device)
+            AddCommand("wheel-device-presence","wheel",  2, 0xFF, new byte[] { },                 0, "array"); // 0x02 → reply `02` (protocol ver?)
+            AddCommand("wheel-device-type",    "wheel",  4, 0xFF, new byte[] { },                 0, "array"); // 0x04 → reply `01 02 04 06` (no cmd echo in reply)
+            AddCommand("wheel-capabilities",   "wheel",  5, 0xFF, new byte[] { },                 0, "array"); // 0x05 → reply `01 02 1f 01` (no cmd echo in reply)
+            AddCommand("wheel-mcu-uid",        "wheel",  6, 0xFF, new byte[] { },                 0, "array"); // 0x06 → 12-byte STM32 UID
+            AddCommand("wheel-identity-11",    "wheel", 17, 0xFF, new byte[] { 4 },               0, "array"); // 0x11 cmd=04 → reply `04 01`
 
             // ===== WHEEL SETTINGS (read group 64, write group 63) =====
             AddCommand("wheel-brightness",         "wheel", 64, 63, new byte[] { 1 },          1, "int");

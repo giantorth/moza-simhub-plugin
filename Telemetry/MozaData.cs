@@ -25,6 +25,28 @@ namespace MozaPlugin
         public volatile string WheelSerialNumber = "";
         public volatile string WheelSwVersion = "";
         public volatile string WheelHwVersion = "";
+        public volatile string WheelHwSubVersion = "";
+        // PitHouse-style extended identity fields (groups 0x02/0x04/0x05/0x06/0x09/0x11).
+        public volatile int WheelSubDeviceCount;               // from 0x09 reply first byte
+        /// <summary>12-byte STM32 MCU UID (from 0x06 probe). Likely the mcUid PitHouse keys dashboard sync against.</summary>
+        public byte[] WheelMcuUid = System.Array.Empty<byte>();
+        public byte[] WheelDeviceType = System.Array.Empty<byte>();    // from 0x04 reply, e.g. 01 02 04 06
+        public byte[] WheelCapabilities = System.Array.Empty<byte>();  // from 0x05 reply, e.g. 01 02 1f 01
+        public byte[] WheelIdentity11 = System.Array.Empty<byte>();    // from 0x11 cmd=04 reply
+        public volatile int WheelDevicePresence;                       // from 0x02 reply first byte (protocol ver?)
+
+        // Display sub-device identity (populated by Plugin.SendDisplayProbe responses).
+        // Display hangs off group 0x43 wrapper and has its own identity separate from wheel.
+        public volatile string DisplayModelName = "";
+        public volatile string DisplayHwVersion = "";
+        public volatile string DisplaySwVersion = "";
+        public volatile string DisplaySerialNumber = "";
+        public volatile int DisplaySubDeviceCount;
+        public volatile int DisplayDevicePresence;
+        public byte[] DisplayMcuUid = System.Array.Empty<byte>();
+        public byte[] DisplayDeviceType = System.Array.Empty<byte>();
+        public byte[] DisplayCapabilities = System.Array.Empty<byte>();
+        public byte[] DisplayIdentity11 = System.Array.Empty<byte>();
         private volatile string _serialPartA = "";
         private volatile string _serialPartB = "";
 
@@ -468,6 +490,10 @@ namespace MozaPlugin
             {
                 WheelHwVersion = ParseNullTerminatedString(data);
             }
+            else if (commandName == "wheel-hw-sub")
+            {
+                WheelHwSubVersion = ParseNullTerminatedString(data);
+            }
             else if (commandName == "wheel-serial-a")
             {
                 _serialPartA = ParseNullTerminatedString(data);
@@ -478,6 +504,72 @@ namespace MozaPlugin
                 _serialPartB = ParseNullTerminatedString(data);
                 WheelSerialNumber = _serialPartA + _serialPartB;
             }
+            else if (commandName == "wheel-presence")
+            {
+                // Reply: 2 bytes. First byte = sub-device count.
+                if (data.Length >= 1) WheelSubDeviceCount = data[0];
+            }
+            else if (commandName == "wheel-device-presence")
+            {
+                if (data.Length >= 1) WheelDevicePresence = data[0];
+            }
+            else if (commandName == "wheel-device-type")
+            {
+                WheelDeviceType = (byte[])data.Clone();
+            }
+            else if (commandName == "wheel-capabilities")
+            {
+                WheelCapabilities = (byte[])data.Clone();
+            }
+            else if (commandName == "wheel-mcu-uid")
+            {
+                WheelMcuUid = (byte[])data.Clone();
+            }
+            else if (commandName == "wheel-identity-11")
+            {
+                WheelIdentity11 = (byte[])data.Clone();
+            }
+            // Display sub-device responses
+            else if (commandName == "display-model-name")
+            {
+                DisplayModelName = ParseNullTerminatedString(data);
+            }
+            else if (commandName == "display-hw-version")
+            {
+                DisplayHwVersion = ParseNullTerminatedString(data);
+            }
+            else if (commandName == "display-sw-version")
+            {
+                DisplaySwVersion = ParseNullTerminatedString(data);
+            }
+            else if (commandName == "display-serial")
+            {
+                DisplaySerialNumber = ParseNullTerminatedString(data);
+            }
+            else if (commandName == "display-presence")
+            {
+                if (data.Length >= 1) DisplaySubDeviceCount = data[0];
+            }
+            else if (commandName == "display-device-presence")
+            {
+                if (data.Length >= 1) DisplayDevicePresence = data[0];
+            }
+            else if (commandName == "display-mcu-uid")
+            {
+                DisplayMcuUid = (byte[])data.Clone();
+            }
+            else if (commandName == "display-device-type")
+            {
+                DisplayDeviceType = (byte[])data.Clone();
+            }
+            else if (commandName == "display-capabilities")
+            {
+                DisplayCapabilities = (byte[])data.Clone();
+            }
+            else if (commandName == "display-identity-11")
+            {
+                DisplayIdentity11 = (byte[])data.Clone();
+            }
         }
 
         public void ClearWheelIdentity()
@@ -486,6 +578,23 @@ namespace MozaPlugin
             WheelSerialNumber = "";
             WheelSwVersion = "";
             WheelHwVersion = "";
+            WheelHwSubVersion = "";
+            WheelSubDeviceCount = 0;
+            WheelDevicePresence = 0;
+            WheelMcuUid = System.Array.Empty<byte>();
+            WheelDeviceType = System.Array.Empty<byte>();
+            WheelCapabilities = System.Array.Empty<byte>();
+            WheelIdentity11 = System.Array.Empty<byte>();
+            DisplayModelName = "";
+            DisplayHwVersion = "";
+            DisplaySwVersion = "";
+            DisplaySerialNumber = "";
+            DisplaySubDeviceCount = 0;
+            DisplayDevicePresence = 0;
+            DisplayMcuUid = System.Array.Empty<byte>();
+            DisplayDeviceType = System.Array.Empty<byte>();
+            DisplayCapabilities = System.Array.Empty<byte>();
+            DisplayIdentity11 = System.Array.Empty<byte>();
             _serialPartA = "";
             _serialPartB = "";
         }

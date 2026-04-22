@@ -68,6 +68,35 @@ namespace MozaPlugin.Protocol
             return (byte)(sum % 256);
         }
 
+        /// <summary>
+        /// Wire-level checksum over a decoded frame. Per doc § 54, each `0x7E`
+        /// in the decoded body (positions 2 through <paramref name="bodyEnd"/>-1)
+        /// adds an extra `0x7E` to the wire-level sum because byte-stuffing
+        /// doubles it on the wire and the sender includes both copies in its
+        /// checksum. Use for verifying received frames and for computing
+        /// outgoing checksum when the payload may contain `0x7E` bytes.
+        /// </summary>
+        /// <param name="data">Frame bytes: <c>[start, len, group, device, payload...]</c> without the checksum slot.</param>
+        public static byte CalculateWireChecksum(byte[] data)
+            => CalculateWireChecksum(data, data.Length);
+
+        /// <summary>
+        /// Same as <see cref="CalculateWireChecksum(byte[])"/> but operates on
+        /// the first <paramref name="length"/> bytes. Pass <c>frame.Length - 1</c>
+        /// when building an outgoing frame to exclude the pre-allocated
+        /// checksum slot from both the raw sum and the escape-count walk.
+        /// </summary>
+        public static byte CalculateWireChecksum(byte[] data, int length)
+        {
+            int sum = MagicValue;
+            for (int i = 0; i < length; i++)
+                sum += data[i];
+            for (int i = 2; i < length; i++)
+                if (data[i] == MessageStart)
+                    sum += MessageStart;
+            return (byte)(sum & 0xFF);
+        }
+
         public static byte SwapNibbles(byte b)
         {
             return (byte)(((b & 0x0F) << 4) | ((b & 0xF0) >> 4));

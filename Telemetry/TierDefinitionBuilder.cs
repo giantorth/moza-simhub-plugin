@@ -252,7 +252,7 @@ namespace MozaPlugin.Telemetry
                 frame[8] = (byte)(seq & 0xFF);
                 frame[9] = (byte)((seq >> 8) & 0xFF);
                 Array.Copy(payload, 0, frame, 10, payload.Length);
-                frame[frame.Length - 1] = MozaProtocol.CalculateChecksum(frame);
+                frame[frame.Length - 1] = MozaProtocol.CalculateWireChecksum(frame);
 
                 frames.Add(frame);
                 offset += chunkSize;

@@ -731,6 +731,36 @@ namespace MozaPlugin
             if (data.Length >= 1 && data[0] == 0x0E)
                 return;
 
+            // Filter SerialStream control frames (group 0xC3 response to 0x43,
+            // payload starts with 7C/FC + 00). These are session-management
+            // chunks (fc:00 session opens/acks, 7c:00 data) handled by
+            // TelemetrySender's session-layer handlers — not command responses.
+            // Without this, sessions 0x01..0x0E opens spam Unmatched log lines.
+            if (data.Length >= 4 && data[0] == 0xC3 &&
+                (data[2] == 0x7C || data[2] == 0xFC) && data[3] == 0x00)
+                return;
+
+            // Filter wheel's `7c:23` dashboard-activate advertisements (group
+            // 0xC3 device 0x71, payload starts with `7C 23`). Wheel broadcasts
+            // active display config periodically — informational, not a command
+            // response. Absorbed by TelemetrySender.
+            if (data.Length >= 4 && data[0] == 0xC3 && data[2] == 0x7C && data[3] == 0x23)
+                return;
+
+            // Filter group 0x40 channel-config burst echoes (0xC0 response):
+            //   1E 00 XX / 1E 01 XX — channel enable read per page
+            //   28 00 / 28 01 / 28 02 — WheelGetCfg_GetMultiFunction{Switch,Num,Left}
+            // Part of the channel configuration burst; wheel returns the stored
+            // EEPROM value per channel/query. Not actionable at plugin level —
+            // just confirms the probe landed. Mark wheel alive so watchdog
+            // doesn't reset detection.
+            if (data.Length >= 4 && data[0] == 0xC0 && data[1] == 0x71 &&
+                (data[2] == 0x1E || data[2] == 0x28))
+            {
+                _deviceManager.MarkWheelResponse(MozaProtocol.SwapNibbles(data[1]));
+                return;
+            }
+
             var result = MozaResponseParser.Parse(data);
             if (!result.HasValue)
             {
@@ -802,6 +832,24 @@ namespace MozaPlugin
         /// </summary>
         private void DetectDevices(string commandName, int value, byte deviceId)
         {
+            // wheel-mcu-uid response starts with 0xBE... which parses to a negative
+            // int32 via ParseIntValue(BE). Log it before the `value < 0` guard
+            // below, because UpdateFromArray has already stored the raw 12 bytes.
+            if (commandName == "wheel-mcu-uid" && _data.WheelMcuUid.Length > 0)
+            {
+                SimHub.Logging.Current.Info(
+                    $"[Moza] Wheel MCU UID ({_data.WheelMcuUid.Length}B): " +
+                    BitConverter.ToString(_data.WheelMcuUid).Replace("-", ""));
+                return;
+            }
+            if (commandName == "display-mcu-uid" && _data.DisplayMcuUid.Length > 0)
+            {
+                SimHub.Logging.Current.Info(
+                    $"[Moza] Display MCU UID ({_data.DisplayMcuUid.Length}B): " +
+                    BitConverter.ToString(_data.DisplayMcuUid).Replace("-", ""));
+                return;
+            }
+
             if (value < 0) return; // No valid response
 
             // Update telemetry sender's heartbeat mask so it only pings detected devices
@@ -911,6 +959,90 @@ namespace MozaPlugin
                 case "wheel-serial-b":
                     if (!string.IsNullOrEmpty(_data.WheelSerialNumber))
                         SimHub.Logging.Current.Info($"[Moza] Wheel serial: {_data.WheelSerialNumber}");
+                    break;
+
+                case "wheel-hw-sub":
+                    if (!string.IsNullOrEmpty(_data.WheelHwSubVersion))
+                        SimHub.Logging.Current.Info($"[Moza] Wheel HW sub: {_data.WheelHwSubVersion}");
+                    break;
+
+                case "wheel-mcu-uid":
+                    if (_data.WheelMcuUid.Length > 0)
+                        SimHub.Logging.Current.Info(
+                            $"[Moza] Wheel MCU UID ({_data.WheelMcuUid.Length}B): " +
+                            BitConverter.ToString(_data.WheelMcuUid).Replace("-", ""));
+                    break;
+
+                case "wheel-device-type":
+                    if (_data.WheelDeviceType.Length > 0)
+                        SimHub.Logging.Current.Info(
+                            $"[Moza] Wheel device type: {BitConverter.ToString(_data.WheelDeviceType)}");
+                    break;
+
+                case "wheel-capabilities":
+                    if (_data.WheelCapabilities.Length > 0)
+                        SimHub.Logging.Current.Info(
+                            $"[Moza] Wheel capabilities: {BitConverter.ToString(_data.WheelCapabilities)}");
+                    break;
+
+                case "wheel-presence":
+                    SimHub.Logging.Current.Info(
+                        $"[Moza] Wheel presence/ready: sub_device_count={_data.WheelSubDeviceCount}");
+                    break;
+
+                case "wheel-device-presence":
+                    SimHub.Logging.Current.Info(
+                        $"[Moza] Wheel device presence byte: 0x{_data.WheelDevicePresence:X2}");
+                    break;
+
+                case "wheel-identity-11":
+                    if (_data.WheelIdentity11.Length > 0)
+                        SimHub.Logging.Current.Info(
+                            $"[Moza] Wheel identity-11: {BitConverter.ToString(_data.WheelIdentity11)}");
+                    break;
+
+                // Display sub-device identity responses (wrapped via 0x43)
+                case "display-model-name":
+                    if (!string.IsNullOrEmpty(_data.DisplayModelName))
+                        SimHub.Logging.Current.Info($"[Moza] Display model: {_data.DisplayModelName}");
+                    break;
+                case "display-hw-version":
+                    if (!string.IsNullOrEmpty(_data.DisplayHwVersion))
+                        SimHub.Logging.Current.Info($"[Moza] Display HW: {_data.DisplayHwVersion}");
+                    break;
+                case "display-sw-version":
+                    if (!string.IsNullOrEmpty(_data.DisplaySwVersion))
+                        SimHub.Logging.Current.Info($"[Moza] Display FW: {_data.DisplaySwVersion}");
+                    break;
+                case "display-serial":
+                    if (!string.IsNullOrEmpty(_data.DisplaySerialNumber))
+                        SimHub.Logging.Current.Info($"[Moza] Display serial: {_data.DisplaySerialNumber}");
+                    break;
+                case "display-presence":
+                    SimHub.Logging.Current.Info(
+                        $"[Moza] Display presence/ready: sub_device_count={_data.DisplaySubDeviceCount}");
+                    break;
+                case "display-device-presence":
+                    SimHub.Logging.Current.Info(
+                        $"[Moza] Display device presence byte: 0x{_data.DisplayDevicePresence:X2}");
+                    break;
+                case "display-device-type":
+                    if (_data.DisplayDeviceType.Length > 0)
+                        SimHub.Logging.Current.Info(
+                            $"[Moza] Display device type: {BitConverter.ToString(_data.DisplayDeviceType)}");
+                    break;
+                case "display-capabilities":
+                    if (_data.DisplayCapabilities.Length > 0)
+                        SimHub.Logging.Current.Info(
+                            $"[Moza] Display capabilities: {BitConverter.ToString(_data.DisplayCapabilities)}");
+                    break;
+                case "display-identity-11":
+                    if (_data.DisplayIdentity11.Length > 0)
+                        SimHub.Logging.Current.Info(
+                            $"[Moza] Display identity-11: {BitConverter.ToString(_data.DisplayIdentity11)}");
+                    break;
+                case "display-mcu-uid":
+                    // Logged before value<0 guard (see top of DetectDevices). Not hit here.
                     break;
 
                 case "wheel-rpm-value1":

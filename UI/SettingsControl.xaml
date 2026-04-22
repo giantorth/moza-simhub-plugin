@@ -849,6 +849,52 @@
                 </ScrollViewer>
             </TabItem>
 
+            <TabItem Header="Diagnostics">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="10,5">
+                        <TextBlock Text="Diagnostics" Style="{StaticResource SectionHeader}"/>
+                        <TextBlock TextWrapping="Wrap" Foreground="Gray" FontSize="11" Margin="0,0,0,8"
+                                   Text="Live dump of wheel identity, display sub-device identity, dashboard state from the wheel's configJson RPC, and session/connection info. Refreshes ~1/s."/>
+
+                        <!-- Wheel identity -->
+                        <TextBlock Text="Wheel identity" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                        <TextBlock x:Name="DiagWheelIdentityBox" FontFamily="Consolas" FontSize="11"
+                                   TextWrapping="Wrap" Text="—" Margin="0,0,0,10"/>
+
+                        <Separator Margin="0,4,0,8"/>
+
+                        <!-- Display sub-device identity -->
+                        <TextBlock Text="Display sub-device identity" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                        <TextBlock x:Name="DiagDisplayIdentityBox" FontFamily="Consolas" FontSize="11"
+                                   TextWrapping="Wrap" Text="—" Margin="0,0,0,10"/>
+
+                        <Separator Margin="0,4,0,8"/>
+
+                        <!-- Dashboard state (session 0x09 configJson RPC) -->
+                        <TextBlock Text="Wheel dashboard state (session 0x09)" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                        <TextBlock x:Name="DiagDashboardStateBox" FontFamily="Consolas" FontSize="11"
+                                   TextWrapping="Wrap" Text="—" Margin="0,0,0,10"/>
+
+                        <Separator Margin="0,4,0,8"/>
+
+                        <!-- Tile-server state (session 0x03, if received) -->
+                        <TextBlock Text="Tile-server state (session 0x03)" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                        <TextBlock x:Name="DiagTileServerBox" FontFamily="Consolas" FontSize="11"
+                                   TextWrapping="Wrap" Text="—" Margin="0,0,0,10"/>
+
+                        <Separator Margin="0,4,0,8"/>
+
+                        <!-- Session / connection -->
+                        <TextBlock Text="Session state" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                        <TextBlock x:Name="DiagSessionBox" FontFamily="Consolas" FontSize="11"
+                                   TextWrapping="Wrap" Text="—" Margin="0,0,0,10"/>
+
+                        <Button Content="Copy all to clipboard" Padding="6,2"
+                                Click="DiagCopyAll_Click" HorizontalAlignment="Left" Margin="0,4,0,0"/>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
         </TabControl>
     </DockPanel>
 </UserControl>

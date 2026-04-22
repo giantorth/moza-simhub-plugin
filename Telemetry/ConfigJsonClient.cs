@@ -32,16 +32,48 @@ namespace MozaPlugin.Telemetry
             _deviceInbox.AddChunk(chunkPayload);
             byte[]? decomp = _deviceInbox.TryDecompress();
             if (decomp == null) return null;
-            var state = WheelStateParser.Parse(decomp);
+            var state = WheelStateParser.Parse(decomp, out var missing);
             if (state != null)
             {
                 _lastState = state;
                 // Consume the decoded blob so successive updates (e.g. after
                 // a dashboard change) can reassemble a fresh one.
                 _deviceInbox.Clear();
+                try
+                {
+                    SimHub.Logging.Current.Info(
+                        $"[Moza] configJson state received: TitleId={state.TitleId} " +
+                        $"displayVersion={state.DisplayVersion} resetVersion={state.ResetVersion} " +
+                        $"configJsonList={state.ConfigJsonList.Count} " +
+                        $"enabled={state.EnabledDashboards.Count} disabled={state.DisabledDashboards.Count} " +
+                        $"imageRefMap={state.ImageRefMap.Count} imagePath={state.ImagePath.Count} " +
+                        $"rootDirPath='{state.RootDirPath}'");
+                }
+                catch { /* logging optional in unit tests */ }
+                // Diagnostic: flag firmware-schema drift. 2025-11 firmware
+                // emits all 11 top-level fields; older or newer firmware may
+                // drop/rename fields and PitHouse's UI flatly rejects the
+                // state when any are missing. Log once per distinct shape.
+                if (missing.Count > 0)
+                {
+                    string shape = string.Join(",", missing);
+                    if (shape != _lastMissingShape)
+                    {
+                        _lastMissingShape = shape;
+                        try
+                        {
+                            SimHub.Logging.Current.Info(
+                                $"[Moza] configJson state missing {missing.Count} expected top-level field(s): {shape}. " +
+                                "Firmware may be older than 2025-11 or schema has drifted — PitHouse UI may reject.");
+                        }
+                        catch { /* logging optional in unit tests */ }
+                    }
+                }
             }
             return state;
         }
+
+        private string _lastMissingShape = "";
 
         /// <summary>
         /// Build the host's `configJson()` reply. Pass the library names the
