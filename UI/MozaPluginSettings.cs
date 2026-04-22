@@ -83,9 +83,7 @@ namespace MozaPlugin
         //       wheel firmware resolves compression internally)
         //   2 = Compact numeric, single batch (host sends flag bytes, channel
         //       indices, compression codes, bit widths per tier)
-        //   3 = Compact numeric, two batch (probe batch at 0x00 followed by
-        //       real def at FlagByte — matches PitHouse's observed sequence)
-        public int TelemetryProtocolVersion { get; set; } = 3;
+        public int TelemetryProtocolVersion { get; set; } = 2;
 
         // Telemetry send rate in Hz
         public int TelemetrySendRateHz { get; set; } = 20;

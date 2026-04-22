@@ -88,5 +88,62 @@ namespace MozaPlugin.Tests.Protocol
         {
             Assert.Equal(expected, MozaProtocol.ToggleBit7(input));
         }
+
+        [Fact]
+        public void StuffFrame_NoEscapes_CopiesVerbatim()
+        {
+            byte[] frame = { 0x7E, 0x03, 0x41, 0x17, 0xAA, 0xBB, 0xCC };
+            var dest = new byte[16];
+            int len = MozaProtocol.StuffFrame(frame, dest);
+            Assert.Equal(frame.Length, len);
+            Assert.Equal(frame.Length, MozaProtocol.StuffedFrameSize(frame));
+            for (int i = 0; i < frame.Length; i++)
+                Assert.Equal(frame[i], dest[i]);
+        }
+
+        [Fact]
+        public void StuffFrame_PayloadHas7E_DoublesIt()
+        {
+            byte[] frame = { 0x7E, 0x04, 0x41, 0x17, 0x7E, 0xBB, 0xCC };
+            var dest = new byte[16];
+            int len = MozaProtocol.StuffFrame(frame, dest);
+            Assert.Equal(frame.Length + 1, len);
+            Assert.Equal(frame.Length + 1, MozaProtocol.StuffedFrameSize(frame));
+            byte[] expected = { 0x7E, 0x04, 0x41, 0x17, 0x7E, 0x7E, 0xBB, 0xCC };
+            for (int i = 0; i < expected.Length; i++)
+                Assert.Equal(expected[i], dest[i]);
+        }
+
+        [Fact]
+        public void StuffFrame_HeaderLenBytePreserved_NotStuffed()
+        {
+            // 0x7E in header position 1 (length byte) must not be doubled — only
+            // bytes from index 2 onward are stuffed. This edge case matters for
+            // frames with payload-length 126 (0x7E) which are legal.
+            byte[] frame = new byte[0x7E + 3];
+            frame[0] = 0x7E;
+            frame[1] = 0x7E;
+            frame[2] = 0x41;
+            frame[3] = 0x17;
+            var dest = new byte[frame.Length * 2];
+            int len = MozaProtocol.StuffFrame(frame, dest);
+            Assert.Equal(frame.Length, len);
+            Assert.Equal(0x7E, dest[0]);
+            Assert.Equal(0x7E, dest[1]);
+            Assert.Equal(0x41, dest[2]);
+        }
+
+        [Fact]
+        public void StuffFrame_MultipleEscapes()
+        {
+            byte[] frame = { 0x7E, 0x05, 0x43, 0x17, 0x7E, 0x00, 0x7E, 0x7E };
+            var dest = new byte[32];
+            int len = MozaProtocol.StuffFrame(frame, dest);
+            // Three 0x7E in the stuffable region (indices 4, 6, 7) → +3 escapes.
+            Assert.Equal(frame.Length + 3, len);
+            byte[] expected = { 0x7E, 0x05, 0x43, 0x17, 0x7E, 0x7E, 0x00, 0x7E, 0x7E, 0x7E, 0x7E };
+            for (int i = 0; i < expected.Length; i++)
+                Assert.Equal(expected[i], dest[i]);
+        }
     }
 }

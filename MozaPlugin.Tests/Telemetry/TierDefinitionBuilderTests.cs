@@ -145,32 +145,6 @@ namespace MozaPlugin.Tests.Telemetry
         }
 
         [Fact]
-        public void BuildProbeBatch_TotalChannelsZero()
-        {
-            var profile = F1DashboardProfileFixture.BuildMultiStream();
-            byte[] msg = TierDefinitionBuilder.BuildProbeBatch(profile, flagBase: 0x08);
-
-            // One tier def (size=1, just flag byte) + end marker
-            // tier def = 1 tag + 4 size + 1 flag = 6 bytes
-            // end marker = 1 tag + 4 param + 4 total = 9 bytes
-            Assert.Equal(6 + 9, msg.Length);
-
-            Assert.Equal(0x01, msg[0]);
-            // size = 1 (LE)
-            Assert.Equal(0x01, msg[1]); Assert.Equal(0x00, msg[2]);
-            Assert.Equal(0x00, msg[3]); Assert.Equal(0x00, msg[4]);
-            Assert.Equal(0x08, msg[5]); // flag
-
-            // End marker
-            Assert.Equal(0x06, msg[6]);
-            // total_channels = 0
-            Assert.Equal(0x00, msg[11]);
-            Assert.Equal(0x00, msg[12]);
-            Assert.Equal(0x00, msg[13]);
-            Assert.Equal(0x00, msg[14]);
-        }
-
-        [Fact]
         public void BuildV0UrlSubscription_StructureValid()
         {
             var profile = F1DashboardProfileFixture.BuildMultiStream();

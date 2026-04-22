@@ -10,12 +10,43 @@ using System.Threading;
 
 namespace MozaPlugin.Protocol
 {
+    /// <summary>
+    /// Stream identifier for coalescing latest-wins telemetry frames. Each kind has
+    /// a single slot in <see cref="MozaSerialConnection"/>; enqueueing a new frame
+    /// for the same kind overwrites any not-yet-sent predecessor, so stale frames
+    /// can never pile up behind newer ones. One-shot/session traffic should still
+    /// use <see cref="MozaSerialConnection.Send(byte[])"/>.
+    /// </summary>
+    public enum StreamKind
+    {
+        TierDash0 = 0,
+        TierDash1 = 1,
+        TierDash2 = 2,
+        TierDash3 = 3,
+        TierDash4 = 4,
+        TierDash5 = 5,
+        TierDash6 = 6,
+        TierDash7 = 7,
+        Enable = 8,
+        Sequence = 9,
+        Mode = 10,
+    }
+
     public class MozaSerialConnection : IDisposable
     {
+        private const int StreamSlotCount = 11;
+
         private volatile SerialPort? _port;
         private Thread? _readThread;
         private Thread? _writeThread;
-        private readonly ConcurrentQueue<byte[]> _writeQueue = new ConcurrentQueue<byte[]>();
+        // One-shot lane: session traffic, settings writes, probes — must preserve
+        // FIFO order and receives 4 ms pacing when bursted (Moza bases drop rapid
+        // settings writes otherwise; see WriteLoop).
+        private readonly ConcurrentQueue<byte[]> _oneShotQueue = new ConcurrentQueue<byte[]>();
+        // Stream lane: per-kind latest-wins slots for periodic telemetry. Drained
+        // after the one-shot lane, unpaced. SendStream overwrites any pending
+        // slot so lagging frames never reach the wire stale.
+        private readonly byte[]?[] _streamSlots = new byte[StreamSlotCount][];
         private volatile bool _running;
         private readonly object _lock = new object();
         private string? _lastPortName;
@@ -65,7 +96,9 @@ namespace MozaPlugin.Protocol
         private bool TryOpen(string portName)
         {
             // Drain any stale messages from a previous connection
-            while (_writeQueue.TryDequeue(out _)) { }
+            while (_oneShotQueue.TryDequeue(out _)) { }
+            for (int k = 0; k < _streamSlots.Length; k++)
+                Interlocked.Exchange(ref _streamSlots[k], null);
 
             try
             {
@@ -138,7 +171,39 @@ namespace MozaPlugin.Protocol
         public void Send(byte[] message)
         {
             if (message != null)
-                _writeQueue.Enqueue(message);
+                _oneShotQueue.Enqueue(message);
+        }
+
+        /// <summary>
+        /// Enqueue a periodic-stream frame with latest-wins coalescing. Any frame
+        /// already pending in the same <see cref="StreamKind"/> slot is discarded.
+        /// Use for telemetry/enable/sequence/mode — frames that only matter at their
+        /// latest value. For ordered one-shot traffic use <see cref="Send(byte[])"/>.
+        /// </summary>
+        public void SendStream(StreamKind kind, byte[] message)
+        {
+            if (message == null) return;
+            int idx = (int)kind;
+            if ((uint)idx >= (uint)_streamSlots.Length) return;
+            Interlocked.Exchange(ref _streamSlots[idx], message);
+        }
+
+        /// <summary>
+        /// Drop everything pending: one-shot FIFO, all stream slots, and the OS
+        /// write buffer. Called from TelemetrySender.Stop so clicking the test
+        /// button's Stop halts the wheel immediately instead of bleeding through
+        /// the ~16 KB WriteBufferSize (~1.4 s at 115200 baud).
+        /// </summary>
+        public void FlushPendingWrites()
+        {
+            while (_oneShotQueue.TryDequeue(out _)) { }
+            for (int k = 0; k < _streamSlots.Length; k++)
+                Interlocked.Exchange(ref _streamSlots[k], null);
+            lock (_lock)
+            {
+                try { _port?.DiscardOutBuffer(); }
+                catch (Exception ex) { SimHub.Logging.Current.Debug($"[Moza] DiscardOutBuffer: {ex.Message}"); }
+            }
         }
 
         // Record an I/O failure. Throttles log spam and force-closes the port
@@ -165,7 +230,9 @@ namespace MozaPlugin.Protocol
                     try { _port?.Close(); } catch { }
                     _port = null;
                 }
-                while (_writeQueue.TryDequeue(out _)) { }
+                while (_oneShotQueue.TryDequeue(out _)) { }
+                for (int k = 0; k < _streamSlots.Length; k++)
+                    Interlocked.Exchange(ref _streamSlots[k], null);
             }
         }
 
@@ -176,9 +243,8 @@ namespace MozaPlugin.Protocol
             // Bulk read buffer — drains all available bytes from the OS read
             // buffer in one SerialPort.Read() call, then parses frames from
             // this byte array in memory. Per-byte ReadByte() under Wine/tty0tty
-            // had ~100μs per-call overhead, causing plugin to fall behind sim's
-            // bursted session 0x09 state pushes and silently lose chunks 1-6
-            // of 7 (seen 2026-04-22). Bulk read eliminates the overhead.
+            // had ~100μs per-call overhead which made multi-chunk burst pacing
+            // marginal even for valid frames.
             var rx = new List<byte>(capacity: 8192);
             var tmp = new byte[4096];
 
@@ -362,50 +428,88 @@ namespace MozaPlugin.Protocol
         {
             SimHub.Logging.Current.Info("[Moza] Write thread started");
             int writeCount = 0;
+            // Pooled stuffing buffer. Worst-case stuffed size is 2 * decoded size;
+            // grows on demand if a larger frame arrives.
+            byte[] stuffBuf = new byte[512];
+            int lastWriteTicks = Environment.TickCount - 1000;
+            bool lastWasOneShot = false;
 
             while (_running)
             {
-                if (_writeQueue.TryDequeue(out var msg))
+                bool didWork = false;
+
+                // 1) One-shot FIFO: session traffic, settings writes, probes.
+                //    Paced at 4 ms between consecutive one-shots — Moza bases drop
+                //    settings writes when flooded (ApplyProfile sends 30+ in a burst).
+                //    Pacing is skipped when the previous write was a stream frame,
+                //    since telemetry-group writes never trigger the drop.
+                if (_oneShotQueue.TryDequeue(out var msg))
                 {
-                    try
+                    if (lastWasOneShot)
                     {
-                        lock (_lock)
-                        {
-                            // Moza byte-stuffing: header (start + len) goes raw; every
-                            // 0x7E byte after that is doubled on the wire so the
-                            // receiver doesn't treat it as a new frame start. Applies
-                            // to group, device, payload, and checksum alike.
-                            if (msg.Length >= 2)
-                                _port?.Write(msg, 0, 2);
-                            byte stuff = MozaProtocol.MessageStart;
-                            for (int i = 2; i < msg.Length; i++)
-                            {
-                                _port?.Write(msg, i, 1);
-                                if (msg[i] == MozaProtocol.MessageStart)
-                                    _port?.Write(new byte[] { stuff }, 0, 1);
-                            }
-                        }
+                        int since = Environment.TickCount - lastWriteTicks;
+                        if (since < 4)
+                            Thread.Sleep(4 - since);
+                    }
+                    if (WriteFrame(msg, ref stuffBuf))
+                    {
                         writeCount++;
                         if (writeCount <= 5)
                             SimHub.Logging.Current.Info($"[Moza] Sent cmd #{writeCount}: {msg.Length} bytes, group=0x{(msg.Length > 2 ? msg[2] : 0):X2}");
-
-                        Interlocked.Exchange(ref _consecutiveIoErrors, 0);
-
-                        // Pace writes: Moza bases drop commands when flooded with rapid-fire
-                        // settings writes (e.g. ApplyProfile sends 30+ commands in a burst).
-                        // 4ms matches boxflat's proven timing for reliable device writes.
-                        if (!_writeQueue.IsEmpty)
-                            Thread.Sleep(4);
+                        lastWriteTicks = Environment.TickCount;
+                        lastWasOneShot = true;
                     }
-                    catch (Exception ex)
-                    {
-                        HandleIoFailure("Write", ex);
-                    }
+                    didWork = true;
                 }
                 else
                 {
-                    Thread.Sleep(10);
+                    // 2) Stream lane: latest-wins per kind, drained unpaced so a full
+                    //    telemetry tick (dash + enable + sequence + mode) goes out
+                    //    back-to-back in ~1 ms total instead of 12–28 ms of sleep.
+                    for (int k = 0; k < _streamSlots.Length; k++)
+                    {
+                        var slot = Interlocked.Exchange(ref _streamSlots[k], null);
+                        if (slot == null) continue;
+                        if (WriteFrame(slot, ref stuffBuf))
+                        {
+                            writeCount++;
+                            lastWriteTicks = Environment.TickCount;
+                            lastWasOneShot = false;
+                            didWork = true;
+                        }
+                    }
                 }
+
+                if (!didWork)
+                    Thread.Sleep(2);
+            }
+        }
+
+        /// <summary>
+        /// Byte-stuff <paramref name="msg"/> into <paramref name="stuffBuf"/> (growing
+        /// it if needed) and write the stuffed bytes to the port in one call.
+        /// Returns true on success, false if the port write raised — callers should
+        /// still count this as "work done" for loop-pacing decisions.
+        /// </summary>
+        private bool WriteFrame(byte[] msg, ref byte[] stuffBuf)
+        {
+            try
+            {
+                int needed = MozaProtocol.StuffedFrameSize(msg);
+                if (stuffBuf.Length < needed)
+                    stuffBuf = new byte[Math.Max(needed, stuffBuf.Length * 2)];
+                int len = MozaProtocol.StuffFrame(msg, stuffBuf);
+                lock (_lock)
+                {
+                    _port?.Write(stuffBuf, 0, len);
+                }
+                Interlocked.Exchange(ref _consecutiveIoErrors, 0);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                HandleIoFailure("Write", ex);
+                return false;
             }
         }
 

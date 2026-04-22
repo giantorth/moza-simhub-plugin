@@ -24,8 +24,7 @@ namespace MozaPlugin.Telemetry
     /// 0-based (0x00, 0x01, 0x02), independent of the session byte.
     ///
     /// Each tier in the MultiStreamProfile runs at its own rate derived from package_level.
-    /// Flag bytes are TierFlagBase + tier index (sorted by package_level ascending).
-    /// TierFlagBase is 0x00 for v0/v2 and FlagByte for v3 (two-batch forces session-port base).
+    /// Flag bytes are 0x00 + tier index (sorted by package_level ascending).
     /// </summary>
     public class TelemetrySender : IDisposable
     {
@@ -144,10 +143,8 @@ namespace MozaPlugin.Telemetry
         /// Tier definition protocol variant.
         /// 0 = URL-based subscription (send channel URLs, wheel resolves compression).
         /// 2 = Compact numeric, single batch (flag bytes, channel indices, compression codes, bit widths).
-        /// 3 = Compact numeric, two batch — probe batch at flag 0x00 followed by real def at FlagByte,
-        ///     matching PitHouse's observed sequence. Forces flag base = FlagByte for the real batch.
         /// </summary>
-        public int ProtocolVersion { get; set; } = 3;
+        public int ProtocolVersion { get; set; } = 2;
 
         /// <summary>Channel URLs reported by the wheel during session startup. Null until parsed.</summary>
         public System.Collections.Generic.IReadOnlyList<string>? WheelChannelCatalog => _wheelChannelCatalog;
@@ -203,7 +200,32 @@ namespace MozaPlugin.Telemetry
             _connection = connection;
         }
 
+        // Serializes Start() against concurrent callers. Without this, two
+        // Start() work items on the ThreadPool (e.g. rapid Test-button double-
+        // click routing through StartTelemetryIfReady's QueueUserWorkItem) each
+        // run Stop() then `new Timer()`; the losing thread's timer gets
+        // orphaned but keeps OnTimerElapsed subscribed, multiplying the tick
+        // rate for the lifetime of the session.
+        private int _startInProgress;
+
         public void Start()
+        {
+            if (Interlocked.CompareExchange(ref _startInProgress, 1, 0) != 0)
+            {
+                SimHub.Logging.Current.Warn("[Moza] Start() ignored — already starting");
+                return;
+            }
+            try
+            {
+                StartInner();
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _startInProgress, 0);
+            }
+        }
+
+        private void StartInner()
         {
             Stop();
             _enabled = true;
@@ -297,6 +319,10 @@ namespace MozaPlugin.Telemetry
                 _sendTimer.Dispose();
                 _sendTimer = null;
             }
+            // Drop anything already queued or sitting in the OS write buffer —
+            // otherwise frames keep flowing to the wheel for ~1.4 s after stop
+            // (16 KB WriteBufferSize at 115200 baud).
+            _connection.FlushPendingWrites();
             try { _ackReceived.Reset(); } catch (ObjectDisposedException) { }
             try { _mgmtResponseEvent.Reset(); } catch (ObjectDisposedException) { }
             try { _session04Opened.Reset(); } catch (ObjectDisposedException) { }
@@ -318,6 +344,23 @@ namespace MozaPlugin.Telemetry
         {
             _latestGameData = data;
         }
+
+        /// <summary>
+        /// Drop queued and in-flight writes on the serial connection. Exposed so
+        /// the UI Test Stop button can halt wire traffic immediately even when
+        /// the sender itself is left running (telemetry remains enabled).
+        /// </summary>
+        public void FlushPendingOutput() => _connection.FlushPendingWrites();
+
+        /// <summary>
+        /// Stop the tick timer without tearing down session state. Use for UI
+        /// Test Stop so the wheel goes quiet immediately; call Resume to kick
+        /// the timer back on. Full Stop() is the destructive teardown path.
+        /// </summary>
+        public void Pause() => _sendTimer?.Stop();
+
+        /// <summary>Re-enable a paused tick timer. No-op if never started.</summary>
+        public void Resume() => _sendTimer?.Start();
 
         // ── Port probing ────────────────────────────────────────────────────
 
@@ -418,25 +461,6 @@ namespace MozaPlugin.Telemetry
         }
 
         /// <summary>
-        /// Send the tier definition message on the telemetry session.
-        /// This is the critical config data that tells the wheel firmware how to
-        /// decode each flag byte's bit-packed telemetry data: which channels are
-        /// in each tier, their compression codes, and bit widths.
-        ///
-        /// Pithouse sends this as 7c:00 data chunks (type=0x01) on session 0x02
-        /// during the first ~1s after session open. Without it, the wheel silently
-        /// ignores all 7d:23 telemetry frames.
-        /// </summary>
-        /// <summary>
-        /// Compute the flag byte base for tier definitions and telemetry frames.
-        ///   v0/v2: 0x00. Matches PitHouse — flag bytes are always zero-based
-        ///          regardless of session port.
-        ///   v3:    FlagByte. Two-batch sends a probe at 0x00 then the real def
-        ///          at the session-port base.
-        /// </summary>
-        private byte TierFlagBase => ProtocolVersion == 3 ? FlagByte : (byte)0x00;
-
-        /// <summary>
         /// Wait for the wheel's pre-tier-def channel registration burst to stop
         /// arriving. Polls <see cref="_channelBufferLastActivityMs"/> — once the
         /// last activity is older than <paramref name="quietMs"/>, we assume the
@@ -514,6 +538,16 @@ namespace MozaPlugin.Telemetry
             return result.Tiers.Count == 0 ? profile : result;
         }
 
+        /// <summary>
+        /// Send the tier definition message on the telemetry session.
+        /// This is the critical config data that tells the wheel firmware how to
+        /// decode each flag byte's bit-packed telemetry data: which channels are
+        /// in each tier, their compression codes, and bit widths.
+        ///
+        /// Pithouse sends this as 7c:00 data chunks (type=0x01) on session 0x02
+        /// during the first ~1s after session open. Without it, the wheel silently
+        /// ignores all 7d:23 telemetry frames.
+        /// </summary>
         private void SendTierDefinition()
         {
             var profile = _profile;
@@ -563,7 +597,7 @@ namespace MozaPlugin.Telemetry
             }
             else
             {
-                // Versions 2 and 3: compact numeric tier definitions.
+                // Version 2: compact numeric tier definitions.
                 // Sub-message 1 preamble: tag 0x07 (version=2), tag 0x03 (value=0).
                 byte[] preambleMsg = new byte[]
                 {
@@ -574,26 +608,12 @@ namespace MozaPlugin.Telemetry
                 foreach (var frame in preambleFrames)
                     _connection.Send(frame);
 
-                // v3 (two-batch): probe batch at flag 0x00 before the real def. Matches
-                // PitHouse's observed sequence. TierFlagBase returns FlagByte for v3.
-                int probeChunks = 0;
-                if (ProtocolVersion == 3)
-                {
-                    byte[] probeMsg = TierDefinitionBuilder.BuildProbeBatch(profile, 0x00);
-                    var probeFrames = TierDefinitionBuilder.ChunkMessage(probeMsg, FlagByte, ref seq);
-                    foreach (var frame in probeFrames)
-                        _connection.Send(frame);
-                    probeChunks = probeFrames.Count;
-                }
-
-                byte flagBase = TierFlagBase;
-                byte[] message = TierDefinitionBuilder.BuildTierDefinitionMessage(profile, flagBase);
+                byte[] message = TierDefinitionBuilder.BuildTierDefinitionMessage(profile, 0x00);
                 var frames = TierDefinitionBuilder.ChunkMessage(message, FlagByte, ref seq);
 
                 SimHub.Logging.Current.Info(
-                    $"[Moza] Sending v{ProtocolVersion} tier definition: flagBase=0x{flagBase:X2}, " +
+                    $"[Moza] Sending v2 tier definition: flagBase=0x00, " +
                     $"preamble ({preambleFrames.Count} chunks)" +
-                    (probeChunks > 0 ? $" + probe ({probeChunks} chunks)" : "") +
                     $" + {message.Length} bytes in {frames.Count} chunks " +
                     $"on session 0x{FlagByte:X2} ({profile.Tiers.Count} tiers)");
 
@@ -1312,7 +1332,31 @@ namespace MozaPlugin.Telemetry
 
         // ── Timer loop ──────────────────────────────────────────────────────
 
+        // Re-entry guard. System.Timers.Timer fires Elapsed on the ThreadPool,
+        // so a handler that overruns its interval gets concurrent invocations.
+        // Without this, _tickCounter/_slowCounter/_modeCounter all race and
+        // non-coalesced one-shot frames (heartbeat, display_cfg) fire 2–3× the
+        // intended rate. Stream-lane traffic is coalesced so it's immune, but
+        // the counter races still skew scheduling. Drop overlapping ticks —
+        // the missed tick's data is re-covered by the next tick's fresh
+        // snapshot via the latest-wins stream slots.
+        private int _tickInProgress;
+
         private void OnTimerElapsed(object sender, ElapsedEventArgs e)
+        {
+            if (Interlocked.CompareExchange(ref _tickInProgress, 1, 0) != 0)
+                return;
+            try
+            {
+                OnTimerElapsedInner();
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _tickInProgress, 0);
+            }
+        }
+
+        private void OnTimerElapsedInner()
         {
             if (!_enabled || !_connection.IsConnected)
                 return;
@@ -1371,9 +1415,16 @@ namespace MozaPlugin.Telemetry
                     if (_tickCounter % tier.TickInterval != 0)
                         continue;
 
-                    byte flagByte = (byte)(TierFlagBase + i);
+                    byte flagByte = (byte)i;
                     byte[] frame = tier.Builder.BuildFrameFromSnapshot(snapshot, flagByte);
-                    _connection.Send(frame);
+                    // Latest-wins per tier: if the last frame for this tier is still
+                    // queued (e.g. write thread stalled under Wine syscall overhead),
+                    // overwrite it so the wheel gets the freshest snapshot instead
+                    // of a growing backlog.
+                    if (i < 8)
+                        _connection.SendStream((StreamKind)((int)StreamKind.TierDash0 + i), frame);
+                    else
+                        _connection.Send(frame);
 
                     if (i == 0)
                     {
@@ -1383,15 +1434,15 @@ namespace MozaPlugin.Telemetry
                     }
                 }
 
-                _connection.Send(_cachedEnableFrame);
+                _connection.SendStream(StreamKind.Enable, _cachedEnableFrame);
 
                 if (SendSequenceCounter)
-                    _connection.Send(BuildSequenceCounterFrame());
+                    _connection.SendStream(StreamKind.Sequence, BuildSequenceCounterFrame());
 
                 _tickCounter++;
 
                 if (SendTelemetryMode && (_modeCounter++ % 10 == 0))
-                    _connection.Send(_cachedModeFrame);
+                    _connection.SendStream(StreamKind.Mode, _cachedModeFrame);
 
                 int slow = Math.Max(1, 1000 / _baseTickMs);
                 if (_slowCounter++ % slow == 0)

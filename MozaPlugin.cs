@@ -493,6 +493,9 @@ namespace MozaPlugin
             if (_telemetrySender == null) return;
             var s = _settings;
 
+            // Legacy v3 (dropped — crashed some wheels) migrates to v2.
+            if (s.TelemetryProtocolVersion != 0 && s.TelemetryProtocolVersion != 2)
+                s.TelemetryProtocolVersion = 2;
             _telemetrySender.ProtocolVersion = s.TelemetryProtocolVersion;
             _telemetrySender.UploadDashboard = s.TelemetryUploadDashboard;
 

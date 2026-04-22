@@ -96,7 +96,6 @@ namespace MozaPlugin
                 RefreshPedalsTab();
                 RefreshHubTab();
                 InitTelemetryTab();
-                RefreshTelemetryStatus();
                 RefreshDiagnosticsTab();
             }
             finally
@@ -1094,7 +1093,7 @@ namespace MozaPlugin
             ProfileListControl.DataContext = ProfileStore;
         }
 
-        // ===== Telemetry tab =====
+        // ===== Telemetry (Options tab) =====
 
         private bool _telemetryUIInitialized;
 
@@ -1114,70 +1113,6 @@ namespace MozaPlugin
             {
                 _suppressEvents = false;
             }
-        }
-
-        private void RefreshTelemetryStatus()
-        {
-            var sender = _plugin.TelemetrySender;
-            if (sender == null) return;
-
-            bool enabled = _plugin.Settings.TelemetryEnabled;
-            bool testMode = sender.TestMode;
-
-            if (!enabled)
-                TelemetryStatusLabel.Text = "Disabled";
-            else if (testMode)
-                TelemetryStatusLabel.Text = $"Test pattern — {sender.FramesSent} frames sent";
-            else
-                TelemetryStatusLabel.Text = $"Sending — {sender.FramesSent} frames sent";
-
-            var last = sender.LastFrameSent;
-            TelemetryLastFrameLabel.Text = last != null
-                ? BitConverter.ToString(last).Replace("-", " ").ToLowerInvariant()
-                : "—";
-
-            // Display sub-device info
-            if (_plugin.IsDisplayDetected)
-                TelemetryDisplayLabel.Text = $"Display: {_plugin.DisplayModelName} (port 0x{sender.FlagByte:X2})";
-            else if (_plugin.IsNewWheelDetected)
-                TelemetryDisplayLabel.Text = "Display: not detected (no dashboard screen)";
-            else
-                TelemetryDisplayLabel.Text = "";
-
-            // Wheel channel catalog
-            var catalog = sender.WheelChannelCatalog;
-            if (catalog != null && catalog.Count > 0)
-                TelemetryWheelChannelsLabel.Text = $"Wheel channels ({catalog.Count}): {string.Join(", ", catalog)}";
-            else
-                TelemetryWheelChannelsLabel.Text = "";
-
-            TelemetryTestStopBtn.IsEnabled = testMode;
-            TelemetryTestStartBtn.IsEnabled = !testMode;
-        }
-
-        private void TelemetryTestStart_Click(object sender, RoutedEventArgs e)
-        {
-            var ts = _plugin.TelemetrySender;
-            if (ts == null) return;
-            ts.TestMode = true;
-            if (!_plugin.Settings.TelemetryEnabled)
-            {
-                _plugin.ApplyTelemetrySettings();
-                System.Threading.ThreadPool.QueueUserWorkItem(_ => ts.Start());
-            }
-            TelemetryTestStartBtn.IsEnabled = false;
-            TelemetryTestStopBtn.IsEnabled = true;
-        }
-
-        private void TelemetryTestStop_Click(object sender, RoutedEventArgs e)
-        {
-            var ts = _plugin.TelemetrySender;
-            if (ts == null) return;
-            ts.TestMode = false;
-            if (!_plugin.Settings.TelemetryEnabled)
-                ts.Stop();
-            TelemetryTestStartBtn.IsEnabled = true;
-            TelemetryTestStopBtn.IsEnabled = false;
         }
 
         private void UploadDashboard_Changed(object sender, RoutedEventArgs e)
@@ -1202,8 +1137,7 @@ namespace MozaPlugin
             {
                 case 0: return 0;
                 case 2: return 1;
-                case 3: return 2;
-                default: return 2;
+                default: return 1;
             }
         }
 
@@ -1213,23 +1147,8 @@ namespace MozaPlugin
             {
                 case 0: return 0;
                 case 1: return 2;
-                case 2: return 3;
-                default: return 3;
+                default: return 2;
             }
-        }
-
-        private void TelemetryExportLog_Click(object sender, RoutedEventArgs e)
-        {
-            var ts = _plugin.TelemetrySender;
-            if (ts == null) return;
-            var dlg = new Microsoft.Win32.SaveFileDialog
-            {
-                Title = "Save Frame Log",
-                Filter = "Text File|*.txt|All Files|*.*",
-                FileName = $"moza-telemetry-{DateTime.Now:yyyyMMdd-HHmmss}.txt"
-            };
-            if (dlg.ShowDialog() != true) return;
-            ts.Diagnostics.ExportLog(dlg.FileName);
         }
 
         // ── Diagnostics tab ─────────────────────────────────────────────

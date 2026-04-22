@@ -23,11 +23,6 @@ namespace MozaPlugin.Telemetry
     /// TelemetrySender.SendTierDefinition. A parser scanning the session buffer must
     /// therefore treat unknown top-level tags as generic TLV and skip by param_size.
     ///
-    /// In ProtocolVersion=3 (two-batch) the plugin sends two messages back-to-back
-    /// on the same session: a probe batch (BuildProbeBatch, ends with total_channels=0)
-    /// followed by the real tier def. A robust reassembler must not break on the first
-    /// 0x06 end marker — the second message starts immediately after it.
-    ///
     /// Channel indices are 1-based, assigned alphabetically by URL across all tiers,
     /// so indices within any single tier are NOT consecutive when a channel's URL
     /// sorts between two channels of a different tier. Compression codes are
@@ -175,36 +170,6 @@ namespace MozaPlugin.Telemetry
             w.Write((byte)0x06);
             w.Write((uint)4);
             w.Write((uint)allChannels.Count);
-
-            return ms.ToArray();
-        }
-
-        /// <summary>
-        /// Build a probe batch: empty tier definitions at flagBase + no enables +
-        /// end marker with total_channels=0. Pithouse sends this as a first batch
-        /// on the telemetry session BEFORE the real tier definitions. The probe
-        /// primes the wheel's tier parser — total_channels=0 is a sentinel ("probe"),
-        /// not a literal channel count. The two messages (probe + real) arrive on
-        /// the same session, each ending with its own 0x06 end marker.
-        /// </summary>
-        public static byte[] BuildProbeBatch(MultiStreamProfile profile, byte flagBase)
-        {
-            using var ms = new MemoryStream();
-            using var w = new BinaryWriter(ms);
-
-            // Tier definitions with no channel data — just flag + empty channel list
-            for (int i = 0; i < profile.Tiers.Count; i++)
-            {
-                byte flag = (byte)(flagBase + i);
-                w.Write((byte)0x01);         // tag
-                w.Write((uint)1);            // size = 1 (flag byte only, no channels)
-                w.Write(flag);               // flag byte
-            }
-
-            // End marker with total_channels=0
-            w.Write((byte)0x06);
-            w.Write((uint)4);
-            w.Write((uint)0);
 
             return ms.ToArray();
         }

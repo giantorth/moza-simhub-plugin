@@ -102,6 +102,41 @@ namespace MozaPlugin.Protocol
             return (byte)(((b & 0x0F) << 4) | ((b & 0xF0) >> 4));
         }
 
+        /// <summary>
+        /// Wire size (bytes) after byte-stuffing the given decoded frame. Header
+        /// bytes 0..1 (start, len) are never stuffed; every 0x7E from index 2 onward
+        /// is doubled on the wire.
+        /// </summary>
+        public static int StuffedFrameSize(byte[] frame)
+        {
+            int escapes = 0;
+            for (int i = 2; i < frame.Length; i++)
+                if (frame[i] == MessageStart) escapes++;
+            return frame.Length + escapes;
+        }
+
+        /// <summary>
+        /// Byte-stuff <paramref name="frame"/> into <paramref name="dest"/>, returning
+        /// the number of bytes written. Caller must size <paramref name="dest"/> to at
+        /// least <see cref="StuffedFrameSize(byte[])"/>. Header bytes 0..1 are copied
+        /// raw; from index 2 onward each 0x7E is emitted twice. Enables a single
+        /// <c>SerialPort.Write</c> call per frame instead of per-byte writes.
+        /// </summary>
+        public static int StuffFrame(byte[] frame, byte[] dest)
+        {
+            if (frame.Length < 2) return 0;
+            dest[0] = frame[0];
+            dest[1] = frame[1];
+            int di = 2;
+            for (int i = 2; i < frame.Length; i++)
+            {
+                dest[di++] = frame[i];
+                if (frame[i] == MessageStart)
+                    dest[di++] = MessageStart;
+            }
+            return di;
+        }
+
         public static byte ToggleBit7(byte b)
         {
             return (byte)(b ^ 0x80);

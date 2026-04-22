@@ -772,65 +772,9 @@
                         <TextBlock Text="Always send the LED bitmask with color updates, even if unchanged. Enable if your wheel ignores color changes when the same LEDs stay lit."
                                    Foreground="Gray" FontSize="11" Margin="0,4,0,0" TextWrapping="Wrap"/>
 
-                        <TextBlock Text="Reset" Style="{StaticResource SectionHeader}"/>
-                        <StackPanel Orientation="Horizontal" Margin="0,8">
-                            <Button x:Name="ClearAllSettingsButton" Content="Clear All Settings &amp; Profiles"
-                                    Padding="12,4" Click="ClearAllSettingsButton_Click"/>
-                        </StackPanel>
-                        <TextBlock Text="This will reset all plugin settings and profiles to their defaults."
-                                   Foreground="Gray" FontSize="11" Margin="0,4,0,0"/>
-
-                    </StackPanel>
-                </ScrollViewer>
-            </TabItem>
-
-            <TabItem Header="Dashboard Telemetry">
-                <ScrollViewer VerticalScrollBarVisibility="Auto">
-                    <StackPanel Margin="10,5">
                         <TextBlock Text="Dashboard Telemetry" Style="{StaticResource SectionHeader}"/>
-                        <TextBlock TextWrapping="Wrap" Foreground="Gray"
-                                   Text="Telemetry enable/disable and dashboard profile selection have moved to the MOZA Wheel device tab (Devices > your wheel > MOZA Wheel)."/>
-
-                        <!-- Separator -->
-                        <!-- Separator -->
-                        <Separator Margin="0,4,0,8"/>
-                        <TextBlock Text="Test Pattern" FontWeight="SemiBold" Margin="0,0,0,6"/>
-
-                        <!-- Test pattern controls -->
-                        <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
-                            <Button x:Name="TelemetryTestStartBtn" Content="▶ Send Test Pattern"
-                                    Padding="6,2" Margin="0,0,8,0" Click="TelemetryTestStart_Click"/>
-                            <Button x:Name="TelemetryTestStopBtn" Content="■ Stop"
-                                    Padding="6,2" Click="TelemetryTestStop_Click" IsEnabled="False"/>
-                        </StackPanel>
-                        <TextBlock Text="Cycles: Gear 1→6, Brake 0→100%, Speed 0→200 km/h" Foreground="Gray"
-                                   FontSize="11" Margin="0,0,0,8"/>
-
-                        <!-- Separator -->
-                        <Separator Margin="0,4,0,8"/>
-                        <TextBlock Text="Status" FontWeight="SemiBold" Margin="0,0,0,6"/>
-
-                        <!-- Frame log -->
-                        <Button Content="Export Frame Log…" Padding="6,2" Margin="0,0,0,8"
-                                Click="TelemetryExportLog_Click"/>
-                        <TextBlock Text="Last frame:" Margin="0,0,0,2"/>
-                        <TextBlock x:Name="TelemetryLastFrameLabel"
-                                   FontFamily="Consolas" FontSize="11" TextWrapping="Wrap"
-                                   Foreground="Gray" Text="—" Margin="0,0,0,4"/>
-                        <TextBlock x:Name="TelemetryStatusLabel" Foreground="Gray" FontSize="11"
-                                   Text="Disabled" Margin="0,0,0,4"/>
-
-                        <!-- Display sub-device info -->
-                        <TextBlock x:Name="TelemetryDisplayLabel" Foreground="Gray" FontSize="11"
-                                   Text="" Margin="0,0,0,4"/>
-                        <TextBlock x:Name="TelemetryWheelChannelsLabel" Foreground="Gray" FontSize="11"
-                                   TextWrapping="Wrap" Text="" Margin="0,0,0,8"/>
-
-                        <!-- Advanced / debug -->
-                        <Separator Margin="0,4,0,8"/>
-                        <TextBlock Text="Advanced" FontWeight="SemiBold" Margin="0,0,0,6"/>
                         <CheckBox x:Name="UploadDashboardCheck" Content="Upload dashboard on connect"
-                                  Margin="0,0,0,4" Checked="UploadDashboard_Changed" Unchecked="UploadDashboard_Changed"/>
+                                  Margin="0,8,0,4" Checked="UploadDashboard_Changed" Unchecked="UploadDashboard_Changed"/>
                         <TextBlock TextWrapping="Wrap" Foreground="Gray" FontSize="11" Margin="0,0,0,8"
                                    Text="PitHouse uploads the dashboard file to the wheel on every connection. Disable to test telemetry without upload."/>
                         <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
@@ -839,11 +783,18 @@
                                       SelectionChanged="ProtocolVersion_Changed">
                                 <ComboBoxItem Content="0 — URL subscription (CSP-style)"/>
                                 <ComboBoxItem Content="2 — Compact numeric (VGS-style)"/>
-                                <ComboBoxItem Content="3 — Compact numeric, two-batch (PitHouse)"/>
                             </ComboBox>
                         </StackPanel>
                         <TextBlock TextWrapping="Wrap" Foreground="Gray" FontSize="11" Margin="0,2,0,8"
-                                   Text="Tier definition format. Version 3 (default) matches PitHouse's probe-then-def sequence. 2 is single-batch compact numeric; 0 sends URLs for the wheel to resolve. Telemetry restarts automatically on change."/>
+                                   Text="Tier definition format. Version 2 (default) is single-batch compact numeric; 0 sends URLs for the wheel to resolve. Telemetry restarts automatically on change."/>
+
+                        <TextBlock Text="Reset" Style="{StaticResource SectionHeader}"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,8">
+                            <Button x:Name="ClearAllSettingsButton" Content="Clear All Settings &amp; Profiles"
+                                    Padding="12,4" Click="ClearAllSettingsButton_Click"/>
+                        </StackPanel>
+                        <TextBlock Text="This will reset all plugin settings and profiles to their defaults."
+                                   Foreground="Gray" FontSize="11" Margin="0,4,0,0"/>
 
                     </StackPanel>
                 </ScrollViewer>

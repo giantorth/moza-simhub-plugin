@@ -661,15 +661,17 @@ Up to 9 concurrent sessions during dashboard management. Confirmed across 4 capt
 
 **Sessions 0x08 and 0x09 are retransmitted** until host sends `fc:00` ack. Real wheel sends each up to 3 times at 1 s intervals. Sim implementations should do same if host doesn't ACK immediately.
 
-### Compressed transfer format (sessions 0x04, 0x09, 0x0a)
+### Compressed transfer format (sessions 0x09, 0x0a)
 
-Zlib-compressed transfers (RPC messages, file contents, configJson state) prepend 9-byte header to reassembled application data:
+Sessions 0x09 (configJson state) and 0x0a (RPC) prepend a 9-byte header to the reassembled application data:
 
 ```
-flags(1)  comp_sz(4 LE)  uncomp_sz(4 LE)  [zlib data...]
+flags(1)  comp_sz+4(4 LE)  uncomp_sz(4 LE)  [zlib data...]
 ```
 
-Zlib stream uses standard deflate (`78 9c` magic). Reassembly: strip 4-byte CRC from each chunk, concatenate payloads (excluding session/type/seq headers), then parse 9-byte header and decompress `comp_sz` bytes.
+The `comp_sz` field stores the compressed byte count **plus 4** (confirmed across five reset-RPC blobs in 2026-04-21 captures — envelope `00 1d 00 00 00 11 00 00 00` for a 25-byte zlib stream and 17-byte JSON body, i.e. field=29, comp=25, uncomp=17). Zlib stream uses standard deflate (`78 9c` magic). Reassembly: strip 4-byte CRC from each chunk, concatenate payloads (excluding session/type/seq headers), then parse 9-byte header and decompress.
+
+**Session 0x04 root directory listing does NOT use this envelope** — it uses a 53-byte prefix documented in § Session 0x04 device → host root directory listing. Session 0x03 tile-server uses a third format (12-byte wrapper, § below). **One envelope per session**, not shared.
 
 ### Session 0x03 tile-server envelope (variant, 12 bytes)
 
@@ -703,13 +705,15 @@ Observed: `04 00 fd 02` → session 4, window 765.
 
 ### Session 0x0a RPC (host → device)
 
-Plugin exposes `TelemetrySender.SendRpcCall(method, arg, timeoutMs)` to send JSON RPCs on session 0x0a in same 9-byte `[flag=0x00][comp_size:u32 LE][uncomp_size:u32 LE][zlib]` envelope used by `configJson` on session 0x09. Request shape `{"<method>()": <arg>, "id": <N>}`, reply shape `{"id": <N>, "result": <value>}`. Replies routed by `id` via dictionary of waiters so multiple in-flight RPCs tracked concurrently.
+Plugin exposes `TelemetrySender.SendRpcCall(method, arg, timeoutMs)` to send JSON RPCs on session 0x0a in same 9-byte `[flag=0x00][comp_size+4:u32 LE][uncomp_size:u32 LE][zlib]` envelope used by `configJson` on session 0x09. Request shape `{"<method>()": <arg>, "id": <N>}`. Reply shape **mirrors the request**: `{"<method>()": <return>, "id": <same N>}` — NOT `{"id": N, "result": ...}`. The `<return>` value is an empty string for the reset RPC (only shape confirmed by pcap); sim uses `""` for every reply pending a capture of a real wheel's `completelyRemove` reply. Replies routed by `id` via dictionary of waiters so multiple in-flight RPCs tracked concurrently.
+
+**Cross-check (2026-04-22):** earlier sim emitted `{"id": N, "result": ...}` replies and PitHouse silently dropped them — the Dashboard Manager stayed stuck on the pre-delete state and refused to initiate any subsequent upload. Switching to the mirrored-key reply shape cleared the stall on the sim side (delete RPC round-trip confirmed end-to-end).
 
 Known methods (observed via pithouse sim capture, 2026-04-21):
 
 | UI action | Request | Notes |
 |-----------|---------|-------|
-| Delete dashboard | `{"completelyRemove()": "{<uuid>}", "id": N}` | UUID in Microsoft GUID format e.g. `{7c218515-6ec6-4e5f-9820-ba030b14c43d}` |
+| Delete dashboard | `{"completelyRemove()": "{<uuid>}", "id": N}` | UUID in Microsoft GUID format e.g. `{7c218515-6ec6-4e5f-9820-ba030b14c43d}`. **The `<uuid>` is PitHouse's own per-install cache key, NOT the id the sim advertised in `enableManager.dashboards[].id`.** Observed uuids include all-zero placeholders like `{00000000-0000-0000-0000-000000000003}` and random 32-char strings (`gLib1v4iWa5XZBCDew8R71yImlYyyaBC`). Sim-side delete handlers must fall back to dirName/hash/title matching (and a single-non-factory-dashboard heuristic when FS holds exactly one user upload) because the uuid will never match whatever the sim reports on session 0x09. |
 | Reset dashboard | `{"()": "", "id": N}` | **Empty method name** (literal `()`), empty args |
 
 **Observed id semantics (PitHouse sim, 2026-04-21):** id is **NOT a monotonic RPC counter**. Across 4 rapid consecutive "Reset Dashboard" clicks within one Pithouse session, all 4 frames carried `id=13`. A prior Pithouse session used `id=15` for a single reset. Id appears to be a **session-scoped target reference** — assigned by Pithouse at connect time, reused for all calls targeting the same item. Different connect = different id. Practical implication: wheel sim / plugin should accept any integer id and echo it back in reply, not expect sequential ids.
@@ -865,19 +869,35 @@ Interpretation:
 
 Both response structures chunked via standard `7c:00 type=0x01` SerialStream data chunks on session 0x04 with per-chunk CRC-32 trailers. Sim / reference implementation builds full ~318-byte message once, then pushes through `ChunkMessage(msg, session=0x04, seq)` for 6 wire chunks.
 
-**2025-11 firmware note:** `automobilista2-wheel-connect-dash-change.pcapng` shows 2025-11 firmware's initial filesystem push on session 0x04 uses DIFFERENT structure (role=`0x0A`, `ttype=0x00`, 14-byte length header + UTF-16LE `/home/root` + 0xFF padding + zlib directory listing). That burst NOT upload response — root directory listing (see § Session 0x04 device → host root directory listing). Under 2025-11, confirmation of fresh upload arrives as post-upload dir-listing refresh on session 0x04 (and updated configJson state blob on session 0x09), not as sub-msg 1/2 response with 2026-04 format. When implementing wheel sim: emit both paths based on `ttype`: `0x01` for per-sub-msg acks (2026-04 style), secondary root-listing refresh on END for 2025-11 parity.
+**2025-11 firmware note:** `automobilista2-wheel-connect-dash-change.pcapng` shows 2025-11 firmware's initial filesystem push on session 0x04 uses a DIFFERENT structure: subtype tag `0x0a`, 53-byte prefix (tag + LE size + BE path-length + UTF-16LE `/home/root` + `ff*8 00` padding + 14-byte unknown metadata) wrapping a zlib directory listing. Full byte-level layout documented in § Session 0x04 device → host root directory listing. That burst is NOT an upload response — it's a root directory listing. Under 2025-11, confirmation of fresh upload arrives as post-upload dir-listing refresh on session 0x04 (and updated configJson state blob on session 0x09), not as sub-msg 1/2 response with 2026-04 format. When implementing wheel sim: emit both paths based on `ttype`: `0x01` for per-sub-msg acks (2026-04 style), secondary root-listing refresh on END for 2025-11 parity.
 
 ### Session 0x04 device → host root directory listing (2025-11 firmware)
 
-Shortly after session 0x04 opens, device pushes filesystem root listing (zlib-compressed JSON, same 9-byte envelope) so host can see what's on wheel before choosing to re-upload:
+Shortly after session 0x04 opens, device pushes filesystem root listing so host can see what's on wheel before choosing to re-upload. Envelope **differs from session 0x09** — a 53-byte prefix precedes the zlib stream (verified 2026-04-22 by decoding `automobilista2-wheel-connect-dash-change.pcapng`):
+
+```
+Offset  Bytes                                           Meaning
+0x00    0a                                              subtype tag
+0x01    <size LE:4>     (e.g. d5 00 00 00 = 213)        byte count after this field
+0x05    <pathlen BE:4><0x00>  (e.g. 00 00 00 14 00)     path length in bytes + null sep
+0x0a    <UTF-16LE path>  (20 B for "/home/root")        utf-16 directory path
++path   ff ff ff ff ff ff ff ff 00                      9-byte padding sentinel
++9      de c3 90 00 00 00 00 00 00 00                   10-byte unknown metadata block
++10     a9 88 01 00                                     4-byte unknown (LE 100521 — not uncomp size)
+-----   zlib deflate stream of the JSON listing
+```
+
+Decoded JSON body:
 
 ```json
 {"children":[{"children":[],"createTime":-28800000,"fileSize":0,"md5":"d41d8cd98f00b204e9800998ecf8427e","modifyTime":1755251038000,"name":"temp"}],"createTime":-28800000,"fileSize":0,"md5":"","modifyTime":1755251038000,"name":"root"}
 ```
 
-Children nest recursively. `createTime` of `-28800000` (–8 h in ms) is UTC epoch offset marker wheel firmware ships with.
+Children nest recursively. `createTime` of `-28800000` (–8 h in ms) is UTC epoch offset marker wheel firmware ships with. Semantics of the 14-byte unknown metadata block (`de c3 90 …` + `a9 88 01 00`) are not decoded — sim emits them verbatim and PitHouse still parses the listing, so they may be header padding the wheel firmware populates but the host ignores.
 
-After each upload (and on initial connection), wheel pushes zlib-compressed root directory listing on session 0x04 using same 9-byte envelope as configJson. Plugin reassembles via second `SessionDataReassembler` instance (`_session04Inbox`), decompresses JSON, logs child count. `_session04DirListingRefreshed` flips true on each complete listing.
+After each upload (and on initial connection), wheel pushes the listing on session 0x04 using this wrapper. Plugin reassembles via second `SessionDataReassembler` instance (`_session04Inbox`), decompresses JSON, logs child count. `_session04DirListingRefreshed` flips true on each complete listing.
+
+**Earlier doc incorrectly claimed "same 9-byte envelope as configJson" for this message.** That shape decoded to garbage for the plugin-side parser; decompression succeeded only when the 53-byte prefix was stripped first. Sim now builds this envelope correctly (see `build_session04_dir_listing` in `sim/wheel_sim.py`, 2026-04-22).
 
 ### Dashboard config RPC (session 0x09, compressed transfer)
 
@@ -1179,7 +1199,7 @@ Before transmitting tier definition, plugin calls `WaitForChannelCatalogQuiet(qu
 
 ### Reassembly fallback
 
-`SessionDataReassembler.TryDecompress` first tries offset-based 9-byte envelope. If that fails (e.g. because embedded 0x7E bytes in mzdash JSON payload shifted header), falls back to `TryDecompressByMagic` which scans for `78 9c` / `78 da` zlib magic bytes and trial-decompresses each hit. Mirrors `sim/wheel_sim.py`'s `_scan`.
+`SessionDataReassembler.TryDecompress` first tries offset-based 9-byte envelope (correct for sessions 0x09 and 0x0a). If that fails (because session 0x04 uses a 53-byte prefix, session 0x03 a 12-byte wrapper, or because embedded 0x7E bytes in mzdash JSON payload shifted an otherwise-valid header), falls back to `TryDecompressByMagic` which scans for `78 9c` / `78 da` zlib magic bytes and trial-decompresses each hit. Mirrors `sim/wheel_sim.py`'s `_scan`. The magic-scan fallback is what kept the plugin parsing session 0x04 dir listings correctly even before sim's envelope was matched to the real-wheel format (2026-04-22).
 
 ---
 
@@ -1373,16 +1393,24 @@ PitHouse subscribes to `group 0x0E dev 0x17` and receives ~522 incrementing-seq 
 
 Measured on `usb-capture/latestcaps/automobilista2-wheel-connect-dash-change.pcapng` (VGS + 2025-11 firmware). Real wheel's device→host session 0x09 state push on connect:
 
-| Metric | Real wheel | wheel_sim (after bulk-write fix) |
-|--------|------------|----------------------------------|
-| Total chunks | 32 (seq 0x000A–0x0029) | 7 (seq 0x0100–0x0106) |
+| Metric | Real wheel | wheel_sim (chunk_size=54 fix) |
+|--------|------------|-------------------------------|
+| Total chunks | 32 (seq 0x000A–0x0029) | 8 (seq 0x0100–0x0107) |
+| Wire N per chunk | 64 | 64 |
+| Net data per chunk | 54 B + 4 B CRC | 54 B + 4 B CRC |
 | Total window | ~90 ms | ~40 ms |
 | Avg inter-chunk gap | ~3 ms | ~6 ms |
 | Min inter-chunk gap | 0.0 ms (same USB microframe) | ~6 ms |
 
 **Real hardware bursts FASTER than the sim**, so any plugin that keeps up on real HW will also keep up with sim. In production (native Windows + USB URB bulk transfers), the plugin receives consolidated byte blocks from kernel-side URB completions and parses cleanly.
 
-Under the SimHub test fixture (Wine SerialPort + tty0tty null-modem pair), `BytesToRead` returns only 1–15 bytes per poll despite sim writing full frames in single syscalls. Plugin's bulk-read loop recovers multi-chunk flows in the general case (verified 40 consecutive session 0x02 tier-def chunks at 7 ms/chunk), but the session 0x09 burst specifically drops ~6 of 7 chunks with no checksum or frame-error logs — bytes never arrive at the `Read()` call. Treated as a test-fixture limitation; not a protocol bug. Real-hardware behaviour expected to match the real-wheel capture above.
+#### Chunk body size — wire N field must stay ≤ 64
+
+Real-wheel session 0x09 chunks carry N=64 on wire: 6-byte `7C:00:sess:01:seqL:seqH` header + 54-byte net payload + 4-byte per-chunk CRC32 trailer = 58-byte frame body + group/device = N=64. Confirmed by decoding `automobilista2-wheel-connect-dash-change.pcapng` chunks: strip trailing 4 bytes per chunk + concat → valid zlib stream (comp=1709, uncomp=7231).
+
+Frame length field N is a single byte (0–255), but the plugin's framer enforces `payloadLength > 64 → reject` (`Protocol/MozaSerialConnection.cs:237`) to match the observed real-wheel upper bound. Any chunker that emits N>64 trips the reject path: the 0x7E at the start is consumed, cursor advances by one byte, and the framer resyncs byte-by-byte through the chunk body. When it hits a stray 0x7E inside the compressed payload it will attempt a bogus parse, log a single `DROP checksum mismatch` with nonsense group/device, and keep resyncing until it reaches the next valid frame start — which is usually the short final chunk of the same burst (often just under N=64 by accident).
+
+Earlier `chunk_session_payload(chunk_size=58)` default in `sim/wheel_sim.py` produced N=68 (58 net + 4 CRC + 6 header = 68). Under that setting session 0x09 bursts reliably lost 6 of 7 chunks on both Linux (tty0tty) and Windows (USB CDC gadget → SimHub / PitHouse). Identical DROP byte pattern `3E-62-A5-A3-E1-79-03-99` appeared on both systems, proving the bytes arrived but the framer rejected each N=68 frame silently. Fix (2026-04-22): default `chunk_size=54` so chunk body + CRC + header totals N=64, matching real wheel. After the fix, all 8 session-0x09 chunks and all 4 session-0x04 dir-listing chunks parse cleanly in the SimHub plugin, and PitHouse Windows ingests the configJson state without issue.
 
 ---
 
@@ -1394,13 +1422,35 @@ Recorded during live PitHouse ↔ wheel_sim testing. Each item documents a behav
 
 Doc § 857 shows an 11-name list (`Core, Grids, Mono, Nebula, Pulse, Rally V1..V6`) extracted from `automobilista2-wheel-connect-dash-change.pcapng`. These are NOT factory-canonical dashboards shipped by MOZA — they are the user's already-installed dashboards for that wheel. Different captures from different wheels will show different lists.
 
-**Practical consequence:** `configJsonList` derives from current wheel-installed dashboard directory names, not from a fixed firmware catalog. A factory-fresh wheel's `configJsonList` is likely empty or shorter than the observed 11. Sim implementations should derive the list from `enableManager.dashboards[].dirName` rather than hardcoding names.
+**Practical consequence:** `configJsonList` derives from current wheel-installed dashboard directory names, not from a fixed firmware catalog. A factory-fresh wheel's `configJsonList` is likely empty or shorter than the observed 11. Sim implementations should derive the list from `enableManager.dashboards[].dirName` rather than hardcoding names — `build_configjson_state()` in `sim/wheel_sim.py` does exactly this (2026-04-22 change).
 
-**Unresolved:** setting `configJsonList=[]` on sim while keeping all 11 other top-level fields populated caused PitHouse to stop detecting the display fully (stuck at pre-tier-def state, `tier_def_received=false`). Reverting to the 11-name placeholder restored detection. Suggests PitHouse UI gates display-feature routing on `configJsonList` being non-empty. Exact dependency not yet understood.
+**Empty-list behaviour confirmed (2026-04-22):** re-tested on Windows PitHouse + real USB CDC gadget. Emitting `configJsonList=[]` with every other top-level field populated kept PitHouse at `sessions_opened=0`, `tier_def_received=false` indefinitely. Restoring a non-empty list (the factory 11-name placeholder as a safety fallback for empty FS) brought the handshake back within a single reconnect. **Rule: keep at least one entry in `configJsonList` at all times.** Sim currently falls back to the factory 11-name list when FS is empty; once the exact gating condition is reverse-engineered from firmware, the fallback can be tightened (a single placeholder name may suffice).
 
 ### Session 0x0a RPC id is target-scoped, not counter
 
 Doc § 663 previously implied sequential id assignment. Captures of 4 consecutive "Reset Dashboard" clicks in one PitHouse session all carried identical `id=13`; a separate earlier session used `id=15` for a different click. Id is a session-scoped target reference assigned once by PitHouse per item, reused across every RPC call targeting that item.
+
+### `completelyRemove` arg does not match sim-advertised ids (2026-04-22)
+
+Testing with Windows PitHouse against the USB-CDC gadget sim confirmed that the `<uuid>` PitHouse sends in `completelyRemove()` is **never** the id the sim advertised in its most recent `enableManager.dashboards[].id` push. Observed uuids across five delete clicks:
+
+- `gLib1v4iWa5XZBCDew8R71yImlYyyaBC` — 32-char random string (factory-id format)
+- `{b6fd8a33-8b10-4c32-8451-7e97c6073f83}` — random Microsoft GUID
+- `{00000000-0000-0000-0000-000000000002}`, `{…000000000003}`, `{…000000000004}` — all-zero placeholders with varying last byte
+- `{177b97ff-43f4-4fa3-bc27-9db20449c165}` — another random GUID
+- `{2e869528-6e4e-4d08-a4cb-0c3981c42df0}` — another random GUID
+
+Sim's synthetic id format (`sim-<md5[:8]>-<dirName>`) never appeared. PitHouse draws the uuid from its own per-install cache rather than echoing whatever `enableManager.dashboards[].id` the wheel most recently reported. This matches the "PitHouse local cache" hypothesis from § PitHouse cache-skip prevents upload.
+
+**Sim-side practical handling** (implemented in `_handle_rpc` / `completelyRemove` branch of `sim/wheel_sim.py`):
+
+1. Try exact match on every FS-derived `id`, `dirName`, `hash`, `title`.
+2. Try a `_pithouse_dashboard_ids[arg]` lookup populated opportunistically from any `configJson()` host→wheel reply the sim observes.
+3. Try matching against the captured factory `enableManager.dashboards[].id` list (for factory-preset dashboards).
+4. **Last-resort fallback:** if FS contains exactly one non-factory dashboard, delete it anyway — PitHouse's UI is the ground truth for "user wants this deleted" and the sim has no other way to resolve the uuid.
+5. **Always fire `_fire_state_refresh()` after handling** (even on no-op) so PitHouse's Dashboard Manager re-syncs against the current wheel state. Without the refresh, PitHouse caches a stale view and will re-issue the same delete on the next UI interaction.
+
+Reply on session 0x0a uses the mirrored-key shape `{"completelyRemove()": "", "id": <same N>}` with the 9-byte envelope (§ Compressed transfer format). Sim's earlier `{"id": N, "result": {...}}` shape was silently dropped by PitHouse.
 
 ### PitHouse cache-skip prevents upload RPC under some condition we can't bypass from sim
 
@@ -1429,7 +1479,7 @@ Doc § 1220 claims PitHouse uploads 5 zlib blobs (session 0x02 channel-name + ac
 
 ### Canonical RPC method envelope variants
 
-Doc § 663 says session 0x0a uses the same 9-byte `[flag=0x00][comp_size LE][uncomp_size LE]` envelope as session 0x09. Verified. But session 0x03 tile-server uses a **12-byte** envelope with `FF 01 00 ... FF 00 ...` + u24 BE uncompressed size — documented in § Session 0x03 tile-server envelope above. Same zlib body, different wrapper. Do not assume one envelope shape fits all zlib-carrying sessions.
+Doc § 663 says session 0x0a uses the same 9-byte `[flag=0x00][comp_size+4 LE][uncomp_size LE]` envelope as session 0x09. Verified. But **session 0x04 root-directory listing** uses a 53-byte prefix (tag `0x0a` + size + UTF-16LE path + padding + metadata; see § Session 0x04 device → host root directory listing) and **session 0x03 tile-server** uses a **12-byte** envelope with `FF 01 00 ... FF 00 ...` + u24 BE uncompressed size — documented in § Session 0x03 tile-server envelope above. Same zlib body, different wrapper on every session. Do not assume one envelope shape fits all zlib-carrying sessions.
 
 ### Session 0x03 is host→wheel ONLY (verified 2026-04-22)
 
