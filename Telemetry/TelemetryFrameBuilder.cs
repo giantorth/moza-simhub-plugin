@@ -50,7 +50,10 @@ namespace MozaPlugin.Telemetry
                 {
                     var path = ch.SimHubProperty;
                     var resolver = propertyResolver;
-                    _resolvers[i] = _ => resolver(path);
+                    double scale = ch.SimHubPropertyScale == 0.0 ? 1.0 : ch.SimHubPropertyScale;
+                    _resolvers[i] = scale == 1.0
+                        ? (_ => resolver(path))
+                        : (_ => resolver(path) * scale);
                 }
                 else
                 {

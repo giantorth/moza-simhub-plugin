@@ -211,8 +211,8 @@ Assumed from device naming conventions (unverified):
 | Prefix | Wheel | Notes |
 |--------|-------|-------|
 | `GS V2P` | GS V2P | 10 button LEDs (5 per side), no flag LEDs |
-| `CSP` | CS Pro | Has flag LEDs |
-| `KSP` | KS Pro | Has flag LEDs |
+| `W17` | CS Pro | 18 RPM LEDs, no flag LEDs (firmware reports `W17`) |
+| `W18` | KS Pro | 18 RPM LEDs, no flag LEDs (firmware reports `W18`) |
 | `KS` | KS | 10 button LEDs, no flag LEDs |
 | `FSR2` | FSR V2 | Has flag LEDs |
 | `TSW` | TSW | 14 button LEDs, no flag LEDs |

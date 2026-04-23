@@ -40,7 +40,7 @@ namespace MozaPlugin.Devices
         {
             ("GS V2P",  "GS V2 Pro",  new WheelModelInfo(10, 10, false, null)),
             ("CS V2.1", "CS V2",      new WheelModelInfo(10, 6,  false, new[] { 0, 1, 3, 6, 8, 9 })),
-            ("W17",     "CS Pro",     new WheelModelInfo(10, 14, true,  null)),  // firmware reports "W17" for CS Pro
+            ("W17",     "CS Pro",     new WheelModelInfo(18, 14, false, null)),  // firmware reports "W17" for CS Pro
             // KS Pro 3/12/3 LED strip appears to live entirely in group 0 (Shift/RPM),
             // not split across RPM + Meter flag sub-device. Driving all 18 as one RPM strip.
             ("W18",     "KS Pro",     new WheelModelInfo(18, 14, false, null)),  // firmware reports "W18" for KS Pro

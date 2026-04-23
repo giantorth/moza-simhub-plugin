@@ -70,14 +70,15 @@ namespace MozaPlugin.Tests.Telemetry
         }
 
         [Fact]
-        public void ApplyUserMappings_empty_value_clears_property()
+        public void ApplyUserMappings_empty_value_preserves_default()
         {
             var p = MakeProfile();
-            p.Tiers[0].Channels[0].SimHubProperty = "DataCorePlugin.GameData.Old";
+            p.Tiers[0].Channels[0].SimHubProperty = "DataCorePlugin.GameData.Default";
 
             var overrides = new Dictionary<string, string> { ["v1/gameData/Rpm"] = "" };
             DashboardProfileStore.ApplyUserMappings(p, overrides);
-            Assert.Equal("", p.Tiers[0].Channels[0].SimHubProperty);
+            // Empty override is a no-op so the channel keeps its default.
+            Assert.Equal("DataCorePlugin.GameData.Default", p.Tiers[0].Channels[0].SimHubProperty);
         }
 
         [Fact]

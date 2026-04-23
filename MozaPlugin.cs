@@ -372,6 +372,10 @@ namespace MozaPlugin
         internal void SaveSettings()
         {
             _settings.ProfileStore?.CurrentProfile?.CaptureFromCurrent(_settings, _data);
+            // Mirror the active flat Wheel* fields into the per-wheel-model slot
+            // so each physical wheel keeps its own brightness/mode/input settings
+            // across reloads (see MozaPluginSettings.PerWheelSlots).
+            _settings.MirrorActiveToSlot(_data?.WheelModelName);
             ScheduleSave();
         }
 
@@ -570,13 +574,37 @@ namespace MozaPlugin
 
         /// <summary>
         /// Per-frame resolver for channels with a user-mapped SimHubProperty.
-        /// Reads the live value from SimHub and coerces to double. Bound into
-        /// the TelemetrySender so each frame builder binds a per-channel closure
-        /// at profile-assign time — no hot-path dictionary lookup.
+        /// Paths starting with <c>@internal/</c> are plugin-computed values
+        /// (e.g. live wheel angle from the HID reader) and bypass SimHub.
+        /// All other paths resolve via <c>PluginManager.GetPropertyValue</c>.
         /// </summary>
         private double ResolvePropertyAsDouble(string path)
-            => PropertyCoercion.Coerce(
+        {
+            if (!string.IsNullOrEmpty(path) && path.StartsWith("@internal/", StringComparison.Ordinal))
+                return ResolveInternalChannel(path);
+
+            return PropertyCoercion.Coerce(
                 _pluginManager?.GetPropertyValue(path), path);
+        }
+
+        private double ResolveInternalChannel(string path)
+        {
+            switch (path)
+            {
+                case "@internal/SteeringWheelAngle":
+                {
+                    // Live wheel angle in degrees, centred at 0. Uses the base's
+                    // reported max-angle (half-range ± maxAngleDeg/2). Falls back
+                    // to 0 when HID is disconnected or max angle hasn't been read.
+                    var hid = _hidReader;
+                    int maxAngleDeg = _data?.MaxAngle * 2 ?? 0;
+                    if (hid == null || maxAngleDeg <= 0) return 0.0;
+                    return hid.GetCurrentAngleDegrees(maxAngleDeg);
+                }
+                default:
+                    return 0.0;
+            }
+        }
 
         /// <summary>Stable identity key for the currently-loaded dashboard.</summary>
         internal string CurrentDashboardKey()
@@ -1017,6 +1045,13 @@ namespace MozaPlugin
                             SimHub.Logging.Current.Info(
                                 $"[Moza] Wheel model: {currentModel} " +
                                 $"(rpm={WheelModelInfo.RpmLedCount}, buttons={WheelModelInfo.ButtonLedCount}, flags={WheelModelInfo.HasFlagLeds})");
+                            // Load this wheel model's persisted slot (brightness/modes/inputs)
+                            // into the active flat fields before any hardware writes fire.
+                            // Seeds a new slot from current flat values on first encounter.
+                            if (_settings.PerWheelSlots.ContainsKey(currentModel))
+                                _settings.LoadSlotIntoActive(currentModel);
+                            else
+                                _settings.MirrorActiveToSlot(currentModel);
                             DeployDeviceDefinitionForModel(currentModel);
                         }
                     }
@@ -1726,14 +1761,26 @@ namespace MozaPlugin
         {
             SimHub.Logging.Current.Info("[Moza] Applying wheel device extension settings");
 
-            // Update _settings and _data in-memory
+            // Update _settings and _data in-memory. ApplyTo already routes into
+            // the correct per-model slot and only updates flat fields when this
+            // extension's captured model matches the currently-connected wheel.
             extSettings.ApplyTo(_settings, _data);
 
-            // Persist blink colors
-            _settings.WheelRpmBlinkColors = extSettings.WheelRpmBlinkColors;
+            // Gate hardware writes + _data mutations on model match — extensions
+            // for other wheel models must not poke the active wheel's hardware.
+            string extModel = extSettings.WheelModelName ?? "";
+            string activeModel = _data?.WheelModelName ?? "";
+            bool hasExtModel = !string.IsNullOrEmpty(extModel);
+            bool modelMatches = hasExtModel &&
+                string.Equals(extModel, activeModel, StringComparison.OrdinalIgnoreCase);
+            bool writeHardware = !hasExtModel || modelMatches;
 
-            // Write to hardware if connected
-            if (_data.IsConnected)
+            // Persist blink colors only when this extension owns the active wheel.
+            if (writeHardware)
+                _settings.WheelRpmBlinkColors = extSettings.WheelRpmBlinkColors;
+
+            // Write to hardware if connected and this extension matches the active wheel
+            if (writeHardware && _data.IsConnected)
             {
                 // Wheel mode/brightness settings
                 if (_newWheelDetected)

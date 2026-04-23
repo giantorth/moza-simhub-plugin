@@ -61,6 +61,17 @@ namespace MozaPlugin.Tests.Telemetry
         }
 
         [Fact]
+        public void Scale_is_applied_to_resolver_output()
+        {
+            var profile = MakeUint16Profile("some.path", SimHubField.Zero);
+            profile.Channels[0].SimHubPropertyScale = 0.01;
+
+            var builder = new TelemetryFrameBuilder(profile, _ => 4200.0);
+            var frame = builder.BuildFrameFromSnapshot(default, flagByte: 0x00);
+            Assert.Equal(42, DecodeUint16At12(frame));
+        }
+
+        [Fact]
         public void Null_resolver_falls_back_to_snapshot_even_if_property_set()
         {
             var profile = MakeUint16Profile("some.path", SimHubField.Rpms);

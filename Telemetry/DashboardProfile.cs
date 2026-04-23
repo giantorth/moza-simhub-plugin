@@ -31,6 +31,14 @@ namespace MozaPlugin.Telemetry
         /// </summary>
         public string SimHubProperty { get; set; } = "";
 
+        /// <summary>
+        /// Multiplier applied to the resolved SimHub property value before encoding.
+        /// Used to reconcile SimHub's unit convention with the channel's compression
+        /// expectation (e.g. Throttle/Brake are 0–100 in SimHub but <c>float_001</c>
+        /// expects 0–1, so the default scale is 0.01).
+        /// </summary>
+        public double SimHubPropertyScale { get; set; } = 1.0;
+
         /// <summary>Telemetry tier (ms update interval, e.g. 30, 500, 2000).</summary>
         public int PackageLevel { get; set; } = 30;
     }

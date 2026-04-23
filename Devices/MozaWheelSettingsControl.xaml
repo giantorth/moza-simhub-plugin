@@ -86,7 +86,6 @@
                                 <DataGridTextColumn Header="Channel"     Binding="{Binding Name}"         IsReadOnly="True" Width="120"/>
                                 <DataGridTextColumn Header="URL"         Binding="{Binding Url}"          IsReadOnly="True" Width="*"/>
                                 <DataGridTextColumn Header="Tier (ms)"   Binding="{Binding PackageLevel}" IsReadOnly="True" Width="70"/>
-                                <DataGridTextColumn Header="Compression" Binding="{Binding Compression}"  IsReadOnly="True" Width="110"/>
                                 <DataGridTemplateColumn Header="SimHub property" Width="2*">
                                     <DataGridTemplateColumn.CellTemplate>
                                         <DataTemplate>

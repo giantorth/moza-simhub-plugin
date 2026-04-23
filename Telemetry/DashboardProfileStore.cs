@@ -173,8 +173,10 @@ namespace MozaPlugin.Telemetry
         /// <summary>
         /// Apply a per-channel user mapping to a loaded profile, overriding
         /// <see cref="ChannelDefinition.SimHubProperty"/> by channel URL. Entries
-        /// with an empty/whitespace value clear any existing property (reverts to
-        /// the SimHubField fallback). Unknown URLs are ignored.
+        /// with an empty/whitespace value are ignored (the channel keeps its
+        /// JSON default). To revert a user override, remove the entire dashboard
+        /// entry from the settings map (see <c>ClearCurrentDashboardMappings</c>).
+        /// Unknown URLs are ignored.
         /// </summary>
         public static void ApplyUserMappings(MultiStreamProfile? profile,
             IReadOnlyDictionary<string, string>? overrides)
@@ -185,11 +187,19 @@ namespace MozaPlugin.Telemetry
             {
                 foreach (var ch in tier.Channels)
                 {
-                    if (overrides.TryGetValue(ch.Url, out var path))
-                        ch.SimHubProperty = string.IsNullOrWhiteSpace(path) ? "" : path.Trim();
+                    // Plugin-locked channels (value sourced internally) ignore user mappings.
+                    if (IsInternalChannel(ch.SimHubProperty)) continue;
+
+                    if (overrides.TryGetValue(ch.Url, out var path) && !string.IsNullOrWhiteSpace(path))
+                        ch.SimHubProperty = path.Trim();
                 }
             }
         }
+
+        /// <summary>True for sentinel property paths resolved internally by the plugin.</summary>
+        public static bool IsInternalChannel(string? simHubProperty)
+            => !string.IsNullOrEmpty(simHubProperty)
+               && simHubProperty!.StartsWith("@internal/", StringComparison.Ordinal);
 
         /// <summary>
         /// Build a stable identity for a dashboard so mappings can be keyed per-dashboard.
@@ -246,12 +256,14 @@ namespace MozaPlugin.Telemetry
 
                 byLevel[level].Add(new ChannelDefinition
                 {
-                    Name         = info.Name,
-                    Url          = url,
-                    Compression  = info.Compression,
-                    BitWidth     = bits,
-                    SimHubField  = field,
-                    PackageLevel = level,
+                    Name                = info.Name,
+                    Url                 = url,
+                    Compression         = info.Compression,
+                    BitWidth            = bits,
+                    SimHubField         = field,
+                    SimHubProperty      = info.SimHubProperty ?? "",
+                    SimHubPropertyScale = info.SimHubPropertyScale == 0 ? 1.0 : info.SimHubPropertyScale,
+                    PackageLevel        = level,
                 });
             }
 
@@ -318,9 +330,12 @@ namespace MozaPlugin.Telemetry
                     string? compression = sector["compression"]?.ToString();
                     string? name        = sector["name"]?.ToString();
                     int packageLevel    = sector["package_level"]?.Value<int>() ?? 30;
+                    string? simHubProp  = sector["simhub_property"]?.ToString();
+                    double scale        = sector["simhub_scale"]?.Value<double>() ?? 1.0;
 
                     if (url == null || compression == null) continue;
-                    result[url] = new TelemetryChannelInfo(name ?? url, compression, packageLevel);
+                    result[url] = new TelemetryChannelInfo(
+                        name ?? url, compression, packageLevel, simHubProp ?? "", scale);
                 }
             }
             catch (Exception ex)
@@ -336,12 +351,17 @@ namespace MozaPlugin.Telemetry
             public string Name;
             public string Compression;
             public int    PackageLevel;
+            public string SimHubProperty;
+            public double SimHubPropertyScale;
 
-            public TelemetryChannelInfo(string name, string compression, int packageLevel)
+            public TelemetryChannelInfo(string name, string compression, int packageLevel,
+                string simHubProperty, double simHubPropertyScale)
             {
-                Name         = name;
-                Compression  = compression;
-                PackageLevel = packageLevel;
+                Name                = name;
+                Compression         = compression;
+                PackageLevel        = packageLevel;
+                SimHubProperty      = simHubProperty;
+                SimHubPropertyScale = simHubPropertyScale;
             }
         }
     }

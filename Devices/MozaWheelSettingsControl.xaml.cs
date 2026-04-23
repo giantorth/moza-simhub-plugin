@@ -909,6 +909,9 @@ namespace MozaPlugin.Devices
             {
                 foreach (var ch in tier.Channels.OrderBy(c => c.Url, StringComparer.OrdinalIgnoreCase))
                 {
+                    // Hide plugin-locked channels (resolved internally, not user-editable).
+                    if (DashboardProfileStore.IsInternalChannel(ch.SimHubProperty)) continue;
+
                     rows.Add(new ChannelMappingRow
                     {
                         Name = ch.Name,
