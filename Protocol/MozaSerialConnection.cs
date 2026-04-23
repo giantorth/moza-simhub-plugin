@@ -10,12 +10,43 @@ using System.Threading;
 
 namespace MozaPlugin.Protocol
 {
+    /// <summary>
+    /// Stream identifier for coalescing latest-wins telemetry frames. Each kind has
+    /// a single slot in <see cref="MozaSerialConnection"/>; enqueueing a new frame
+    /// for the same kind overwrites any not-yet-sent predecessor, so stale frames
+    /// can never pile up behind newer ones. One-shot/session traffic should still
+    /// use <see cref="MozaSerialConnection.Send(byte[])"/>.
+    /// </summary>
+    public enum StreamKind
+    {
+        TierDash0 = 0,
+        TierDash1 = 1,
+        TierDash2 = 2,
+        TierDash3 = 3,
+        TierDash4 = 4,
+        TierDash5 = 5,
+        TierDash6 = 6,
+        TierDash7 = 7,
+        Enable = 8,
+        Sequence = 9,
+        Mode = 10,
+    }
+
     public class MozaSerialConnection : IDisposable
     {
+        private const int StreamSlotCount = 11;
+
         private volatile SerialPort? _port;
         private Thread? _readThread;
         private Thread? _writeThread;
-        private readonly ConcurrentQueue<byte[]> _writeQueue = new ConcurrentQueue<byte[]>();
+        // One-shot lane: session traffic, settings writes, probes — must preserve
+        // FIFO order and receives 4 ms pacing when bursted (Moza bases drop rapid
+        // settings writes otherwise; see WriteLoop).
+        private readonly ConcurrentQueue<byte[]> _oneShotQueue = new ConcurrentQueue<byte[]>();
+        // Stream lane: per-kind latest-wins slots for periodic telemetry. Drained
+        // after the one-shot lane, unpaced. SendStream overwrites any pending
+        // slot so lagging frames never reach the wire stale.
+        private readonly byte[]?[] _streamSlots = new byte[StreamSlotCount][];
         private volatile bool _running;
         private readonly object _lock = new object();
         private string? _lastPortName;
@@ -65,14 +96,22 @@ namespace MozaPlugin.Protocol
         private bool TryOpen(string portName)
         {
             // Drain any stale messages from a previous connection
-            while (_writeQueue.TryDequeue(out _)) { }
+            while (_oneShotQueue.TryDequeue(out _)) { }
+            for (int k = 0; k < _streamSlots.Length; k++)
+                Interlocked.Exchange(ref _streamSlots[k], null);
 
             try
             {
                 _port = new SerialPort(portName, MozaProtocol.BaudRate)
                 {
                     ReadTimeout = 500,
-                    WriteTimeout = 500
+                    WriteTimeout = 500,
+                    // Larger buffers cushion bursts under Wine/tty0tty where
+                    // the kernel-side pty queue can hold multiple concurrent
+                    // device-session chunks (session 0x09 configJson state
+                    // burst is up to 7 × 68B = ~500B in under 40ms).
+                    ReadBufferSize = 65536,
+                    WriteBufferSize = 16384,
                 };
                 _port.Open();
                 _port.DiscardInBuffer();
@@ -132,7 +171,39 @@ namespace MozaPlugin.Protocol
         public void Send(byte[] message)
         {
             if (message != null)
-                _writeQueue.Enqueue(message);
+                _oneShotQueue.Enqueue(message);
+        }
+
+        /// <summary>
+        /// Enqueue a periodic-stream frame with latest-wins coalescing. Any frame
+        /// already pending in the same <see cref="StreamKind"/> slot is discarded.
+        /// Use for telemetry/enable/sequence/mode — frames that only matter at their
+        /// latest value. For ordered one-shot traffic use <see cref="Send(byte[])"/>.
+        /// </summary>
+        public void SendStream(StreamKind kind, byte[] message)
+        {
+            if (message == null) return;
+            int idx = (int)kind;
+            if ((uint)idx >= (uint)_streamSlots.Length) return;
+            Interlocked.Exchange(ref _streamSlots[idx], message);
+        }
+
+        /// <summary>
+        /// Drop everything pending: one-shot FIFO, all stream slots, and the OS
+        /// write buffer. Called from TelemetrySender.Stop so clicking the test
+        /// button's Stop halts the wheel immediately instead of bleeding through
+        /// the ~16 KB WriteBufferSize (~1.4 s at 115200 baud).
+        /// </summary>
+        public void FlushPendingWrites()
+        {
+            while (_oneShotQueue.TryDequeue(out _)) { }
+            for (int k = 0; k < _streamSlots.Length; k++)
+                Interlocked.Exchange(ref _streamSlots[k], null);
+            lock (_lock)
+            {
+                try { _port?.DiscardOutBuffer(); }
+                catch (Exception ex) { SimHub.Logging.Current.Debug($"[Moza] DiscardOutBuffer: {ex.Message}"); }
+            }
         }
 
         // Record an I/O failure. Throttles log spam and force-closes the port
@@ -159,7 +230,9 @@ namespace MozaPlugin.Protocol
                     try { _port?.Close(); } catch { }
                     _port = null;
                 }
-                while (_writeQueue.TryDequeue(out _)) { }
+                while (_oneShotQueue.TryDequeue(out _)) { }
+                for (int k = 0; k < _streamSlots.Length; k++)
+                    Interlocked.Exchange(ref _streamSlots[k], null);
             }
         }
 
@@ -167,12 +240,18 @@ namespace MozaPlugin.Protocol
         {
             SimHub.Logging.Current.Info("[Moza] Read thread started");
             int messageCount = 0;
+            // Bulk read buffer — drains all available bytes from the OS read
+            // buffer in one SerialPort.Read() call, then parses frames from
+            // this byte array in memory. Per-byte ReadByte() under Wine/tty0tty
+            // had ~100μs per-call overhead which made multi-chunk burst pacing
+            // marginal even for valid frames.
+            var rx = new List<byte>(capacity: 8192);
+            var tmp = new byte[4096];
 
             while (_running)
             {
                 try
                 {
-                    // Snapshot _port to avoid race with Disconnect() nullifying the field
                     var port = _port;
                     if (port == null || !port.IsOpen)
                     {
@@ -180,79 +259,120 @@ namespace MozaPlugin.Protocol
                         continue;
                     }
 
-                    // Poll for available data (works better under Wine than blocking ReadByte)
-                    if (port.BytesToRead == 0)
+                    // Wine's SerialPort.Read blocks for full count (doesn't
+                    // return early when fewer bytes available), so we can't use
+                    // a plain blocking Read. Instead poll BytesToRead and pull
+                    // whatever is available. 2 ms sleep when idle keeps CPU
+                    // usage negligible while still draining the pty buffer
+                    // promptly — observed 1-15 bytes per pull at 115200 baud.
+                    int avail = port.BytesToRead;
+                    if (avail == 0)
                     {
                         Thread.Sleep(2);
                         continue;
                     }
+                    if (avail > tmp.Length) avail = tmp.Length;
+                    int n = port.Read(tmp, 0, avail);
+                    if (n <= 0) continue;
+                    for (int i = 0; i < n; i++)
+                        rx.Add(tmp[i]);
+                    Interlocked.Exchange(ref _consecutiveIoErrors, 0);
 
-                    // Read until we find the start byte
-                    int b = port.ReadByte();
-                    if (b != MozaProtocol.MessageStart)
-                        continue;
-
-                    // Wait for payload length byte
-                    int waitMs = 0;
-                    while (port.BytesToRead < 1 && waitMs < 200)
+                    // Parse as many complete frames from `rx` as possible, then
+                    // keep any trailing partial frame for the next bulk read.
+                    int cursor = 0;
+                    while (cursor < rx.Count)
                     {
-                        Thread.Sleep(1);
-                        waitMs++;
-                    }
-                    if (port.BytesToRead < 1) continue;
+                        int frameStart = cursor;
+                        // Scan for frame start 0x7E
+                        while (frameStart < rx.Count && rx[frameStart] != MozaProtocol.MessageStart)
+                            frameStart++;
+                        if (frameStart >= rx.Count)
+                        {
+                            // No start byte found at all — discard junk.
+                            cursor = rx.Count;
+                            break;
+                        }
+                        // Need at least start + length byte to proceed.
+                        if (frameStart + 1 >= rx.Count)
+                        {
+                            cursor = frameStart;
+                            break;
+                        }
+                        int payloadLength = rx[frameStart + 1];
+                        if (payloadLength < 2 || payloadLength > 64)
+                        {
+                            // Invalid length — skip this start byte and resync on
+                            // the next 0x7E. Common at connect when junk precedes
+                            // real frames.
+                            cursor = frameStart + 1;
+                            continue;
+                        }
+                        int needed = payloadLength + 3; // group + device + payload + checksum
+                        // Walk wire bytes starting after [start, len], collapsing
+                        // 0x7E 0x7E wire pairs back to a single 0x7E body byte.
+                        var raw = new byte[needed];
+                        int decoded = 0;
+                        int wirePos = frameStart + 2;
+                        bool frameError = false;
+                        bool needMoreData = false;
+                        while (decoded < needed)
+                        {
+                            if (wirePos >= rx.Count) { needMoreData = true; break; }
+                            byte wb = rx[wirePos++];
+                            if (wb == MozaProtocol.MessageStart)
+                            {
+                                if (wirePos >= rx.Count) { needMoreData = true; break; }
+                                byte esc = rx[wirePos++];
+                                if (esc != MozaProtocol.MessageStart)
+                                {
+                                    frameError = true;
+                                    break;
+                                }
+                                raw[decoded++] = MozaProtocol.MessageStart;
+                            }
+                            else
+                            {
+                                raw[decoded++] = wb;
+                            }
+                        }
+                        if (needMoreData)
+                        {
+                            // Frame straddles buffer end; wait for more bytes.
+                            cursor = frameStart;
+                            break;
+                        }
+                        if (frameError || decoded != needed)
+                        {
+                            int nn = Math.Min(8, Math.Max(0, decoded));
+                            string first8a = nn > 0 ? BitConverter.ToString(raw, 0, nn) : "(empty)";
+                            SimHub.Logging.Current.Info(
+                                $"[Moza] DROP frame-error: decoded={decoded}/{needed} len={payloadLength} first8={first8a}");
+                            // Skip past the bad start byte and try to resync.
+                            cursor = frameStart + 1;
+                            continue;
+                        }
 
-                    int payloadLength = port.ReadByte();
-                    if (payloadLength < 2 || payloadLength > 64)
-                        continue;
-
-                    // Wait for remaining bytes: group + device_id + payload + checksum
-                    int needed = payloadLength + 3;
-                    waitMs = 0;
-                    while (port.BytesToRead < needed && waitMs < 200)
-                    {
-                        Thread.Sleep(1);
-                        waitMs++;
-                    }
-
-                    int available = port.BytesToRead;
-                    if (available < needed) continue;
-
-                    var raw = new byte[needed];
-                    int totalRead = 0;
-                    while (totalRead < raw.Length)
-                    {
-                        int read = port.Read(raw, totalRead, raw.Length - totalRead);
-                        if (read <= 0) break;
-                        totalRead += read;
-                    }
-
-                    if (totalRead == raw.Length)
-                    {
-                        // Validate checksum: rebuild the full wire frame for calculation
+                        // Validate wire-level checksum (includes 0x7E escape
+                        // accounting per doc § 54).
                         var wireFrame = new byte[2 + payloadLength + 2];
                         wireFrame[0] = MozaProtocol.MessageStart;
                         wireFrame[1] = (byte)payloadLength;
                         Array.Copy(raw, 0, wireFrame, 2, payloadLength + 2);
-                        byte expected = MozaProtocol.CalculateChecksum(wireFrame);
+                        byte expected = MozaProtocol.CalculateWireChecksum(wireFrame);
                         byte actual = raw[raw.Length - 1];
-
                         if (expected != actual)
                         {
-                            SimHub.Logging.Current.Debug(
-                                $"[Moza] Checksum mismatch: expected=0x{expected:X2} actual=0x{actual:X2}, dropping message");
+                            int nn = Math.Min(8, raw.Length);
+                            string first8a = nn > 0 ? BitConverter.ToString(raw, 0, nn) : "(empty)";
+                            SimHub.Logging.Current.Info(
+                                $"[Moza] DROP checksum mismatch: expected=0x{expected:X2} actual=0x{actual:X2} " +
+                                $"len={payloadLength} group=0x{raw[0]:X2} dev=0x{raw[1]:X2} first8={first8a}");
+                            cursor = frameStart + 1;
                             continue;
                         }
 
-                        // Checksum escape: when checksum == 0x7E, sender doubles it on the wire.
-                        // Consume the extra byte so it doesn't desync the next frame read.
-                        if (actual == MozaProtocol.MessageStart && port.BytesToRead > 0)
-                        {
-                            try { port.ReadByte(); }
-                            catch (TimeoutException) { }
-                            catch (InvalidOperationException) { }
-                        }
-
-                        // Strip the checksum byte before passing to the parser
+                        // Strip the checksum byte before passing to the parser.
                         var data = new byte[needed - 1];
                         Array.Copy(raw, 0, data, 0, data.Length);
 
@@ -263,8 +383,33 @@ namespace MozaPlugin.Protocol
                                 $"[Moza] Received msg #{messageCount}: len={payloadLength} " +
                                 $"group=0x{data[0]:X2} dev=0x{data[1]:X2} ({data.Length} bytes)");
                         }
-                        Interlocked.Exchange(ref _consecutiveIoErrors, 0);
+                        // Diagnostic: per-chunk log for 0xC3/71/7C/00 SerialStream
+                        // frames so we can verify session 0x09 chunk reception.
+                        if (data.Length >= 8 && data[0] == 0xC3 && data[1] == 0x71 &&
+                            data[2] == 0x7C && data[3] == 0x00)
+                        {
+                            byte sess = data[4];
+                            byte type = data[5];
+                            int seqWire = data[6] | (data[7] << 8);
+                            int bodyLen = data.Length - 8;
+                            string first8 = bodyLen > 0
+                                ? BitConverter.ToString(data, 8, Math.Min(8, bodyLen))
+                                : "(empty)";
+                            SimHub.Logging.Current.Info(
+                                $"[Moza] WIRE sess=0x{sess:X2} type=0x{type:X2} seq={seqWire} " +
+                                $"totalLen={data.Length} payload={bodyLen}B first8={first8}");
+                        }
                         MessageReceived?.Invoke(data);
+                        // Move cursor past the consumed wire bytes.
+                        cursor = wirePos;
+                    }
+                    // Drop consumed bytes so `rx` doesn't grow unbounded.
+                    if (cursor > 0)
+                    {
+                        if (cursor >= rx.Count)
+                            rx.Clear();
+                        else
+                            rx.RemoveRange(0, cursor);
                     }
                 }
                 catch (TimeoutException)
@@ -283,43 +428,88 @@ namespace MozaPlugin.Protocol
         {
             SimHub.Logging.Current.Info("[Moza] Write thread started");
             int writeCount = 0;
+            // Pooled stuffing buffer. Worst-case stuffed size is 2 * decoded size;
+            // grows on demand if a larger frame arrives.
+            byte[] stuffBuf = new byte[512];
+            int lastWriteTicks = Environment.TickCount - 1000;
+            bool lastWasOneShot = false;
 
             while (_running)
             {
-                if (_writeQueue.TryDequeue(out var msg))
+                bool didWork = false;
+
+                // 1) One-shot FIFO: session traffic, settings writes, probes.
+                //    Paced at 4 ms between consecutive one-shots — Moza bases drop
+                //    settings writes when flooded (ApplyProfile sends 30+ in a burst).
+                //    Pacing is skipped when the previous write was a stream frame,
+                //    since telemetry-group writes never trigger the drop.
+                if (_oneShotQueue.TryDequeue(out var msg))
                 {
-                    try
+                    if (lastWasOneShot)
                     {
-                        lock (_lock)
-                        {
-                            _port?.Write(msg, 0, msg.Length);
-                            // Checksum escape: when the last byte (checksum) is 0x7E,
-                            // double it on the wire so the receiver doesn't treat it
-                            // as the start of a new frame.
-                            if (msg[msg.Length - 1] == MozaProtocol.MessageStart)
-                                _port?.Write(new byte[] { MozaProtocol.MessageStart }, 0, 1);
-                        }
+                        int since = Environment.TickCount - lastWriteTicks;
+                        if (since < 4)
+                            Thread.Sleep(4 - since);
+                    }
+                    if (WriteFrame(msg, ref stuffBuf))
+                    {
                         writeCount++;
                         if (writeCount <= 5)
                             SimHub.Logging.Current.Info($"[Moza] Sent cmd #{writeCount}: {msg.Length} bytes, group=0x{(msg.Length > 2 ? msg[2] : 0):X2}");
-
-                        Interlocked.Exchange(ref _consecutiveIoErrors, 0);
-
-                        // Pace writes: Moza bases drop commands when flooded with rapid-fire
-                        // settings writes (e.g. ApplyProfile sends 30+ commands in a burst).
-                        // 4ms matches boxflat's proven timing for reliable device writes.
-                        if (!_writeQueue.IsEmpty)
-                            Thread.Sleep(4);
+                        lastWriteTicks = Environment.TickCount;
+                        lastWasOneShot = true;
                     }
-                    catch (Exception ex)
-                    {
-                        HandleIoFailure("Write", ex);
-                    }
+                    didWork = true;
                 }
                 else
                 {
-                    Thread.Sleep(10);
+                    // 2) Stream lane: latest-wins per kind, drained unpaced so a full
+                    //    telemetry tick (dash + enable + sequence + mode) goes out
+                    //    back-to-back in ~1 ms total instead of 12–28 ms of sleep.
+                    for (int k = 0; k < _streamSlots.Length; k++)
+                    {
+                        var slot = Interlocked.Exchange(ref _streamSlots[k], null);
+                        if (slot == null) continue;
+                        if (WriteFrame(slot, ref stuffBuf))
+                        {
+                            writeCount++;
+                            lastWriteTicks = Environment.TickCount;
+                            lastWasOneShot = false;
+                            didWork = true;
+                        }
+                    }
                 }
+
+                if (!didWork)
+                    Thread.Sleep(2);
+            }
+        }
+
+        /// <summary>
+        /// Byte-stuff <paramref name="msg"/> into <paramref name="stuffBuf"/> (growing
+        /// it if needed) and write the stuffed bytes to the port in one call.
+        /// Returns true on success, false if the port write raised — callers should
+        /// still count this as "work done" for loop-pacing decisions.
+        /// </summary>
+        private bool WriteFrame(byte[] msg, ref byte[] stuffBuf)
+        {
+            try
+            {
+                int needed = MozaProtocol.StuffedFrameSize(msg);
+                if (stuffBuf.Length < needed)
+                    stuffBuf = new byte[Math.Max(needed, stuffBuf.Length * 2)];
+                int len = MozaProtocol.StuffFrame(msg, stuffBuf);
+                lock (_lock)
+                {
+                    _port?.Write(stuffBuf, 0, len);
+                }
+                Interlocked.Exchange(ref _consecutiveIoErrors, 0);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                HandleIoFailure("Write", ex);
+                return false;
             }
         }
 
@@ -376,17 +566,37 @@ namespace MozaPlugin.Protocol
                 return nb.CompareTo(na); // Descending - check high ports first
             });
 
+            // Two-pass probe: bases first, then hubs. v0.7.0 sent both probes per port
+            // and returned the first port with any 0x7E reply, which mis-selected the
+            // hub when both base + hub were present, or when probe-cycle timing left
+            // the base unresponsive after the wrong message hit it.
+            //
+            // 600ms budget per port — SerialPort.Open can hang indefinitely under Wine
+            // if another process holds the tty. Background-thread the probe so one bad
+            // port can't block all detection.
+            var unreachable = new HashSet<string>();
             foreach (var port in ports)
             {
                 if (cancel?.Invoke() == true) return (null, null);
 
-                // 600ms budget per port — SerialPort.Open can hang indefinitely
-                // under Wine if another process holds the tty (e.g. CustomSerialPlugin
-                // owns /dev/tnt1 → com35). Background-thread the probe so one bad
-                // port can't block all detection.
-                if (ProbeWithTimeout(port, 600))
+                var (responded, reachable) = ProbeWithTimeout(port, 600, baseProbe: true);
+                if (responded)
                 {
-                    SimHub.Logging.Current.Info($"[Moza] Found Moza device on {port} (probe)");
+                    SimHub.Logging.Current.Info($"[Moza] Found Moza base on {port} (probe)");
+                    return (port, null);
+                }
+                if (!reachable) unreachable.Add(port);
+            }
+
+            foreach (var port in ports)
+            {
+                if (cancel?.Invoke() == true) return (null, null);
+                if (unreachable.Contains(port)) continue;
+
+                var (responded, _) = ProbeWithTimeout(port, 600, baseProbe: false);
+                if (responded)
+                {
+                    SimHub.Logging.Current.Info($"[Moza] Found Moza hub on {port} (probe)");
                     return (port, null);
                 }
             }
@@ -418,37 +628,49 @@ namespace MozaPlugin.Protocol
             return "0x" + pidHex.ToUpperInvariant();
         }
 
+        // Pre-built probe frames. Base targets group 43, device 19, cmd id 2 (state-change probe).
+        // Hub targets group 100, device 18, cmd id 3 (port1 power).
+        // Base probe arg matches PitHouse wire pattern (documented § Group 0x2B) so device
+        // responses stay consistent across clients.
+        private static readonly byte[] BaseProbeFrame = BuildProbe(new byte[] { 0x7E, 0x03, 0x2B, 0x13, 0x02, 0x00, 0x00, 0x00 });
+        private static readonly byte[] HubProbeFrame  = BuildProbe(new byte[] { 0x7E, 0x03, 0x64, 0x12, 0x03, 0x00, 0x00, 0x00 });
+
+        private static byte[] BuildProbe(byte[] frame)
+        {
+            frame[frame.Length - 1] = MozaProtocol.CalculateChecksum(frame, frame.Length - 1);
+            return frame;
+        }
+
         /// <summary>
         /// Run ProbeMozaDevice on a background thread with a hard time budget (ms).
-        /// If the probe doesn't finish in time (usually because SerialPort.Open is
-        /// blocked on a tty another process is holding), abandon the thread and
-        /// return false. The orphan thread stays background so it can't prevent
-        /// process exit and will eventually unblock or die with the process.
+        /// Returns (responded, reachable). reachable=false means open/timeout failed
+        /// — caller can skip this port in subsequent passes.
         /// </summary>
-        private static bool ProbeWithTimeout(string portName, int timeoutMs)
+        private static (bool responded, bool reachable) ProbeWithTimeout(string portName, int timeoutMs, bool baseProbe)
         {
-            bool result = false;
+            bool responded = false;
+            bool reachable = false;
             var t = new Thread(() =>
             {
-                try { result = ProbeMozaDevice(portName); }
-                catch { result = false; }
+                try { (responded, reachable) = ProbeMozaDevice(portName, baseProbe); }
+                catch { responded = false; reachable = false; }
             })
             { IsBackground = true, Name = $"MozaProbe-{portName}" };
             t.Start();
             if (!t.Join(timeoutMs))
             {
                 SimHub.Logging.Current.Debug($"[Moza] Probe {portName}: timed out after {timeoutMs}ms, skipping");
-                return false;
+                return (false, false);
             }
-            return result;
+            return (responded, reachable);
         }
 
         /// <summary>
-        /// Try to open a port and send Moza read commands to the base and hub.
-        /// If we get a valid response starting with 0x7E, it's a Moza device.
-        /// Sends both probes so hub-only setups (no wheelbase) are also discovered.
+        /// Open port, send a single base-or-hub probe, wait for any 0x7E reply.
+        /// Single-message probe avoids the v0.7.0 issue where back-to-back base+hub
+        /// writes left the device in a state where it stopped answering after reopen.
         /// </summary>
-        private static bool ProbeMozaDevice(string portName)
+        private static (bool responded, bool reachable) ProbeMozaDevice(string portName, bool baseProbe)
         {
             try
             {
@@ -461,34 +683,26 @@ namespace MozaPlugin.Protocol
                     probe.Open();
                     probe.DiscardInBuffer();
 
-                    // Send a read request for base-state (read group 43, device base 19, cmd id 1)
-                    var baseMsg = new byte[] { 0x7E, 0x03, 0x2B, 0x13, 0x01, 0x00, 0x01, 0x00 };
-                    baseMsg[baseMsg.Length - 1] = MozaProtocol.CalculateChecksum(baseMsg, baseMsg.Length - 1);
-                    probe.Write(baseMsg, 0, baseMsg.Length);
+                    var msg = baseProbe ? BaseProbeFrame : HubProbeFrame;
+                    probe.Write(msg, 0, msg.Length);
 
-                    // Also probe the hub (read group 100, device hub 18, cmd id 3 = port1)
-                    // Hub-only setups have no base to respond to the first probe.
-                    var hubMsg = new byte[] { 0x7E, 0x03, 0x64, 0x12, 0x03, 0x00, 0x00, 0x00 };
-                    hubMsg[hubMsg.Length - 1] = MozaProtocol.CalculateChecksum(hubMsg, hubMsg.Length - 1);
-                    probe.Write(hubMsg, 0, hubMsg.Length);
-
-                    // Wait briefly for a response from either device
                     System.Threading.Thread.Sleep(100);
 
+                    bool responded = false;
                     if (probe.BytesToRead > 0)
                     {
                         int first = probe.ReadByte();
-                        probe.Close();
-                        return first == MozaProtocol.MessageStart;
+                        responded = first == MozaProtocol.MessageStart;
                     }
                     probe.Close();
+                    return (responded, true);
                 }
             }
             catch (Exception ex)
             {
                 SimHub.Logging.Current.Debug($"[Moza] Probe {portName}: {ex.GetType().Name}");
+                return (false, false);
             }
-            return false;
         }
 
         private static int ExtractPortNumber(string portName)

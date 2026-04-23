@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.RegularExpressions;
 using Newtonsoft.Json.Linq;
 
@@ -43,6 +45,32 @@ namespace MozaPlugin.Telemetry
             ["TyreWearFrontRight"] = SimHubField.TyreWearFrontRight,
             ["TyreWearRearLeft"]   = SimHubField.TyreWearRearLeft,
             ["TyreWearRearRight"]  = SimHubField.TyreWearRearRight,
+        };
+
+        /// <summary>
+        /// Canonical SimHub property path for each built-in field. Used to seed
+        /// the UI's channel mapping so defaults route through the same
+        /// <c>GetPropertyValue</c> path as user overrides.
+        /// </summary>
+        public static readonly IReadOnlyDictionary<SimHubField, string> DefaultPropertyPaths =
+            new Dictionary<SimHubField, string>
+        {
+            [SimHubField.SpeedKmh]              = "DataCorePlugin.GameData.SpeedKmh",
+            [SimHubField.Rpms]                  = "DataCorePlugin.GameData.Rpms",
+            [SimHubField.Gear]                  = "DataCorePlugin.GameData.Gear",
+            [SimHubField.Throttle]              = "DataCorePlugin.GameData.Throttle",
+            [SimHubField.Brake]                 = "DataCorePlugin.GameData.Brake",
+            [SimHubField.BestLapTimeSeconds]    = "DataCorePlugin.GameData.BestLapTime",
+            [SimHubField.CurrentLapTimeSeconds] = "DataCorePlugin.GameData.CurrentLapTime",
+            [SimHubField.LastLapTimeSeconds]    = "DataCorePlugin.GameData.LastLapTime",
+            [SimHubField.DeltaToSessionBest]    = "DataCorePlugin.GameData.DeltaToSessionBest",
+            [SimHubField.FuelPercent]           = "DataCorePlugin.GameData.FuelPercent",
+            [SimHubField.DrsEnabled]            = "DataCorePlugin.GameData.DRSEnabled",
+            [SimHubField.ErsPercent]            = "DataCorePlugin.GameData.ERSPercent",
+            [SimHubField.TyreWearFrontLeft]     = "DataCorePlugin.GameData.TyreWearFrontLeft",
+            [SimHubField.TyreWearFrontRight]    = "DataCorePlugin.GameData.TyreWearFrontRight",
+            [SimHubField.TyreWearRearLeft]      = "DataCorePlugin.GameData.TyreWearRearLeft",
+            [SimHubField.TyreWearRearRight]     = "DataCorePlugin.GameData.TyreWearRearRight",
         };
 
         public IReadOnlyList<MultiStreamProfile> BuiltinProfiles
@@ -143,6 +171,65 @@ namespace MozaPlugin.Telemetry
         }
 
         /// <summary>
+        /// Apply a per-channel user mapping to a loaded profile, overriding
+        /// <see cref="ChannelDefinition.SimHubProperty"/> by channel URL. Entries
+        /// with an empty/whitespace value are ignored (the channel keeps its
+        /// JSON default). To revert a user override, remove the entire dashboard
+        /// entry from the settings map (see <c>ClearCurrentDashboardMappings</c>).
+        /// Unknown URLs are ignored.
+        /// </summary>
+        public static void ApplyUserMappings(MultiStreamProfile? profile,
+            IReadOnlyDictionary<string, string>? overrides)
+        {
+            if (profile == null || overrides == null || overrides.Count == 0) return;
+
+            foreach (var tier in profile.Tiers)
+            {
+                foreach (var ch in tier.Channels)
+                {
+                    // Plugin-locked channels (value sourced internally) ignore user mappings.
+                    if (IsInternalChannel(ch.SimHubProperty)) continue;
+
+                    if (overrides.TryGetValue(ch.Url, out var path) && !string.IsNullOrWhiteSpace(path))
+                        ch.SimHubProperty = path.Trim();
+                }
+            }
+        }
+
+        /// <summary>True for sentinel property paths resolved internally by the plugin.</summary>
+        public static bool IsInternalChannel(string? simHubProperty)
+            => !string.IsNullOrEmpty(simHubProperty)
+               && simHubProperty!.StartsWith("@internal/", StringComparison.Ordinal);
+
+        /// <summary>
+        /// Build a stable identity for a dashboard so mappings can be keyed per-dashboard.
+        /// Builtin profiles (no file path) use <c>"builtin:&lt;name&gt;"</c>. User-loaded
+        /// .mzdash files use <c>"file:&lt;filename&gt;:&lt;sha1-first-8&gt;"</c> so identically-named
+        /// files with different contents don't share mappings.
+        /// </summary>
+        public static string GetDashboardKey(string? loadedPath, MultiStreamProfile profile)
+        {
+            if (string.IsNullOrEmpty(loadedPath))
+                return "builtin:" + (profile?.Name ?? "");
+
+            string filename = Path.GetFileName(loadedPath);
+            string hash;
+            try
+            {
+                using var sha = SHA1.Create();
+                byte[] digest = sha.ComputeHash(File.ReadAllBytes(loadedPath));
+                var sb = new StringBuilder(8);
+                for (int i = 0; i < 4; i++) sb.Append(digest[i].ToString("x2"));
+                hash = sb.ToString();
+            }
+            catch
+            {
+                hash = "nohash";
+            }
+            return "file:" + filename + ":" + hash;
+        }
+
+        /// <summary>
         /// Build a MultiStreamProfile from a list of channel URLs.
         /// Channels are grouped by package_level and sorted alphabetically within each tier.
         /// Any package_level value found in Telemetry.json gets its own tier.
@@ -169,12 +256,14 @@ namespace MozaPlugin.Telemetry
 
                 byLevel[level].Add(new ChannelDefinition
                 {
-                    Name         = info.Name,
-                    Url          = url,
-                    Compression  = info.Compression,
-                    BitWidth     = bits,
-                    SimHubField  = field,
-                    PackageLevel = level,
+                    Name                = info.Name,
+                    Url                 = url,
+                    Compression         = info.Compression,
+                    BitWidth            = bits,
+                    SimHubField         = field,
+                    SimHubProperty      = info.SimHubProperty ?? "",
+                    SimHubPropertyScale = info.SimHubPropertyScale == 0 ? 1.0 : info.SimHubPropertyScale,
+                    PackageLevel        = level,
                 });
             }
 
@@ -241,9 +330,12 @@ namespace MozaPlugin.Telemetry
                     string? compression = sector["compression"]?.ToString();
                     string? name        = sector["name"]?.ToString();
                     int packageLevel    = sector["package_level"]?.Value<int>() ?? 30;
+                    string? simHubProp  = sector["simhub_property"]?.ToString();
+                    double scale        = sector["simhub_scale"]?.Value<double>() ?? 1.0;
 
                     if (url == null || compression == null) continue;
-                    result[url] = new TelemetryChannelInfo(name ?? url, compression, packageLevel);
+                    result[url] = new TelemetryChannelInfo(
+                        name ?? url, compression, packageLevel, simHubProp ?? "", scale);
                 }
             }
             catch (Exception ex)
@@ -259,12 +351,17 @@ namespace MozaPlugin.Telemetry
             public string Name;
             public string Compression;
             public int    PackageLevel;
+            public string SimHubProperty;
+            public double SimHubPropertyScale;
 
-            public TelemetryChannelInfo(string name, string compression, int packageLevel)
+            public TelemetryChannelInfo(string name, string compression, int packageLevel,
+                string simHubProperty, double simHubPropertyScale)
             {
-                Name         = name;
-                Compression  = compression;
-                PackageLevel = packageLevel;
+                Name                = name;
+                Compression         = compression;
+                PackageLevel        = packageLevel;
+                SimHubProperty      = simHubProperty;
+                SimHubPropertyScale = simHubPropertyScale;
             }
         }
     }

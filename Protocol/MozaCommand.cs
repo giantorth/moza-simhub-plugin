@@ -41,7 +41,7 @@ namespace MozaPlugin.Protocol
             msg.AddRange(CommandId);
             msg.AddRange(new byte[PayloadBytes]);
 
-            msg.Add(MozaProtocol.CalculateChecksum(msg.ToArray()));
+            msg.Add(MozaProtocol.CalculateWireChecksum(msg.ToArray()));
             return msg.ToArray();
         }
 
@@ -60,7 +60,7 @@ namespace MozaPlugin.Protocol
             };
             msg.AddRange(CommandId);
             msg.AddRange(payload);
-            msg.Add(MozaProtocol.CalculateChecksum(msg.ToArray()));
+            msg.Add(MozaProtocol.CalculateWireChecksum(msg.ToArray()));
             return msg.ToArray();
         }
 

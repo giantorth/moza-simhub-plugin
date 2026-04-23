@@ -38,7 +38,8 @@ jobs:
         shell: bash
         run: |
           short_sha="${GITHUB_SHA::7}"
-          latest_tag=$(git describe --tags --match 'v*' --abbrev=0 2>/dev/null || echo v0.0.0)
+          latest_tag=$(git tag --list 'v*' --sort=-v:refname | head -n1)
+          latest_tag=${latest_tag:-v0.0.0}
           IFS=. read -r MAJ MIN PAT <<<"${latest_tag#v}"
           next="${MAJ}.${MIN}.$((PAT+1))"
           dev_version="${next}-dev.${short_sha}"
@@ -67,19 +68,23 @@ jobs:
           New-Item -ItemType Directory -Path $staging -Force
           Copy-Item ./bin/x86/Release/MozaPlugin.dll $staging/
           Compress-Archive -Path ./staging/* -DestinationPath ./MozaPlugin_dev.zip
-          Copy-Item ./MozaPlugin_dev.zip ./MozaPlugin_dev-${{ steps.vars.outputs.short_sha }}.zip
+
+      - name: Delete previous dev-latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: gh release delete dev-latest --yes --cleanup-tag --repo ${{ github.repository }} || true
 
       - name: Publish pre-release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: dev-latest
-          name: "Development Build (${{ steps.vars.outputs.dev_version }})"
+          name: "${{ steps.vars.outputs.dev_version }}"
           prerelease: true
           make_latest: false
           fail_on_unmatched_files: true
           files: |
             MozaPlugin_dev.zip
-            MozaPlugin_dev-${{ steps.vars.outputs.short_sha }}.zip
           body: |
             ⚠️ **Pre-release — expect rough edges.** Use the latest stable release if you need reliability.
 
@@ -88,4 +93,4 @@ jobs:
             **Built:** ${{ steps.vars.outputs.build_timestamp }}
             **Changes since ${{ steps.vars.outputs.latest_tag }}:** https://github.com/${{ github.repository }}/compare/${{ steps.vars.outputs.latest_tag }}...${{ github.sha }}
 
-            Download `MozaPlugin_dev.zip` for the latest build, or `MozaPlugin_dev-<sha>.zip` for a specific build.
+            Download `MozaPlugin_dev.zip` for the latest build.

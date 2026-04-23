@@ -241,7 +241,7 @@ Group 42 is used for both writes (calibration, music set) and reads (music get).
 
 ### Group `0x2D` (45) — Sequence Counter (write-only)
 
-Observed in USB capture at ~50×/sec during driving. Group 45 is not in the main command list — discovered by capture analysis. See [moza-protocol.md § sequence counter](moza-protocol.md#group-0x2d-host--device-0x13-50-hz).
+Observed in USB capture at ~50×/sec during driving. Group 45 is not in the main command list — discovered by capture analysis. See [moza-protocol.md § sequence counter](moza-protocol.md#sequence-counter-group-0x2d-device-0x13-50-hz).
 
 | Command | ID | Bytes | Type | Notes |
 |---------|----|-------|------|-------|
@@ -433,7 +433,7 @@ Confirmed in USB capture: sent to device `0x17` at ~100×/sec with payload alway
 
 ### Group `0x43` (67) — Live Telemetry Stream (write-only)
 
-Main game telemetry sent at ~17–20×/sec. See [moza-protocol.md § main real-time telemetry](moza-protocol.md#main-real-time-telemetry-group-0x43-device-0x17-cmd-0x7d-0x23) for full packet analysis and bit-packing format.
+Main game telemetry sent at ~17–20×/sec. See [moza-protocol.md § live telemetry stream](moza-protocol.md#live-telemetry-stream-group-0x43-device-0x17-cmd-0x7d-0x23) for full packet analysis and bit-packing format.
 
 Payload = 2-byte cmd ID + 6-byte header + variable-length bit-packed channel data. Header bytes 0–3 are constant (`32 00 23 32`), byte 4 is a flag/stream selector, byte 5 is constant (`0x20`). Three concurrent streams use consecutive flag values for `package_level` tiers 30/500/2000. Channel data is bit-packed alphabetically by URL suffix per the active dashboard; payload size = `ceil(total_channel_bits / 8)`. Empty tiers send a 2-byte stub.
 
@@ -441,9 +441,10 @@ Payload = 2-byte cmd ID + 6-byte header + variable-length bit-packed channel dat
 |---------|----|-------|------|-------|
 | send-live-telemetry | `7D 23` | varies | array | 6-byte header + bit-packed channel data; size depends on dashboard |
 | send-telemetry-state | `FC 00` | 3 | array | Session acknowledgment (`session + ack_seq`) ~1×/sec |
-| dashboard-transfer | `7C 00` | varies | array | Session-based chunked file transfer / RPC; see [moza-protocol.md § dashboard upload](moza-protocol.md#dashboard-upload-protocol-group-0x43-cmd-7c00) |
-| display-config | `7C 27` | 4–8 | array | Periodic display config push (~1×/sec), page-cycled |
-| dashboard-activate | `7C 23` | 8 | array | One-shot dashboard activation notification |
+| dashboard-transfer | `7C 00` | varies | array | Session-based chunked file transfer / RPC; see [moza-protocol.md § dashboard upload](moza-protocol.md#dashboard-upload-protocol) |
+| display-config | `7C 27` | 4–8 | array | Periodic display config push (~1/s), page-cycled alongside `7C 23` |
+| dashboard-activate | `7C 23` | 8 | array | Periodic dashboard activate (~1/s), interleaved per page with `7C 27`; declares active pages |
+| display-settings | `7C 1E` | 8 | array | Periodic display settings push (~1/s) — brightness/timeout/orientation; sent to all wheel models |
 
 ### Old-Protocol Commands (Groups `0x3F` / `0x40`)
 

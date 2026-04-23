@@ -96,7 +96,7 @@ namespace MozaPlugin
                 RefreshPedalsTab();
                 RefreshHubTab();
                 InitTelemetryTab();
-                RefreshTelemetryStatus();
+                RefreshDiagnosticsTab();
             }
             finally
             {
@@ -1093,7 +1093,7 @@ namespace MozaPlugin
             ProfileListControl.DataContext = ProfileStore;
         }
 
-        // ===== Telemetry tab =====
+        // ===== Telemetry (Options tab) =====
 
         private bool _telemetryUIInitialized;
 
@@ -1107,79 +1107,12 @@ namespace MozaPlugin
             {
                 var s = _plugin.Settings;
                 UploadDashboardCheck.IsChecked = s.TelemetryUploadDashboard;
-                int protoVer = s.TelemetryProtocolVersion;
-                ProtocolVersionCombo.SelectedIndex = protoVer == 0 ? 1 : 0;
-                FlagByteModeCombo.SelectedIndex = Math.Max(0, Math.Min(2, s.TelemetryFlagByteMode));
-                FlagByteModePanel.IsEnabled = protoVer != 0;
+                ProtocolVersionCombo.SelectedIndex = ProtocolVersionToIndex(s.TelemetryProtocolVersion);
             }
             finally
             {
                 _suppressEvents = false;
             }
-        }
-
-        private void RefreshTelemetryStatus()
-        {
-            var sender = _plugin.TelemetrySender;
-            if (sender == null) return;
-
-            bool enabled = _plugin.Settings.TelemetryEnabled;
-            bool testMode = sender.TestMode;
-
-            if (!enabled)
-                TelemetryStatusLabel.Text = "Disabled";
-            else if (testMode)
-                TelemetryStatusLabel.Text = $"Test pattern — {sender.FramesSent} frames sent";
-            else
-                TelemetryStatusLabel.Text = $"Sending — {sender.FramesSent} frames sent";
-
-            var last = sender.LastFrameSent;
-            TelemetryLastFrameLabel.Text = last != null
-                ? BitConverter.ToString(last).Replace("-", " ").ToLowerInvariant()
-                : "—";
-
-            // Display sub-device info
-            if (_plugin.IsDisplayDetected)
-                TelemetryDisplayLabel.Text = $"Display: {_plugin.DisplayModelName} (port 0x{sender.FlagByte:X2})";
-            else if (_plugin.IsNewWheelDetected)
-                TelemetryDisplayLabel.Text = "Display: not detected (no dashboard screen)";
-            else
-                TelemetryDisplayLabel.Text = "";
-
-            // Wheel channel catalog
-            var catalog = sender.WheelChannelCatalog;
-            if (catalog != null && catalog.Count > 0)
-                TelemetryWheelChannelsLabel.Text = $"Wheel channels ({catalog.Count}): {string.Join(", ", catalog)}";
-            else
-                TelemetryWheelChannelsLabel.Text = "";
-
-            TelemetryTestStopBtn.IsEnabled = testMode;
-            TelemetryTestStartBtn.IsEnabled = !testMode;
-        }
-
-        private void TelemetryTestStart_Click(object sender, RoutedEventArgs e)
-        {
-            var ts = _plugin.TelemetrySender;
-            if (ts == null) return;
-            ts.TestMode = true;
-            if (!_plugin.Settings.TelemetryEnabled)
-            {
-                _plugin.ApplyTelemetrySettings();
-                System.Threading.ThreadPool.QueueUserWorkItem(_ => ts.Start());
-            }
-            TelemetryTestStartBtn.IsEnabled = false;
-            TelemetryTestStopBtn.IsEnabled = true;
-        }
-
-        private void TelemetryTestStop_Click(object sender, RoutedEventArgs e)
-        {
-            var ts = _plugin.TelemetrySender;
-            if (ts == null) return;
-            ts.TestMode = false;
-            if (!_plugin.Settings.TelemetryEnabled)
-                ts.Stop();
-            TelemetryTestStartBtn.IsEnabled = true;
-            TelemetryTestStopBtn.IsEnabled = false;
         }
 
         private void UploadDashboard_Changed(object sender, RoutedEventArgs e)
@@ -1193,33 +1126,177 @@ namespace MozaPlugin
         private void ProtocolVersion_Changed(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
         {
             if (_suppressEvents) return;
-            int version = ProtocolVersionCombo.SelectedIndex == 1 ? 0 : 2;
-            _plugin.Settings.TelemetryProtocolVersion = version;
-            FlagByteModePanel.IsEnabled = version != 0;
+            _plugin.Settings.TelemetryProtocolVersion = ProtocolVersionFromIndex(ProtocolVersionCombo.SelectedIndex);
             _plugin.SaveSettings();
             _plugin.RestartTelemetry();
         }
 
-        private void FlagByteMode_Changed(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+        private static int ProtocolVersionToIndex(int version)
         {
-            if (_suppressEvents) return;
-            _plugin.Settings.TelemetryFlagByteMode = FlagByteModeCombo.SelectedIndex;
-            _plugin.SaveSettings();
-            _plugin.RestartTelemetry();
+            switch (version)
+            {
+                case 0: return 0;
+                case 2: return 1;
+                default: return 1;
+            }
         }
 
-        private void TelemetryExportLog_Click(object sender, RoutedEventArgs e)
+        private static int ProtocolVersionFromIndex(int index)
+        {
+            switch (index)
+            {
+                case 0: return 0;
+                case 1: return 2;
+                default: return 2;
+            }
+        }
+
+        // ── Diagnostics tab ─────────────────────────────────────────────
+        private void RefreshDiagnosticsTab()
+        {
+            if (DiagWheelIdentityBox == null) return;
+            DiagWheelIdentityBox.Text = BuildWheelIdentityText();
+            DiagDisplayIdentityBox.Text = BuildDisplayIdentityText();
+            DiagDashboardStateBox.Text = BuildDashboardStateText();
+            DiagTileServerBox.Text = BuildTileServerText();
+            DiagSessionBox.Text = BuildSessionStateText();
+        }
+
+        private string BuildWheelIdentityText()
+        {
+            var d = _data;
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine($"Model:          {Blank(d.WheelModelName)}");
+            sb.AppendLine($"FW (sw):        {Blank(d.WheelSwVersion)}");
+            sb.AppendLine($"HW version:     {Blank(d.WheelHwVersion)}");
+            sb.AppendLine($"HW sub:         {Blank(d.WheelHwSubVersion)}");
+            sb.AppendLine($"Serial:         {Blank(d.WheelSerialNumber)}");
+            sb.AppendLine($"Sub-devices:    {d.WheelSubDeviceCount}");
+            sb.AppendLine($"Device presence:0x{d.WheelDevicePresence:X2}");
+            sb.AppendLine($"Device type:    {Hex(d.WheelDeviceType)}");
+            sb.AppendLine($"Capabilities:   {Hex(d.WheelCapabilities)}");
+            sb.AppendLine($"MCU UID:        {HexRaw(d.WheelMcuUid)}");
+            sb.Append    ($"Identity-11:    {Hex(d.WheelIdentity11)}");
+            return sb.ToString();
+        }
+
+        private string BuildDisplayIdentityText()
+        {
+            var d = _data;
+            if (string.IsNullOrEmpty(d.DisplayModelName) && d.DisplayMcuUid.Length == 0)
+                return "(display sub-device not probed or not present)";
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine($"Model:          {Blank(d.DisplayModelName)}");
+            sb.AppendLine($"FW (sw):        {Blank(d.DisplaySwVersion)}");
+            sb.AppendLine($"HW version:     {Blank(d.DisplayHwVersion)}");
+            sb.AppendLine($"Serial:         {Blank(d.DisplaySerialNumber)}");
+            sb.AppendLine($"Sub-devices:    {d.DisplaySubDeviceCount}");
+            sb.AppendLine($"Device presence:0x{d.DisplayDevicePresence:X2}");
+            sb.AppendLine($"Device type:    {Hex(d.DisplayDeviceType)}");
+            sb.AppendLine($"Capabilities:   {Hex(d.DisplayCapabilities)}");
+            sb.AppendLine($"MCU UID:        {HexRaw(d.DisplayMcuUid)}");
+            sb.Append    ($"Identity-11:    {Hex(d.DisplayIdentity11)}");
+            return sb.ToString();
+        }
+
+        private string BuildDashboardStateText()
         {
             var ts = _plugin.TelemetrySender;
-            if (ts == null) return;
-            var dlg = new Microsoft.Win32.SaveFileDialog
+            var state = ts?.WheelState;
+            if (state == null) return "(no configJson state received yet)";
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine($"TitleId:        {state.TitleId}");
+            sb.AppendLine($"displayVersion: {state.DisplayVersion}");
+            sb.AppendLine($"resetVersion:   {state.ResetVersion}");
+            sb.AppendLine($"sortTag:        {state.SortTag}");
+            sb.AppendLine($"rootDirPath:    {Blank(state.RootDirPath)}");
+            sb.AppendLine($"rootPath:       {Blank(state.RootPath)}");
+            sb.AppendLine($"configJsonList ({state.ConfigJsonList.Count}): {JoinList(state.ConfigJsonList)}");
+            sb.AppendLine($"imageRefMap:    {state.ImageRefMap.Count} entries");
+            sb.AppendLine($"fontRefMap:     {state.FontRefMap.Count} entries");
+            sb.AppendLine($"imagePath:      {state.ImagePath.Count} entries");
+            sb.AppendLine($"captured at:    {state.CapturedAt:HH:mm:ss}");
+            sb.AppendLine();
+            sb.AppendLine($"-- Enabled dashboards ({state.EnabledDashboards.Count}) --");
+            foreach (var d in state.EnabledDashboards)
             {
-                Title = "Save Frame Log",
-                Filter = "Text File|*.txt|All Files|*.*",
-                FileName = $"moza-telemetry-{DateTime.Now:yyyyMMdd-HHmmss}.txt"
-            };
-            if (dlg.ShowDialog() != true) return;
-            ts.Diagnostics.ExportLog(dlg.FileName);
+                sb.AppendLine($"  • {d.Title} / dirName={d.DirName} / id={TruncateId(d.Id)}");
+                if (!string.IsNullOrEmpty(d.LastModified))
+                    sb.AppendLine($"      lastModified: {d.LastModified}");
+                if (d.IdealDeviceInfos.Count > 0)
+                {
+                    foreach (var info in d.IdealDeviceInfos)
+                        sb.AppendLine($"      device: id={info.DeviceId} hw={info.HardwareVersion} product={info.ProductType}");
+                }
+            }
+            sb.Append($"-- Disabled dashboards ({state.DisabledDashboards.Count}) --");
+            foreach (var d in state.DisabledDashboards)
+                sb.Append($"\n  • {d.Title} / {d.DirName}");
+            return sb.ToString();
         }
+
+        private string BuildTileServerText()
+        {
+            var ts = _plugin.TelemetrySender;
+            var tile = ts?.TileServerState;
+            if (tile == null)
+                return "(no inbound tile-server blob received — plugin PUSHES empty state on 0x03; wheel doesn't push back in current captures)";
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine($"root:          {Blank(tile.Root)}");
+            sb.AppendLine($"version:       {tile.Version}");
+            sb.AppendLine($"any populated: {tile.AnyPopulated}");
+            foreach (var kv in tile.Games)
+            {
+                var g = kv.Value;
+                sb.Append($"\n[{kv.Key}] populated={g.Populated} map_version={g.MapVersion} " +
+                          $"tile_size={g.TileSize} layers={g.LayersCount} name={Blank(g.Name)}");
+            }
+            return sb.ToString();
+        }
+
+        private string BuildSessionStateText()
+        {
+            var ts = _plugin.TelemetrySender;
+            if (ts == null) return "(telemetry sender not running)";
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine($"Enabled:            {ts.Enabled}");
+            sb.AppendLine($"FramesSent:         {ts.FramesSent}");
+            sb.AppendLine($"DisplayDetected:    {ts.DisplayDetected}");
+            sb.AppendLine($"DisplayModelName:   {Blank(ts.DisplayModelName)}");
+            sb.AppendLine($"ProtocolVersion:    {ts.ProtocolVersion}");
+            sb.AppendLine($"FlagByte:           0x{ts.FlagByte:X2}");
+            sb.AppendLine($"UploadDashboard:    {ts.UploadDashboard}");
+            sb.Append    ($"Profile:            {ts.Profile?.Name ?? "(none)"}");
+            return sb.ToString();
+        }
+
+        private void DiagCopyAll_Click(object sender, System.Windows.RoutedEventArgs e)
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine("=== Wheel identity ===");
+            sb.AppendLine(DiagWheelIdentityBox.Text);
+            sb.AppendLine();
+            sb.AppendLine("=== Display sub-device identity ===");
+            sb.AppendLine(DiagDisplayIdentityBox.Text);
+            sb.AppendLine();
+            sb.AppendLine("=== Dashboard state ===");
+            sb.AppendLine(DiagDashboardStateBox.Text);
+            sb.AppendLine();
+            sb.AppendLine("=== Tile-server state ===");
+            sb.AppendLine(DiagTileServerBox.Text);
+            sb.AppendLine();
+            sb.AppendLine("=== Session state ===");
+            sb.AppendLine(DiagSessionBox.Text);
+            try { System.Windows.Clipboard.SetText(sb.ToString()); }
+            catch { /* clipboard may be contested under Wine */ }
+        }
+
+        private static string Blank(string s) => string.IsNullOrEmpty(s) ? "—" : s;
+        private static string Hex(byte[] b) => b == null || b.Length == 0 ? "—" : BitConverter.ToString(b);
+        private static string HexRaw(byte[] b) => b == null || b.Length == 0 ? "—" : BitConverter.ToString(b).Replace("-", "");
+        private static string JoinList(System.Collections.Generic.IReadOnlyList<string> l)
+            => l == null || l.Count == 0 ? "(empty)" : string.Join(", ", l);
+        private static string TruncateId(string id)
+            => string.IsNullOrEmpty(id) ? "—" : (id.Length > 40 ? id.Substring(0, 40) + "…" : id);
     }
 }

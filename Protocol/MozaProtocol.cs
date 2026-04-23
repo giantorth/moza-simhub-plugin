@@ -68,14 +68,139 @@ namespace MozaPlugin.Protocol
             return (byte)(sum % 256);
         }
 
+        /// <summary>
+        /// Wire-level checksum over a decoded frame. Per doc § 54, each `0x7E`
+        /// in the decoded body (positions 2 through <paramref name="bodyEnd"/>-1)
+        /// adds an extra `0x7E` to the wire-level sum because byte-stuffing
+        /// doubles it on the wire and the sender includes both copies in its
+        /// checksum. Use for verifying received frames and for computing
+        /// outgoing checksum when the payload may contain `0x7E` bytes.
+        /// </summary>
+        /// <param name="data">Frame bytes: <c>[start, len, group, device, payload...]</c> without the checksum slot.</param>
+        public static byte CalculateWireChecksum(byte[] data)
+            => CalculateWireChecksum(data, data.Length);
+
+        /// <summary>
+        /// Same as <see cref="CalculateWireChecksum(byte[])"/> but operates on
+        /// the first <paramref name="length"/> bytes. Pass <c>frame.Length - 1</c>
+        /// when building an outgoing frame to exclude the pre-allocated
+        /// checksum slot from both the raw sum and the escape-count walk.
+        /// </summary>
+        public static byte CalculateWireChecksum(byte[] data, int length)
+        {
+            int sum = MagicValue;
+            for (int i = 0; i < length; i++)
+                sum += data[i];
+            for (int i = 2; i < length; i++)
+                if (data[i] == MessageStart)
+                    sum += MessageStart;
+            return (byte)(sum & 0xFF);
+        }
+
         public static byte SwapNibbles(byte b)
         {
             return (byte)(((b & 0x0F) << 4) | ((b & 0xF0) >> 4));
         }
 
+        /// <summary>
+        /// Wire size (bytes) after byte-stuffing the given decoded frame. Header
+        /// bytes 0..1 (start, len) are never stuffed; every 0x7E from index 2 onward
+        /// is doubled on the wire.
+        /// </summary>
+        public static int StuffedFrameSize(byte[] frame)
+        {
+            int escapes = 0;
+            for (int i = 2; i < frame.Length; i++)
+                if (frame[i] == MessageStart) escapes++;
+            return frame.Length + escapes;
+        }
+
+        /// <summary>
+        /// Byte-stuff <paramref name="frame"/> into <paramref name="dest"/>, returning
+        /// the number of bytes written. Caller must size <paramref name="dest"/> to at
+        /// least <see cref="StuffedFrameSize(byte[])"/>. Header bytes 0..1 are copied
+        /// raw; from index 2 onward each 0x7E is emitted twice. Enables a single
+        /// <c>SerialPort.Write</c> call per frame instead of per-byte writes.
+        /// </summary>
+        public static int StuffFrame(byte[] frame, byte[] dest)
+        {
+            if (frame.Length < 2) return 0;
+            dest[0] = frame[0];
+            dest[1] = frame[1];
+            int di = 2;
+            for (int i = 2; i < frame.Length; i++)
+            {
+                dest[di++] = frame[i];
+                if (frame[i] == MessageStart)
+                    dest[di++] = MessageStart;
+            }
+            return di;
+        }
+
         public static byte ToggleBit7(byte b)
         {
             return (byte)(b ^ 0x80);
+        }
+
+        /// <summary>
+        /// Commands the wheel echoes back verbatim (group | 0x80, device nibble-swapped,
+        /// payload mirrored). Mirrors sim/wheel_sim.py:_WHEEL_ECHO_PREFIXES.
+        /// Match form: (group, device, payload-prefix bytes). Used to short-circuit
+        /// unmatched-response logging and treat echoes as wheel keepalive signals
+        /// for commands not in MozaCommandDatabase.
+        /// </summary>
+        public static readonly byte[][] WheelEchoPrefixes = new[]
+        {
+            new byte[] { 0x3F, 0x17, 0x1f, 0x00 }, // per-LED color page 0
+            new byte[] { 0x3F, 0x17, 0x1f, 0x01 }, // per-LED color page 1
+            new byte[] { 0x3F, 0x17, 0x1e, 0x00 }, // channel CC enable page 0
+            new byte[] { 0x3F, 0x17, 0x1e, 0x01 }, // channel CC enable page 1
+            new byte[] { 0x3F, 0x17, 0x1b, 0x00 }, // brightness page 0
+            new byte[] { 0x3F, 0x17, 0x1b, 0x01 }, // brightness page 1
+            new byte[] { 0x3F, 0x17, 0x1c, 0x00 }, // page config
+            new byte[] { 0x3F, 0x17, 0x1d, 0x00 },
+            new byte[] { 0x3F, 0x17, 0x1d, 0x01 },
+            new byte[] { 0x3F, 0x17, 0x27, 0x00 }, // LED display config page 0
+            new byte[] { 0x3F, 0x17, 0x27, 0x01 },
+            new byte[] { 0x3F, 0x17, 0x27, 0x02 },
+            new byte[] { 0x3F, 0x17, 0x27, 0x03 },
+            new byte[] { 0x3F, 0x17, 0x2a, 0x00 },
+            new byte[] { 0x3F, 0x17, 0x2a, 0x01 },
+            new byte[] { 0x3F, 0x17, 0x2a, 0x02 },
+            new byte[] { 0x3F, 0x17, 0x2a, 0x03 },
+            new byte[] { 0x3F, 0x17, 0x0a, 0x00 },
+            new byte[] { 0x3F, 0x17, 0x24, 0xff }, // display setting
+            new byte[] { 0x3F, 0x17, 0x20, 0x01 },
+            new byte[] { 0x3F, 0x17, 0x1a, 0x00 }, // RPM LED telemetry write
+            new byte[] { 0x3F, 0x17, 0x19, 0x00 }, // RPM LED color write
+            new byte[] { 0x3F, 0x17, 0x19, 0x01 }, // button LED color write
+            new byte[] { 0x3E, 0x17, 0x0b },       // newer-wheel LED cmd (1-byte prefix)
+        };
+
+        /// <summary>
+        /// Returns true when <paramref name="data"/> is a wheel echo of a known write
+        /// command. <paramref name="data"/> layout: [responseGroup, responseDeviceId, payload...].
+        /// responseGroup is bit7-toggled (0xBF ↔ 0x3F, 0xBE ↔ 0x3E); responseDeviceId is
+        /// nibble-swapped (0x71 ↔ 0x17). Match is against the normalized group/device.
+        /// </summary>
+        public static bool IsWheelEcho(byte[] data)
+        {
+            if (data == null || data.Length < 4) return false;
+            byte group = ToggleBit7(data[0]);
+            byte device = SwapNibbles(data[1]);
+            foreach (var prefix in WheelEchoPrefixes)
+            {
+                if (prefix[0] != group || prefix[1] != device) continue;
+                int prefixLen = prefix.Length - 2;
+                if (data.Length < 2 + prefixLen) continue;
+                bool match = true;
+                for (int i = 0; i < prefixLen; i++)
+                {
+                    if (data[2 + i] != prefix[2 + i]) { match = false; break; }
+                }
+                if (match) return true;
+            }
+            return false;
         }
     }
 }

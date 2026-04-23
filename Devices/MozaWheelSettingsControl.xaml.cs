@@ -1,9 +1,13 @@
 using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
+using MozaPlugin.Telemetry;
 
 namespace MozaPlugin.Devices
 {
@@ -795,9 +799,13 @@ namespace MozaPlugin.Devices
             {
                 _plugin.Settings.TelemetryProfileName = selected;
                 _plugin.Settings.TelemetryMzdashPath = "";
-                _plugin.ApplyTelemetrySettings();
                 _plugin.SaveSettings();
+                // Restart so the wheel receives the new tier def + mzdash upload.
+                // Without a restart, the wheel keeps the old tier def and decodes
+                // the new frame layout as garbage.
+                _plugin.RestartTelemetry();
                 UpdateTelemetryProfileInfo();
+                if (TelemetryMappingsExpander.IsExpanded) PopulateChannelMappingGrid();
             }
         }
 
@@ -814,8 +822,9 @@ namespace MozaPlugin.Devices
 
             _plugin.Settings.TelemetryMzdashPath = dlg.FileName;
             _plugin.Settings.TelemetryProfileName = "";
-            _plugin.ApplyTelemetrySettings();
             _plugin.SaveSettings();
+            // Restart so the wheel receives the new tier def + mzdash upload.
+            _plugin.RestartTelemetry();
 
             _suppressEvents = true;
             string label = "[Custom: " + System.IO.Path.GetFileName(dlg.FileName) + "]";
@@ -827,6 +836,7 @@ namespace MozaPlugin.Devices
             _suppressEvents = false;
 
             UpdateTelemetryProfileInfo();
+            if (TelemetryMappingsExpander.IsExpanded) PopulateChannelMappingGrid();
         }
 
         private void TelemetryTestStart_Click(object sender, RoutedEventArgs e)
@@ -854,6 +864,89 @@ namespace MozaPlugin.Devices
                 ts.Stop();
             TelemetryTestStartBtn.IsEnabled = true;
             TelemetryTestStopBtn.IsEnabled = false;
+        }
+
+        // ===== Channel mappings =====
+
+        private void TelemetryMappingsExpander_Expanded(object sender, RoutedEventArgs e)
+            => PopulateChannelMappingGrid();
+
+        private void TelemetryApplyMappings_Click(object sender, RoutedEventArgs e)
+        {
+            if (_plugin == null || TelemetryChannelGrid.ItemsSource is not IEnumerable<ChannelMappingRow> rows)
+                return;
+
+            foreach (var row in rows)
+                _plugin.SetChannelMapping(row.Url, row.SimHubProperty);
+
+            _plugin.RestartTelemetry();
+            PopulateChannelMappingGrid();
+            TelemetryMappingStatus.Text = $"Applied at {DateTime.Now:HH:mm:ss}";
+        }
+
+        private void TelemetryResetMappings_Click(object sender, RoutedEventArgs e)
+        {
+            if (_plugin == null) return;
+            _plugin.ClearCurrentDashboardMappings();
+            _plugin.RestartTelemetry();
+            PopulateChannelMappingGrid();
+            TelemetryMappingStatus.Text = $"Reset to defaults at {DateTime.Now:HH:mm:ss}";
+        }
+
+        private void PopulateChannelMappingGrid()
+        {
+            if (_plugin == null) { TelemetryChannelGrid.ItemsSource = null; return; }
+            var profile = _plugin.TelemetrySender?.Profile;
+            if (profile == null || profile.Tiers.Count == 0)
+            {
+                TelemetryChannelGrid.ItemsSource = null;
+                TelemetryMappingStatus.Text = "(no dashboard loaded)";
+                return;
+            }
+
+            var rows = new List<ChannelMappingRow>();
+            foreach (var tier in profile.Tiers.OrderBy(t => t.PackageLevel))
+            {
+                foreach (var ch in tier.Channels.OrderBy(c => c.Url, StringComparer.OrdinalIgnoreCase))
+                {
+                    // Hide plugin-locked channels (resolved internally, not user-editable).
+                    if (DashboardProfileStore.IsInternalChannel(ch.SimHubProperty)) continue;
+
+                    rows.Add(new ChannelMappingRow
+                    {
+                        Name = ch.Name,
+                        Url = ch.Url,
+                        PackageLevel = ch.PackageLevel,
+                        Compression = ch.Compression,
+                        SimHubProperty = ch.SimHubProperty ?? "",
+                    });
+                }
+            }
+            TelemetryChannelGrid.ItemsSource = rows;
+        }
+
+        private sealed class ChannelMappingRow : INotifyPropertyChanged
+        {
+            public string Name { get; set; } = "";
+            public string Url { get; set; } = "";
+            public int PackageLevel { get; set; }
+            public string Compression { get; set; } = "";
+
+            private string _simHubProperty = "";
+            public string SimHubProperty
+            {
+                get => _simHubProperty;
+                set
+                {
+                    if (_simHubProperty == value) return;
+                    _simHubProperty = value ?? "";
+                    PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SimHubProperty)));
+                }
+            }
+
+            public IReadOnlyList<string> KnownProperties => KnownSimHubProperties.Paths;
+
+            public event PropertyChangedEventHandler? PropertyChanged;
         }
     }
 }

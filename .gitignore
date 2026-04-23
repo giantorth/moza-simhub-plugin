@@ -25,3 +25,5 @@ usb-capture/
 __pycache__
 
 sim/logs/
+
+*.lock

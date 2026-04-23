@@ -277,6 +277,7 @@ namespace MozaPlugin
             if (_settings.ProfileStore == null)
                 _settings.ProfileStore = new MozaProfileStore();
 
+
             // Restore blink colors from settings (write-only, can't be polled from device)
             MozaProfile.UnpackColorsInto(_settings.WheelRpmBlinkColors, _data.WheelRpmBlinkColors);
             MozaProfile.UnpackColorsInto(_settings.DashRpmBlinkColors, _data.DashRpmBlinkColors);
@@ -371,6 +372,10 @@ namespace MozaPlugin
         internal void SaveSettings()
         {
             _settings.ProfileStore?.CurrentProfile?.CaptureFromCurrent(_settings, _data);
+            // Mirror the active flat Wheel* fields into the per-wheel-model slot
+            // so each physical wheel keeps its own brightness/mode/input settings
+            // across reloads (see MozaPluginSettings.PerWheelSlots).
+            _settings.MirrorActiveToSlot(_data?.WheelModelName);
             ScheduleSave();
         }
 
@@ -492,8 +497,10 @@ namespace MozaPlugin
             if (_telemetrySender == null) return;
             var s = _settings;
 
+            // Legacy v3 (dropped — crashed some wheels) migrates to v2.
+            if (s.TelemetryProtocolVersion != 0 && s.TelemetryProtocolVersion != 2)
+                s.TelemetryProtocolVersion = 2;
             _telemetrySender.ProtocolVersion = s.TelemetryProtocolVersion;
-            _telemetrySender.FlagByteMode = s.TelemetryFlagByteMode;
             _telemetrySender.UploadDashboard = s.TelemetryUploadDashboard;
 
             // Resolve the active multi-stream profile and raw mzdash content
@@ -534,9 +541,116 @@ namespace MozaPlugin
                 }
             }
 
+            // Apply user channel mappings for the selected dashboard (overrides
+            // each channel's SimHubProperty string by URL). Must run before
+            // assigning Profile so the frame builder binds resolvers correctly.
+            if (profile != null)
+            {
+                string dashboardKey = DashboardProfileStore.GetDashboardKey(
+                    s.TelemetryMzdashPath, profile);
+                if (s.TelemetryChannelMappings != null &&
+                    s.TelemetryChannelMappings.TryGetValue(dashboardKey, out var overrides))
+                {
+                    DashboardProfileStore.ApplyUserMappings(profile, overrides);
+                }
+            }
+
+            _telemetrySender.PropertyResolver = ResolvePropertyAsDouble;
             _telemetrySender.Profile = profile;
             _telemetrySender.MzdashContent = mzdashContent;
             _telemetrySender.MzdashName = mzdashName;
+
+            // Advertise our built-in dashboard library to the wheel on session
+            // 0x09. Wheel echoes these names in its next configJson state blob
+            // (seen in usb-capture/latestcaps); PitHouse reads them for UI
+            // filtering. List matches the plugin's built-in profile set.
+            var libraryNames = new System.Collections.Generic.List<string>();
+            foreach (var p in DashProfileStore.BuiltinProfiles)
+                libraryNames.Add(p.Name);
+            if (!string.IsNullOrEmpty(mzdashName) && !libraryNames.Contains(mzdashName))
+                libraryNames.Add(mzdashName);
+            _telemetrySender.CanonicalDashboardList = libraryNames;
+        }
+
+        /// <summary>
+        /// Per-frame resolver for channels with a user-mapped SimHubProperty.
+        /// Paths starting with <c>@internal/</c> are plugin-computed values
+        /// (e.g. live wheel angle from the HID reader) and bypass SimHub.
+        /// All other paths resolve via <c>PluginManager.GetPropertyValue</c>.
+        /// </summary>
+        private double ResolvePropertyAsDouble(string path)
+        {
+            if (!string.IsNullOrEmpty(path) && path.StartsWith("@internal/", StringComparison.Ordinal))
+                return ResolveInternalChannel(path);
+
+            return PropertyCoercion.Coerce(
+                _pluginManager?.GetPropertyValue(path), path);
+        }
+
+        private double ResolveInternalChannel(string path)
+        {
+            switch (path)
+            {
+                case "@internal/SteeringWheelAngle":
+                {
+                    // Live wheel angle in degrees, centred at 0. Uses the base's
+                    // reported max-angle (half-range ± maxAngleDeg/2). Falls back
+                    // to 0 when HID is disconnected or max angle hasn't been read.
+                    var hid = _hidReader;
+                    int maxAngleDeg = _data?.MaxAngle * 2 ?? 0;
+                    if (hid == null || maxAngleDeg <= 0) return 0.0;
+                    return hid.GetCurrentAngleDegrees(maxAngleDeg);
+                }
+                default:
+                    return 0.0;
+            }
+        }
+
+        /// <summary>Stable identity key for the currently-loaded dashboard.</summary>
+        internal string CurrentDashboardKey()
+        {
+            var profile = _telemetrySender?.Profile;
+            if (profile == null) return "";
+            return DashboardProfileStore.GetDashboardKey(
+                _settings.TelemetryMzdashPath, profile);
+        }
+
+        /// <summary>Set or clear a per-channel SimHub property override for the current dashboard.</summary>
+        internal void SetChannelMapping(string channelUrl, string propertyPath)
+        {
+            if (string.IsNullOrEmpty(channelUrl)) return;
+            string key = CurrentDashboardKey();
+            if (string.IsNullOrEmpty(key)) return;
+
+            _settings.TelemetryChannelMappings ??=
+                new System.Collections.Generic.Dictionary<string,
+                    System.Collections.Generic.Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
+
+            if (!_settings.TelemetryChannelMappings.TryGetValue(key, out var inner))
+            {
+                inner = new System.Collections.Generic.Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                _settings.TelemetryChannelMappings[key] = inner;
+            }
+
+            string trimmed = (propertyPath ?? "").Trim();
+            if (string.IsNullOrEmpty(trimmed))
+                inner.Remove(channelUrl);
+            else
+                inner[channelUrl] = trimmed;
+
+            SaveSettings();
+        }
+
+        /// <summary>Clear all per-channel overrides for the currently-loaded dashboard.</summary>
+        internal void ClearCurrentDashboardMappings()
+        {
+            string key = CurrentDashboardKey();
+            if (string.IsNullOrEmpty(key)) return;
+            if (_settings.TelemetryChannelMappings != null &&
+                _settings.TelemetryChannelMappings.Remove(key))
+            {
+                SaveSettings();
+            }
         }
 
         /// <summary>
@@ -720,9 +834,49 @@ namespace MozaPlugin
             if (data.Length >= 1 && data[0] == 0x0E)
                 return;
 
+            // Filter SerialStream control frames (group 0xC3 response to 0x43,
+            // payload starts with 7C/FC + 00). These are session-management
+            // chunks (fc:00 session opens/acks, 7c:00 data) handled by
+            // TelemetrySender's session-layer handlers — not command responses.
+            // Without this, sessions 0x01..0x0E opens spam Unmatched log lines.
+            if (data.Length >= 4 && data[0] == 0xC3 &&
+                (data[2] == 0x7C || data[2] == 0xFC) && data[3] == 0x00)
+                return;
+
+            // Filter wheel's `7c:23` dashboard-activate advertisements (group
+            // 0xC3 device 0x71, payload starts with `7C 23`). Wheel broadcasts
+            // active display config periodically — informational, not a command
+            // response. Absorbed by TelemetrySender.
+            if (data.Length >= 4 && data[0] == 0xC3 && data[2] == 0x7C && data[3] == 0x23)
+                return;
+
+            // Filter group 0x40 channel-config burst echoes (0xC0 response):
+            //   1E 00 XX / 1E 01 XX — channel enable read per page
+            //   28 00 / 28 01 / 28 02 — WheelGetCfg_GetMultiFunction{Switch,Num,Left}
+            // Part of the channel configuration burst; wheel returns the stored
+            // EEPROM value per channel/query. Not actionable at plugin level —
+            // just confirms the probe landed. Mark wheel alive so watchdog
+            // doesn't reset detection.
+            if (data.Length >= 4 && data[0] == 0xC0 && data[1] == 0x71 &&
+                (data[2] == 0x1E || data[2] == 0x28))
+            {
+                _deviceManager.MarkWheelResponse(MozaProtocol.SwapNibbles(data[1]));
+                return;
+            }
+
             var result = MozaResponseParser.Parse(data);
             if (!result.HasValue)
             {
+                // Known wheel write echoes that have no command DB entry: silently
+                // treat as a keepalive from the wheel device id. Avoids unmatched-log
+                // spam and keeps wheel-alive tracking accurate for LED/page-config
+                // writes that firmware echoes verbatim (see MozaProtocol.WheelEchoPrefixes).
+                if (MozaProtocol.IsWheelEcho(data))
+                {
+                    _deviceManager.MarkWheelResponse(MozaProtocol.SwapNibbles(data[1]));
+                    return;
+                }
+
                 _unmatched++;
                 if (_unmatched <= 20 && data.Length >= 2)
                 {
@@ -781,6 +935,24 @@ namespace MozaPlugin
         /// </summary>
         private void DetectDevices(string commandName, int value, byte deviceId)
         {
+            // wheel-mcu-uid response starts with 0xBE... which parses to a negative
+            // int32 via ParseIntValue(BE). Log it before the `value < 0` guard
+            // below, because UpdateFromArray has already stored the raw 12 bytes.
+            if (commandName == "wheel-mcu-uid" && _data.WheelMcuUid.Length > 0)
+            {
+                SimHub.Logging.Current.Info(
+                    $"[Moza] Wheel MCU UID ({_data.WheelMcuUid.Length}B): " +
+                    BitConverter.ToString(_data.WheelMcuUid).Replace("-", ""));
+                return;
+            }
+            if (commandName == "display-mcu-uid" && _data.DisplayMcuUid.Length > 0)
+            {
+                SimHub.Logging.Current.Info(
+                    $"[Moza] Display MCU UID ({_data.DisplayMcuUid.Length}B): " +
+                    BitConverter.ToString(_data.DisplayMcuUid).Replace("-", ""));
+                return;
+            }
+
             if (value < 0) return; // No valid response
 
             // Update telemetry sender's heartbeat mask so it only pings detected devices
@@ -827,6 +999,9 @@ namespace MozaPlugin
                         _deviceManager.ReadSetting("wheel-hw-version");
                         _deviceManager.ReadSetting("wheel-serial-a");
                         _deviceManager.ReadSetting("wheel-serial-b");
+                        // Match PitHouse's full 12-frame identity handshake (adds the 7 probes
+                        // ReadSetting doesn't cover: 0x09/0x02/0x04/0x05/0x06/0x08-sub2/0x11).
+                        _deviceManager.SendPithouseIdentityProbe(deviceId);
                         _deviceManager.ReadSettingsPaced(NewWheelSettingsReadCommands);
                         SimHub.Logging.Current.Info($"[Moza] New-protocol wheel detected on ID {deviceId}");
                         StartTelemetryIfReady();
@@ -870,6 +1045,13 @@ namespace MozaPlugin
                             SimHub.Logging.Current.Info(
                                 $"[Moza] Wheel model: {currentModel} " +
                                 $"(rpm={WheelModelInfo.RpmLedCount}, buttons={WheelModelInfo.ButtonLedCount}, flags={WheelModelInfo.HasFlagLeds})");
+                            // Load this wheel model's persisted slot (brightness/modes/inputs)
+                            // into the active flat fields before any hardware writes fire.
+                            // Seeds a new slot from current flat values on first encounter.
+                            if (_settings.PerWheelSlots.ContainsKey(currentModel))
+                                _settings.LoadSlotIntoActive(currentModel);
+                            else
+                                _settings.MirrorActiveToSlot(currentModel);
                             DeployDeviceDefinitionForModel(currentModel);
                         }
                     }
@@ -889,6 +1071,90 @@ namespace MozaPlugin
                         SimHub.Logging.Current.Info($"[Moza] Wheel serial: {_data.WheelSerialNumber}");
                     break;
 
+                case "wheel-hw-sub":
+                    if (!string.IsNullOrEmpty(_data.WheelHwSubVersion))
+                        SimHub.Logging.Current.Info($"[Moza] Wheel HW sub: {_data.WheelHwSubVersion}");
+                    break;
+
+                case "wheel-mcu-uid":
+                    if (_data.WheelMcuUid.Length > 0)
+                        SimHub.Logging.Current.Info(
+                            $"[Moza] Wheel MCU UID ({_data.WheelMcuUid.Length}B): " +
+                            BitConverter.ToString(_data.WheelMcuUid).Replace("-", ""));
+                    break;
+
+                case "wheel-device-type":
+                    if (_data.WheelDeviceType.Length > 0)
+                        SimHub.Logging.Current.Info(
+                            $"[Moza] Wheel device type: {BitConverter.ToString(_data.WheelDeviceType)}");
+                    break;
+
+                case "wheel-capabilities":
+                    if (_data.WheelCapabilities.Length > 0)
+                        SimHub.Logging.Current.Info(
+                            $"[Moza] Wheel capabilities: {BitConverter.ToString(_data.WheelCapabilities)}");
+                    break;
+
+                case "wheel-presence":
+                    SimHub.Logging.Current.Info(
+                        $"[Moza] Wheel presence/ready: sub_device_count={_data.WheelSubDeviceCount}");
+                    break;
+
+                case "wheel-device-presence":
+                    SimHub.Logging.Current.Info(
+                        $"[Moza] Wheel device presence byte: 0x{_data.WheelDevicePresence:X2}");
+                    break;
+
+                case "wheel-identity-11":
+                    if (_data.WheelIdentity11.Length > 0)
+                        SimHub.Logging.Current.Info(
+                            $"[Moza] Wheel identity-11: {BitConverter.ToString(_data.WheelIdentity11)}");
+                    break;
+
+                // Display sub-device identity responses (wrapped via 0x43)
+                case "display-model-name":
+                    if (!string.IsNullOrEmpty(_data.DisplayModelName))
+                        SimHub.Logging.Current.Info($"[Moza] Display model: {_data.DisplayModelName}");
+                    break;
+                case "display-hw-version":
+                    if (!string.IsNullOrEmpty(_data.DisplayHwVersion))
+                        SimHub.Logging.Current.Info($"[Moza] Display HW: {_data.DisplayHwVersion}");
+                    break;
+                case "display-sw-version":
+                    if (!string.IsNullOrEmpty(_data.DisplaySwVersion))
+                        SimHub.Logging.Current.Info($"[Moza] Display FW: {_data.DisplaySwVersion}");
+                    break;
+                case "display-serial":
+                    if (!string.IsNullOrEmpty(_data.DisplaySerialNumber))
+                        SimHub.Logging.Current.Info($"[Moza] Display serial: {_data.DisplaySerialNumber}");
+                    break;
+                case "display-presence":
+                    SimHub.Logging.Current.Info(
+                        $"[Moza] Display presence/ready: sub_device_count={_data.DisplaySubDeviceCount}");
+                    break;
+                case "display-device-presence":
+                    SimHub.Logging.Current.Info(
+                        $"[Moza] Display device presence byte: 0x{_data.DisplayDevicePresence:X2}");
+                    break;
+                case "display-device-type":
+                    if (_data.DisplayDeviceType.Length > 0)
+                        SimHub.Logging.Current.Info(
+                            $"[Moza] Display device type: {BitConverter.ToString(_data.DisplayDeviceType)}");
+                    break;
+                case "display-capabilities":
+                    if (_data.DisplayCapabilities.Length > 0)
+                        SimHub.Logging.Current.Info(
+                            $"[Moza] Display capabilities: {BitConverter.ToString(_data.DisplayCapabilities)}");
+                    break;
+                case "display-identity-11":
+                    if (_data.DisplayIdentity11.Length > 0)
+                        SimHub.Logging.Current.Info(
+                            $"[Moza] Display identity-11: {BitConverter.ToString(_data.DisplayIdentity11)}");
+                    break;
+                case "display-mcu-uid":
+                    // Logged before value<0 guard (see top of DetectDevices). Not hit here.
+                    break;
+
                 case "wheel-rpm-value1":
                     if (!_newWheelDetected && !_oldWheelDetected)
                     {
@@ -900,6 +1166,7 @@ namespace MozaPlugin
                         _deviceManager.ReadSetting("wheel-hw-version");
                         _deviceManager.ReadSetting("wheel-serial-a");
                         _deviceManager.ReadSetting("wheel-serial-b");
+                        _deviceManager.SendPithouseIdentityProbe(deviceId);
                         _deviceManager.ReadSettingsPaced(OldWheelSettingsReadCommands);
                         DeployDeviceDefinitionForOldProto();
                         SimHub.Logging.Current.Info($"[Moza] Old-protocol wheel detected on ID {deviceId}");
@@ -1494,14 +1761,26 @@ namespace MozaPlugin
         {
             SimHub.Logging.Current.Info("[Moza] Applying wheel device extension settings");
 
-            // Update _settings and _data in-memory
+            // Update _settings and _data in-memory. ApplyTo already routes into
+            // the correct per-model slot and only updates flat fields when this
+            // extension's captured model matches the currently-connected wheel.
             extSettings.ApplyTo(_settings, _data);
 
-            // Persist blink colors
-            _settings.WheelRpmBlinkColors = extSettings.WheelRpmBlinkColors;
+            // Gate hardware writes + _data mutations on model match — extensions
+            // for other wheel models must not poke the active wheel's hardware.
+            string extModel = extSettings.WheelModelName ?? "";
+            string activeModel = _data?.WheelModelName ?? "";
+            bool hasExtModel = !string.IsNullOrEmpty(extModel);
+            bool modelMatches = hasExtModel &&
+                string.Equals(extModel, activeModel, StringComparison.OrdinalIgnoreCase);
+            bool writeHardware = !hasExtModel || modelMatches;
 
-            // Write to hardware if connected
-            if (_data.IsConnected)
+            // Persist blink colors only when this extension owns the active wheel.
+            if (writeHardware)
+                _settings.WheelRpmBlinkColors = extSettings.WheelRpmBlinkColors;
+
+            // Write to hardware if connected and this extension matches the active wheel
+            if (writeHardware && _data.IsConnected)
             {
                 // Wheel mode/brightness settings
                 if (_newWheelDetected)

@@ -40,6 +40,27 @@ namespace MozaPlugin.Protocol
             if (responseGroup == 0x0E)
                 return null;
 
+            // Filter SerialStream control frames (group 0xC3 = response to 0x43 +
+            // payload starts with `7C 00` or `FC 00`). These are session-management
+            // chunks (data / session-open-ack / fc:00 ack) handled by
+            // TelemetrySender.OnMessageDuringPreamble, not command responses.
+            // Logging them as "Unmatched" was noise.
+            if (responseGroup == 0xC3 && payload.Length >= 2 &&
+                (payload[0] == 0x7C || payload[0] == 0xFC) && payload[1] == 0x00)
+                return null;
+
+            // Wrapped Display sub-device identity responses arrive as 0xC3/0x71
+            // with an inner response group byte. Unwrap and re-dispatch as if
+            // it were a top-level response, but tag with "display-" prefix so
+            // MozaData.UpdateFromArray can route them to Display fields without
+            // overwriting the base wheel identity. Covers response groups:
+            //   0x89/0x84/0x85/0x86/0x82/0x87/0x88/0x8F/0x90/0x91
+            if (responseGroup == 0xC3 && payload.Length >= 1 &&
+                IsDisplayIdentityResponseGroup(payload[0]))
+            {
+                return ParseDisplayIdentity(payload, responseDeviceId);
+            }
+
             // Device hint overrides based on group range
             string? deviceHint = null;
             if (group >= 63 && group <= 66)
@@ -103,6 +124,95 @@ namespace MozaPlugin.Protocol
             }
 
             return null;
+        }
+
+        private static bool IsDisplayIdentityResponseGroup(byte g)
+        {
+            return g == 0x82 || g == 0x84 || g == 0x85 || g == 0x86 ||
+                   g == 0x87 || g == 0x88 || g == 0x89 || g == 0x8F ||
+                   g == 0x90 || g == 0x91;
+        }
+
+        private static ParsedResponse? ParseDisplayIdentity(byte[] payload, byte deviceId)
+        {
+            // payload[0] = response group (0x8X). Payload shape varies:
+            //   0x89 00 01           — presence (2 bytes)
+            //   0x82 02              — product type (1 byte)
+            //   0x84 01 02 08 06     — device type (4 bytes, byte 2 = 0x08 for display)
+            //   0x85 01 02 00 00     — capabilities
+            //   0x86 <12B>           — MCU UID
+            //   0x87 01 "<ASCII>"    — model name ("Display")
+            //   0x88 01 "<ASCII>"    — HW version
+            //   0x8F 01 "<ASCII>"    — FW version
+            //   0x90 00 "<ASCII>"    — serial
+            //   0x91 04 01           — identity-11
+            byte g = payload[0];
+            string name;
+            byte[] value;
+            switch (g)
+            {
+                case 0x89:
+                    name = "display-presence";
+                    value = payload.Length > 1 ? Slice(payload, 1) : new byte[0];
+                    break;
+                case 0x82:
+                    name = "display-device-presence";
+                    value = payload.Length > 1 ? Slice(payload, 1) : new byte[0];
+                    break;
+                case 0x84:
+                    name = "display-device-type";
+                    value = payload.Length > 1 ? Slice(payload, 1) : new byte[0];
+                    break;
+                case 0x85:
+                    name = "display-capabilities";
+                    value = payload.Length > 1 ? Slice(payload, 1) : new byte[0];
+                    break;
+                case 0x86:
+                    name = "display-mcu-uid";
+                    value = payload.Length > 1 ? Slice(payload, 1) : new byte[0];
+                    break;
+                case 0x87:
+                    // Skip leading length/index byte (0x01). Payload after is ASCII model name.
+                    name = "display-model-name";
+                    value = payload.Length > 2 ? Slice(payload, 2) : new byte[0];
+                    break;
+                case 0x88:
+                    name = "display-hw-version";
+                    value = payload.Length > 2 ? Slice(payload, 2) : new byte[0];
+                    break;
+                case 0x8F:
+                    name = "display-sw-version";
+                    value = payload.Length > 2 ? Slice(payload, 2) : new byte[0];
+                    break;
+                case 0x90:
+                    name = "display-serial";
+                    value = payload.Length > 2 ? Slice(payload, 2) : new byte[0];
+                    break;
+                case 0x91:
+                    name = "display-identity-11";
+                    value = payload.Length > 1 ? Slice(payload, 1) : new byte[0];
+                    break;
+                default:
+                    return null;
+            }
+            var r = new ParsedResponse
+            {
+                Name = name,
+                DeviceId = deviceId,
+                PayloadLength = value.Length,
+                ArrayValue = value,
+                IntValue = MozaCommand.ParseIntValue(value, Math.Min(value.Length, 4)),
+            };
+            return r;
+        }
+
+        private static byte[] Slice(byte[] src, int start)
+        {
+            int len = src.Length - start;
+            if (len <= 0) return new byte[0];
+            var dst = new byte[len];
+            Array.Copy(src, start, dst, 0, len);
+            return dst;
         }
     }
 }

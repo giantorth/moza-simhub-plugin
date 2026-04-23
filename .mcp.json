@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "wheel-sim-windows": {
+      "command": ".venv/bin/python3",
+      "args": ["sim/wheel_sim.py", "--mcp", "/dev/ttyGS0"],
+      "cwd": "."
+    },
+    "wheel-sim-linux": {
+      "command": ".venv/bin/python3",
+      "args": ["sim/wheel_sim.py", "--mcp", "/dev/tnt0"],
+      "cwd": "."
+    },
+    "simhub-control": {
+      "command": ".venv/bin/python3",
+      "args": ["sim/simhub_mcp.py"],
+      "cwd": "."
+    }
+  }
+}

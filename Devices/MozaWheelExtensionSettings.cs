@@ -10,6 +10,11 @@ namespace MozaPlugin.Devices
     /// </summary>
     public class MozaWheelExtensionSettings
     {
+        // Wheel model this extension was last captured against (empty for legacy
+        // pre-per-wheel-slot JSON). Lets ApplyTo route settings into the matching
+        // slot instead of clobbering whichever wheel is currently active.
+        public string WheelModelName { get; set; } = "";
+
         // Wheel LED mode
         public int WheelTelemetryMode { get; set; } = -1;
         public int WheelIdleEffect { get; set; } = -1;
@@ -25,9 +30,12 @@ namespace MozaPlugin.Devices
         public int WheelRpmIndicatorMode { get; set; } = -1;
         public int WheelRpmDisplayMode { get; set; } = -1;
 
-        // Dashboard telemetry (per-wheel-profile)
+        // Dashboard telemetry (per-wheel-profile).
+        // NOTE: TelemetryEnabled intentionally NOT persisted here — the enable
+        // toggle is a global plugin setting on MozaPluginSettings. Persisting it
+        // per-wheel-profile caused the checkbox to always restore to the last
+        // captured value on startup, ignoring the user's runtime unchecks.
         public bool TelemetrySettingsPresent { get; set; } = false;
-        public bool TelemetryEnabled { get; set; } = false;
         public string TelemetryProfileName { get; set; } = "";
         public string TelemetryMzdashPath { get; set; } = "";
 
@@ -46,6 +54,7 @@ namespace MozaPlugin.Devices
         {
             if (!data.BaseSettingsRead) return;
 
+            WheelModelName = data.WheelModelName ?? "";
             WheelTelemetryMode = settings.WheelTelemetryMode;
             WheelIdleEffect = settings.WheelIdleEffect;
             WheelButtonsIdleEffect = settings.WheelButtonsIdleEffect;
@@ -57,7 +66,6 @@ namespace MozaPlugin.Devices
             WheelRpmDisplayMode = settings.WheelRpmDisplayMode;
 
             TelemetrySettingsPresent = true;
-            TelemetryEnabled = settings.TelemetryEnabled;
             TelemetryProfileName = settings.TelemetryProfileName;
             TelemetryMzdashPath = settings.TelemetryMzdashPath;
 
@@ -75,19 +83,50 @@ namespace MozaPlugin.Devices
         /// </summary>
         public void ApplyTo(MozaPluginSettings settings, MozaData data)
         {
-            if (WheelTelemetryMode >= 0) settings.WheelTelemetryMode = WheelTelemetryMode;
-            if (WheelIdleEffect >= 0) settings.WheelIdleEffect = WheelIdleEffect;
-            if (WheelButtonsIdleEffect >= 0) settings.WheelButtonsIdleEffect = WheelButtonsIdleEffect;
-            if (WheelRpmBrightness >= 0) settings.WheelRpmBrightness = WheelRpmBrightness;
-            if (WheelButtonsBrightness >= 0) settings.WheelButtonsBrightness = WheelButtonsBrightness;
-            if (WheelFlagsBrightness >= 0) settings.WheelFlagsBrightness = WheelFlagsBrightness;
-            if (WheelESRpmBrightness >= 0) settings.WheelESRpmBrightness = WheelESRpmBrightness;
-            if (WheelRpmIndicatorMode >= 0) settings.WheelRpmIndicatorMode = WheelRpmIndicatorMode;
-            if (WheelRpmDisplayMode >= 0) settings.WheelRpmDisplayMode = WheelRpmDisplayMode;
+            // Route wheel-model-scoped fields into the slot for this extension's
+            // captured model rather than overwriting the active flat state.
+            // - If WheelModelName matches the currently-connected wheel, also
+            //   update the flat fields so hardware-write paths see the values.
+            // - If WheelModelName is empty (legacy JSON), fall back to writing
+            //   flat directly — matches pre-slot behaviour for single-wheel setups.
+            string extModel = WheelModelName ?? "";
+            string activeModel = data?.WheelModelName ?? "";
+            bool hasExtModel = !string.IsNullOrEmpty(extModel);
+            bool activeMatches = hasExtModel &&
+                string.Equals(extModel, activeModel, StringComparison.OrdinalIgnoreCase);
+            bool writeFlat = !hasExtModel || activeMatches;
 
+            if (hasExtModel)
+            {
+                var slot = settings.GetOrCreateSlot(extModel);
+                if (WheelTelemetryMode     >= 0) slot.WheelTelemetryMode     = WheelTelemetryMode;
+                if (WheelIdleEffect        >= 0) slot.WheelIdleEffect        = WheelIdleEffect;
+                if (WheelButtonsIdleEffect >= 0) slot.WheelButtonsIdleEffect = WheelButtonsIdleEffect;
+                if (WheelRpmBrightness     >= 0) slot.WheelRpmBrightness     = WheelRpmBrightness;
+                if (WheelButtonsBrightness >= 0) slot.WheelButtonsBrightness = WheelButtonsBrightness;
+                if (WheelFlagsBrightness   >= 0) slot.WheelFlagsBrightness   = WheelFlagsBrightness;
+                if (WheelESRpmBrightness   >= 0) slot.WheelESRpmBrightness   = WheelESRpmBrightness;
+                if (WheelRpmIndicatorMode  >= 0) slot.WheelRpmIndicatorMode  = WheelRpmIndicatorMode;
+                if (WheelRpmDisplayMode    >= 0) slot.WheelRpmDisplayMode    = WheelRpmDisplayMode;
+            }
+
+            if (writeFlat)
+            {
+                if (WheelTelemetryMode     >= 0) settings.WheelTelemetryMode     = WheelTelemetryMode;
+                if (WheelIdleEffect        >= 0) settings.WheelIdleEffect        = WheelIdleEffect;
+                if (WheelButtonsIdleEffect >= 0) settings.WheelButtonsIdleEffect = WheelButtonsIdleEffect;
+                if (WheelRpmBrightness     >= 0) settings.WheelRpmBrightness     = WheelRpmBrightness;
+                if (WheelButtonsBrightness >= 0) settings.WheelButtonsBrightness = WheelButtonsBrightness;
+                if (WheelFlagsBrightness   >= 0) settings.WheelFlagsBrightness   = WheelFlagsBrightness;
+                if (WheelESRpmBrightness   >= 0) settings.WheelESRpmBrightness   = WheelESRpmBrightness;
+                if (WheelRpmIndicatorMode  >= 0) settings.WheelRpmIndicatorMode  = WheelRpmIndicatorMode;
+                if (WheelRpmDisplayMode    >= 0) settings.WheelRpmDisplayMode    = WheelRpmDisplayMode;
+            }
+
+            // Telemetry profile name/path stay global (user picks one dashboard
+            // per game regardless of which wheel instance is saving).
             if (TelemetrySettingsPresent)
             {
-                settings.TelemetryEnabled = TelemetryEnabled;
                 settings.TelemetryProfileName = TelemetryProfileName;
                 settings.TelemetryMzdashPath = TelemetryMzdashPath;
             }

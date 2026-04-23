@@ -1,3 +1,6 @@
+using System;
+using System.Collections.Generic;
+
 namespace MozaPlugin
 {
     /// <summary>
@@ -78,21 +81,12 @@ namespace MozaPlugin
         // PitHouse does this on every connection — the wheel may require it.
         public bool TelemetryUploadDashboard { get; set; } = false;
 
-        // Tier definition protocol version.
-        // 0 = URL-based subscription (CSP-style — host sends channel URLs,
-        //     wheel firmware resolves compression internally)
-        // 2 = Compact numeric (VGS-style — host sends flag bytes, channel indices,
-        //     compression codes, and bit widths per tier)
-        public int TelemetryProtocolVersion { get; set; } = 0;
-
-        // How to assign flag bytes in tier definitions and telemetry frames.
-        // We don't fully understand how the wheel uses flag bytes — Pithouse uses
-        // a monotonic counter and the wheel accepts values from 0x00 to 0x13+.
-        // Options:
-        //   0 = Zero-based (0x00, 0x01, 0x02) — matches Pithouse's initial probe batch
-        //   1 = Session-port-based (FlagByte+0, +1, +2) — matches Pithouse's mid-session behavior
-        //   2 = Two-batch (probe at 0x00 then real at FlagByte) — matches Pithouse's full sequence
-        public int TelemetryFlagByteMode { get; set; } = 2;
+        // Tier definition protocol variant.
+        //   0 = URL-based subscription (CSP-style — host sends channel URLs,
+        //       wheel firmware resolves compression internally)
+        //   2 = Compact numeric, single batch (host sends flag bytes, channel
+        //       indices, compression codes, bit widths per tier)
+        public int TelemetryProtocolVersion { get; set; } = 2;
 
         // Telemetry send rate in Hz
         public int TelemetrySendRateHz { get; set; } = 20;
@@ -102,5 +96,97 @@ namespace MozaPlugin
 
         // Whether to send the 0x2D/F5:31 sequence counter to the base (~30 Hz)
         public bool TelemetrySendSequenceCounter { get; set; } = true;
+
+        // Per-dashboard user channel mappings. Outer key = DashboardProfileStore.GetDashboardKey
+        // (e.g. "builtin:Formula 1" or "file:custom.mzdash:a1b2c3d4"). Inner key =
+        // channel URL (e.g. "v1/gameData/Rpm"). Value = SimHub property path
+        // (e.g. "DataCorePlugin.GameData.Rpms"). Empty value clears the override.
+        public Dictionary<string, Dictionary<string, string>> TelemetryChannelMappings { get; set; }
+            = new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
+
+        // Per-wheel-model setting slots. Keyed by wheel model name (from data.WheelModelName).
+        // The flat Wheel* properties above represent the CURRENTLY-ACTIVE wheel; on save we
+        // mirror them into the slot for the active model, and on wheel-model-detected we load
+        // the slot back into the flat properties. This keeps each physical wheel model's
+        // brightness/mode/input settings isolated when multiple SimHub device extensions exist.
+        public Dictionary<string, PerWheelSlot> PerWheelSlots { get; set; }
+            = new Dictionary<string, PerWheelSlot>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Get the slot for a model, creating one on first access.</summary>
+        public PerWheelSlot GetOrCreateSlot(string? modelName)
+        {
+            if (string.IsNullOrEmpty(modelName)) return new PerWheelSlot();
+            if (!PerWheelSlots.TryGetValue(modelName, out var slot))
+            {
+                slot = new PerWheelSlot();
+                PerWheelSlots[modelName] = slot;
+            }
+            return slot;
+        }
+
+        /// <summary>Copy the flat Wheel* fields into the slot for <paramref name="modelName"/>.</summary>
+        public void MirrorActiveToSlot(string? modelName)
+        {
+            if (string.IsNullOrEmpty(modelName)) return;
+            var slot = GetOrCreateSlot(modelName);
+            slot.WheelTelemetryMode     = WheelTelemetryMode;
+            slot.WheelIdleEffect        = WheelIdleEffect;
+            slot.WheelButtonsIdleEffect = WheelButtonsIdleEffect;
+            slot.WheelPaddlesMode       = WheelPaddlesMode;
+            slot.WheelClutchPoint       = WheelClutchPoint;
+            slot.WheelKnobMode          = WheelKnobMode;
+            slot.WheelStickMode         = WheelStickMode;
+            slot.WheelRpmIndicatorMode  = WheelRpmIndicatorMode;
+            slot.WheelRpmDisplayMode    = WheelRpmDisplayMode;
+            slot.WheelRpmBrightness     = WheelRpmBrightness;
+            slot.WheelButtonsBrightness = WheelButtonsBrightness;
+            slot.WheelFlagsBrightness   = WheelFlagsBrightness;
+            slot.WheelESRpmBrightness   = WheelESRpmBrightness;
+            slot.WheelRpmBlinkColors    = WheelRpmBlinkColors;
+        }
+
+        /// <summary>Copy the slot for <paramref name="modelName"/> into the flat Wheel* fields.</summary>
+        public void LoadSlotIntoActive(string? modelName)
+        {
+            if (string.IsNullOrEmpty(modelName)) return;
+            if (!PerWheelSlots.TryGetValue(modelName!, out var slot)) return;
+            WheelTelemetryMode     = slot.WheelTelemetryMode;
+            WheelIdleEffect        = slot.WheelIdleEffect;
+            WheelButtonsIdleEffect = slot.WheelButtonsIdleEffect;
+            WheelPaddlesMode       = slot.WheelPaddlesMode;
+            WheelClutchPoint       = slot.WheelClutchPoint;
+            WheelKnobMode          = slot.WheelKnobMode;
+            WheelStickMode         = slot.WheelStickMode;
+            WheelRpmIndicatorMode  = slot.WheelRpmIndicatorMode;
+            WheelRpmDisplayMode    = slot.WheelRpmDisplayMode;
+            WheelRpmBrightness     = slot.WheelRpmBrightness;
+            WheelButtonsBrightness = slot.WheelButtonsBrightness;
+            WheelFlagsBrightness   = slot.WheelFlagsBrightness;
+            WheelESRpmBrightness   = slot.WheelESRpmBrightness;
+            WheelRpmBlinkColors    = slot.WheelRpmBlinkColors;
+        }
+    }
+
+    /// <summary>
+    /// Per-wheel-model snapshot of the subset of <see cref="MozaPluginSettings"/>
+    /// fields that are scoped to a specific wheel model. Keyed by wheel model name
+    /// inside <see cref="MozaPluginSettings.PerWheelSlots"/>.
+    /// </summary>
+    public class PerWheelSlot
+    {
+        public int WheelTelemetryMode { get; set; } = -1;
+        public int WheelIdleEffect { get; set; } = -1;
+        public int WheelButtonsIdleEffect { get; set; } = -1;
+        public int WheelPaddlesMode { get; set; } = -1;
+        public int WheelClutchPoint { get; set; } = -1;
+        public int WheelKnobMode { get; set; } = -1;
+        public int WheelStickMode { get; set; } = -1;
+        public int WheelRpmIndicatorMode { get; set; } = -1;
+        public int WheelRpmDisplayMode { get; set; } = -1;
+        public int WheelRpmBrightness { get; set; } = 100;
+        public int WheelButtonsBrightness { get; set; } = 100;
+        public int WheelFlagsBrightness { get; set; } = 100;
+        public int WheelESRpmBrightness { get; set; } = 15;
+        public int[]? WheelRpmBlinkColors { get; set; }
     }
 }

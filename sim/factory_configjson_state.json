@@ -1,0 +1,314 @@
+{
+  "TitleId": 1,
+  "configJsonList": [
+    "Core",
+    "Grids",
+    "Mono",
+    "Nebula",
+    "Pulse",
+    "Rally V1",
+    "Rally V2",
+    "Rally V3",
+    "Rally V4",
+    "Rally V5",
+    "Rally V6"
+  ],
+  "disableManager": {
+    "dashboards": [],
+    "imageRefMap": {
+      "MD5/5a541aae7f85c2b8837db1664fa5dd61.png": 1,
+      "MD5/8b093bdee54da30d40bb9e98882bfe3c.png": 1,
+      "MD5/a444d071c069c37480c3d44ab3ca14be.png": 1,
+      "MD5/bf3932d9c1e0e5ce7e32c1678b735648.png": 1,
+      "MD5/c0e1818a41ada8c274dcc8b89fd0a62a.png": 1,
+      "MD5/c2657726876b11fd572b8b568af197cf.png": 1,
+      "MD5/f0c45b151c2d7b0c7c536c7f481aabc8.png": 1
+    },
+    "rootPath": "/home/moza/resource/dashes"
+  },
+  "displayVersion": 11,
+  "enableManager": {
+    "dashboards": [
+      {
+        "createTime": "",
+        "dirName": "Rally V1",
+        "hash": "6237346230306537323364343265656566653032343734323631653261363333",
+        "id": "0ZPoaC0XdTHawiWIvXEq8wjDYjGenlMz",
+        "idealDeviceInfos": [
+          {
+            "deviceId": 17,
+            "hardwareVersion": "RS21-W08-HW SM-DU-V14",
+            "networkId": 1,
+            "productType": "W17 Display"
+          }
+        ],
+        "lastModified": "2025-11-21T07:45:36Z",
+        "previewImageFilePaths": [
+          "/home/moza/resource/dashes/Rally V1/Rally V1.mzdash_v2_10_3_05.png"
+        ],
+        "resouceImageFilePaths": [],
+        "title": "Rally V1"
+      },
+      {
+        "createTime": "",
+        "dirName": "Rally V5",
+        "hash": "6335636262363965666534323030626635303839646234316236333238656363",
+        "id": "7zt87PZK9zSoIPsIYbwTVduN5ddVipu9",
+        "idealDeviceInfos": [
+          {
+            "deviceId": 17,
+            "hardwareVersion": "RS21-W08-HW SM-DU-V14",
+            "networkId": 1,
+            "productType": "W17 Display"
+          }
+        ],
+        "lastModified": "2025-11-21T07:46:06Z",
+        "previewImageFilePaths": [
+          "/home/moza/resource/dashes/Rally V5/Rally V5.mzdash_v2_10_3_05.png"
+        ],
+        "resouceImageFilePaths": [],
+        "title": "Rally V5"
+      },
+      {
+        "createTime": "",
+        "dirName": "Rally V2",
+        "hash": "6237613532663061666562366333326334383130383838313261333439313531",
+        "id": "AMl9tFWbubQZ8IstnJIKyTN31NV1glNP",
+        "idealDeviceInfos": [
+          {
+            "deviceId": 17,
+            "hardwareVersion": "RS21-W08-HW SM-DU-V14",
+            "networkId": 1,
+            "productType": "W17 Display"
+          }
+        ],
+        "lastModified": "2025-11-27T04:14:08Z",
+        "previewImageFilePaths": [
+          "/home/moza/resource/dashes/Rally V2/Rally V2.mzdash_v2_10_3_05.png"
+        ],
+        "resouceImageFilePaths": [],
+        "title": "Rally V2"
+      },
+      {
+        "createTime": "",
+        "dirName": "Rally V3",
+        "hash": "3935653534646664313165636362643564383433326662333964663132663363",
+        "id": "PJx9TUnPLBUrSkL3Q9nZ5a6QCH1QKKAg",
+        "idealDeviceInfos": [
+          {
+            "deviceId": 17,
+            "hardwareVersion": "RS21-W08-HW SM-DU-V14",
+            "networkId": 1,
+            "productType": "W17 Display"
+          }
+        ],
+        "lastModified": "2025-11-21T03:02:21Z",
+        "previewImageFilePaths": [
+          "/home/moza/resource/dashes/Rally V3/Rally V3.mzdash_v2_10_3_05.png"
+        ],
+        "resouceImageFilePaths": [],
+        "title": "Rally V3"
+      },
+      {
+        "createTime": "",
+        "dirName": "Rally V6",
+        "hash": "6364623666313036383261613838303135633534396531383464363830326365",
+        "id": "ZxJDzapoFuOg6KSzufFAzpkA2vQLGT1I",
+        "idealDeviceInfos": [
+          {
+            "deviceId": 8,
+            "hardwareVersion": "RS21-W17-HW RGB-DU-V11",
+            "networkId": 1,
+            "productType": "W17 Display"
+          }
+        ],
+        "lastModified": "2025-12-16T07:21:29Z",
+        "previewImageFilePaths": [
+          "/home/moza/resource/dashes/Rally V6/Rally V6.mzdash_v2_10_3_05.png"
+        ],
+        "resouceImageFilePaths": [
+          "MD5/c2657726876b11fd572b8b568af197cf.png",
+          "MD5/5a541aae7f85c2b8837db1664fa5dd61.png",
+          "MD5/bf3932d9c1e0e5ce7e32c1678b735648.png"
+        ],
+        "title": "Rally V6"
+      },
+      {
+        "createTime": "",
+        "dirName": "Rally V4",
+        "hash": "3239613830343963633437363936326137373439323162313632316165323532",
+        "id": "m7o97CNOJ6sPGNrKjAYnna1Ani9X9QP6",
+        "idealDeviceInfos": [
+          {
+            "deviceId": 17,
+            "hardwareVersion": "RS21-W08-HW SM-DU-V14",
+            "networkId": 1,
+            "productType": "W17 Display"
+          }
+        ],
+        "lastModified": "2025-11-21T04:13:16Z",
+        "previewImageFilePaths": [
+          "/home/moza/resource/dashes/Rally V4/Rally V4.mzdash_v2_10_3_05.png"
+        ],
+        "resouceImageFilePaths": [],
+        "title": "Rally V4"
+      },
+      {
+        "createTime": "",
+        "dirName": "Core",
+        "hash": "3335393338343862356536303264353930396262373062626139643763643536",
+        "id": "{23f611f4-5660-454b-808b-f19728f64d48}",
+        "idealDeviceInfos": [
+          {
+            "deviceId": 8,
+            "hardwareVersion": "RS21-W17-HW RGB-DU-V11",
+            "networkId": 1,
+            "productType": "W17 Display"
+          }
+        ],
+        "lastModified": "2026-03-07T14:29:46Z",
+        "previewImageFilePaths": [
+          "/home/moza/resource/dashes/Core/Core.mzdash_v2_10_3_05.png"
+        ],
+        "resouceImageFilePaths": [],
+        "title": "Core"
+      },
+      {
+        "createTime": "",
+        "dirName": "Mono",
+        "hash": "3563333566643334646533313235656263643931353930343466383331373339",
+        "id": "{288fdc2c-6050-4c8e-86b3-51bb4f4f5ccc}",
+        "idealDeviceInfos": [
+          {
+            "deviceId": 8,
+            "hardwareVersion": "RS21-W17-HW RGB-DU-V11",
+            "networkId": 1,
+            "productType": "W17 Display"
+          }
+        ],
+        "lastModified": "2025-11-21T09:04:15Z",
+        "previewImageFilePaths": [
+          "/home/moza/resource/dashes/Mono/Mono.mzdash_v2_10_3_05.png"
+        ],
+        "resouceImageFilePaths": [],
+        "title": "Mono"
+      },
+      {
+        "createTime": "",
+        "dirName": "Pulse",
+        "hash": "6632333430393764323065333866623537656631396561653761633261336164",
+        "id": "{3b177b19-9884-48b1-b7b2-6dcdb6180828}",
+        "idealDeviceInfos": [
+          {
+            "deviceId": 8,
+            "hardwareVersion": "RS21-W17-HW RGB-DU-V11",
+            "networkId": 1,
+            "productType": "W17 Display"
+          }
+        ],
+        "lastModified": "2025-11-21T09:03:48Z",
+        "previewImageFilePaths": [
+          "/home/moza/resource/dashes/Pulse/Pulse.mzdash_v2_10_3_05.png"
+        ],
+        "resouceImageFilePaths": [
+          "MD5/8b093bdee54da30d40bb9e98882bfe3c.png"
+        ],
+        "title": "Pulse"
+      },
+      {
+        "createTime": "",
+        "dirName": "Nebula",
+        "hash": "6538633537633333663639356132623732313939346435373832323337333234",
+        "id": "{94a9ade1-d841-4579-a115-5f6ffef97005}",
+        "idealDeviceInfos": [
+          {
+            "deviceId": 8,
+            "hardwareVersion": "RS21-W17-HW RGB-DU-V11",
+            "networkId": 1,
+            "productType": "W17 Display"
+          }
+        ],
+        "lastModified": "2025-11-21T09:04:18Z",
+        "previewImageFilePaths": [
+          "/home/moza/resource/dashes/Nebula/Nebula.mzdash_v2_10_3_05.png"
+        ],
+        "resouceImageFilePaths": [
+          "MD5/c0e1818a41ada8c274dcc8b89fd0a62a.png",
+          "MD5/f0c45b151c2d7b0c7c536c7f481aabc8.png",
+          "MD5/a444d071c069c37480c3d44ab3ca14be.png"
+        ],
+        "title": "Nebula"
+      },
+      {
+        "createTime": "",
+        "dirName": "Grids",
+        "hash": "3862623437393737666138386161303166316534343736613233613836646636",
+        "id": "{f6b22346-fdef-4f9d-87d0-02579c96d483}",
+        "idealDeviceInfos": [
+          {
+            "deviceId": 8,
+            "hardwareVersion": "RS21-W17-HW RGB-DU-V11",
+            "networkId": 1,
+            "productType": "W17 Display"
+          }
+        ],
+        "lastModified": "2025-11-21T09:04:11Z",
+        "previewImageFilePaths": [
+          "/home/moza/resource/dashes/Grids/Grids.mzdash_v2_10_3_05.png"
+        ],
+        "resouceImageFilePaths": [],
+        "title": "Grids"
+      }
+    ],
+    "imageRefMap": {
+      "MD5/5a541aae7f85c2b8837db1664fa5dd61.png": 1,
+      "MD5/8b093bdee54da30d40bb9e98882bfe3c.png": 1,
+      "MD5/a444d071c069c37480c3d44ab3ca14be.png": 1,
+      "MD5/bf3932d9c1e0e5ce7e32c1678b735648.png": 1,
+      "MD5/c0e1818a41ada8c274dcc8b89fd0a62a.png": 1,
+      "MD5/c2657726876b11fd572b8b568af197cf.png": 1,
+      "MD5/f0c45b151c2d7b0c7c536c7f481aabc8.png": 1
+    },
+    "rootPath": "/home/moza/resource/dashes"
+  },
+  "fontRefMap": {},
+  "imagePath": [
+    {
+      "md5": "8b093bdee54da30d40bb9e98882bfe3c",
+      "modify": "-4679572209000",
+      "url": "MD5/8b093bdee54da30d40bb9e98882bfe3c.png"
+    },
+    {
+      "md5": "a444d071c069c37480c3d44ab3ca14be",
+      "modify": "-4679643322000",
+      "url": "MD5/a444d071c069c37480c3d44ab3ca14be.png"
+    },
+    {
+      "md5": "c0e1818a41ada8c274dcc8b89fd0a62a",
+      "modify": "-4679556966000",
+      "url": "MD5/c0e1818a41ada8c274dcc8b89fd0a62a.png"
+    },
+    {
+      "md5": "f0c45b151c2d7b0c7c536c7f481aabc8",
+      "modify": "-4679572856000",
+      "url": "MD5/f0c45b151c2d7b0c7c536c7f481aabc8.png"
+    },
+    {
+      "md5": "5a541aae7f85c2b8837db1664fa5dd61",
+      "modify": "-4665538176967",
+      "url": "MD5/5a541aae7f85c2b8837db1664fa5dd61.png"
+    }
+  ],
+  "imageRefMap": {
+    "MD5/5a541aae7f85c2b8837db1664fa5dd61.png": 2,
+    "MD5/8b093bdee54da30d40bb9e98882bfe3c.png": 2,
+    "MD5/a444d071c069c37480c3d44ab3ca14be.png": 2,
+    "MD5/bf3932d9c1e0e5ce7e32c1678b735648.png": 2,
+    "MD5/c0e1818a41ada8c274dcc8b89fd0a62a.png": 2,
+    "MD5/c2657726876b11fd572b8b568af197cf.png": 2,
+    "MD5/f0c45b151c2d7b0c7c536c7f481aabc8.png": 2
+  },
+  "resetVersion": 10,
+  "rootDirPath": "/home/moza/resource",
+  "sortTag": 0
+}

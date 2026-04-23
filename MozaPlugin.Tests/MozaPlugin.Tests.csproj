@@ -20,10 +20,18 @@
     <Compile Include="..\Telemetry\TelemetryEncoder.cs" Link="Src\Telemetry\TelemetryEncoder.cs" />
     <Compile Include="..\Telemetry\TelemetryBitWriter.cs" Link="Src\Telemetry\TelemetryBitWriter.cs" />
     <Compile Include="..\Telemetry\DashboardProfile.cs" Link="Src\Telemetry\DashboardProfile.cs" />
+    <Compile Include="..\Telemetry\DashboardProfileStore.cs" Link="Src\Telemetry\DashboardProfileStore.cs" />
+    <Compile Include="..\Telemetry\PropertyCoercion.cs" Link="Src\Telemetry\PropertyCoercion.cs" />
+    <Compile Include="..\Telemetry\KnownSimHubProperties.cs" Link="Src\Telemetry\KnownSimHubProperties.cs" />
     <Compile Include="..\Telemetry\GameDataSnapshot.cs" Link="Src\Telemetry\GameDataSnapshot.cs" />
     <Compile Include="..\Telemetry\TelemetryFrameBuilder.cs" Link="Src\Telemetry\TelemetryFrameBuilder.cs" />
     <Compile Include="..\Telemetry\TierDefinitionBuilder.cs" Link="Src\Telemetry\TierDefinitionBuilder.cs" />
     <Compile Include="..\Telemetry\DashboardUploader.cs" Link="Src\Telemetry\DashboardUploader.cs" />
+    <Compile Include="..\Telemetry\FileTransferBuilder.cs" Link="Src\Telemetry\FileTransferBuilder.cs" />
+    <Compile Include="..\Telemetry\ConfigJsonClient.cs" Link="Src\Telemetry\ConfigJsonClient.cs" />
+    <Compile Include="..\Telemetry\WheelDashboardState.cs" Link="Src\Telemetry\WheelDashboardState.cs" />
+    <Compile Include="..\Telemetry\SessionDataReassembler.cs" Link="Src\Telemetry\SessionDataReassembler.cs" />
+    <Compile Include="..\Telemetry\SessionRegistry.cs" Link="Src\Telemetry\SessionRegistry.cs" />
     <Compile Include="..\Telemetry\TelemetryDiagnostics.cs" Link="Src\Telemetry\TelemetryDiagnostics.cs" />
   </ItemGroup>
 

@@ -20,8 +20,24 @@ namespace MozaPlugin.Telemetry
         /// <summary>
         /// How to read the value from SimHub GameData.
         /// One of the SimHubProperty enum values defined in DashboardProfileStore.
+        /// Used as the fallback when <see cref="SimHubProperty"/> is empty.
         /// </summary>
         public SimHubField SimHubField { get; set; } = SimHubField.Zero;
+
+        /// <summary>
+        /// Full SimHub property path (e.g. "DataCorePlugin.GameData.Rpms") resolved
+        /// per-frame via <c>PluginManager.GetPropertyValue</c>. Empty = use SimHubField fallback.
+        /// Populated from defaults at load time; user overrides persisted via settings.
+        /// </summary>
+        public string SimHubProperty { get; set; } = "";
+
+        /// <summary>
+        /// Multiplier applied to the resolved SimHub property value before encoding.
+        /// Used to reconcile SimHub's unit convention with the channel's compression
+        /// expectation (e.g. Throttle/Brake are 0–100 in SimHub but <c>float_001</c>
+        /// expects 0–1, so the default scale is 0.01).
+        /// </summary>
+        public double SimHubPropertyScale { get; set; } = 1.0;
 
         /// <summary>Telemetry tier (ms update interval, e.g. 30, 500, 2000).</summary>
         public int PackageLevel { get; set; } = 30;
