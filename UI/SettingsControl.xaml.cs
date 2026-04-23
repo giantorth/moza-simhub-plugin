@@ -1609,8 +1609,15 @@ namespace MozaPlugin
 
             MozaLedDeviceManager.SendColorChunks(_plugin, colors, n, cfg.LiveColorCmd);
 
-            _device.WriteArray(cfg.LiveBitmaskCmd,
-                new byte[] { (byte)(activeMask & 0xFF), (byte)((activeMask >> 8) & 0xFF) });
+            byte[] maskBytes = (cfg.LiveBitmaskCmd == "wheel-send-rpm-telemetry" && n > 16)
+                ? new byte[] {
+                    (byte)(activeMask & 0xFF),
+                    (byte)((activeMask >> 8) & 0xFF),
+                    (byte)((activeMask >> 16) & 0xFF),
+                    (byte)((activeMask >> 24) & 0xFF)
+                }
+                : new byte[] { (byte)(activeMask & 0xFF), (byte)((activeMask >> 8) & 0xFF) };
+            _device.WriteArray(cfg.LiveBitmaskCmd, maskBytes);
         }
 
         private void ExtLedSendBrightness_Click(object sender, RoutedEventArgs e)

@@ -481,7 +481,9 @@ namespace MozaPlugin
         private void ClearLedsOnHardware()
         {
             if (!_connection.IsConnected) return;
-            _deviceManager.WriteArray("wheel-send-rpm-telemetry", new byte[] { 0, 0 });
+            int rpmCount = WheelModelInfo?.RpmLedCount ?? 0;
+            _deviceManager.WriteArray("wheel-send-rpm-telemetry",
+                Devices.MozaLedDeviceManager.BuildRpmBitmaskBytes(0, rpmCount));
             _deviceManager.WriteArray("wheel-send-buttons-telemetry", new byte[] { 0, 0 });
             _deviceManager.WriteSetting("wheel-old-send-telemetry", 0);
             _deviceManager.WriteSetting("dash-send-telemetry", 0);

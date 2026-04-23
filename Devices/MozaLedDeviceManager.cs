@@ -253,7 +253,7 @@ namespace MozaPlugin.Devices
                         {
                             _lastRpmBitmask = bitmask;
                             plugin.DeviceManager.WriteArray("wheel-send-rpm-telemetry",
-                                new byte[] { (byte)(bitmask & 0xFF), (byte)((bitmask >> 8) & 0xFF) });
+                                BuildRpmBitmaskBytes(bitmask, count));
                         }
                         anySent = true;
                     }
@@ -422,7 +422,7 @@ namespace MozaPlugin.Devices
                 SendColorChunks(plugin, _lastLeds, count, "wheel-telemetry-rpm-colors");
                 if (_lastRpmBitmask >= 0)
                     plugin.DeviceManager.WriteArray("wheel-send-rpm-telemetry",
-                        new byte[] { (byte)(_lastRpmBitmask & 0xFF), (byte)((_lastRpmBitmask >> 8) & 0xFF) });
+                        BuildRpmBitmaskBytes(_lastRpmBitmask, count));
 
                 if (modelInfo?.HasFlagLeds == true && plugin.IsDashDetected && _lastFlagColorsPrimed)
                 {
@@ -440,6 +440,28 @@ namespace MozaPlugin.Devices
                 if (_lastRpmBitmask >= 0)
                     plugin.DeviceManager.WriteSetting("wheel-old-send-telemetry", _lastRpmBitmask);
             }
+        }
+
+        /// <summary>
+        /// Build RPM active-LED bitmask payload sized for the wheel's LED count.
+        /// 16 or fewer LEDs → 2 bytes (legacy wire format). 17+ LEDs → 4 bytes.
+        /// KS Pro / CS Pro (18 LEDs) require the extended form to light bits 16-17.
+        /// </summary>
+        internal static byte[] BuildRpmBitmaskBytes(int bitmask, int ledCount)
+        {
+            if (ledCount > 16)
+            {
+                return new byte[] {
+                    (byte)(bitmask & 0xFF),
+                    (byte)((bitmask >> 8) & 0xFF),
+                    (byte)((bitmask >> 16) & 0xFF),
+                    (byte)((bitmask >> 24) & 0xFF)
+                };
+            }
+            return new byte[] {
+                (byte)(bitmask & 0xFF),
+                (byte)((bitmask >> 8) & 0xFF)
+            };
         }
 
         /// <summary>
