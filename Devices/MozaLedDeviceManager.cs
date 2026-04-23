@@ -301,6 +301,32 @@ namespace MozaPlugin.Devices
                 // power cycle or forced color change.
                 if (isNewWheel && buttonColors.Length > 0 && modelInfo != null)
                 {
+                    // "Default during telemetry" override: per-button flags (Data.WheelButtonDefaultDuringTelemetry)
+                    // replace 'off' (0,0,0) in the incoming SimHub frame with the button's configured static color.
+                    // Runs unconditionally while SimHub is feeding button colors — the frame itself IS the telemetry
+                    // signal, so no extra "is telemetry running" gate is needed.
+                    var defaultFlags = plugin.Data.WheelButtonDefaultDuringTelemetry;
+                    var staticColors = plugin.Data.WheelButtonColors;
+                    bool anyOverride = false;
+                    for (int i = 0; i < defaultFlags.Length; i++)
+                    {
+                        if (defaultFlags[i]) { anyOverride = true; break; }
+                    }
+                    if (anyOverride)
+                    {
+                        var overridden = (Color[])buttonColors.Clone();
+                        int lim = Math.Min(overridden.Length, Math.Min(defaultFlags.Length, staticColors.Length));
+                        for (int i = 0; i < lim; i++)
+                        {
+                            if (!defaultFlags[i]) continue;
+                            var c = overridden[i];
+                            if (c.R != 0 || c.G != 0 || c.B != 0) continue;
+                            var sc = staticColors[i];
+                            overridden[i] = Color.FromArgb(sc[0], sc[1], sc[2]);
+                        }
+                        buttonColors = overridden;
+                    }
+
                     bool buttonsChanged = _lastButtons == null || !buttonColors.SequenceEqual(_lastButtons);
                     bool shouldSendButtons = buttonsChanged || (!limitUpdates && forceRefresh);
 

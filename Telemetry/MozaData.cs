@@ -151,6 +151,10 @@ namespace MozaPlugin
         public readonly byte[][] WheelRpmColors = InitWheelRpmColorArray();
         public readonly byte[][] WheelRpmBlinkColors = InitRpmColorArray();
         public readonly byte[][] WheelButtonColors = InitColorArray(14);
+        // Per-button "default during telemetry" flags. When true, any 'off' (0,0,0) value
+        // sent through the live button-color telemetry pipeline is replaced with that
+        // button's configured static color (see WheelButtonColors).
+        public readonly bool[] WheelButtonDefaultDuringTelemetry = new bool[14];
         public readonly byte[][] WheelFlagColors = InitFlagColorArray();
         public readonly byte[] WheelIdleColor = new byte[] { 255, 255, 255 };
 

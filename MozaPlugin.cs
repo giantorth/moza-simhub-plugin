@@ -1591,6 +1591,12 @@ namespace MozaPlugin
                 MozaProfile.UnpackColorsInto(profile.WheelRpmColors, _data.WheelRpmColors);
                 MozaProfile.UnpackColorsInto(profile.WheelRpmBlinkColors, _data.WheelRpmBlinkColors);
                 MozaProfile.UnpackColorsInto(profile.WheelButtonColors, _data.WheelButtonColors);
+                if (profile.WheelButtonDefaultDuringTelemetry != null)
+                {
+                    int n = Math.Min(profile.WheelButtonDefaultDuringTelemetry.Length, _data.WheelButtonDefaultDuringTelemetry.Length);
+                    for (int i = 0; i < n; i++)
+                        _data.WheelButtonDefaultDuringTelemetry[i] = profile.WheelButtonDefaultDuringTelemetry[i];
+                }
                 MozaProfile.UnpackColorsInto(profile.WheelFlagColors, _data.WheelFlagColors);
                 if (profile.WheelIdleColor != null && profile.WheelIdleColor.Length > 0)
                 {
