@@ -31,9 +31,11 @@ The goal is to expand the functionality of MOZA devices to a wider audience by p
 
 ## Custom Effects managed by Simhub
 
+https://github.com/user-attachments/assets/f5e77a1b-4b85-438c-957e-18c45d22a216
+
 https://github.com/user-attachments/assets/94ad3e6a-9ae0-46a2-8e2f-4f4343326414
 
-_Thank you to a gracious tester who provided this custom Engine Start and Pit Limiter effects video._
+_Thank you to a gracious alpha tester who provided these custom effect and dashboard videos._
 
 ## Installation
 
