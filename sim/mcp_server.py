@@ -204,8 +204,30 @@ def _load_wheel_sim():
 
 
 def _apply_model(ws_mod, model_name: str) -> dict:
-    """Switch wheel model: rebuild identity tables, device catalog, frame set."""
-    model = ws_mod.WHEEL_MODELS[model_name]
+    """Switch wheel model: rebuild identity tables, device catalog, frame set.
+    Serial + hw_id are randomised on every sim_start so PitHouse treats each
+    session as a fresh wheel and doesn't cache-skip uploads against its
+    per-device routing key (mcUid / serial)."""
+    import copy
+    import random
+    import time as _time
+    model = copy.deepcopy(ws_mod.WHEEL_MODELS[model_name])
+    # Randomise wheel serial0 with a run-specific suffix.
+    _suffix = f'{random.randint(0, 0xFFFF):04X}{int(_time.time()) & 0xFFFF:04X}'
+    prefix = model.get('name', 'SIM').upper()[:4]
+    model['serial0'] = f'{prefix}{_suffix}'[:16].ljust(16, '0')
+    model['serial1'] = f'{_suffix}'.ljust(14, '0')[:14]
+    # Randomise the 12-byte hw_id (probable mcUid-like identifier).
+    model['hw_id'] = bytes(random.getrandbits(8) for _ in range(12))
+    # Also randomise the display sub-device identity — PitHouse probes the
+    # display (group 0x43 to dev 0x17) separately, and dashboards are a
+    # display-device concern, so its identity likely drives the dashboard
+    # upload cache key more than the base wheel identity.
+    if 'display' in model and isinstance(model['display'], dict):
+        disp_suffix = f'{random.randint(0, 0xFFFF):04X}{int(_time.time()) & 0xFFFF:04X}'
+        model['display']['serial0'] = f'DISP{disp_suffix}'[:16].ljust(16, '0')
+        model['display']['serial1'] = f'DPX{disp_suffix}'[:16].ljust(16, '0')
+        model['display']['hw_id'] = bytes(random.getrandbits(8) for _ in range(12))
     plugin_probe_rsp, pithouse_id_rsp = ws_mod._build_identity_tables(model)
     display_model_name = model.get('display', {}).get('name', '')
     # Also set module globals for backward compat with standalone mode
@@ -310,6 +332,8 @@ def sim_start(port: Optional[str] = None, model: Optional[str] = None) -> dict:
         plugin_probe_rsp=overrides.get('plugin_probe_rsp'),
         pithouse_id_rsp=overrides.get('pithouse_id_rsp'),
         display_model_name=overrides.get('display_model_name', ''),
+        rpm_led_count=int(use_model.get('rpm_led_count', 10)),
+        button_led_count=int(use_model.get('button_led_count', 14)),
     )
     _sim = sim
 
@@ -402,6 +426,9 @@ def sim_status() -> dict:
         "catalog_sent": _sim.catalog_sent,
         "proactive_sent": _sim.proactive_sent,
         "fps": round(_sim.fps, 1),
+        "session_data_counts": {
+            f"0x{s:02X}": n for s, n in sorted(_sim.session_data_counts.items())
+        },
     }
 
 
@@ -482,6 +509,9 @@ def sim_counters() -> dict:
     result = dict(_sim.cat_counts)
     result["total"] = _sim.frames_total
     result["proactive_sent"] = _sim.proactive_sent
+    result["session_data_counts"] = {
+        f"0x{s:02X}": n for s, n in sorted(_sim.session_data_counts.items())
+    }
     return result
 
 
@@ -489,7 +519,15 @@ def sim_counters() -> dict:
 def sim_uploads() -> dict:
     """What PitHouse has uploaded: decoded zlib blobs + extracted dashboard
     metadata. Each blob carries size, session, and (if parseable) JSON root
-    keys or a UTF-16 preview."""
+    keys or a UTF-16 preview.
+
+    Research fields (S1/S3):
+      envelope_hex — up to 64 bytes preceding the zlib magic (absolute)
+      envelope_from_prev_hex — bytes since previous blob's zlib end in same
+        session; the per-blob framing envelope under investigation
+      compressed_size — zlib stream byte length
+      tile_server — structured view of tile-server state blobs (session 0x03):
+        per-game populated/empty + name + layers_count + bounds"""
     if _sim is None:
         return _no_sim()
     ut = getattr(_sim, '_upload_tracker', None)
@@ -501,6 +539,10 @@ def sim_uploads() -> dict:
             "session": f"0x{b['session']:02x}",
             "size": b['size'],
             "offset": b['session_offset'],
+            "compressed_size": b.get('compressed_size'),
+            "envelope_from_prev_hex": b.get('envelope_from_prev_hex', ''),
+            "envelope_from_prev_len": b.get('envelope_from_prev_len', 0),
+            "envelope_hex": b.get('envelope_hex', ''),
         }
         if b.get('json') is not None:
             if isinstance(b['json'], dict):
@@ -508,8 +550,47 @@ def sim_uploads() -> dict:
             item["json_preview"] = str(b['json'])[:500]
         elif b.get('utf16'):
             item["utf16_preview"] = b['utf16'][:200]
+        if b.get('tile_server') is not None:
+            item["tile_server"] = b['tile_server']
         blobs.append(item)
-    return {"blobs": blobs, "dashboards": ut.uploaded_dashboards}
+    # S1 helper: constant-byte analysis across blobs with identical envelope
+    # length. Marks bytes that never change with '==' and varying bytes with
+    # '??' to speed hypothesis formation.
+    envelope_diff = _analyse_envelope_diff(ut.decoded_blobs)
+    return {
+        "blobs": blobs,
+        "dashboards": ut.uploaded_dashboards,
+        "envelope_diff": envelope_diff,
+    }
+
+
+def _analyse_envelope_diff(blobs) -> dict:
+    """Group blobs by (session, envelope_from_prev_len) and report which bytes
+    are constant across blobs within each group. Constant bytes are shown as
+    hex; variable bytes are shown as '??'."""
+    from collections import defaultdict
+    groups: dict = defaultdict(list)
+    for b in blobs:
+        env = b.get('envelope_from_prev_hex', '')
+        if not env:
+            continue
+        groups[(b['session'], len(env) // 2)].append(bytes.fromhex(env))
+    out = {}
+    for (session, length), envs in groups.items():
+        if len(envs) < 2:
+            continue
+        pattern = []
+        for i in range(length):
+            first = envs[0][i]
+            if all(e[i] == first for e in envs):
+                pattern.append(f'{first:02x}')
+            else:
+                pattern.append('??')
+        out[f"0x{session:02x}_len{length}"] = {
+            "count": len(envs),
+            "pattern": ' '.join(pattern),
+        }
+    return out
 
 
 @_server.tool()
@@ -570,6 +651,124 @@ def sim_stored_dashboards() -> list:
         }
         for d in _sim.stored_dashboards
     ]
+
+
+@_server.tool()
+def sim_reset_fs(install_stub: Optional[str] = None) -> dict:
+    """Clear the simulated wheel filesystem + stored dashboards + upload
+    tracker state. Forces configJson state to re-emit as empty so PitHouse
+    UI sees "no dashboards installed" and issues real upload RPCs.
+
+    Args:
+      install_stub: Optional dashboard name to install as a single stub
+        dashboard (e.g. "Core"). If set, the matching entry from the
+        captured factory state is restored to the virtual FS with realistic
+        hash/id/metadata so PitHouse sees one-installed-dashboard state.
+        Omit or set None for a truly empty wheel."""
+    if _sim is None:
+        return _no_sim()
+    fs = getattr(_sim, 'fs', None)
+    if fs is None:
+        return {"error": "Filesystem not initialized"}
+    # Wipe FS — factory-fresh state. User uploads grow it from here.
+    try:
+        fs._files.clear()
+        fs._save()
+    except Exception as e:
+        return {"error": f"FS clear failed: {e}"}
+    installed: Optional[dict] = None
+    if install_stub:
+        try:
+            installed = fs.populate_single_stub_dashboard(install_stub)
+        except Exception as e:
+            return {"error": f"stub install failed: {e}"}
+    # Reset stored dashboards
+    try:
+        _sim.stored_dashboards = []
+    except Exception:
+        pass
+    # Clear upload tracker so re-pushed blobs re-decode
+    ut = getattr(_sim, '_upload_tracker', None)
+    if ut is not None:
+        ut.decoded_blobs = []
+        ut.uploaded_dashboards = []
+        ut.rpc_log = []
+        ut._bufs = {}
+        ut._prev_blob_end = {}
+    # Reset session data counts
+    _sim.session_data_counts = {}
+    result = {"status": "reset", "fs_count": len(fs.tree())}
+    if installed:
+        result["installed_stub"] = {
+            "dirName": installed.get('dirName', ''),
+            "title": installed.get('title', ''),
+            "id": installed.get('id', ''),
+        }
+    return result
+
+
+@_server.tool()
+def sim_push_configjson(use_factory: bool = True) -> dict:
+    """Queue a session 0x09 configJson state push on the device→host side.
+    Frames accumulate in `_pending_sends` and flush on the next host-triggered
+    handle() call (PitHouse heartbeats fire handle() frequently so the replay
+    typically lands within a few ms).
+
+    Args:
+      use_factory: True (default) serializes the captured real-wheel factory
+        state verbatim. False uses the sim-built state derived from current
+        FS dashboards."""
+    if _sim is None:
+        return _no_sim()
+    try:
+        n = _sim.push_configjson_replay(use_factory=use_factory)
+    except Exception as e:
+        return {"error": f"push failed: {e}"}
+    return {
+        "status": "queued",
+        "frames": n,
+        "use_factory": use_factory,
+        "next_seq": f"0x{getattr(_sim, '_session09_next_seq', 0):04x}",
+    }
+
+
+@_server.tool()
+def sim_reported_state() -> dict:
+    """What the sim would emit to PitHouse via session 0x09 configJson state
+    right now, based on current FS. Useful for spotting discrepancies between
+    FS contents and configJsonList (the list-of-names field that PitHouse's
+    UI uses for cache-skip decisions)."""
+    if _sim is None:
+        return _no_sim()
+    fs = getattr(_sim, 'fs', None)
+    if fs is None:
+        return {"error": "Filesystem not initialized"}
+    try:
+        import wheel_sim as _ws
+        import zlib
+        import json as _json
+        dashboards = fs.dashboards()
+        # Build the actual state bytes the sim would send to PitHouse, then
+        # decode + expose the full structure. This reflects the factory-state
+        # merge (11 canonical + FS uploads) rather than just FS contents.
+        payload = _ws.build_configjson_state(dashboards)
+        state_json = _json.loads(zlib.decompress(payload[9:]))
+        em = state_json.get('enableManager', {}).get('dashboards', [])
+        em_names = [d.get('dirName') or d.get('title') or d.get('name', '') for d in em]
+        return {
+            "configJsonList": state_json.get('configJsonList', []),
+            "configJsonList_count": len(state_json.get('configJsonList', [])),
+            "enableManager_dashboards_count": len(em),
+            "enableManager_dashboard_names": em_names,
+            "displayVersion": state_json.get('displayVersion'),
+            "resetVersion": state_json.get('resetVersion'),
+            "rootDirPath": state_json.get('rootDirPath'),
+            "top_level_keys": list(state_json.keys()),
+            "fs_count": len(fs.tree()),
+            "fs_dashboards_count": len(dashboards),
+        }
+    except Exception as e:
+        return {"error": str(e)}
 
 
 def run_stdio():
