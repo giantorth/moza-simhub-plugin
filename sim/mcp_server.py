@@ -212,22 +212,11 @@ def _apply_model(ws_mod, model_name: str) -> dict:
     import random
     import time as _time
     model = copy.deepcopy(ws_mod.WHEEL_MODELS[model_name])
-    # Randomise wheel serial0 with a run-specific suffix.
-    _suffix = f'{random.randint(0, 0xFFFF):04X}{int(_time.time()) & 0xFFFF:04X}'
-    prefix = model.get('name', 'SIM').upper()[:4]
-    model['serial0'] = f'{prefix}{_suffix}'[:16].ljust(16, '0')
-    model['serial1'] = f'{_suffix}'.ljust(14, '0')[:14]
-    # Randomise the 12-byte hw_id (probable mcUid-like identifier).
-    model['hw_id'] = bytes(random.getrandbits(8) for _ in range(12))
-    # Also randomise the display sub-device identity — PitHouse probes the
-    # display (group 0x43 to dev 0x17) separately, and dashboards are a
-    # display-device concern, so its identity likely drives the dashboard
-    # upload cache key more than the base wheel identity.
-    if 'display' in model and isinstance(model['display'], dict):
-        disp_suffix = f'{random.randint(0, 0xFFFF):04X}{int(_time.time()) & 0xFFFF:04X}'
-        model['display']['serial0'] = f'DISP{disp_suffix}'[:16].ljust(16, '0')
-        model['display']['serial1'] = f'DPX{disp_suffix}'[:16].ljust(16, '0')
-        model['display']['hw_id'] = bytes(random.getrandbits(8) for _ in range(12))
+    # Respect model's hardcoded serials and hw_id verbatim. Previously these
+    # were randomised per sim_start to cache-bust PitHouse's dashboard sync,
+    # but mismatch with session1_desc embedded values broke display
+    # detection. When user wants exact capture-derived identity, model-
+    # profile values must flow through unchanged.
     plugin_probe_rsp, pithouse_id_rsp = ws_mod._build_identity_tables(model)
     display_model_name = model.get('display', {}).get('name', '')
     # Also set module globals for backward compat with standalone mode
@@ -251,6 +240,21 @@ def _apply_model(ws_mod, model_name: str) -> dict:
     c7_23_frames = {'CSP': ws_mod._7C_23_FRAMES_CSP, 'VGS': ws_mod._7C_23_FRAMES_VGS}.get(
         frames_name, ws_mod._7C_23_FRAMES_CSP)
 
+    # Per-model replay table: layer JSON tables over any startup-loaded pcap
+    # replay. The fallback to `_config['replay']` (loaded once from default
+    # pcap) stays in place for models without their own JSON tables.
+    replay_override = None
+    tables = model.get('replay_tables') or []
+    if tables:
+        replay_override = ws_mod.ResponseReplay()
+        for rel in tables:
+            abs_path = Path(__file__).parent.parent / rel
+            if not abs_path.exists():
+                print(f'[WARN] replay_table {rel} not found', file=sys.stderr)
+                continue
+            added = replay_override.load_json(str(abs_path))
+            print(f'[replay: +{added} entries from {rel}]', file=sys.stderr)
+
     return {
         'model': model,
         'device_catalog': device_catalog,
@@ -260,6 +264,7 @@ def _apply_model(ws_mod, model_name: str) -> dict:
         'plugin_probe_rsp': plugin_probe_rsp,
         'pithouse_id_rsp': pithouse_id_rsp,
         'display_model_name': display_model_name,
+        'replay': replay_override,
     }
 
 
@@ -319,6 +324,7 @@ def sim_start(port: Optional[str] = None, model: Optional[str] = None) -> dict:
     use_c7_23_frames = overrides.get('c7_23_frames', _config['c7_23_frames'])
     use_c7_23_reps = overrides.get('c7_23_reps', _config['c7_23_reps'])
     use_model = overrides.get('model', _config.get('model', {}))
+    use_replay = overrides.get('replay') or _config.get('replay')
 
     log_path = Path(__file__).parent / 'logs' / 'wheel_sim.log'
     log_fh = _ws._open_session_log(log_path, use_port)
@@ -327,7 +333,7 @@ def sim_start(port: Optional[str] = None, model: Optional[str] = None) -> dict:
 
     sim = _ws.WheelSimulator(
         _config['db'],
-        _config['replay'],
+        use_replay,
         use_device_catalog,
         plugin_probe_rsp=overrides.get('plugin_probe_rsp'),
         pithouse_id_rsp=overrides.get('pithouse_id_rsp'),

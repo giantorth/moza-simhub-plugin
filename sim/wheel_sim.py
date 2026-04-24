@@ -109,6 +109,7 @@ _WHEEL_ECHO_PREFIXES: set = {
     (0x3F, 0x17, b'\x27\x01'),  # LED display config page 1
     (0x3F, 0x17, b'\x27\x02'),  # LED display config page 2
     (0x3F, 0x17, b'\x27\x03'),  # LED display config page 3
+    (0x3F, 0x17, b'\x27\x04'),  # LED display config page 4 (KS Pro)
     (0x3F, 0x17, b'\x2a\x00'),
     (0x3F, 0x17, b'\x2a\x01'),
     (0x3F, 0x17, b'\x2a\x02'),
@@ -121,6 +122,15 @@ _WHEEL_ECHO_PREFIXES: set = {
     (0x3F, 0x17, b'\x19\x00'),  # RPM LED color write
     (0x3F, 0x17, b'\x19\x01'),  # button LED color write
     (0x3E, 0x17, b'\x0b'),      # newer-wheel LED cmd (1-byte prefix)
+    # 1-byte-prefix echoes observed in CSP captures (2026-04 firmware).
+    # Real wheel echoes back full request payload for these config writes.
+    # plugin_probe_rsp intercepts specific (cmd, sub) pairs first, so
+    # 1-byte entries here only trigger for unmatched sub-bytes.
+    (0x3F, 0x17, b'\x03'),      # misc config write
+    (0x3F, 0x17, b'\x09'),      # config-mode probe (non-32 sub)
+    (0x3F, 0x17, b'\x0a'),      # misc config write
+    (0x3F, 0x17, b'\x0b'),      # LED cmd (0x3f variant)
+    (0x3F, 0x17, b'\x21'),      # misc config write
 }
 
 def _id_str(s: str) -> bytes:
@@ -207,6 +217,46 @@ WHEEL_MODELS: Dict[str, dict] = {
         'emits_7c23': False,
         'session_layout': 'legacy',
     },
+    'es': {
+        # MOZA ES (old-protocol) wheel on R5 base. ES wheels share device ID
+        # 0x13 with the wheelbase — identity probes to wheel device 0x17
+        # return nothing, queries to 0x13 return base identity (see
+        # docs/moza-protocol.md § ES wheel identity caveat). Identity bytes
+        # captured 2026-04-23 from real R5+ES via probes to 0x13.
+        #
+        # `wheel_device: 0x13` reroutes all wheel-keyed dispatch through
+        # 0x13 (response from 0x31 = swap_nibbles(0x13)), and the sim drops
+        # any frame addressed to 0x17 silently to mimic real ES behavior.
+        'name': 'R5 Black # MOT-1',
+        'friendly': 'ES (R5 base)',
+        # ES routing: identity, plugin probes, wheel echoes all answer at 0x13
+        # (base device) instead of 0x17. Sim drops anything addressed to 0x17
+        # silently to mimic a real ES wheel that doesn't enumerate there.
+        'wheel_device': 0x13,
+        # ES wheels: brightness 0-15, RPM LEDs driven by bitmask only (see
+        # MozaWheelExtensionSettings.cs / MozaLedDeviceManager.cs). Real LED
+        # count varies by ES variant; 10 is the common base assumption.
+        'rpm_led_count': 10,
+        'button_led_count': 0,
+        'sw_version': 'RS21-D05-MC WB',
+        'hw_version': 'RS21-D05-HW BM-C',
+        'hw_sub': 'U-V10',
+        # Serials redacted (real values present in /dev/serial/by-id and the
+        # 0x10:0x00/0x10:0x01 capture; placeholders here per other profiles).
+        'serial0': 'ES00000000000000',
+        'serial1': 'ES00000000000001',
+        # Real caps: byte 2 = 0x54 — no 0x20 RGB-display bit, so PitHouse
+        # skips the display sub-device probe cascade.
+        'caps': bytes([0x01, 0x02, 0x54, 0x00]),
+        # Real R5+ES hw_id (matches /dev/serial/by-id/usb-Gudsen_MOZA_R5_Base_*).
+        'hw_id': bytes.fromhex('410021001851333135363734'),
+        # ES base returns sub-byte 0x12 in dev_type (VGS/CSP=0x04, KS=0x05).
+        'dev_type': bytes([0x01, 0x02, 0x12, 0x08]),
+        # identity_11 = 04:01 (matches VGS/CSP default; no override needed).
+        # No dashboard, no 7c:23 frames, no display block.
+        'emits_7c23': False,
+        'session_layout': 'legacy',
+    },
     'csp': {
         'name': 'W17',
         'friendly': 'CS Pro',
@@ -215,13 +265,27 @@ WHEEL_MODELS: Dict[str, dict] = {
         'sw_version': 'RS21-W17-MC SW',
         'hw_version': 'RS21-W17-HW SM-C',
         'hw_sub': 'U-V12',
-        # Serials redacted.
-        'serial0': 'CSP0000000000000',
-        'serial1': 'CSP0000000000001',
+        # Real values from usb-capture/latestcaps/pithouse-switch-list-
+        # delete-upload-reupload.pcapng. Byte-exact match so PitHouse's
+        # cache key aligns with the real CSP wheel identity.
+        'serial0': 'KRA15R/ODpCPuVL',
+        'serial1': '3ctgwI7Sm4agxaq',
         'caps': bytes([0x01, 0x02, 0x3f, 0x01]),
-        'hw_id': bytes.fromhex('80313bc000203004'),
+        # hw_id from cmd 0x06 response (12B): 80 31 3b c0 00 20 30 04 4a 36 30 34 ("J604" tail)
+        'hw_id': bytes.fromhex('80313bc0002030044a363034'),
+        # dev_type from cmd 0x04 response (4B): 01 02 06 06 — differs from
+        # sim default 01 02 04 06 in position 2 (06 not 04).
+        'dev_type': bytes([0x01, 0x02, 0x06, 0x06]),
         'emits_7c23': True,
         '_7c23_frames_name': 'CSP',
+        # Hub (0x12) + base (0x13) + wheel (0x17) identity cascade plus all
+        # session-port reads extracted from a CSP-on-R9 capture. PitHouse
+        # probes hub/base with the same identity cmd set as the wheel.
+        'replay_tables': [
+            'sim/replay/csp_r9_wheel_17.json',
+            'sim/replay/csp_r9_base_13.json',
+            'sim/replay/csp_r9_hub_12.json',
+        ],
         'session1_desc': bytes.fromhex(
             '0701000000000c048ae5d086b2fcad7486dbe208041001'
             '0a0164000000050004020000000000000006 00'
@@ -231,9 +295,75 @@ WHEEL_MODELS: Dict[str, dict] = {
             'sw_version': 'RS21-W17-HW RGB-',
             'hw_version': 'RS21-W17-HW RGB-',
             'hw_sub': 'DU-V11',
+            # Real display serials from same capture (cmd 0x10 via grp 0x43).
+            'serial0': 'ZjHh2CULKQ7GH573',
+            'serial1': 'XoUZzSk3wTdJfkaY',
+            # dev_type from cmd 0x04 response: 01 02 11 06 (position 2 = 0x11,
+            # not sim default 0x0d). Capture-verified.
+            'dev_type': bytes([0x01, 0x02, 0x11, 0x06]),
+            'caps': bytes([0x01, 0x02, 0x00, 0x00]),
+            'hw_id': bytes.fromhex('8ae5d086b2fcad7486dbe208'),
+        },
+    },
+    'kspro': {
+        # MOZA KS Pro race wheel (RS21-W18). Shares the W17-HW RGB display
+        # module with CSP (same 12B display hw_id). Identity strings + session
+        # description chunks extracted from
+        # usb-capture/ksp/putOnWheelAndOpenPitHouse.pcapng (frames ~19500–19700,
+        # full PitHouse handshake). dev_type sub-byte 0x05 matches the model
+        # byte at session2 desc position 7 (VGS=0x06, CSP=0x04, KS/KSP=0x05).
+        'name': 'W18',
+        'friendly': 'KS Pro',
+        # LED counts from probe enumeration in capture: page 0 sub=0 reads
+        # cover ff00..ff11 (18 entries), page 1 sub=1 reads cover ff00..ff09
+        # (10 entries). Verify against real wheel.
+        'rpm_led_count': 18,
+        'button_led_count': 10,
+        'sw_version': 'RS21-W18-MC SW',
+        'hw_version': 'RS21-W18-HW SM-C',
+        'hw_sub': 'U-V12',
+        # Serials redacted.
+        'serial0': 'KSP0000000000000',
+        'serial1': 'KSP0000000000001',
+        # Caps mirrors CSP (display present, similar feature set). Not
+        # directly observed in the capture's probe range — verify.
+        'caps': bytes([0x01, 0x02, 0x3f, 0x01]),
+        'hw_id': bytes.fromhex('8ae5d086b2fcad7486dbe208'),
+        'dev_type': bytes([0x01, 0x02, 0x05, 0x06]),
+        'emits_7c23': True,
+        # No KSP-specific 7c:23 page-activate frame table extracted yet; fall
+        # back to CSP frames since they share the display module.
+        '_7c23_frames_name': 'CSP',
+        'session_layout': 'vgs_combined',
+        'catalog_pcapng': 'usb-capture/ksp/putOnWheelAndOpenPitHouse.pcapng',
+        # Per-device replay tables (JSON) layered over the default replay
+        # source. Earlier tables win when keys collide. Pedal table is loaded
+        # because real KS Pro captures include pedal traffic on 0x19 that
+        # PitHouse expects a response to.
+        'replay_tables': [
+            'sim/replay/kspro_wheel_17.json',
+            'sim/replay/kspro_base_13.json',
+            'sim/replay/kspro_hub_12.json',
+            'sim/replay/kspro_pedal_19.json',
+        ],
+        # Byte-for-byte from capture session 0/port 2 frags 6..10
+        # (chunk sizes 26/5/2/9/2 → 'vgs_combined' layout).
+        'session1_desc': bytes.fromhex(
+            '0701000000000c058ae5d086b2fcad7486dbe2080410120 10a00'  # 26B
+            '0164000000'                                              # 5B
+            '0500'                                                    # 2B
+            '040000000000000000'                                      # 9B
+            '0600'                                                    # 2B
+            .replace(' ', '')),
+        'display': {
+            'name': 'W18 Display',
+            # KS Pro display reports the same RGB-I/RGB-B board strings as CSP.
+            'sw_version': 'RS21-W17-HW RGB-',
+            'hw_version': 'RS21-W17-HW RGB-',
+            'hw_sub': 'DU-V11',
             # Serials redacted.
-            'serial0': 'CSPDISPLAY000000',
-            'serial1': 'CSPDISPLAY000001',
+            'serial0': 'KSPDISPLAY000000',
+            'serial1': 'KSPDISPLAY000001',
             'dev_type': bytes([0x01, 0x02, 0x0d, 0x06]),
             'caps': bytes([0x01, 0x02, 0x00, 0x00]),
             'hw_id': bytes.fromhex('8ae5d086b2fcad7486dbe208'),
@@ -245,9 +375,15 @@ def _build_identity_tables(model: dict) -> Tuple[
     Dict[Tuple[int, int, bytes], bytes],
     Dict[Tuple[int, bytes], bytes],
 ]:
-    """Build plugin probe and PitHouse identity tables from a wheel model profile."""
+    """Build plugin probe and PitHouse identity tables from a wheel model profile.
+
+    For ES wheels (wheel_device=0x13), wheel identity entries are keyed by 0x13
+    instead of 0x17 — real ES wheels share device ID with the wheelbase and do
+    not respond at 0x17 at all.
+    """
     name = model['name']
     disp = model.get('display', {})
+    wheel_dev = model.get('wheel_device', DEV_WHEEL)
 
     # Plugin probe responses — device-independent entries plus wheel identity
     plugin_rsp: Dict[Tuple[int, int, bytes], bytes] = {
@@ -274,13 +410,13 @@ def _build_identity_tables(model: dict) -> Tuple[
         (0x1F, 0x12, b'\x4e\x09'): b'\x4c\x00',
         (0x1F, 0x12, b'\x4e\x0a'): b'\x4c\x00',
         (0x1F, 0x12, b'\x4e\x0b'): b'\x4c\x00',
-        # ── Wheel identity reads (model-specific) ──
-        (0x07, 0x17, b'\x01'): b'\x01' + _id_str(name),
-        (0x0F, 0x17, b'\x01'): b'\x01' + _id_str(model['sw_version']),
-        (0x08, 0x17, b'\x01'): b'\x01' + _id_str(model['hw_version']),
-        (0x08, 0x17, b'\x02'): b'\x02' + _id_str(model['hw_sub']),
-        (0x10, 0x17, b'\x00'): b'\x00' + _id_str(model['serial0']),
-        (0x10, 0x17, b'\x01'): b'\x01' + _id_str(model['serial1']),
+        # ── Wheel identity reads (model-specific; ES → 0x13 not 0x17) ──
+        (0x07, wheel_dev, b'\x01'): b'\x01' + _id_str(name),
+        (0x0F, wheel_dev, b'\x01'): b'\x01' + _id_str(model['sw_version']),
+        (0x08, wheel_dev, b'\x01'): b'\x01' + _id_str(model['hw_version']),
+        (0x08, wheel_dev, b'\x02'): b'\x02' + _id_str(model['hw_sub']),
+        (0x10, wheel_dev, b'\x00'): b'\x00' + _id_str(model['serial0']),
+        (0x10, wheel_dev, b'\x01'): b'\x01' + _id_str(model['serial1']),
     }
 
     # Display sub-device identity probes (routed via group 0x43 to device 0x17).
@@ -304,6 +440,18 @@ def _build_identity_tables(model: dict) -> Tuple[
             (0x43, 0x17, b'\x10\x00'):         bytes([0x90, 0x00]) + _id_str(disp['serial0']),
             (0x43, 0x17, b'\x10\x01'):         bytes([0x90, 0x01]) + _id_str(disp['serial1']),
             (0x43, 0x17, b'\x11\x04'):         bytes([0x91, 0x04, 0x01]),
+            # Short-form identity probes (no sub-byte). PitHouse sends these
+            # alongside the sub-byte variants during display negotiation on
+            # 2025-11+ firmware; wheel answers with the sub=0x01 (or 0x00 for
+            # serial) payload. Without these entries PitHouse marks the
+            # display as "not fully detected" in Dashboard Manager even
+            # though the sub-byte probes all got answers. Byte-exact from
+            # usb-capture/latestcaps/automobilista2-wheel-connect-dash-change.pcapng.
+            (0x43, 0x17, b'\x07'):             bytes([0x87, 0x01]) + _id_str(disp.get('name', '')),
+            (0x43, 0x17, b'\x08'):             bytes([0x88, 0x01]) + _id_str(disp['hw_version']),
+            (0x43, 0x17, b'\x0f'):             bytes([0x8f, 0x01]) + _id_str(disp['sw_version']),
+            (0x43, 0x17, b'\x10'):             bytes([0x90, 0x00]) + _id_str(disp['serial0']),
+            (0x43, 0x17, b'\x11'):             bytes([0x91, 0x04]),
         })
 
     # PitHouse identity probes (groups 0x02–0x11, device 0x17)
@@ -335,6 +483,9 @@ def _build_identity_tables(model: dict) -> Tuple[
 _PLUGIN_PROBE_RSP: Dict[Tuple[int, int, bytes], bytes] = {}
 _PITHOUSE_ID_RSP: Dict[Tuple[int, bytes], bytes] = {}
 _DISPLAY_MODEL_NAME: str = 'Display'
+# Selected wheel device (0x17 for new-protocol wheels, 0x13 for ES which shares
+# the wheelbase address). Populated by main() from the chosen model profile.
+_WHEEL_DEVICE: int = DEV_WHEEL
 
 # Semantic labels for unhandled-frame logging. Drawn from docs/moza-protocol.md
 # and Protocol/MozaProtocol.cs group constants.
@@ -1335,6 +1486,14 @@ def build_configjson_state(dashboards: List[dict], title_id: int = 1,
     if canonical_list is None:
         fs_names = [d.get('dirName') for d in dashboards if d.get('dirName')]
         canonical_list = fs_names if fs_names else list(_CONFIGJSON_CANONICAL_LIST)
+    # When FS is empty and caller hasn't injected any dashboards, ship the
+    # factory's enableManager.dashboards list verbatim. Real wheel firmware
+    # ships these 11 entries baked in so PitHouse's Dashboard Manager sees a
+    # populated catalog on a freshly-flashed wheel. Empty list (sim's old
+    # default) made real session 9 payload 7231B; sim's 454B. The missing
+    # metadata appears to gate "fully detected" state.
+    if not dashboards and not enable_dashboards:
+        enable_dashboards = list(factory.get('enableManager', {}).get('dashboards', []))
     state = {
         "TitleId": title_id,
         "configJsonList": canonical_list,
@@ -1864,6 +2023,50 @@ class ResponseReplay:
             self.sources.append(path)
         return added
 
+    def load_json(self, path: str) -> int:
+        """Load request/response pairs from a JSON replay table. Returns added count.
+
+        Schema v1 format (one file per device, groups embedded in entry keys):
+            {"schema": 1,
+             "device": <int>,  # target device byte (e.g. 0x17 = wheel)
+             "label": "<optional description>",
+             "source": "<optional: origin capture path>",
+             "entries": {
+                 "<group_hex>:<req_payload_hex>": "<rsp_frame_hex>",
+                 ...
+             }}
+
+        Group is the host-side request group byte. `req_payload_hex` is the
+        frame payload (cmd + data, no grp/dev/cksum). `rsp_frame_hex` is the
+        full wheel→host wire frame (7e N grp dev payload cksum). First entry
+        per (group, device, payload) key wins across sources.
+        """
+        with open(path) as fh:
+            data = json.load(fh)
+        if data.get('schema') != 1:
+            raise ValueError(f'{path}: unsupported schema (expected 1)')
+        req_device = int(data['device'])
+        added = 0
+        for key_str, rsp_hex in data.get('entries', {}).items():
+            try:
+                grp_str, payload_str = key_str.split(':', 1)
+            except ValueError:
+                continue
+            req_group = int(grp_str, 16)
+            req_pl = bytes.fromhex(payload_str)
+            rsp_frame = bytes.fromhex(rsp_hex)
+            if not verify(rsp_frame):
+                continue
+            key = (req_group, req_device, req_pl)
+            if key not in self._table:
+                self._table[key] = rsp_frame
+                self._by_device[(req_group, req_device)] = \
+                    self._by_device.get((req_group, req_device), 0) + 1
+                added += 1
+        if added:
+            self.sources.append(path)
+        return added
+
     def lookup(self, frame: bytes) -> Optional[bytes]:
         if len(frame) < 4:
             return None
@@ -1895,12 +2098,20 @@ class WheelSimulator:
                  pithouse_id_rsp: Optional[Dict] = None,
                  display_model_name: str = '',
                  rpm_led_count: int = 10,
-                 button_led_count: int = 14):
+                 button_led_count: int = 14,
+                 wheel_device: Optional[int] = None):
         self._db = db
         self._replay = replay
         self._plugin_probe_rsp = plugin_probe_rsp if plugin_probe_rsp is not None else _PLUGIN_PROBE_RSP
         self._pithouse_id_rsp = pithouse_id_rsp if pithouse_id_rsp is not None else _PITHOUSE_ID_RSP
         self._display_model_name = display_model_name or _DISPLAY_MODEL_NAME
+        # Wheel device address: 0x17 for new-protocol wheels, 0x13 for ES.
+        # Drives all wheel-routed dispatch + simulated-device set membership.
+        self.wheel_device = wheel_device if wheel_device is not None else _WHEEL_DEVICE
+        self.wheel_device_rsp = swap_nibbles(self.wheel_device)
+        # ES suppresses any response at 0x17 — real ES wheels don't enumerate
+        # there. {0x12 hub, 0x13 base} for ES; {0x12, 0x13, 0x17} otherwise.
+        self._simulated_devices = {0x12, 0x13, self.wheel_device}
         self.mgmt_session = 0
         self.telem_session = 0
         self.sessions_opened = 0
@@ -2454,9 +2665,17 @@ class WheelSimulator:
         self.frames_total += 1
         group, device = frame[2], frame[3]
 
+        # ES routing: when --model es selects wheel_device=0x13, drop any frame
+        # addressed to 0x17 silently. Real ES wheels don't enumerate at 0x17 —
+        # without this, the replay table (built from VGS/CSP captures) would
+        # answer 0x17 identity probes with VGS values and confuse PitHouse.
+        if device == 0x17 and self.wheel_device != 0x17:
+            self._record('es_drop_17', frame)
+            return []
+
         # Stateful wheel handlers (session/tier def/display/telemetry). Returns
         # None if this isn't a known wheel-protocol command so we fall through.
-        if group == GRP_HOST and device == DEV_WHEEL:
+        if group == GRP_HOST and device == self.wheel_device:
             result = self._handle_wheel(frame)
             if result is not None:
                 tag, rsp = result
@@ -2482,13 +2701,14 @@ class WheelSimulator:
             self._record('probe', frame)
             return [build_frame(rsp_group, rsp_dev, bytes(frame_payload(frame)))]
 
-        # PitHouse VGS identity probes (groups 0x02/0x04/…/0x11, device=0x17).
-        if device == DEV_WHEEL:
+        # PitHouse identity probes — wheel_device is 0x17 for new-protocol
+        # wheels, 0x13 for ES. Response device is the nibble-swap.
+        if device == self.wheel_device:
             key = (group, bytes(frame_payload(frame)))
             id_rsp = self._pithouse_id_rsp.get(key)
             if id_rsp is not None:
                 self._record('identity', frame)
-                return [build_frame(group | 0x80, DEV_WHEEL_RSP, id_rsp)]
+                return [build_frame(group | 0x80, self.wheel_device_rsp, id_rsp)]
 
         if group == 0x0E:
             self._record('fw_debug', frame)
@@ -2498,7 +2718,7 @@ class WheelSimulator:
         # can answer identity probes for. ACKing phantom devices (0x14, 0x15,
         # 0x18-0x1E) causes PitHouse to endlessly probe their identity.
         if group == 0x00 and len(payload_all) == 0:
-            if device in _SIMULATED_DEVICES:
+            if device in self._simulated_devices:
                 self._record('heartbeat', frame)
                 return [build_frame(0x80, swap_nibbles(device), b'')]
             return []  # silent drop — device not present
@@ -2506,7 +2726,7 @@ class WheelSimulator:
         # Bare 0x43 connection-keepalive ping (n=1, payload=0x00) — only ACK
         # for simulated devices; stray keepalives to dash/wheel-21 silently drop.
         if group == GRP_HOST and len(payload_all) == 1 and payload_all[0] == 0x00:
-            if device in _SIMULATED_DEVICES:
+            if device in self._simulated_devices:
                 self._record('keepalive_43', frame)
                 return [build_frame(GRP_WHEEL, swap_nibbles(device), b'\x80')]
             return []
@@ -2551,12 +2771,12 @@ class WheelSimulator:
                 self._record('replay', frame)
                 return [recorded]
 
-        # Wheel config reads (group 0x40 to dev 0x17) — fallback echo for
+        # Wheel config reads (group 0x40 to wheel device) — fallback echo for
         # queries not in the replay table. Keeps PitHouse from stalling on
         # LED config reads whose exact payloads vary per session.
-        if group == 0x40 and device == DEV_WHEEL:
+        if group == 0x40 and device == self.wheel_device:
             self._record('wheel_cfg_echo', frame)
-            return [build_frame(0xC0, DEV_WHEEL_RSP, bytes(payload_all))]
+            return [build_frame(0xC0, self.wheel_device_rsp, bytes(payload_all))]
 
         # Nothing handled it — record for the gap report with semantic label.
         payload = frame_payload(frame)
@@ -2584,6 +2804,22 @@ class WheelSimulator:
 
         cmd1, cmd2 = payload[0], payload[1]
         responses: List[bytes] = []
+
+        # ── FC:00 session cumulative ACK (both directions) ─────────────────
+        # Host periodically emits `fc 00 [sess] [seq_lo] [seq_hi]` meaning "I
+        # have acked up to seq X on session Y". Wheel does the same in reverse.
+        # Nothing to reply with — consume silently. Without this branch, the
+        # replay table answers with a stale capture-time ack value that
+        # doesn't match sim's current session state, which causes PitHouse to
+        # re-transmit session data (observed as tier-def retry loop).
+        if cmd1 == 0xFC and cmd2 == 0x00 and len(payload) >= 3:
+            session = payload[2]
+            peer_ack = 0
+            if len(payload) >= 5:
+                peer_ack = payload[3] | (payload[4] << 8)
+            self._peer_session_acks = getattr(self, '_peer_session_acks', {})
+            self._peer_session_acks[session] = peer_ack
+            return ('session_peer_ack', [])
 
         # ── 7C:00 session management ────────────────────────────────────────
         if cmd1 == 0x7C and cmd2 == 0x00 and len(payload) >= 4:
@@ -3201,9 +3437,17 @@ def build_device_catalog(model: dict, channel_urls: List[str]) -> Dict[int, List
         # bytes are data + CRC-32 trailer; data[0] at seq 4 is 1 byte (`ff`)
         # with CRC `00 00 00 ff`; data at seq 5 is the 9-byte TLV
         # `03 04 00 00 00 01 00 00 00` with its own CRC.
+        #
+        # Real CSP wheel (2026-04 firmware) follows the preamble with the
+        # full channel catalog on session 1 too — gated by
+        # `session1_emits_catalog` flag on the profile.
         s1_frames = _chunk_catalog_message(0x01, b'\xff', start_seq=4)
         s1_frames += _chunk_catalog_message(
             0x01, bytes.fromhex('030400000001000000'), start_seq=5)
+        s1_seq_next = 6
+        if channel_urls and model.get('session1_emits_catalog'):
+            s1_msg = _build_session2_message(channel_urls)
+            s1_frames += _chunk_catalog_message(0x01, s1_msg, start_seq=s1_seq_next)
         catalog[0x01] = s1_frames
 
         # Session 2: device description first (seq 5..), then channel catalog.
@@ -3804,10 +4048,11 @@ def main():
         output_mode = 'mcp'
 
     # Populate global identity tables from selected model
-    global _PLUGIN_PROBE_RSP, _PITHOUSE_ID_RSP, _DISPLAY_MODEL_NAME
+    global _PLUGIN_PROBE_RSP, _PITHOUSE_ID_RSP, _DISPLAY_MODEL_NAME, _WHEEL_DEVICE
     model = WHEEL_MODELS[args.model]
     _PLUGIN_PROBE_RSP, _PITHOUSE_ID_RSP = _build_identity_tables(model)
     _DISPLAY_MODEL_NAME = model.get('display', {}).get('name', '')
+    _WHEEL_DEVICE = model.get('wheel_device', DEV_WHEEL)
     print(f'[Model: {model["friendly"]} ({model["name"]}), Display: {_DISPLAY_MODEL_NAME}]',
           file=sys.stderr)
 
@@ -3825,11 +4070,25 @@ def main():
 
     replay: Optional[ResponseReplay] = None
     device_catalog: Optional[Dict[int, List[bytes]]] = None
-    if replay_paths:
+    # Per-model JSON replay tables take precedence: load them first so their
+    # entries win on key collisions with any pcap-sourced fallback.
+    model_tables = model.get('replay_tables') or []
+    if model_tables:
         replay = ResponseReplay()
+        for rel in model_tables:
+            abs_path = Path(__file__).parent.parent / rel
+            if not abs_path.exists():
+                print(f'[WARN] replay_table {rel} not found', file=sys.stderr)
+                continue
+            added = replay.load_json(str(abs_path))
+            print(f'[Replay JSON: +{added} entries from {rel}]', file=sys.stderr)
+    if replay_paths:
+        if replay is None:
+            replay = ResponseReplay()
         for p in replay_paths:
             added = replay.load_pcapng(p)
             print(f'[Replay: loaded {added} new entries from {p}]', file=sys.stderr)
+    if replay is not None:
         print(f'[Replay table: {len(replay)} unique (group, device, payload) keys]',
               file=sys.stderr)
 

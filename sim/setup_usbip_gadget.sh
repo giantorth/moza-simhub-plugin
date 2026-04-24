@@ -18,10 +18,18 @@ fi
 
 GADGET=/sys/kernel/config/usb_gadget/moza
 
-# Clean up stale state before loading anything.
-if [[ -d "$GADGET" ]] || pgrep -x usbipd >/dev/null 2>&1; then
-    echo "Stale gadget or usbipd found — running teardown first..."
-    bash "$(dirname "$0")/teardown_usbip_gadget.sh"
+# Clean up stale state before loading anything. Leaked wheel_sim.py procs
+# also trigger teardown so they get killed before we rebuild the gadget —
+# otherwise their stale ttyGS0 fds would block UDC unbind on the next cycle.
+if [[ -d "$GADGET" ]] \
+   || pgrep -x usbipd >/dev/null 2>&1 \
+   || pgrep -f 'wheel_sim\.py' >/dev/null 2>&1; then
+    echo "Stale gadget, usbipd, or wheel_sim found — running teardown first..."
+    if ! bash "$(dirname "$0")/teardown_usbip_gadget.sh"; then
+        echo "Pre-cleanup teardown failed — refusing to proceed (gadget would EBUSY)." >&2
+        echo "Inspect with: bash $(dirname "$0")/status_usbip_gadget.sh" >&2
+        exit 1
+    fi
 fi
 
 modprobe dummy_hcd
@@ -52,7 +60,11 @@ if [[ -z "$UDC" ]]; then
     echo "No dummy_udc.N in /sys/class/udc/ — is dummy_hcd loaded?" >&2
     exit 1
 fi
-echo "$UDC" > "$GADGET/UDC"
+if ! timeout 5 sh -c 'echo "$1" > "$2/UDC"' _ "$UDC" "$GADGET"; then
+    echo "UDC bind timed out after 5s — dummy_hcd or libcomposite likely wedged." >&2
+    echo "Try: rmmod dummy_hcd libcomposite && bash $(basename "$0")" >&2
+    exit 1
+fi
 
 # Wait for /dev/ttyGS0 to appear, then relax permissions.
 for _ in 1 2 3 4 5; do

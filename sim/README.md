@@ -241,7 +241,7 @@ The captures use `usbcom.data.out_payload` (host→device) and `usbcom.data.in_p
 - Live mode via tty0tty + Proton: known-working for SimHub plugin testing.
 - USBIP gadget scripts (`setup_usbip_gadget.sh`, `teardown_usbip_gadget.sh`) written and syntax-clean; **not yet validated end-to-end against real PitHouse on Windows**.
 - Hardcoded probe responses: plugin base/hub probes (`_PROBE_SYNTH`) and PitHouse identity probes (`_PITHOUSE_ID_RSP`, built from `--model` selection) live in `wheel_sim.py`.
-- Multi-model support: `--model vgs` (default), `--model csp`, or `--model ks`. Identity strings, capability flags, and hardware IDs are derived from the selected model profile (`WHEEL_MODELS` dict). CSP identity extracted from `usb-capture/CSP captures/pithouse-complete.txt`. VGS identity + sub-device values + session-1/2 replay extracted from `usb-capture/connect-wheel-start-game.pcapng`. KS identity captured live from real R5 base + KS wheel via `sim/probe_wheel.py` (2026-04-20) — no dashboard, no display sub-device.
+- Multi-model support: `--model vgs` (default), `--model csp`, `--model ks`, or `--model es`. Identity strings, capability flags, and hardware IDs are derived from the selected model profile (`WHEEL_MODELS` dict). CSP identity extracted from `usb-capture/CSP captures/pithouse-complete.txt`. VGS identity + sub-device values + session-1/2 replay extracted from `usb-capture/connect-wheel-start-game.pcapng`. KS identity captured live from real R5 base + KS wheel via `sim/probe_wheel.py` (2026-04-20) — no dashboard, no display sub-device. ES identity captured live from real R5 base + ES wheel (2026-04-23) — see ES caveat below.
 - Plugin ack race condition: fixed in `Telemetry/TelemetrySender.cs`.
 - Device-initiated session opens: sim proactively opens sessions 0x04/0x06/0x08/0x09/0x0A 150 ms after host brings up 0x01/0x02 — required for PitHouse's dashboard UI (session 0x09 populates `configJsonList`) and for the plugin's session 0x04 upload path.
 - Dashboard upload decode: `UploadTracker` reassembles FF-prefixed chunks, decompresses zlib, parses mzdash JSON + path. Uploads are persisted to `sim/logs/stored_dashboards.json` and surface through `sim_uploads` / `sim_stored_dashboards`.
@@ -307,6 +307,58 @@ wheel — KS uses `01:02:05:06` / `04:00` where VGS/CSP use `01:02:04:06` /
 `04:01`. Both are optional fields on a model profile; omitting them gets the
 VGS/CSP defaults.
 
+#### ES wheel caveat
+
+ES (old-protocol) wheels share device ID `0x13` with the wheelbase — identity
+probes to wheel device `0x17` return nothing. Probe `0x13` instead and you get
+the **base** identity back (e.g. `R5 Black # MOT-1`, hw `RS21-D05-HW BM-C`).
+See `docs/moza-protocol.md` § "ES wheel identity caveat". The captured ES
+profile in `WHEEL_MODELS['es']` (R5 base + ES wheel, 2026-04-23) records:
+
+| Field | Value |
+|-------|-------|
+| name | `R5 Black # MOT-1` |
+| sw_version | `RS21-D05-MC WB` |
+| hw_version | `RS21-D05-HW BM-C` |
+| hw_sub | `U-V10` |
+| caps | `01 02 54 00` (no `0x20` RGB-display bit) |
+| dev_type | `01 02 12 08` (sub-byte 0x12; VGS/CSP=0x04, KS=0x05) |
+| identity_11 | `04 01` (default) |
+| hw_id | base hw_id (12 bytes, matches `/dev/serial/by-id/usb-Gudsen_MOZA_*`) |
+
+To re-capture from a different R5/ES combo:
+
+```bash
+python3 -c "import sys, time; sys.path.insert(0,'sim'); \
+from wheel_sim import build_frame, MSG_START, frame_payload, verify; \
+import serial; ser = serial.Serial('/dev/ttyACM0', 115200, timeout=0.05); \
+end=time.time()+0.3
+while time.time()<end: ser.read(4096)
+for grp,pl,lbl in [(0x07,b'\x01','name'),(0x0F,b'\x01','sw'),(0x08,b'\x01','hw'),
+    (0x08,b'\x02','hw_sub'),(0x10,b'\x00','serial0'),(0x10,b'\x01','serial1'),
+    (0x05,b'\x00\x00\x00\x00','caps'),(0x06,b'','hw_id'),
+    (0x04,b'\x00\x00\x00\x00','dev_type'),(0x11,b'\x04','id11')]:
+    ser.reset_input_buffer(); ser.write(build_frame(grp,0x13,pl)); ser.flush()
+    deadline=time.time()+0.8
+    while time.time()<deadline:
+        b=ser.read(1)
+        if not b or b[0]!=MSG_START: continue
+        n=ser.read(1); rest=ser.read(n[0]+3)
+        fr=bytes([MSG_START,n[0]])+rest
+        if verify(fr) and len(fr)>=4 and fr[2]==(grp|0x80):
+            print(lbl, frame_payload(fr).hex()); break"
+```
+
+Routing: the `es` profile sets `wheel_device: 0x13`, which makes
+`_build_identity_tables` key all wheel identity entries by `0x13`, makes the
+PitHouse identity dispatch and wheel-config-echo answer from `swap_nibbles(0x13)
+= 0x31`, and excludes `0x17` from the simulated-device set (heartbeats and
+keepalives to `0x17` get no ACK). An early gate in `_handle_core` drops every
+frame addressed to `0x17` silently — without it the replay table (built from
+VGS captures) would answer `0x17` identity probes with VGS values and confuse
+PitHouse. See "ES feature parity" in Pending work for what's still missing
+(brightness range, LED bitmask-only writes, wake-up handling).
+
 **PCAPNG capture only** — follow the steps below:
 
 1. Capture a real-hardware PitHouse startup into pcapng for the wheel.
@@ -317,7 +369,8 @@ VGS/CSP defaults.
 
 ## Pending work
 
-1. **More wheel models**: add profiles to `WHEEL_MODELS` for other display-equipped wheels (KS Pro/W18, FSR V2, etc.) as captures become available. Follow "Adding a new model" above — do not copy the CSP defaults blindly. Models currently supported: `vgs`, `csp`, `ks`.
+1. **More wheel models**: add profiles to `WHEEL_MODELS` for other display-equipped wheels (KS Pro/W18, FSR V2, etc.) as captures become available. Follow "Adding a new model" above — do not copy the CSP defaults blindly. Models currently supported: `vgs`, `csp`, `ks`, `es`.
+2. **ES feature parity**: identity / plugin-probe / wheel-echo routing through `0x13` is wired (see `wheel_device` in `WHEEL_MODELS['es']`), and `0x17` traffic is dropped silently. Still missing: brightness range 0-15 enforcement, LED bitmask-only write semantics, ES wake-up sequence handling. Plugin-side ES code paths (`MozaLedDeviceManager.cs`) can be exercised today; wheel-side write semantics still echo unmodified.
 
 ---
 
@@ -464,6 +517,9 @@ python3 sim/wheel_sim.py --model csp /dev/tnt0
 
 # Live mode as KS (no dashboard)
 python3 sim/wheel_sim.py --model ks /dev/tnt0
+
+# Live mode as ES (old-protocol; identity proxies through base 0x13)
+python3 sim/wheel_sim.py --model es /dev/tnt0
 
 # Console output (non-interactive, grep-friendly)
 python3 sim/wheel_sim.py --console /dev/tnt0
