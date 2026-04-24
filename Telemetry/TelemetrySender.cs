@@ -34,7 +34,6 @@ namespace MozaPlugin.Telemetry
         private volatile StatusDataBase? _latestGameData;
         private volatile bool _enabled;
         private int _tickCounter;
-        private int _testFrameCounter;
         private int _modeCounter;
         private int _slowCounter;
         private int _baseTickMs;  // Timer period derived from fastest tier's package_level
@@ -239,7 +238,6 @@ namespace MozaPlugin.Telemetry
             _enabled = true;
             _tickCounter = 0;
             _modeCounter = 0;
-            _testFrameCounter = 0;
             _framesSent = 0;
             _sequenceCounter = 0;
             _slowCounter = 0;
@@ -1413,8 +1411,8 @@ namespace MozaPlugin.Telemetry
                 }
 
                 // Active phase: telemetry + enable + periodic streams
-                var snapshot = TestMode
-                    ? Diagnostics.BuildTestPattern(_testFrameCounter++)
+                GameDataSnapshot snapshot = TestMode
+                    ? default
                     : GameDataSnapshot.FromStatusData(_latestGameData);
 
                 for (int i = 0; i < tiers.Length; i++)
@@ -1424,7 +1422,9 @@ namespace MozaPlugin.Telemetry
                         continue;
 
                     byte flagByte = (byte)i;
-                    byte[] frame = tier.Builder.BuildFrameFromSnapshot(snapshot, flagByte);
+                    byte[] frame = TestMode
+                        ? tier.Builder.BuildTestFrame(flagByte)
+                        : tier.Builder.BuildFrameFromSnapshot(snapshot, flagByte);
                     // Latest-wins per tier: if the last frame for this tier is still
                     // queued (e.g. write thread stalled under Wine syscall overhead),
                     // overwrite it so the wheel gets the freshest snapshot instead

@@ -2809,11 +2809,12 @@ def render(sim: WheelSimulator, port: str):
     lines.append(f'Display:        {"DETECTED" if sim.display_detected else "not detected"}')
 
     if sim.tier_def_received:
-        lines.append(f'Tier def:       {len(sim.channels)} channels received')
-        names = '  '.join(f'{c["name"]}({c["bit_width"]}b)' for c in sim.channels[:6])
-        if len(sim.channels) > 6:
-            names += f'  +{len(sim.channels)-6} more'
-        lines.append(f'Channels:       {names}')
+        if sim.tiers:
+            tier_summary = ', '.join(
+                f'flag=0x{f:02X}:{len(ch)}ch' for f, ch in sorted(sim.tiers.items()))
+            lines.append(f'Tier def:       {len(sim.channels)} channels  [{tier_summary}]')
+        else:
+            lines.append(f'Tier def:       {len(sim.channels)} channels received')
     else:
         lines.append('Tier def:       waiting...')
 
@@ -2830,19 +2831,68 @@ def render(sim: WheelSimulator, port: str):
                          f'{len(sim.unhandled_counts)} unique (no replay loaded)')
 
     lines.append('')
-    lines.append('┌─ Live Values ──────────────────────────────────┐')
-    if sim.values:
-        for name, val in list(sim.values.items())[:12]:
-            if isinstance(val, float) and val != val:
-                vstr = 'N/A'
-            elif isinstance(val, float):
-                vstr = f'{val:.4g}'
-            else:
-                vstr = str(val)
-            lines.append(f'│  {name:<22} {vstr:<22}  │')
+    # Box width: idx(3) + sp(1) + name(22) + sp(1) + comp(15) + sp(1) + bits(4) + sp(1) + val(14) = 62
+    # Total inside: 62 + 4 padding = 66
+    inner_w = 66
+    top    = '┌─ Live Values ' + '─' * (inner_w - 14) + '┐'
+    bottom = '└' + '─' * inner_w + '┘'
+    lines.append(top)
+
+    def _fmt_val(v):
+        if isinstance(v, float):
+            if v != v:
+                return 'NaN'
+            return f'{v:.4g}'
+        return str(v)
+
+    # Build sections: one per tier if tier def received, else fallback to merged list.
+    tier_items = []
+    if sim.tiers:
+        for flag in sorted(sim.tiers.keys()):
+            tier_items.append((flag, sim.tiers[flag]))
+    elif sim.channels:
+        tier_items.append((None, sim.channels))
+
+    # Cap channel rows so counters / recent-frames stay on screen.
+    term_rows_cap = shutil.get_terminal_size(fallback=(80, 24)).lines
+    # Reserve ~10 rows for status/counters/LEDs/recent-header below.
+    max_channel_rows = max(6, term_rows_cap - len(lines) - 12)
+
+    if not tier_items:
+        content = '  (waiting for tier definition…)'
+        lines.append(f'│{content:<{inner_w}}│')
     else:
-        lines.append('│  (no telemetry yet)                            │')
-    lines.append('└────────────────────────────────────────────────┘')
+        rows_written = 0
+        truncated = 0
+        for flag, channels in tier_items:
+            if flag is not None and len(tier_items) > 1:
+                if rows_written >= max_channel_rows:
+                    truncated += len(channels)
+                    continue
+                header = f'  Tier flag=0x{flag:02X}  ({len(channels)} channels)'
+                lines.append(f'│{header:<{inner_w}}│')
+                rows_written += 1
+            for ch in channels:
+                if rows_written >= max_channel_rows:
+                    truncated += 1
+                    continue
+                idx = ch.get('index', 0)
+                name = ch.get('name', '?')
+                comp = ch.get('compression', '?')
+                bits = ch.get('bit_width', 0)
+                val = sim.values.get(name)
+                vstr = _fmt_val(val) if val is not None else '—'
+                if len(name) > 22:
+                    name = name[:21] + '…'
+                if len(comp) > 15:
+                    comp = comp[:14] + '…'
+                row = f'  {idx:>2} {name:<22} {comp:<15} {bits:>3}b {vstr:<14}'
+                lines.append(f'│{row:<{inner_w}}│')
+                rows_written += 1
+        if truncated:
+            more = f'  … +{truncated} more (resize terminal to see all)'
+            lines.append(f'│{more:<{inner_w}}│')
+    lines.append(bottom)
     rpm = ''.join('[*]' if sim.rpm_led_mask & (1 << i) else '[ ]'
                   for i in range(sim.rpm_led_count))
     btn = ''.join('(*)' if sim.button_led_mask & (1 << i) else '( )'

@@ -116,10 +116,10 @@ namespace MozaPlugin
         public PerWheelSlot GetOrCreateSlot(string? modelName)
         {
             if (string.IsNullOrEmpty(modelName)) return new PerWheelSlot();
-            if (!PerWheelSlots.TryGetValue(modelName, out var slot))
+            if (!PerWheelSlots.TryGetValue(modelName!, out var slot))
             {
                 slot = new PerWheelSlot();
-                PerWheelSlots[modelName] = slot;
+                PerWheelSlots[modelName!] = slot;
             }
             return slot;
         }

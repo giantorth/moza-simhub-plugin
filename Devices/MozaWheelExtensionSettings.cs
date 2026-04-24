@@ -92,7 +92,7 @@ namespace MozaPlugin.Devices
             // - If WheelModelName is empty (legacy JSON), fall back to writing
             //   flat directly — matches pre-slot behaviour for single-wheel setups.
             string extModel = WheelModelName ?? "";
-            string activeModel = data?.WheelModelName ?? "";
+            string activeModel = data.WheelModelName ?? "";
             bool hasExtModel = !string.IsNullOrEmpty(extModel);
             bool activeMatches = hasExtModel &&
                 string.Equals(extModel, activeModel, StringComparison.OrdinalIgnoreCase);

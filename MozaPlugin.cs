@@ -926,7 +926,8 @@ namespace MozaPlugin
             }
 
             _deviceManager.MarkWheelResponse(r.DeviceId);
-            DetectDevices(r.Name, r.IntValue, r.DeviceId);
+            if (r.Name != null)
+                DetectDevices(r.Name, r.IntValue, r.DeviceId);
         }
 
         /// <summary>
@@ -1777,7 +1778,7 @@ namespace MozaPlugin
             // Gate hardware writes + _data mutations on model match — extensions
             // for other wheel models must not poke the active wheel's hardware.
             string extModel = extSettings.WheelModelName ?? "";
-            string activeModel = _data?.WheelModelName ?? "";
+            string activeModel = _data.WheelModelName ?? "";
             bool hasExtModel = !string.IsNullOrEmpty(extModel);
             bool modelMatches = hasExtModel &&
                 string.Equals(extModel, activeModel, StringComparison.OrdinalIgnoreCase);

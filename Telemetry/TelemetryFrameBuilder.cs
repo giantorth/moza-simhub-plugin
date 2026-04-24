@@ -120,6 +120,54 @@ namespace MozaPlugin.Telemetry
             return copy;
         }
 
+        // Per-builder phase counter — advances once per BuildTestFrame call so each tier
+        // sweeps at its own update rate (fast tiers cycle quickly, slow tiers slowly),
+        // matching how the user experiences live data.
+        private int _testPhase;
+
+        /// <summary>
+        /// Build a test-pattern frame that cycles every channel through its decoded range
+        /// and back as a triangle wave. Bypasses the game-data resolver so all channels on
+        /// the loaded dashboard are exercised, not just a fixed subset.
+        /// Phase advances one step per call, so the cycle period scales with the tier's
+        /// update rate.
+        /// </summary>
+        public byte[] BuildTestFrame(byte flagByte)
+        {
+            _frameBuffer[10] = flagByte;
+
+            const int period = 100;
+            int phase = _testPhase;
+            _testPhase = (_testPhase + 1) % period;
+            double t = 1.0 - Math.Abs(phase * 2.0 / period - 1.0); // 0 → 1 → 0
+
+            if (_bitWriter != null)
+            {
+                _bitWriter.Reset();
+
+                for (int i = 0; i < _profile.Channels.Count; i++)
+                {
+                    var ch = _profile.Channels[i];
+                    var range = TelemetryEncoder.GetTestRange(ch.Compression);
+                    double value = range.min + (range.max - range.min) * t;
+
+                    if (TelemetryEncoder.IsFloat(ch.Compression))
+                        _bitWriter.WriteFloat((float)value);
+                    else if (TelemetryEncoder.IsDouble(ch.Compression))
+                        _bitWriter.WriteDouble(value);
+                    else
+                        _bitWriter.WriteBits(TelemetryEncoder.Encode(ch.Compression, value), ch.BitWidth);
+                }
+            }
+
+            _frameBuffer[_frameBuffer.Length - 1] = MozaProtocol.CalculateWireChecksum(
+                _frameBuffer, _frameBuffer.Length - 1);
+
+            var copy = new byte[_frameBuffer.Length];
+            Array.Copy(_frameBuffer, 0, copy, 0, copy.Length);
+            return copy;
+        }
+
         /// <summary>
         /// Build a stub frame for a tier with no active channels.
         /// Frame contains the full fixed header but no data bytes.
