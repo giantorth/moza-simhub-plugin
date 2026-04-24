@@ -39,6 +39,11 @@ namespace MozaPlugin
         public int[]? WheelRpmBlinkColors { get; set; }
         public int[]? DashRpmBlinkColors { get; set; }
 
+        // Per-knob LED ring colours (W17/W18 only, 3 knobs). Write-only on the wire —
+        // persisted here so they survive restarts. Packed as R<<16 | G<<8 | B.
+        public int[]? WheelKnobBackgroundColors { get; set; }
+        public int[]? WheelKnobPrimaryColors { get; set; }
+
         // Connection enabled (persisted toggle)
         public bool ConnectionEnabled { get; set; } = true;
 
@@ -143,6 +148,8 @@ namespace MozaPlugin
             slot.WheelFlagsBrightness   = WheelFlagsBrightness;
             slot.WheelESRpmBrightness   = WheelESRpmBrightness;
             slot.WheelRpmBlinkColors    = WheelRpmBlinkColors;
+            slot.WheelKnobBackgroundColors = WheelKnobBackgroundColors;
+            slot.WheelKnobPrimaryColors    = WheelKnobPrimaryColors;
         }
 
         /// <summary>Copy the slot for <paramref name="modelName"/> into the flat Wheel* fields.</summary>
@@ -164,6 +171,8 @@ namespace MozaPlugin
             WheelFlagsBrightness   = slot.WheelFlagsBrightness;
             WheelESRpmBrightness   = slot.WheelESRpmBrightness;
             WheelRpmBlinkColors    = slot.WheelRpmBlinkColors;
+            WheelKnobBackgroundColors = slot.WheelKnobBackgroundColors;
+            WheelKnobPrimaryColors    = slot.WheelKnobPrimaryColors;
         }
     }
 
@@ -188,5 +197,7 @@ namespace MozaPlugin
         public int WheelFlagsBrightness { get; set; } = 100;
         public int WheelESRpmBrightness { get; set; } = 15;
         public int[]? WheelRpmBlinkColors { get; set; }
+        public int[]? WheelKnobBackgroundColors { get; set; }
+        public int[]? WheelKnobPrimaryColors { get; set; }
     }
 }

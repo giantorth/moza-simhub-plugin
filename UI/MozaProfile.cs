@@ -98,6 +98,8 @@ namespace MozaPlugin
         public int[]? WheelFlagColors { get; set; }       // [6]
         public int[]? WheelIdleColor { get; set; }        // [1]
         public int[]? WheelESRpmColors { get; set; }     // [10]
+        public int[]? WheelKnobBackgroundColors { get; set; } // [3] — W17/W18
+        public int[]? WheelKnobPrimaryColors { get; set; }    // [3] — W17/W18
         public int[]? DashRpmColors { get; set; }         // [10]
         public int[]? DashRpmBlinkColors { get; set; }   // [10]
         public int[]? DashFlagColors { get; set; }        // [6]
@@ -163,6 +165,8 @@ namespace MozaPlugin
             WheelFlagColors = CloneArray(p.WheelFlagColors);
             WheelIdleColor = CloneArray(p.WheelIdleColor);
             WheelESRpmColors = CloneArray(p.WheelESRpmColors);
+            WheelKnobBackgroundColors = CloneArray(p.WheelKnobBackgroundColors);
+            WheelKnobPrimaryColors = CloneArray(p.WheelKnobPrimaryColors);
             DashRpmColors = CloneArray(p.DashRpmColors);
             DashRpmBlinkColors = CloneArray(p.DashRpmBlinkColors);
             DashFlagColors = CloneArray(p.DashFlagColors);
@@ -237,6 +241,8 @@ namespace MozaPlugin
             WheelFlagColors = PackColors(data.WheelFlagColors);
             WheelIdleColor = new[] { PackColor(data.WheelIdleColor) };
             WheelESRpmColors = PackColors(data.WheelESRpmColors);
+            WheelKnobBackgroundColors = PackColors(data.WheelKnobBackgroundColors);
+            WheelKnobPrimaryColors = PackColors(data.WheelKnobPrimaryColors);
             DashRpmColors = PackColors(data.DashRpmColors);
             DashRpmBlinkColors = PackColors(data.DashRpmBlinkColors);
             DashFlagColors = PackColors(data.DashFlagColors);

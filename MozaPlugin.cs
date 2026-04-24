@@ -1047,7 +1047,7 @@ namespace MozaPlugin
                             WheelModelInfo = Devices.WheelModelInfo.FromModelName(currentModel);
                             SimHub.Logging.Current.Info(
                                 $"[Moza] Wheel model: {currentModel} " +
-                                $"(rpm={WheelModelInfo.RpmLedCount}, buttons={WheelModelInfo.ButtonLedCount}, flags={WheelModelInfo.HasFlagLeds})");
+                                $"(rpm={WheelModelInfo.RpmLedCount}, buttons={WheelModelInfo.ButtonLedCount}, flags={WheelModelInfo.HasFlagLeds}, knobs={WheelModelInfo.KnobCount})");
                             // Load this wheel model's persisted slot (brightness/modes/inputs)
                             // into the active flat fields before any hardware writes fire.
                             // Seeds a new slot from current flat values on first encounter.
@@ -1056,6 +1056,12 @@ namespace MozaPlugin
                             else
                                 _settings.MirrorActiveToSlot(currentModel);
                             DeployDeviceDefinitionForModel(currentModel);
+
+                            // Refresh _data knob colours from the slot we just loaded
+                            // and push to hardware (W17/W18 only — KnobCount gate).
+                            MozaProfile.UnpackColorsInto(_settings.WheelKnobBackgroundColors, _data.WheelKnobBackgroundColors);
+                            MozaProfile.UnpackColorsInto(_settings.WheelKnobPrimaryColors,    _data.WheelKnobPrimaryColors);
+                            WriteKnobColors(_settings.WheelKnobBackgroundColors, _settings.WheelKnobPrimaryColors);
                         }
                     }
                     else
@@ -1245,6 +1251,13 @@ namespace MozaPlugin
             if (_settings.WheelClutchPoint >= 0) _data.WheelClutchPoint = _settings.WheelClutchPoint;
             if (_settings.WheelKnobMode    >= 0) _data.WheelKnobMode    = _settings.WheelKnobMode;
             if (_settings.WheelStickMode   >= 0) _data.WheelStickMode   = _settings.WheelStickMode;
+
+            // Knob ring colors — write-only on the wire so the only persisted copy is here.
+            // Unpack now so the UI picker reflects the saved colors even before the model
+            // is resolved; hardware push happens in the wheel-model-name handler once we
+            // know the wheel actually exposes knob rings.
+            MozaProfile.UnpackColorsInto(_settings.WheelKnobBackgroundColors, _data.WheelKnobBackgroundColors);
+            MozaProfile.UnpackColorsInto(_settings.WheelKnobPrimaryColors,    _data.WheelKnobPrimaryColors);
 
             // LED mode (only if previously saved)
             if (_settings.WheelTelemetryMode >= 0)
@@ -1609,7 +1622,11 @@ namespace MozaPlugin
                     _data.WheelIdleColor[2] = rgb[2];
                 }
                 MozaProfile.UnpackColorsInto(profile.WheelESRpmColors, _data.WheelESRpmColors);
+                MozaProfile.UnpackColorsInto(profile.WheelKnobBackgroundColors, _data.WheelKnobBackgroundColors);
+                MozaProfile.UnpackColorsInto(profile.WheelKnobPrimaryColors,    _data.WheelKnobPrimaryColors);
                 _settings.WheelRpmBlinkColors = profile.WheelRpmBlinkColors;
+                _settings.WheelKnobBackgroundColors = profile.WheelKnobBackgroundColors;
+                _settings.WheelKnobPrimaryColors    = profile.WheelKnobPrimaryColors;
             }
             if (!DashDeviceExtensionActive)
             {
@@ -1734,6 +1751,7 @@ namespace MozaPlugin
                     var rgb = MozaProfile.UnpackColor(profile.WheelIdleColor[0]);
                     _deviceManager.WriteColor("wheel-idle-color", rgb[0], rgb[1], rgb[2]);
                 }
+                WriteKnobColors(profile.WheelKnobBackgroundColors, profile.WheelKnobPrimaryColors);
             }
 
             // Old-protocol (ES) wheel colors
@@ -1759,6 +1777,30 @@ namespace MozaPlugin
             {
                 var rgb = MozaProfile.UnpackColor(packedColors[i]);
                 _deviceManager.WriteColor($"{commandPrefix}{i + 1}", rgb[0], rgb[1], rgb[2]);
+            }
+        }
+
+        /// <summary>
+        /// Push per-knob background + primary colors to the wheel. No-op unless the
+        /// active wheel model exposes knob LED rings (W17 CS Pro / W18 KS Pro).
+        /// Source arrays are packed R&lt;&lt;16|G&lt;&lt;8|B per knob; null = skip.
+        /// </summary>
+        private void WriteKnobColors(int[]? packedBackground, int[]? packedPrimary)
+        {
+            int knobs = WheelModelInfo?.KnobCount ?? 0;
+            if (knobs <= 0) return;
+            WriteKnobRoleArray(packedBackground, "bg-color", knobs);
+            WriteKnobRoleArray(packedPrimary,    "primary-color", knobs);
+        }
+
+        private void WriteKnobRoleArray(int[]? packedColors, string roleSuffix, int count)
+        {
+            if (packedColors == null) return;
+            int len = Math.Min(packedColors.Length, count);
+            for (int i = 0; i < len; i++)
+            {
+                var rgb = MozaProfile.UnpackColor(packedColors[i]);
+                _deviceManager.WriteColor($"wheel-knob{i + 1}-{roleSuffix}", rgb[0], rgb[1], rgb[2]);
             }
         }
 
@@ -1832,6 +1874,7 @@ namespace MozaPlugin
                     _deviceManager.WriteColor("wheel-idle-color", rgb[0], rgb[1], rgb[2]);
                 }
                 WriteColorArray(extSettings.WheelESRpmColors, "wheel-old-rpm-color", 10);
+                WriteKnobColors(extSettings.WheelKnobBackgroundColors, extSettings.WheelKnobPrimaryColors);
             }
 
             PersistSettings();

@@ -27,8 +27,15 @@ namespace MozaPlugin.Devices
         /// </summary>
         public int[]? ButtonLedMap { get; }
 
-        /// <summary>Default for unknown models — 10 RPM, 14 buttons, no flags, contiguous.</summary>
-        public static readonly WheelModelInfo Default = new(10, 14, false, null);
+        /// <summary>
+        /// Number of physical rotary encoders on this wheel that have configurable
+        /// background + primary LED ring colors. Protocol group indices are 1..KnobCount
+        /// (group 0 = RPM, not a knob). 0 when the wheel has no configurable knob colors.
+        /// </summary>
+        public int KnobCount { get; }
+
+        /// <summary>Default for unknown models — 10 RPM, 14 buttons, no flags, contiguous, no knobs.</summary>
+        public static readonly WheelModelInfo Default = new(10, 14, false, null, 0);
 
         /// <summary>
         /// Known wheel models, ordered longest prefix first for correct disambiguation.
@@ -38,24 +45,28 @@ namespace MozaPlugin.Devices
         /// </summary>
         internal static readonly (string Prefix, string FriendlyName, WheelModelInfo Info)[] KnownModels =
         {
-            ("GS V2P",  "GS V2 Pro",  new WheelModelInfo(10, 10, false, null)),
-            ("CS V2.1", "CS V2",      new WheelModelInfo(10, 6,  false, new[] { 0, 1, 3, 6, 8, 9 })),
-            ("W17",     "CS Pro",     new WheelModelInfo(18, 14, false, null)),  // firmware reports "W17" for CS Pro
+            ("GS V2P",  "GS V2 Pro",  new WheelModelInfo(10, 10, false, null, 0)),
+            ("CS V2.1", "CS V2",      new WheelModelInfo(10, 6,  false, new[] { 0, 1, 3, 6, 8, 9 }, 0)),
+            // CS Pro / KS Pro expose rotary encoders with configurable background +
+            // primary colors (protocol groups 1..KnobCount; group 0 is the RPM strip).
+            // CS Pro = 4 knobs, KS Pro = 5 knobs.
+            ("W17",     "CS Pro",     new WheelModelInfo(18, 14, false, null, 4)),  // firmware reports "W17" for CS Pro
             // KS Pro 3/12/3 LED strip appears to live entirely in group 0 (Shift/RPM),
             // not split across RPM + Meter flag sub-device. Driving all 18 as one RPM strip.
-            ("W18",     "KS Pro",     new WheelModelInfo(18, 14, false, null)),  // firmware reports "W18" for KS Pro
-            ("KS",      "KS",         new WheelModelInfo(10, 10, false, null)),
-            ("FSR2",    "FSR V2",     new WheelModelInfo(10, 14, true,  null)),
-            ("VGS",     "Vision GS",  new WheelModelInfo(10, 8,  false, null)),
-            ("TSW",     "TSW",        new WheelModelInfo(10, 14, false, null)),
+            ("W18",     "KS Pro",     new WheelModelInfo(18, 14, false, null, 5)),  // firmware reports "W18" for KS Pro
+            ("KS",      "KS",         new WheelModelInfo(10, 10, false, null, 0)),
+            ("FSR2",    "FSR V2",     new WheelModelInfo(10, 14, true,  null, 0)),
+            ("VGS",     "Vision GS",  new WheelModelInfo(10, 8,  false, null, 0)),
+            ("TSW",     "TSW",        new WheelModelInfo(10, 14, false, null, 0)),
         };
 
-        public WheelModelInfo(int rpmLedCount, int buttonLedCount, bool hasFlagLeds, int[]? buttonLedMap)
+        public WheelModelInfo(int rpmLedCount, int buttonLedCount, bool hasFlagLeds, int[]? buttonLedMap, int knobCount = 0)
         {
             RpmLedCount = rpmLedCount;
             ButtonLedCount = buttonLedCount;
             HasFlagLeds = hasFlagLeds;
             ButtonLedMap = buttonLedMap;
+            KnobCount = knobCount;
         }
 
         /// <summary>

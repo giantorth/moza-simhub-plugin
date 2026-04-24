@@ -192,6 +192,16 @@ namespace MozaPlugin.Protocol
             for (byte i = 0; i < 16; i++)
                 AddCommand($"wheel-button-color{i + 1}", "wheel", 64, 63, new byte[] { 31, 1, 0xFF, i }, 3, "array");
 
+            // Per-rotary-knob LED colors (W17 CS Pro = 4 knobs, W18 KS Pro = 5 knobs).
+            // Wire: [27, <group>, <role>] + [R, G, B]. group = 1..5 (knob N — group 0 is RPM),
+            // role 0=background (idle), 1=primary (active). Write-only — wheel echoes via
+            // WheelEchoPrefixes entries for (0x3F, 0x17, 0x27, 0x01..0x05).
+            for (byte k = 1; k <= 5; k++)
+            {
+                AddCommand($"wheel-knob{k}-bg-color",      "wheel", 0xFF, 63, new byte[] { 27, k, 0 }, 3, "array");
+                AddCommand($"wheel-knob{k}-primary-color", "wheel", 0xFF, 63, new byte[] { 27, k, 1 }, 3, "array");
+            }
+
             // Extended LED groups (2=Single/28 LEDs, 3=Rotary/56 LEDs, 4=Ambient/12 LEDs).
             // Per-LED color: [31, G, 0xFF, index] — same wire format as groups 0/1.
             // Brightness: [27, G, 0xFF]. Mode: [28, G]. Presence probed via brightness read.

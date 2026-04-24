@@ -158,6 +158,14 @@ namespace MozaPlugin
         public readonly byte[][] WheelFlagColors = InitFlagColorArray();
         public readonly byte[] WheelIdleColor = new byte[] { 255, 255, 255 };
 
+        // Per-knob LED ring colors — W17 CS Pro (4 knobs) / W18 KS Pro (5 knobs).
+        // Background = idle colour shown when the knob is not being turned;
+        // primary = colour flashed on rotation. Wire: [27, group, role] + RGB,
+        // group 1..KnobCount (group 0 = RPM), role 0=background, 1=primary.
+        public const int WheelKnobMax = 5;
+        public readonly byte[][] WheelKnobBackgroundColors = InitColorArray(WheelKnobMax);
+        public readonly byte[][] WheelKnobPrimaryColors = InitColorArray(WheelKnobMax);
+
         // ES wheel
         public volatile int WheelESRpmBrightness;
         public readonly byte[][] WheelESRpmColors = InitRpmColorArray();

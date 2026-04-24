@@ -47,6 +47,8 @@ namespace MozaPlugin.Devices
         public int[]? WheelFlagColors { get; set; }
         public int[]? WheelIdleColor { get; set; }
         public int[]? WheelESRpmColors { get; set; }
+        public int[]? WheelKnobBackgroundColors { get; set; }
+        public int[]? WheelKnobPrimaryColors { get; set; }
 
         /// <summary>
         /// Capture current wheel state from the plugin.
@@ -77,6 +79,8 @@ namespace MozaPlugin.Devices
             WheelFlagColors = MozaProfile.PackColors(data.WheelFlagColors);
             WheelIdleColor = new[] { MozaProfile.PackColor(data.WheelIdleColor) };
             WheelESRpmColors = MozaProfile.PackColors(data.WheelESRpmColors);
+            WheelKnobBackgroundColors = MozaProfile.PackColors(data.WheelKnobBackgroundColors);
+            WheelKnobPrimaryColors = MozaProfile.PackColors(data.WheelKnobPrimaryColors);
         }
 
         /// <summary>
@@ -149,6 +153,24 @@ namespace MozaPlugin.Devices
                 Array.Copy(rgb, data.WheelIdleColor, 3);
             }
             MozaProfile.UnpackColorsInto(WheelESRpmColors, data.WheelESRpmColors);
+            MozaProfile.UnpackColorsInto(WheelKnobBackgroundColors, data.WheelKnobBackgroundColors);
+            MozaProfile.UnpackColorsInto(WheelKnobPrimaryColors, data.WheelKnobPrimaryColors);
+
+            // Knob colours are wheel-model-scoped (only W17/W18 expose them) and the
+            // wire is write-only, so the plugin-level persisted slot needs the same
+            // values — mirror into settings (flat + slot when this extension owns the
+            // active wheel model).
+            if (hasExtModel)
+            {
+                var slot = settings.GetOrCreateSlot(extModel);
+                slot.WheelKnobBackgroundColors = WheelKnobBackgroundColors;
+                slot.WheelKnobPrimaryColors    = WheelKnobPrimaryColors;
+            }
+            if (writeFlat)
+            {
+                settings.WheelKnobBackgroundColors = WheelKnobBackgroundColors;
+                settings.WheelKnobPrimaryColors    = WheelKnobPrimaryColors;
+            }
         }
     }
 }

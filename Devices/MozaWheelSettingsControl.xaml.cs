@@ -37,6 +37,9 @@ namespace MozaPlugin.Devices
         private const int WheelRpmSwatchMax = 25;
         private readonly Border[] _wheelRpmColorSwatches = new Border[WheelRpmSwatchMax];
         private readonly TextBlock[] _wheelRpmIndexLabels = new TextBlock[WheelRpmSwatchMax];
+        private readonly Border[] _wheelKnobBgSwatches = new Border[MozaData.WheelKnobMax];
+        private readonly Border[] _wheelKnobPrimarySwatches = new Border[MozaData.WheelKnobMax];
+        private readonly FrameworkElement[] _wheelKnobRowContainers = new FrameworkElement[MozaData.WheelKnobMax];
 
         // ES wheel indicator: device 1=RPM, 2=Off, 3=On (1-based, -1 applied on read)
         // UI combo: 0="SimHub Mode", 1="Always On", 2="Off"
@@ -79,6 +82,7 @@ namespace MozaPlugin.Devices
             BuildSwatchRow(WheelFlagColorPanel, _wheelFlagColorSwatches, 6, "dash-flag-color", _data.WheelFlagColors);
             BuildButtonSwatchRow();
             BuildRpmSwatches();
+            BuildKnobSwatchRows();
             _swatchesBuilt = true;
         }
 
@@ -183,6 +187,85 @@ namespace MozaPlugin.Devices
             public string CommandPrefix = "";
             public int Index;
             public byte[][] ColorSource = Array.Empty<byte[]>();
+            // When non-empty, used verbatim as the wheel command name instead of
+            // "{CommandPrefix}{Index+1}". Used for knob colors whose commands follow
+            // the pattern "wheel-knob{N}-bg-color" / "wheel-knob{N}-primary-color".
+            public string CommandNameOverride = "";
+            // Optional callback fired after a successful picker commit — lets the
+            // caller repack the colour into a packed int[] on MozaPluginSettings
+            // (knob colours are write-only on the wire, so settings is the only
+            // persisted copy).
+            public Action? OnChanged;
+        }
+
+        private void BuildKnobSwatchRows()
+        {
+            if (_data == null) return;
+            int count = MozaData.WheelKnobMax;
+            for (int i = 0; i < count; i++)
+            {
+                int idx = i;
+                var row = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Margin = new Thickness(0, 0, 0, 4),
+                };
+                row.Children.Add(new TextBlock
+                {
+                    Text = $"Knob {idx + 1}",
+                    Width = 70,
+                    VerticalAlignment = VerticalAlignment.Center,
+                });
+                var bg = CreateKnobSwatch($"wheel-knob{idx + 1}-bg-color", idx, _data.WheelKnobBackgroundColors, isBackground: true);
+                var primary = CreateKnobSwatch($"wheel-knob{idx + 1}-primary-color", idx, _data.WheelKnobPrimaryColors, isBackground: false);
+                row.Children.Add(WrapInCell(bg));
+                row.Children.Add(WrapInCell(primary));
+                WheelKnobPanel.Children.Add(row);
+                _wheelKnobBgSwatches[idx] = bg;
+                _wheelKnobPrimarySwatches[idx] = primary;
+                _wheelKnobRowContainers[idx] = row;
+            }
+        }
+
+        private static FrameworkElement WrapInCell(Border swatch)
+        {
+            var cell = new Grid { Width = 60, HorizontalAlignment = HorizontalAlignment.Center };
+            swatch.HorizontalAlignment = HorizontalAlignment.Center;
+            cell.Children.Add(swatch);
+            return cell;
+        }
+
+        private Border CreateKnobSwatch(string commandName, int idx, byte[][] colorSource, bool isBackground)
+        {
+            var border = new Border
+            {
+                Width = 28, Height = 28,
+                BorderBrush = new SolidColorBrush(Color.FromRgb(85, 85, 85)),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(3),
+                Cursor = Cursors.Hand,
+                Background = Brushes.Black,
+                Tag = new ColorSwatchInfo
+                {
+                    CommandNameOverride = commandName,
+                    Index = idx,
+                    ColorSource = colorSource,
+                    OnChanged = () => PersistKnobColor(idx, isBackground),
+                },
+            };
+            border.MouseLeftButtonUp += ColorSwatch_Click;
+            return border;
+        }
+
+        private void PersistKnobColor(int idx, bool isBackground)
+        {
+            if (_data == null || _settings == null) return;
+            // Write-only on the wire — settings is the canonical store. Repack the
+            // full 3-element array each time so null -> default black is preserved.
+            if (isBackground)
+                _settings.WheelKnobBackgroundColors = MozaProfile.PackColors(_data.WheelKnobBackgroundColors);
+            else
+                _settings.WheelKnobPrimaryColors    = MozaProfile.PackColors(_data.WheelKnobPrimaryColors);
         }
 
         private void ColorSwatch_Click(object sender, MouseButtonEventArgs e)
@@ -197,13 +280,16 @@ namespace MozaPlugin.Devices
             if (dialog.ShowDialog() == true)
             {
                 byte r = dialog.SelectedR, g = dialog.SelectedG, b = dialog.SelectedB;
-                string cmdName = $"{info.CommandPrefix}{info.Index + 1}";
+                string cmdName = !string.IsNullOrEmpty(info.CommandNameOverride)
+                    ? info.CommandNameOverride
+                    : $"{info.CommandPrefix}{info.Index + 1}";
                 _device!.WriteColor(cmdName, r, g, b);
                 info.ColorSource[info.Index][0] = r;
                 info.ColorSource[info.Index][1] = g;
                 info.ColorSource[info.Index][2] = b;
                 border.Background = new SolidColorBrush(Color.FromRgb(r, g, b));
 
+                info.OnChanged?.Invoke();
                 _plugin.SaveSettings();
             }
         }
@@ -305,6 +391,17 @@ namespace MozaPlugin.Devices
                         if ((cb.IsChecked == true) != want) cb.IsChecked = want;
                     }
                     UpdateSwatches(_wheelRpmColorSwatches, _data.WheelRpmColors, rpmCount);
+
+                    int knobCount = modelInfo?.KnobCount ?? 0;
+                    WheelKnobSection.Visibility = knobCount > 0 ? Visibility.Visible : Visibility.Collapsed;
+                    for (int i = 0; i < MozaData.WheelKnobMax; i++)
+                    {
+                        var vis = i < knobCount ? Visibility.Visible : Visibility.Collapsed;
+                        if (_wheelKnobRowContainers[i] != null)
+                            _wheelKnobRowContainers[i].Visibility = vis;
+                    }
+                    UpdateSwatches(_wheelKnobBgSwatches, _data.WheelKnobBackgroundColors, knobCount);
+                    UpdateSwatches(_wheelKnobPrimarySwatches, _data.WheelKnobPrimaryColors, knobCount);
                 }
 
                 if (oldWheel)

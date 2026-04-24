@@ -503,7 +503,7 @@ Additional newer wheel commands:
 | sleep-breath-color | `24 FF 01 FF` | 3 | array | RGB |
 | startup-color | `25` | 3 | array | RGB |
 | paddle-thresholds | `26` | 24 | array | 12× 2-byte thresholds |
-| rotary-switch-color | `27 [N] [0/1]` | 3 | array | Switch N (0–4) foreground/background RGB |
+| led-group-color | `27 [G] [role]` | 3 | array | Per-group idle/active RGB. `G=0` = RPM strip; `G=1..5` = rotary knobs (CS Pro has 4 knobs, KS Pro has 5). `role=0` = background/idle, `role=1` = primary/active. Plugin commands `wheel-knob{1..5}-bg-color` / `wheel-knob{1..5}-primary-color` for the knob groups. Wire frame verified on CS Pro (see [moza-protocol.md § LED group colour](moza-protocol.md#led-group-colour-group-0x3f-device-0x17-cmd-0x27-group-role)) |
 | multi-function-switch | `28 [0..2]` | 1 | int | Enable, count, left/right assignment |
 | rotary-signal-mode | `2A [N]` | 1 | int | Encoder N (0–4) signal mode |
 
