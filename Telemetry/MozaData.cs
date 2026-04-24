@@ -151,8 +151,20 @@ namespace MozaPlugin
         public readonly byte[][] WheelRpmColors = InitWheelRpmColorArray();
         public readonly byte[][] WheelRpmBlinkColors = InitRpmColorArray();
         public readonly byte[][] WheelButtonColors = InitColorArray(14);
+        // Per-button "default during telemetry" flags. When true, any 'off' (0,0,0) value
+        // sent through the live button-color telemetry pipeline is replaced with that
+        // button's configured static color (see WheelButtonColors).
+        public readonly bool[] WheelButtonDefaultDuringTelemetry = new bool[14];
         public readonly byte[][] WheelFlagColors = InitFlagColorArray();
         public readonly byte[] WheelIdleColor = new byte[] { 255, 255, 255 };
+
+        // Per-knob LED ring colors — W17 CS Pro (4 knobs) / W18 KS Pro (5 knobs).
+        // Background = idle colour shown when the knob is not being turned;
+        // primary = colour flashed on rotation. Wire: [27, group, role] + RGB,
+        // group 1..KnobCount (group 0 = RPM), role 0=background, 1=primary.
+        public const int WheelKnobMax = 5;
+        public readonly byte[][] WheelKnobBackgroundColors = InitColorArray(WheelKnobMax);
+        public readonly byte[][] WheelKnobPrimaryColors = InitColorArray(WheelKnobMax);
 
         // ES wheel
         public volatile int WheelESRpmBrightness;

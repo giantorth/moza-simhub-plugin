@@ -58,7 +58,7 @@ Not present in replay table (capture taken with full device attached — device 
 
 ## MOZA protocol quick reference
 
-For full details: `docs/moza-protocol.md`, `usb-capture/pithouse-re.md`.
+For full details: `docs/moza-protocol.md`.
 
 ### Frame format
 

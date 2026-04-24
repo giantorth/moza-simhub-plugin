@@ -39,6 +39,11 @@ namespace MozaPlugin
         public int[]? WheelRpmBlinkColors { get; set; }
         public int[]? DashRpmBlinkColors { get; set; }
 
+        // Per-knob LED ring colours (W17/W18 only, 3 knobs). Write-only on the wire —
+        // persisted here so they survive restarts. Packed as R<<16 | G<<8 | B.
+        public int[]? WheelKnobBackgroundColors { get; set; }
+        public int[]? WheelKnobPrimaryColors { get; set; }
+
         // Connection enabled (persisted toggle)
         public bool ConnectionEnabled { get; set; } = true;
 
@@ -47,7 +52,7 @@ namespace MozaPlugin
 
         // When true, only send LED updates to wheel when data actually changed (ignores SimHub forceRefresh).
         // Fixes flickering on some non-ES wheels. When false, respects SimHub's refresh cycle.
-        public bool LimitWheelUpdates { get; set; } = true;
+        public bool LimitWheelUpdates { get; set; } = false;
 
         // Per-slot min/max index for the experimental diagnostic panels (slots 0..5).
         // -1 sentinel = "use full range" (slot's MaxLeds-1 for max, 0 for min).
@@ -56,7 +61,7 @@ namespace MozaPlugin
 
         // When true, resend LED state to wheel every ~1 second even if unchanged.
         // Some ES wheels need this to stay in telemetry mode.
-        public bool WheelKeepalive { get; set; } = true;
+        public bool WheelKeepalive { get; set; } = false;
 
         // When true, always resend the LED bitmask alongside color updates even if the bitmask
         // value hasn't changed. Fixes wheels that don't pick up new colors without a bitmask write.
@@ -116,10 +121,10 @@ namespace MozaPlugin
         public PerWheelSlot GetOrCreateSlot(string? modelName)
         {
             if (string.IsNullOrEmpty(modelName)) return new PerWheelSlot();
-            if (!PerWheelSlots.TryGetValue(modelName, out var slot))
+            if (!PerWheelSlots.TryGetValue(modelName!, out var slot))
             {
                 slot = new PerWheelSlot();
-                PerWheelSlots[modelName] = slot;
+                PerWheelSlots[modelName!] = slot;
             }
             return slot;
         }
@@ -143,6 +148,8 @@ namespace MozaPlugin
             slot.WheelFlagsBrightness   = WheelFlagsBrightness;
             slot.WheelESRpmBrightness   = WheelESRpmBrightness;
             slot.WheelRpmBlinkColors    = WheelRpmBlinkColors;
+            slot.WheelKnobBackgroundColors = WheelKnobBackgroundColors;
+            slot.WheelKnobPrimaryColors    = WheelKnobPrimaryColors;
         }
 
         /// <summary>Copy the slot for <paramref name="modelName"/> into the flat Wheel* fields.</summary>
@@ -164,6 +171,8 @@ namespace MozaPlugin
             WheelFlagsBrightness   = slot.WheelFlagsBrightness;
             WheelESRpmBrightness   = slot.WheelESRpmBrightness;
             WheelRpmBlinkColors    = slot.WheelRpmBlinkColors;
+            WheelKnobBackgroundColors = slot.WheelKnobBackgroundColors;
+            WheelKnobPrimaryColors    = slot.WheelKnobPrimaryColors;
         }
     }
 
@@ -188,5 +197,7 @@ namespace MozaPlugin
         public int WheelFlagsBrightness { get; set; } = 100;
         public int WheelESRpmBrightness { get; set; } = 15;
         public int[]? WheelRpmBlinkColors { get; set; }
+        public int[]? WheelKnobBackgroundColors { get; set; }
+        public int[]? WheelKnobPrimaryColors { get; set; }
     }
 }

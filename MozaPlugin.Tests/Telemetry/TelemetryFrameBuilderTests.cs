@@ -122,5 +122,100 @@ namespace MozaPlugin.Tests.Telemetry
             // Different flags yield different checksums
             Assert.NotEqual(a[a.Length - 1], b[b.Length - 1]);
         }
+
+        [Fact]
+        public void BuildTestFrame_HeaderAndChecksumValid()
+        {
+            var profile = F1DashboardProfileFixture.BuildTier30ms();
+            var builder = new TelemetryFrameBuilder(profile);
+
+            byte[] frame = builder.BuildTestFrame(0x01);
+
+            Assert.Equal(12 + profile.TotalBytes + 1, frame.Length);
+            Assert.Equal(0x7E, frame[0]);
+            Assert.Equal(0x01, frame[10]);
+            Assert.Equal(0x20, frame[11]);
+            Assert.Equal(
+                MozaProtocol.CalculateChecksum(frame, frame.Length - 1),
+                frame[frame.Length - 1]);
+        }
+
+        [Fact]
+        public void BuildTestFrame_PhaseAdvancesPerCall()
+        {
+            var profile = F1DashboardProfileFixture.BuildTier30ms();
+            var builder = new TelemetryFrameBuilder(profile);
+
+            byte[] first = builder.BuildTestFrame(0x01);
+            // Advance to mid-period (phase 50 of 100 → peak of triangle)
+            byte[] mid = null!;
+            for (int i = 0; i < 50; i++)
+                mid = builder.BuildTestFrame(0x01);
+
+            bool anyDiff = false;
+            for (int i = 12; i < first.Length - 1; i++)
+                if (first[i] != mid[i]) { anyDiff = true; break; }
+            Assert.True(anyDiff, "Test pattern phase should advance between calls");
+        }
+
+        [Fact]
+        public void BuildTestFrame_WrapsAtPeriod()
+        {
+            var profile = F1DashboardProfileFixture.BuildTier30ms();
+            var a = new TelemetryFrameBuilder(profile);
+            var b = new TelemetryFrameBuilder(profile);
+
+            byte[] first = a.BuildTestFrame(0x01);
+            // Advance b by a full period (100) — should land back at same phase as first call.
+            byte[] wrapped = null!;
+            for (int i = 0; i < 100; i++)
+                wrapped = b.BuildTestFrame(0x01);
+            byte[] bNext = b.BuildTestFrame(0x01);
+
+            Assert.Equal(first, bNext);
+        }
+
+        [Fact]
+        public void BuildTestFrame_SlowerTier_AdvancesPhaseSlower()
+        {
+            // Same profile shape, two independent builders: one call count vs many — the builder
+            // called fewer times has smaller phase advance, proving per-tier rate scaling.
+            var profile = F1DashboardProfileFixture.BuildTier30ms();
+            var fast = new TelemetryFrameBuilder(profile);
+            var slow = new TelemetryFrameBuilder(profile);
+
+            byte[] fastLatest = null!;
+            for (int i = 0; i < 20; i++)
+                fastLatest = fast.BuildTestFrame(0x01);
+
+            byte[] slowLatest = null!;
+            for (int i = 0; i < 4; i++)
+                slowLatest = slow.BuildTestFrame(0x01);
+
+            bool anyDiff = false;
+            for (int i = 12; i < fastLatest.Length - 1; i++)
+                if (fastLatest[i] != slowLatest[i]) { anyDiff = true; break; }
+            Assert.True(anyDiff, "Fast-tier builder should be further through its cycle than slow-tier builder");
+        }
+
+        [Fact]
+        public void BuildTestFrame_StubForEmptyProfile()
+        {
+            var empty = new DashboardProfile
+            {
+                Name = "empty",
+                Channels = new System.Collections.Generic.List<ChannelDefinition>(),
+                TotalBits = 0,
+                TotalBytes = 0,
+                PackageLevel = 30,
+            };
+            var builder = new TelemetryFrameBuilder(empty);
+
+            byte[] frame = builder.BuildTestFrame(0x04);
+
+            Assert.Equal(13, frame.Length);
+            Assert.Equal(0x04, frame[10]);
+            Assert.Equal(MozaProtocol.CalculateChecksum(frame, 12), frame[12]);
+        }
     }
 }

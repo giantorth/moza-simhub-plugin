@@ -253,7 +253,7 @@ namespace MozaPlugin.Devices
                         {
                             _lastRpmBitmask = bitmask;
                             plugin.DeviceManager.WriteArray("wheel-send-rpm-telemetry",
-                                new byte[] { (byte)(bitmask & 0xFF), (byte)((bitmask >> 8) & 0xFF) });
+                                BuildRpmBitmaskBytes(bitmask, count));
                         }
                         anySent = true;
                     }
@@ -301,6 +301,32 @@ namespace MozaPlugin.Devices
                 // power cycle or forced color change.
                 if (isNewWheel && buttonColors.Length > 0 && modelInfo != null)
                 {
+                    // "Default during telemetry" override: per-button flags (Data.WheelButtonDefaultDuringTelemetry)
+                    // replace 'off' (0,0,0) in the incoming SimHub frame with the button's configured static color.
+                    // Runs unconditionally while SimHub is feeding button colors — the frame itself IS the telemetry
+                    // signal, so no extra "is telemetry running" gate is needed.
+                    var defaultFlags = plugin.Data.WheelButtonDefaultDuringTelemetry;
+                    var staticColors = plugin.Data.WheelButtonColors;
+                    bool anyOverride = false;
+                    for (int i = 0; i < defaultFlags.Length; i++)
+                    {
+                        if (defaultFlags[i]) { anyOverride = true; break; }
+                    }
+                    if (anyOverride)
+                    {
+                        var overridden = (Color[])buttonColors.Clone();
+                        int lim = Math.Min(overridden.Length, Math.Min(defaultFlags.Length, staticColors.Length));
+                        for (int i = 0; i < lim; i++)
+                        {
+                            if (!defaultFlags[i]) continue;
+                            var c = overridden[i];
+                            if (c.R != 0 || c.G != 0 || c.B != 0) continue;
+                            var sc = staticColors[i];
+                            overridden[i] = Color.FromArgb(sc[0], sc[1], sc[2]);
+                        }
+                        buttonColors = overridden;
+                    }
+
                     bool buttonsChanged = _lastButtons == null || !buttonColors.SequenceEqual(_lastButtons);
                     bool shouldSendButtons = buttonsChanged || (!limitUpdates && forceRefresh);
 
@@ -396,7 +422,7 @@ namespace MozaPlugin.Devices
                 SendColorChunks(plugin, _lastLeds, count, "wheel-telemetry-rpm-colors");
                 if (_lastRpmBitmask >= 0)
                     plugin.DeviceManager.WriteArray("wheel-send-rpm-telemetry",
-                        new byte[] { (byte)(_lastRpmBitmask & 0xFF), (byte)((_lastRpmBitmask >> 8) & 0xFF) });
+                        BuildRpmBitmaskBytes(_lastRpmBitmask, count));
 
                 if (modelInfo?.HasFlagLeds == true && plugin.IsDashDetected && _lastFlagColorsPrimed)
                 {
@@ -414,6 +440,28 @@ namespace MozaPlugin.Devices
                 if (_lastRpmBitmask >= 0)
                     plugin.DeviceManager.WriteSetting("wheel-old-send-telemetry", _lastRpmBitmask);
             }
+        }
+
+        /// <summary>
+        /// Build RPM active-LED bitmask payload sized for the wheel's LED count.
+        /// 16 or fewer LEDs → 2 bytes (legacy wire format). 17+ LEDs → 4 bytes.
+        /// KS Pro / CS Pro (18 LEDs) require the extended form to light bits 16-17.
+        /// </summary>
+        internal static byte[] BuildRpmBitmaskBytes(int bitmask, int ledCount)
+        {
+            if (ledCount > 16)
+            {
+                return new byte[] {
+                    (byte)(bitmask & 0xFF),
+                    (byte)((bitmask >> 8) & 0xFF),
+                    (byte)((bitmask >> 16) & 0xFF),
+                    (byte)((bitmask >> 24) & 0xFF)
+                };
+            }
+            return new byte[] {
+                (byte)(bitmask & 0xFF),
+                (byte)((bitmask >> 8) & 0xFF)
+            };
         }
 
         /// <summary>

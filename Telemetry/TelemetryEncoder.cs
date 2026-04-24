@@ -135,5 +135,46 @@ namespace MozaPlugin.Telemetry
         {
             return value < min ? min : value > max ? max : value;
         }
+
+        /// <summary>
+        /// Decoded-value min/max for test-pattern cycling.
+        /// Ranges chosen so a triangle wave in [min..max] sweeps the displayable range
+        /// of the target channel (LED bars, meters, numeric readouts).
+        /// </summary>
+        public static (double min, double max) GetTestRange(string compression)
+        {
+            switch (compression)
+            {
+                case "bool":            return (0.0, 1.0);
+                case "uint3":
+                case "uint8":
+                case "uint15":          return (0.0, 15.0);     // 4-bit raw range
+                case "int30":
+                case "uint30":
+                case "uint31":          return (0.0, 30.0);     // 5-bit forward-only (skip 31 = reverse)
+                case "int8_t":          return (-128.0, 127.0);
+                case "uint8_t":         return (0.0, 255.0);
+                case "percent_1":       return (0.0, 100.0);
+                case "float_001":       return (0.0, 1.0);
+                case "tyre_pressure_1": return (0.0, 40.0);     // bar
+                case "tyre_temp_1":     return (0.0, 150.0);    // °C
+                case "track_temp_1":    return (0.0, 60.0);     // °C
+                case "oil_pressure_1":  return (0.0, 10.0);     // bar
+                case "int16_t":         return (-1000.0, 1000.0);
+                case "uint16_t":        return (0.0, 10000.0);  // covers RPM
+                case "float_6000_1":    return (0.0, 400.0);    // kmh
+                case "float_600_2":     return (0.0, 400.0);
+                case "brake_temp_1":    return (0.0, 1000.0);   // °C
+                case "uint24_t":        return (0.0, 10000.0);
+                case "int32_t":         return (-10000.0, 10000.0);
+                case "uint32_t":        return (0.0, 10000.0);
+                case "float":           return (0.0, 200.0);
+                case "double":          return (0.0, 200.0);
+                case "location_t":      return (0.0, 1.0);
+                case "int64_t":         return (-1000.0, 1000.0);
+                case "uint64_t":        return (0.0, 1000.0);
+                default:                return (0.0, 1.0);
+            }
+        }
     }
 }

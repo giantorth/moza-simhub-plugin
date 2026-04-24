@@ -274,12 +274,10 @@ namespace MozaPlugin.Tests.Integration
         {
             var profile = F1DashboardProfileFixture.BuildTier30ms();
             var builder = new TelemetryFrameBuilder(profile);
-            var diagnostics = new TelemetryDiagnostics();
 
-            for (int frame = 0; frame < 200; frame += 10)
+            for (int frame = 0; frame < 200; frame++)
             {
-                var snap = diagnostics.BuildTestPattern(frame);
-                byte[] bytes = builder.BuildFrameFromSnapshot(snap, 0x01);
+                byte[] bytes = builder.BuildTestFrame(0x01);
                 Assert.Equal(
                     MozaProtocol.CalculateChecksum(bytes, bytes.Length - 1),
                     bytes[bytes.Length - 1]);

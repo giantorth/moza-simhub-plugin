@@ -137,7 +137,7 @@ namespace MozaPlugin.Protocol
 
             // ===== TELEMETRY OUTPUT =====
             AddCommand("dash-send-telemetry",           "dash",  0xFF, 65, new byte[] { 253, 222 }, 4, "int");
-            AddCommand("wheel-send-rpm-telemetry",      "wheel", 0xFF, 63, new byte[] { 26, 0 },    2, "array");
+            AddCommand("wheel-send-rpm-telemetry",      "wheel", 0xFF, 63, new byte[] { 26, 0 },    4, "array");
             AddCommand("wheel-send-buttons-telemetry",  "wheel", 0xFF, 63, new byte[] { 26, 1 },    2, "array");
             AddCommand("wheel-telemetry-rpm-colors",    "wheel", 0xFF, 63, new byte[] { 25, 0 },   20, "array");
             AddCommand("wheel-telemetry-button-colors", "wheel", 0xFF, 63, new byte[] { 25, 1 },   20, "array");
@@ -191,6 +191,16 @@ namespace MozaPlugin.Protocol
             // Wheel button colors (id [31, 1, 0xFF, index]). Group 1 spec max = 16 LEDs.
             for (byte i = 0; i < 16; i++)
                 AddCommand($"wheel-button-color{i + 1}", "wheel", 64, 63, new byte[] { 31, 1, 0xFF, i }, 3, "array");
+
+            // Per-rotary-knob LED colors (W17 CS Pro = 4 knobs, W18 KS Pro = 5 knobs).
+            // Wire: [27, <group>, <role>] + [R, G, B]. group = 1..5 (knob N — group 0 is RPM),
+            // role 0=background (idle), 1=primary (active). Write-only — wheel echoes via
+            // WheelEchoPrefixes entries for (0x3F, 0x17, 0x27, 0x01..0x05).
+            for (byte k = 1; k <= 5; k++)
+            {
+                AddCommand($"wheel-knob{k}-bg-color",      "wheel", 0xFF, 63, new byte[] { 27, k, 0 }, 3, "array");
+                AddCommand($"wheel-knob{k}-primary-color", "wheel", 0xFF, 63, new byte[] { 27, k, 1 }, 3, "array");
+            }
 
             // Extended LED groups (2=Single/28 LEDs, 3=Rotary/56 LEDs, 4=Ambient/12 LEDs).
             // Per-LED color: [31, G, 0xFF, index] — same wire format as groups 0/1.

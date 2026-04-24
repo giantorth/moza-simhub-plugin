@@ -32,50 +32,14 @@ namespace MozaPlugin.Devices
         // Color swatch references
         private readonly Border[] _wheelFlagColorSwatches = new Border[6];
         private readonly Border[] _wheelButtonColorSwatches = new Border[14];
+        private readonly CheckBox[] _wheelButtonDefaultTelemetryChecks = new CheckBox[14];
+        private readonly FrameworkElement[] _wheelButtonSlotContainers = new FrameworkElement[14];
         private const int WheelRpmSwatchMax = 25;
         private readonly Border[] _wheelRpmColorSwatches = new Border[WheelRpmSwatchMax];
         private readonly TextBlock[] _wheelRpmIndexLabels = new TextBlock[WheelRpmSwatchMax];
-
-        // Diagnostic LED panel state (keyed by slot: 0=Shift/RPM, 1=Button,
-        // 2/3/4=extended groups, 5=Meter flags)
-        private readonly bool[] _extLedPanelBuilt = new bool[6];
-        private readonly byte[] _extLedFillR = new byte[6];
-        private readonly byte[] _extLedFillG = new byte[6];
-        private readonly byte[] _extLedFillB = new byte[6];
-        private readonly Border[] _extLedSwatches = new Border[6];
-        private readonly int[] _extLedRangeMin = new int[6];
-        private readonly int[] _extLedRangeMax = new int[6];
-        // Per-slot TextBox refs so LostFocus handlers + summary refresh can read current values
-        private readonly TextBox?[] _extLedMinBoxes = new TextBox?[6];
-        private readonly TextBox?[] _extLedMaxBoxes = new TextBox?[6];
-
-        private class DiagLedCfg
-        {
-            public int Slot;
-            public string Title = "";
-            public int MaxLeds;
-            public string ColorCmdPrefix = "";  // "wheel-group2-color" → "wheel-group2-color{N}". Ignored when LiveColorCmd set.
-            public string BrightnessCmd = "";
-            public string? ModeCmd;             // null = skip mode row
-            // When both set, writes go through the live telemetry pipeline (bulk chunk + bitmask)
-            // instead of per-LED static EEPROM writes. Used for Button group where static writes
-            // only render in idle/constant mode; live writes hit the telemetry frame buffer.
-            public string? LiveColorCmd;
-            public string? LiveBitmaskCmd;
-        }
-
-        private static readonly DiagLedCfg[] DiagLedCfgs =
-        {
-            // Groups 0/1 mode skipped — wheel-telemetry-mode / idle-effect already drive this UI elsewhere.
-            new DiagLedCfg { Slot = 0, Title = "Group 0 — Shift/RPM", MaxLeds = 25, ColorCmdPrefix = "wheel-rpm-color",    BrightnessCmd = "wheel-rpm-brightness",     ModeCmd = null,
-                             LiveColorCmd = "wheel-telemetry-rpm-colors", LiveBitmaskCmd = "wheel-send-rpm-telemetry" },
-            new DiagLedCfg { Slot = 1, Title = "Group 1 — Button",   MaxLeds = 16, ColorCmdPrefix = "wheel-button-color", BrightnessCmd = "wheel-buttons-brightness", ModeCmd = null,
-                             LiveColorCmd = "wheel-telemetry-button-colors", LiveBitmaskCmd = "wheel-send-buttons-telemetry" },
-            new DiagLedCfg { Slot = 2, Title = "Group 2 — Single",   MaxLeds = 28, ColorCmdPrefix = "wheel-group2-color", BrightnessCmd = "wheel-group2-brightness",  ModeCmd = "wheel-group2-mode" },
-            new DiagLedCfg { Slot = 3, Title = "Group 3 — Rotary",   MaxLeds = 56, ColorCmdPrefix = "wheel-group3-color", BrightnessCmd = "wheel-group3-brightness",  ModeCmd = "wheel-group3-mode" },
-            new DiagLedCfg { Slot = 4, Title = "Group 4 — Ambient",  MaxLeds = 12, ColorCmdPrefix = "wheel-group4-color", BrightnessCmd = "wheel-group4-brightness",  ModeCmd = "wheel-group4-mode" },
-            new DiagLedCfg { Slot = 5, Title = "Flags (Meter device)", MaxLeds = 6, ColorCmdPrefix = "dash-flag-color",   BrightnessCmd = "dash-flags-brightness",    ModeCmd = null },
-        };
+        private readonly Border[] _wheelKnobBgSwatches = new Border[MozaData.WheelKnobMax];
+        private readonly Border[] _wheelKnobPrimarySwatches = new Border[MozaData.WheelKnobMax];
+        private readonly FrameworkElement[] _wheelKnobRowContainers = new FrameworkElement[MozaData.WheelKnobMax];
 
         // ES wheel indicator: device 1=RPM, 2=Off, 3=On (1-based, -1 applied on read)
         // UI combo: 0="SimHub Mode", 1="Always On", 2="Off"
@@ -116,8 +80,9 @@ namespace MozaPlugin.Devices
             if (_swatchesBuilt || _data == null) return;
             // Flag LEDs live on the Meter sub-device (RS21 DB); swatch writes route via dash-flag-color*.
             BuildSwatchRow(WheelFlagColorPanel, _wheelFlagColorSwatches, 6, "dash-flag-color", _data.WheelFlagColors);
-            BuildSwatchRow(WheelButtonColorPanel, _wheelButtonColorSwatches, 14, "wheel-button-color", _data.WheelButtonColors);
+            BuildButtonSwatchRow();
             BuildRpmSwatches();
+            BuildKnobSwatchRows();
             _swatchesBuilt = true;
         }
 
@@ -157,11 +122,150 @@ namespace MozaPlugin.Devices
             }
         }
 
+        private void BuildButtonSwatchRow()
+        {
+            if (_data == null) return;
+            const int count = 14;
+            for (int i = 0; i < count; i++)
+            {
+                var col = new StackPanel
+                {
+                    Orientation = Orientation.Vertical,
+                    Margin = new Thickness(2, 0, 2, 0),
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                };
+
+                var border = new Border
+                {
+                    Width = 28, Height = 28,
+                    BorderBrush = new SolidColorBrush(Color.FromRgb(85, 85, 85)),
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(3),
+                    Cursor = Cursors.Hand,
+                    Background = Brushes.Black,
+                    Tag = new ColorSwatchInfo
+                    {
+                        CommandPrefix = "wheel-button-color",
+                        Index = i,
+                        ColorSource = _data.WheelButtonColors,
+                    },
+                };
+                border.MouseLeftButtonUp += ColorSwatch_Click;
+                col.Children.Add(border);
+                _wheelButtonColorSwatches[i] = border;
+
+                var cb = new CheckBox
+                {
+                    Margin = new Thickness(0, 4, 0, 0),
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    IsChecked = _data.WheelButtonDefaultDuringTelemetry[i],
+                    ToolTip = "Default during telemetry: replace 'off' with this button's color whenever SimHub is sending telemetry.",
+                    Tag = i,
+                };
+                cb.Checked += ButtonDefaultTelemetryCheck_Changed;
+                cb.Unchecked += ButtonDefaultTelemetryCheck_Changed;
+                col.Children.Add(cb);
+                _wheelButtonDefaultTelemetryChecks[i] = cb;
+
+                WheelButtonColorPanel.Children.Add(col);
+                _wheelButtonSlotContainers[i] = col;
+            }
+        }
+
+        private void ButtonDefaultTelemetryCheck_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_suppressEvents || _plugin == null || _data == null) return;
+            var cb = (CheckBox)sender;
+            int i = (int)cb.Tag;
+            if (i < 0 || i >= _data.WheelButtonDefaultDuringTelemetry.Length) return;
+            _data.WheelButtonDefaultDuringTelemetry[i] = cb.IsChecked == true;
+            _plugin.SaveSettings();
+        }
+
         private class ColorSwatchInfo
         {
             public string CommandPrefix = "";
             public int Index;
             public byte[][] ColorSource = Array.Empty<byte[]>();
+            // When non-empty, used verbatim as the wheel command name instead of
+            // "{CommandPrefix}{Index+1}". Used for knob colors whose commands follow
+            // the pattern "wheel-knob{N}-bg-color" / "wheel-knob{N}-primary-color".
+            public string CommandNameOverride = "";
+            // Optional callback fired after a successful picker commit — lets the
+            // caller repack the colour into a packed int[] on MozaPluginSettings
+            // (knob colours are write-only on the wire, so settings is the only
+            // persisted copy).
+            public Action? OnChanged;
+        }
+
+        private void BuildKnobSwatchRows()
+        {
+            if (_data == null) return;
+            int count = MozaData.WheelKnobMax;
+            for (int i = 0; i < count; i++)
+            {
+                int idx = i;
+                var row = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Margin = new Thickness(0, 0, 0, 4),
+                };
+                row.Children.Add(new TextBlock
+                {
+                    Text = $"Knob {idx + 1}",
+                    Width = 70,
+                    VerticalAlignment = VerticalAlignment.Center,
+                });
+                var bg = CreateKnobSwatch($"wheel-knob{idx + 1}-bg-color", idx, _data.WheelKnobBackgroundColors, isBackground: true);
+                var primary = CreateKnobSwatch($"wheel-knob{idx + 1}-primary-color", idx, _data.WheelKnobPrimaryColors, isBackground: false);
+                row.Children.Add(WrapInCell(bg));
+                row.Children.Add(WrapInCell(primary));
+                WheelKnobPanel.Children.Add(row);
+                _wheelKnobBgSwatches[idx] = bg;
+                _wheelKnobPrimarySwatches[idx] = primary;
+                _wheelKnobRowContainers[idx] = row;
+            }
+        }
+
+        private static FrameworkElement WrapInCell(Border swatch)
+        {
+            var cell = new Grid { Width = 60, HorizontalAlignment = HorizontalAlignment.Center };
+            swatch.HorizontalAlignment = HorizontalAlignment.Center;
+            cell.Children.Add(swatch);
+            return cell;
+        }
+
+        private Border CreateKnobSwatch(string commandName, int idx, byte[][] colorSource, bool isBackground)
+        {
+            var border = new Border
+            {
+                Width = 28, Height = 28,
+                BorderBrush = new SolidColorBrush(Color.FromRgb(85, 85, 85)),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(3),
+                Cursor = Cursors.Hand,
+                Background = Brushes.Black,
+                Tag = new ColorSwatchInfo
+                {
+                    CommandNameOverride = commandName,
+                    Index = idx,
+                    ColorSource = colorSource,
+                    OnChanged = () => PersistKnobColor(idx, isBackground),
+                },
+            };
+            border.MouseLeftButtonUp += ColorSwatch_Click;
+            return border;
+        }
+
+        private void PersistKnobColor(int idx, bool isBackground)
+        {
+            if (_data == null || _settings == null) return;
+            // Write-only on the wire — settings is the canonical store. Repack the
+            // full 3-element array each time so null -> default black is preserved.
+            if (isBackground)
+                _settings.WheelKnobBackgroundColors = MozaProfile.PackColors(_data.WheelKnobBackgroundColors);
+            else
+                _settings.WheelKnobPrimaryColors    = MozaProfile.PackColors(_data.WheelKnobPrimaryColors);
         }
 
         private void ColorSwatch_Click(object sender, MouseButtonEventArgs e)
@@ -176,13 +280,16 @@ namespace MozaPlugin.Devices
             if (dialog.ShowDialog() == true)
             {
                 byte r = dialog.SelectedR, g = dialog.SelectedG, b = dialog.SelectedB;
-                string cmdName = $"{info.CommandPrefix}{info.Index + 1}";
+                string cmdName = !string.IsNullOrEmpty(info.CommandNameOverride)
+                    ? info.CommandNameOverride
+                    : $"{info.CommandPrefix}{info.Index + 1}";
                 _device!.WriteColor(cmdName, r, g, b);
                 info.ColorSource[info.Index][0] = r;
                 info.ColorSource[info.Index][1] = g;
                 info.ColorSource[info.Index][2] = b;
                 border.Background = new SolidColorBrush(Color.FromRgb(r, g, b));
 
+                info.OnChanged?.Invoke();
                 _plugin.SaveSettings();
             }
         }
@@ -243,7 +350,8 @@ namespace MozaPlugin.Devices
                 WheelNotDetectedPanel.Visibility = anyWheel ? Visibility.Collapsed : Visibility.Visible;
                 NewWheelPanel.Visibility = newWheel ? Visibility.Visible : Visibility.Collapsed;
                 EsWheelPanel.Visibility = oldWheel ? Visibility.Visible : Visibility.Collapsed;
-                TelemetrySection.Visibility = oldWheel ? Visibility.Collapsed : Visibility.Visible;
+                bool showTelemetry = newWheel && (_plugin?.IsDisplayDetected ?? false);
+                TelemetrySection.Visibility = showTelemetry ? Visibility.Visible : Visibility.Collapsed;
 
                 if (newWheel)
                 {
@@ -259,9 +367,11 @@ namespace MozaPlugin.Devices
 
                     for (int i = 0; i < 14; i++)
                     {
-                        if (_wheelButtonColorSwatches[i] != null)
-                            _wheelButtonColorSwatches[i].Visibility = (modelInfo?.IsButtonActive(i) ?? true)
-                                ? Visibility.Visible : Visibility.Collapsed;
+                        var vis = (modelInfo?.IsButtonActive(i) ?? true) ? Visibility.Visible : Visibility.Collapsed;
+                        if (_wheelButtonSlotContainers[i] != null)
+                            _wheelButtonSlotContainers[i].Visibility = vis;
+                        else if (_wheelButtonColorSwatches[i] != null)
+                            _wheelButtonColorSwatches[i].Visibility = vis;
                     }
 
                     int rpmCount = modelInfo?.RpmLedCount ?? 10;
@@ -274,9 +384,25 @@ namespace MozaPlugin.Devices
 
                     UpdateSwatches(_wheelFlagColorSwatches, _data.WheelFlagColors, 6);
                     UpdateSwatches(_wheelButtonColorSwatches, _data.WheelButtonColors, 14);
+                    for (int i = 0; i < 14; i++)
+                    {
+                        var cb = _wheelButtonDefaultTelemetryChecks[i];
+                        if (cb == null) continue;
+                        bool want = _data.WheelButtonDefaultDuringTelemetry[i];
+                        if ((cb.IsChecked == true) != want) cb.IsChecked = want;
+                    }
                     UpdateSwatches(_wheelRpmColorSwatches, _data.WheelRpmColors, rpmCount);
 
-                    RefreshExtendedLedGroups();
+                    int knobCount = modelInfo?.KnobCount ?? 0;
+                    WheelKnobSection.Visibility = knobCount > 0 ? Visibility.Visible : Visibility.Collapsed;
+                    for (int i = 0; i < MozaData.WheelKnobMax; i++)
+                    {
+                        var vis = i < knobCount ? Visibility.Visible : Visibility.Collapsed;
+                        if (_wheelKnobRowContainers[i] != null)
+                            _wheelKnobRowContainers[i].Visibility = vis;
+                    }
+                    UpdateSwatches(_wheelKnobBgSwatches, _data.WheelKnobBackgroundColors, knobCount);
+                    UpdateSwatches(_wheelKnobPrimarySwatches, _data.WheelKnobPrimaryColors, knobCount);
                 }
 
                 if (oldWheel)
@@ -314,337 +440,6 @@ namespace MozaPlugin.Devices
             if (value < min) return min;
             if (value > max) return max;
             return value;
-        }
-
-        // ===== Experimental LED diagnostics (groups 2/3/4 + Meter flags) =====
-
-        private void RefreshExtendedLedGroups()
-        {
-            if (_plugin == null) return;
-
-            bool any = false;
-            bool built = false;
-            foreach (var cfg in DiagLedCfgs)
-            {
-                bool present = IsDiagSlotPresent(cfg.Slot);
-                if (present && !_extLedPanelBuilt[cfg.Slot])
-                {
-                    BuildDiagLedPanel(cfg);
-                    _extLedPanelBuilt[cfg.Slot] = true;
-                    built = true;
-                }
-                var panel = GetDiagLedPanel(cfg.Slot);
-                if (panel != null)
-                    panel.Visibility = present ? Visibility.Visible : Visibility.Collapsed;
-                any |= present;
-            }
-            ExtLedSection.Visibility = any ? Visibility.Visible : Visibility.Collapsed;
-            if (built)
-                RefreshExtendedLedSummary();
-        }
-
-        private void RefreshExtendedLedSummary()
-        {
-            if (_plugin == null) return;
-
-            var sb = new System.Text.StringBuilder();
-            var info = _plugin.WheelModelInfo;
-            string modelName = _data?.WheelModelName ?? "";
-            string friendly = string.IsNullOrEmpty(modelName) ? "Unknown wheel"
-                : $"{WheelModelInfo.GetFriendlyName(WheelModelInfo.ExtractPrefix(modelName))} ({modelName})";
-            sb.AppendLine($"{friendly} — wheel LED support");
-            if (info != null)
-                sb.AppendLine($"  WheelModelInfo: rpm={info.RpmLedCount}, buttons={info.ButtonLedCount}, flags={info.HasFlagLeds}");
-            sb.AppendLine();
-
-            foreach (var cfg in DiagLedCfgs)
-            {
-                if (!_extLedPanelBuilt[cfg.Slot]) continue;
-                int min = _extLedRangeMin[cfg.Slot];
-                int max = _extLedRangeMax[cfg.Slot];
-                int count = max - min + 1;
-                sb.AppendLine($"  {cfg.Title,-28} : {count,3} LEDs (indices {min}-{max} of 0-{cfg.MaxLeds - 1})");
-            }
-            ExtLedSummaryBox.Text = sb.ToString();
-        }
-
-        private void ExtLedRangeMin_LostFocus(object sender, RoutedEventArgs e) =>
-            ExtLedRangeChanged((TextBox)sender, isMax: false);
-
-        private void ExtLedRangeMax_LostFocus(object sender, RoutedEventArgs e) =>
-            ExtLedRangeChanged((TextBox)sender, isMax: true);
-
-        private void ExtLedRangeChanged(TextBox box, bool isMax)
-        {
-            var cfg = (DiagLedCfg)box.Tag;
-            if (!int.TryParse(box.Text, out int v))
-                v = isMax ? cfg.MaxLeds - 1 : 0;
-            v = Math.Max(0, Math.Min(v, cfg.MaxLeds - 1));
-
-            if (isMax)
-            {
-                if (v < _extLedRangeMin[cfg.Slot]) v = _extLedRangeMin[cfg.Slot];
-                _extLedRangeMax[cfg.Slot] = v;
-            }
-            else
-            {
-                if (v > _extLedRangeMax[cfg.Slot]) v = _extLedRangeMax[cfg.Slot];
-                _extLedRangeMin[cfg.Slot] = v;
-            }
-            box.Text = v.ToString();
-
-            if (_settings != null)
-            {
-                _settings.ExtLedDiagMin[cfg.Slot] = _extLedRangeMin[cfg.Slot];
-                _settings.ExtLedDiagMax[cfg.Slot] = _extLedRangeMax[cfg.Slot];
-                _plugin?.SaveSettings();
-            }
-            RefreshExtendedLedSummary();
-        }
-
-        private bool IsDiagSlotPresent(int slot)
-        {
-            if (_plugin == null) return false;
-            // Slots 0/1: Shift/RPM + Button — universally present on any new-protocol wheel.
-            if (slot == 0 || slot == 1) return _plugin.IsNewWheelDetected;
-            // Slots 2..4: extended wheel groups detected via brightness-read probe.
-            //   NOTE: probe can false-positive — firmware accepts the read even when
-            //   no physical hardware is present. Keep surfacing so we can map support per model.
-            if (slot >= 2 && slot <= 4) return _plugin.IsWheelLedGroupPresent(slot);
-            // Slot 5: Meter flag LEDs — show whenever the Meter sub-device is detected.
-            if (slot == 5) return _plugin.IsDashDetected;
-            return false;
-        }
-
-        private StackPanel? GetDiagLedPanel(int slot) => slot switch
-        {
-            0 => ExtLedGroup0Panel,
-            1 => ExtLedGroup1Panel,
-            2 => ExtLedGroup2Panel,
-            3 => ExtLedGroup3Panel,
-            4 => ExtLedGroup4Panel,
-            5 => ExtLedFlagsPanel,
-            _ => null,
-        };
-
-        private void BuildDiagLedPanel(DiagLedCfg cfg)
-        {
-            var panel = GetDiagLedPanel(cfg.Slot);
-            if (panel == null) return;
-
-            panel.Children.Clear();
-
-            panel.Children.Add(new TextBlock
-            {
-                Text = $"{cfg.Title} (up to {cfg.MaxLeds} LEDs)",
-                FontWeight = FontWeights.SemiBold,
-                Margin = new Thickness(0, 6, 0, 4),
-            });
-
-            // Load persisted min/max for this slot, defaulting to full range
-            int savedMin = _settings != null && _settings.ExtLedDiagMin.Length > cfg.Slot ? _settings.ExtLedDiagMin[cfg.Slot] : -1;
-            int savedMax = _settings != null && _settings.ExtLedDiagMax.Length > cfg.Slot ? _settings.ExtLedDiagMax[cfg.Slot] : -1;
-            _extLedRangeMin[cfg.Slot] = savedMin < 0 ? 0 : Math.Max(0, Math.Min(savedMin, cfg.MaxLeds - 1));
-            _extLedRangeMax[cfg.Slot] = savedMax < 0 ? cfg.MaxLeds - 1 : Math.Max(0, Math.Min(savedMax, cfg.MaxLeds - 1));
-            if (_extLedRangeMin[cfg.Slot] > _extLedRangeMax[cfg.Slot])
-                _extLedRangeMin[cfg.Slot] = _extLedRangeMax[cfg.Slot];
-
-            // Fill color swatch + Min/Max + Fill-all / Clear buttons
-            var row1 = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 2) };
-            row1.Children.Add(new TextBlock { Text = "Fill color:", Width = 80, VerticalAlignment = VerticalAlignment.Center });
-
-            _extLedFillR[cfg.Slot] = 255;
-            _extLedFillG[cfg.Slot] = 0;
-            _extLedFillB[cfg.Slot] = 0;
-            var swatch = new Border
-            {
-                Width = 28, Height = 28,
-                BorderBrush = new SolidColorBrush(Color.FromRgb(85, 85, 85)),
-                BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(3),
-                Margin = new Thickness(0, 0, 8, 0),
-                Cursor = Cursors.Hand,
-                Background = new SolidColorBrush(Color.FromRgb(255, 0, 0)),
-                Tag = cfg.Slot,
-            };
-            swatch.MouseLeftButtonUp += ExtLedSwatch_Click;
-            _extLedSwatches[cfg.Slot] = swatch;
-            row1.Children.Add(swatch);
-
-            row1.Children.Add(new TextBlock { Text = "Range:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 4, 0) });
-            var minBox = new TextBox { Width = 40, Text = _extLedRangeMin[cfg.Slot].ToString(), Margin = new Thickness(0, 0, 2, 0), Tag = cfg, VerticalAlignment = VerticalAlignment.Center };
-            minBox.LostFocus += ExtLedRangeMin_LostFocus;
-            _extLedMinBoxes[cfg.Slot] = minBox;
-            row1.Children.Add(minBox);
-            row1.Children.Add(new TextBlock { Text = "–", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(2, 0, 2, 0) });
-            var maxBox = new TextBox { Width = 40, Text = _extLedRangeMax[cfg.Slot].ToString(), Margin = new Thickness(0, 0, 8, 0), Tag = cfg, VerticalAlignment = VerticalAlignment.Center };
-            maxBox.LostFocus += ExtLedRangeMax_LostFocus;
-            _extLedMaxBoxes[cfg.Slot] = maxBox;
-            row1.Children.Add(maxBox);
-
-            var fillBtn = new Button { Content = "Fill all", Padding = new Thickness(8, 2, 8, 2), Margin = new Thickness(0, 0, 6, 0), Tag = cfg };
-            fillBtn.Click += ExtLedFillAll_Click;
-            row1.Children.Add(fillBtn);
-
-            var clearBtn = new Button { Content = "All off", Padding = new Thickness(8, 2, 8, 2), Margin = new Thickness(0, 0, 6, 0), Tag = cfg };
-            clearBtn.Click += ExtLedClearAll_Click;
-            row1.Children.Add(clearBtn);
-            panel.Children.Add(row1);
-
-            // Single-LED write: index + Send
-            var row2 = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 2) };
-            row2.Children.Add(new TextBlock { Text = "LED index:", Width = 80, VerticalAlignment = VerticalAlignment.Center });
-            var idxBox = new TextBox { Width = 50, Text = "0", Margin = new Thickness(0, 0, 8, 0) };
-            row2.Children.Add(idxBox);
-            var sendOneBtn = new Button { Content = "Send one", Padding = new Thickness(8, 2, 8, 2), Tag = (cfg, idxBox) };
-            sendOneBtn.Click += ExtLedSendOne_Click;
-            row2.Children.Add(sendOneBtn);
-            panel.Children.Add(row2);
-
-            // Brightness slider + send
-            var row3 = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 2) };
-            row3.Children.Add(new TextBlock { Text = "Brightness:", Width = 80, VerticalAlignment = VerticalAlignment.Center });
-            var brightSlider = new Slider { Minimum = 0, Maximum = 100, Value = 50, Width = 200, IsSnapToTickEnabled = true, TickFrequency = 1, VerticalAlignment = VerticalAlignment.Center };
-            row3.Children.Add(brightSlider);
-            var brightLabel = new TextBlock { Width = 40, TextAlignment = TextAlignment.Right, Margin = new Thickness(6, 0, 8, 0), Text = "50", VerticalAlignment = VerticalAlignment.Center };
-            brightSlider.ValueChanged += (s, e) => brightLabel.Text = ((int)brightSlider.Value).ToString();
-            row3.Children.Add(brightLabel);
-            var sendBrightBtn = new Button { Content = "Send", Padding = new Thickness(8, 2, 8, 2), Tag = (cfg, brightSlider) };
-            sendBrightBtn.Click += ExtLedSendBrightness_Click;
-            row3.Children.Add(sendBrightBtn);
-            panel.Children.Add(row3);
-
-            // Mode byte (optional) — 0=off, 1=telemetry-active, 2=static (tentative)
-            if (cfg.ModeCmd != null)
-            {
-                var row4 = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 2) };
-                row4.Children.Add(new TextBlock { Text = "Mode:", Width = 80, VerticalAlignment = VerticalAlignment.Center });
-                var modeCombo = new ComboBox { Width = 60, Margin = new Thickness(0, 0, 8, 0) };
-                modeCombo.Items.Add("0");
-                modeCombo.Items.Add("1");
-                modeCombo.Items.Add("2");
-                modeCombo.SelectedIndex = 0;
-                row4.Children.Add(modeCombo);
-                var sendModeBtn = new Button { Content = "Send", Padding = new Thickness(8, 2, 8, 2), Tag = (cfg, modeCombo) };
-                sendModeBtn.Click += ExtLedSendMode_Click;
-                row4.Children.Add(sendModeBtn);
-                panel.Children.Add(row4);
-            }
-        }
-
-        private void ExtLedSwatch_Click(object sender, MouseButtonEventArgs e)
-        {
-            if (_plugin == null) return;
-            var border = (Border)sender;
-            int slot = (int)border.Tag;
-            var dialog = new ColorPickerDialog(_extLedFillR[slot], _extLedFillG[slot], _extLedFillB[slot]);
-            dialog.Owner = Window.GetWindow(this);
-            if (dialog.ShowDialog() == true)
-            {
-                _extLedFillR[slot] = dialog.SelectedR;
-                _extLedFillG[slot] = dialog.SelectedG;
-                _extLedFillB[slot] = dialog.SelectedB;
-                border.Background = new SolidColorBrush(Color.FromRgb(dialog.SelectedR, dialog.SelectedG, dialog.SelectedB));
-            }
-        }
-
-        private void ExtLedFillAll_Click(object sender, RoutedEventArgs e)
-        {
-            if (_device == null) return;
-            var cfg = (DiagLedCfg)((Button)sender).Tag;
-            byte r = _extLedFillR[cfg.Slot], g = _extLedFillG[cfg.Slot], b = _extLedFillB[cfg.Slot];
-            int min = _extLedRangeMin[cfg.Slot], max = _extLedRangeMax[cfg.Slot];
-            if (cfg.LiveColorCmd != null)
-            {
-                int mask = RangeMask(min, max);
-                SendLiveFrame(cfg, fillColor: (r, g, b), activeMask: mask, rangeMin: min, rangeMax: max, onlyIdx: -1);
-                return;
-            }
-            for (int i = min; i <= max; i++)
-                _device.WriteColor($"{cfg.ColorCmdPrefix}{i + 1}", r, g, b);
-        }
-
-        private void ExtLedClearAll_Click(object sender, RoutedEventArgs e)
-        {
-            if (_device == null) return;
-            var cfg = (DiagLedCfg)((Button)sender).Tag;
-            int min = _extLedRangeMin[cfg.Slot], max = _extLedRangeMax[cfg.Slot];
-            if (cfg.LiveColorCmd != null)
-            {
-                // Live pipeline: bitmask=0 removes live override. Firmware falls back to static or off.
-                SendLiveFrame(cfg, fillColor: (0, 0, 0), activeMask: 0, rangeMin: min, rangeMax: max, onlyIdx: -1);
-                return;
-            }
-            for (int i = min; i <= max; i++)
-                _device.WriteColor($"{cfg.ColorCmdPrefix}{i + 1}", 0, 0, 0);
-        }
-
-        private void ExtLedSendOne_Click(object sender, RoutedEventArgs e)
-        {
-            if (_device == null) return;
-            var (cfg, idxBox) = ((DiagLedCfg, TextBox))((Button)sender).Tag;
-            if (!int.TryParse(idxBox.Text, out int idx)) return;
-            if (idx < 0 || idx >= cfg.MaxLeds) return;
-            byte r = _extLedFillR[cfg.Slot], g = _extLedFillG[cfg.Slot], b = _extLedFillB[cfg.Slot];
-            if (cfg.LiveColorCmd != null)
-            {
-                SendLiveFrame(cfg, fillColor: (r, g, b), activeMask: 1 << idx, rangeMin: idx, rangeMax: idx, onlyIdx: idx);
-                return;
-            }
-            _device.WriteColor($"{cfg.ColorCmdPrefix}{idx + 1}", r, g, b);
-        }
-
-        /// <summary>Build a bitmask with bits [min..max] (inclusive) set.</summary>
-        private static int RangeMask(int min, int max)
-        {
-            int mask = 0;
-            for (int i = min; i <= max; i++)
-                mask |= 1 << i;
-            return mask;
-        }
-
-        /// <summary>
-        /// Send one frame through the live telemetry pipeline: per-LED colors chunked via
-        /// <see cref="MozaLedDeviceManager.SendColorChunks"/>, then a 2-byte LE bitmask.
-        /// Frame buffer is volatile — firmware overwrites it on the next live update from
-        /// the telemetry sender or SimHub effects loop.
-        /// </summary>
-        private void SendLiveFrame(DiagLedCfg cfg, (byte r, byte g, byte b) fillColor,
-            int activeMask, int rangeMin, int rangeMax, int onlyIdx)
-        {
-            if (_device == null || _plugin == null || cfg.LiveColorCmd == null || cfg.LiveBitmaskCmd == null) return;
-
-            int n = cfg.MaxLeds;
-            var colors = new System.Drawing.Color[n];
-            var fill = System.Drawing.Color.FromArgb(fillColor.r, fillColor.g, fillColor.b);
-            for (int i = 0; i < n; i++)
-            {
-                bool paint = onlyIdx < 0
-                    ? (i >= rangeMin && i <= rangeMax)
-                    : i == onlyIdx;
-                colors[i] = paint ? fill : System.Drawing.Color.Black;
-            }
-
-            MozaLedDeviceManager.SendColorChunks(_plugin, colors, n, cfg.LiveColorCmd);
-
-            _device.WriteArray(cfg.LiveBitmaskCmd,
-                new byte[] { (byte)(activeMask & 0xFF), (byte)((activeMask >> 8) & 0xFF) });
-        }
-
-        private void ExtLedSendBrightness_Click(object sender, RoutedEventArgs e)
-        {
-            if (_device == null) return;
-            var (cfg, slider) = ((DiagLedCfg, Slider))((Button)sender).Tag;
-            _device.WriteSetting(cfg.BrightnessCmd, (int)slider.Value);
-        }
-
-        private void ExtLedSendMode_Click(object sender, RoutedEventArgs e)
-        {
-            if (_device == null) return;
-            var (cfg, modeCombo) = ((DiagLedCfg, ComboBox))((Button)sender).Tag;
-            if (cfg.ModeCmd == null) return;
-            if (modeCombo.SelectedIndex < 0) return;
-            _device.WriteSetting(cfg.ModeCmd, modeCombo.SelectedIndex);
         }
 
         // ===== New wheel handlers =====

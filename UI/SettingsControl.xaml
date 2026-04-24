@@ -750,6 +750,8 @@
                         </StackPanel>
 
                         <TextBlock Text="Wheel LED Output (RPM / Buttons)" Style="{StaticResource SectionHeader}"/>
+                        <TextBlock TextWrapping="Wrap" Foreground="Gray" FontSize="11" Margin="0,0,0,8"
+                                   Text="Recommended: leave all three options below OFF unless you hit LED issues. These are legacy defensive toggles from before the protocol was reverse-engineered; current firmware does not require them."/>
                         <StackPanel Orientation="Horizontal" Margin="0,8">
                             <TextBlock Text="Limit updates to wheel" Style="{StaticResource SliderLabel}"/>
                             <CheckBox x:Name="LimitWheelUpdatesCheck" VerticalAlignment="Center"
@@ -796,6 +798,28 @@
                         <TextBlock Text="This will reset all plugin settings and profiles to their defaults."
                                    Foreground="Gray" FontSize="11" Margin="0,4,0,0"/>
 
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <TabItem Header="LEDs">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel x:Name="ExtLedSection" Margin="10,5" Visibility="Collapsed">
+                        <TextBlock Text="Extended LED groups (experimental)" Style="{StaticResource SectionHeader}"/>
+                        <TextBlock Text="Auto-detected led groups 2=Single (up to 28), 3=Rotary (up to 56), 4=Ambient (up to 12). Semantics on your wheel are unknown — use these controls to probe index layout and behaviour. Nothing is sent until you click a button."
+                                   Foreground="Gray" TextWrapping="Wrap" Margin="0,0,0,8" FontSize="11"/>
+
+                        <TextBlock Text="Wheel support summary (copy-paste into bug reports):" Foreground="Gray" FontSize="11" Margin="0,4,0,2"/>
+                        <TextBox x:Name="ExtLedSummaryBox" IsReadOnly="True" FontFamily="Consolas" FontSize="11"
+                                 TextWrapping="NoWrap" AcceptsReturn="True" VerticalScrollBarVisibility="Auto"
+                                 Height="100" Margin="0,0,0,8"/>
+
+                        <StackPanel x:Name="ExtLedGroup0Panel" Visibility="Collapsed" Margin="0,4"/>
+                        <StackPanel x:Name="ExtLedGroup1Panel" Visibility="Collapsed" Margin="0,4"/>
+                        <StackPanel x:Name="ExtLedGroup2Panel" Visibility="Collapsed" Margin="0,4"/>
+                        <StackPanel x:Name="ExtLedGroup3Panel" Visibility="Collapsed" Margin="0,4"/>
+                        <StackPanel x:Name="ExtLedGroup4Panel" Visibility="Collapsed" Margin="0,4"/>
+                        <StackPanel x:Name="ExtLedFlagsPanel" Visibility="Collapsed" Margin="0,4"/>
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>
