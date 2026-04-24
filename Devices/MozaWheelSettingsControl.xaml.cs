@@ -350,7 +350,8 @@ namespace MozaPlugin.Devices
                 WheelNotDetectedPanel.Visibility = anyWheel ? Visibility.Collapsed : Visibility.Visible;
                 NewWheelPanel.Visibility = newWheel ? Visibility.Visible : Visibility.Collapsed;
                 EsWheelPanel.Visibility = oldWheel ? Visibility.Visible : Visibility.Collapsed;
-                TelemetrySection.Visibility = oldWheel ? Visibility.Collapsed : Visibility.Visible;
+                bool showTelemetry = newWheel && (_plugin?.IsDisplayDetected ?? false);
+                TelemetrySection.Visibility = showTelemetry ? Visibility.Visible : Visibility.Collapsed;
 
                 if (newWheel)
                 {

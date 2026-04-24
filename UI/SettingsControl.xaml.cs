@@ -1173,12 +1173,12 @@ namespace MozaPlugin
             sb.AppendLine($"FW (sw):        {Blank(d.WheelSwVersion)}");
             sb.AppendLine($"HW version:     {Blank(d.WheelHwVersion)}");
             sb.AppendLine($"HW sub:         {Blank(d.WheelHwSubVersion)}");
-            sb.AppendLine($"Serial:         {Blank(d.WheelSerialNumber)}");
+            sb.AppendLine($"Serial:         {Redact(d.WheelSerialNumber)}");
             sb.AppendLine($"Sub-devices:    {d.WheelSubDeviceCount}");
             sb.AppendLine($"Device presence:0x{d.WheelDevicePresence:X2}");
             sb.AppendLine($"Device type:    {Hex(d.WheelDeviceType)}");
             sb.AppendLine($"Capabilities:   {Hex(d.WheelCapabilities)}");
-            sb.AppendLine($"MCU UID:        {HexRaw(d.WheelMcuUid)}");
+            sb.AppendLine($"MCU UID:        {RedactBytes(d.WheelMcuUid)}");
             sb.Append    ($"Identity-11:    {Hex(d.WheelIdentity11)}");
             return sb.ToString();
         }
@@ -1192,12 +1192,12 @@ namespace MozaPlugin
             sb.AppendLine($"Model:          {Blank(d.DisplayModelName)}");
             sb.AppendLine($"FW (sw):        {Blank(d.DisplaySwVersion)}");
             sb.AppendLine($"HW version:     {Blank(d.DisplayHwVersion)}");
-            sb.AppendLine($"Serial:         {Blank(d.DisplaySerialNumber)}");
+            sb.AppendLine($"Serial:         {Redact(d.DisplaySerialNumber)}");
             sb.AppendLine($"Sub-devices:    {d.DisplaySubDeviceCount}");
             sb.AppendLine($"Device presence:0x{d.DisplayDevicePresence:X2}");
             sb.AppendLine($"Device type:    {Hex(d.DisplayDeviceType)}");
             sb.AppendLine($"Capabilities:   {Hex(d.DisplayCapabilities)}");
-            sb.AppendLine($"MCU UID:        {HexRaw(d.DisplayMcuUid)}");
+            sb.AppendLine($"MCU UID:        {RedactBytes(d.DisplayMcuUid)}");
             sb.Append    ($"Identity-11:    {Hex(d.DisplayIdentity11)}");
             return sb.ToString();
         }
@@ -1635,6 +1635,8 @@ namespace MozaPlugin
         }
 
         private static string Blank(string s) => string.IsNullOrEmpty(s) ? "—" : s;
+        private static string Redact(string s) => string.IsNullOrEmpty(s) ? "—" : new string('*', s.Length);
+        private static string RedactBytes(byte[] b) => b == null || b.Length == 0 ? "—" : new string('*', b.Length * 2);
         private static string Hex(byte[] b) => b == null || b.Length == 0 ? "—" : BitConverter.ToString(b);
         private static string HexRaw(byte[] b) => b == null || b.Length == 0 ? "—" : BitConverter.ToString(b).Replace("-", "");
         private static string JoinList(System.Collections.Generic.IReadOnlyList<string> l)
