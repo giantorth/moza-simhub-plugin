@@ -154,18 +154,28 @@ namespace MozaPlugin.Protocol
         public void Disconnect()
         {
             _running = false;
-            _readThread?.Join(1000);
-            _writeThread?.Join(1000);
 
+            // Close the port BEFORE joining threads so any read/write blocked
+            // in a kernel syscall on a wedged tty (sleep/resume, unplug, or
+            // device-side stall) returns with an error and the thread can
+            // exit. If we joined first, a wedged Write would sit holding no
+            // lock but still pinned in the syscall; Join would hit its 1000ms
+            // timeout and we'd proceed to Close, but SimHub's End() timeout
+            // on the surrounding call would already have expired.
+            SerialPort? p;
             lock (_lock)
             {
-                if (_port?.IsOpen == true)
-                {
-                    try { _port.Close(); }
-                    catch (Exception ex) { SimHub.Logging.Current.Debug($"[Moza] Port close: {ex.Message}"); }
-                }
+                p = _port;
                 _port = null;
             }
+            if (p != null)
+            {
+                try { p.Close(); }
+                catch (Exception ex) { SimHub.Logging.Current.Debug($"[Moza] Port close: {ex.Message}"); }
+            }
+
+            _readThread?.Join(1000);
+            _writeThread?.Join(1000);
         }
 
         public void Send(byte[] message)
@@ -499,10 +509,15 @@ namespace MozaPlugin.Protocol
                 if (stuffBuf.Length < needed)
                     stuffBuf = new byte[Math.Max(needed, stuffBuf.Length * 2)];
                 int len = MozaProtocol.StuffFrame(msg, stuffBuf);
-                lock (_lock)
-                {
-                    _port?.Write(stuffBuf, 0, len);
-                }
+                // No lock around the kernel Write syscall. Only this thread
+                // calls WriteFrame, and Disconnect/HandleIoFailure close the
+                // port without contending. A concurrent Close turns this into
+                // an IOException/ObjectDisposedException, which is handled
+                // below. Previously we locked around Write; a wedged port
+                // (dead tty after sleep/resume) could leave the syscall
+                // blocked past WriteTimeout, pinning the lock forever and
+                // hanging SimHub shutdown.
+                _port?.Write(stuffBuf, 0, len);
                 Interlocked.Exchange(ref _consecutiveIoErrors, 0);
                 return true;
             }
