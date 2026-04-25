@@ -25,6 +25,7 @@ namespace MozaPlugin
         private MozaSerialConnection _connection = null!;
         private MozaData _data = null!;
         private MozaDeviceManager _deviceManager = null!;
+        private MozaAb9DeviceManager _ab9Manager = null!;
         private MozaPluginSettings _settings = null!;
         private Timer _pollTimer = null!;
         private Timer _reconnectTimer = null!;
@@ -42,6 +43,8 @@ namespace MozaPlugin
         private bool _handbrakeDetected;
         private bool _pedalsDetected;
         private bool _hubDetected;
+        private bool _ab9Detected;
+        private bool _ab9SettingsApplied;
 
         // Guard against concurrent/duplicate telemetry Start() dispatch
         private int _telemetryStartRequested;
@@ -267,6 +270,8 @@ namespace MozaPlugin
         internal bool IsHandbrakeDetected => _handbrakeDetected;
         internal bool IsPedalsDetected => _pedalsDetected;
         internal bool IsHubDetected => _hubDetected;
+        internal bool IsAb9Detected => _ab9Detected;
+        internal MozaAb9DeviceManager Ab9Manager => _ab9Manager;
 
         /// <summary>True if the wheel's internal Display sub-device responded to probe.</summary>
         internal bool IsDisplayDetected => _telemetrySender?.DisplayDetected ?? false;
@@ -311,10 +316,17 @@ namespace MozaPlugin
                 RegisterProperties(pluginManager);
                 RegisterActions();
 
-                _connection = new MozaSerialConnection();
+                // Reject the AB9 shifter PID on the wheelbase pipe — both devices
+                // enumerate as VID_346E composite, and without this filter the
+                // wheelbase code path can grab the AB9 port and stall on probes.
+                // Probe-based discovery (PID = null, Wine/Proton) still works.
+                _connection = new MozaSerialConnection(pid => !MozaUsbIds.IsAb9Pid(pid));
                 _connection.MessageReceived += OnMessageReceived;
 
                 _deviceManager = new MozaDeviceManager(_connection);
+
+                _ab9Manager = new MozaAb9DeviceManager();
+                _ab9Manager.MessageReceived += OnAb9MessageReceived;
 
                 _pollTimer = new Timer(2000);
                 _pollTimer.Elapsed += PollStatus;
@@ -326,6 +338,8 @@ namespace MozaPlugin
                 {
                     if (!_connection.IsConnected)
                         TryConnect();
+                    if (!_ab9Manager.IsConnected)
+                        TryConnectAb9();
                 };
                 _reconnectTimer.AutoReset = true;
                 if (_settings.ConnectionEnabled)
@@ -381,6 +395,13 @@ namespace MozaPlugin
             try { _hidReader?.Dispose(); } catch { }
             try { _telemetrySender?.Dispose(); } catch { }
             try { _connection?.Dispose(); } catch { }
+            try
+            {
+                if (_ab9Manager != null)
+                    _ab9Manager.MessageReceived -= OnAb9MessageReceived;
+            }
+            catch { }
+            try { _ab9Manager?.Dispose(); } catch { }
             try { _pollTimer?.Dispose(); } catch { }
             try { _reconnectTimer?.Dispose(); } catch { }
             try { _saveDebounceTimer?.Dispose(); } catch { }
@@ -431,6 +452,13 @@ namespace MozaPlugin
             _hidReader?.Dispose();
             _telemetrySender?.Dispose();
             _connection?.Dispose();
+            try
+            {
+                if (_ab9Manager != null)
+                    _ab9Manager.MessageReceived -= OnAb9MessageReceived;
+            }
+            catch { }
+            _ab9Manager?.Dispose();
 
             // 6. Dispose timers after I/O is gone.
             _saveDebounceTimer?.Dispose();
@@ -518,6 +546,9 @@ namespace MozaPlugin
                 _handbrakeDetected = false;
                 _pedalsDetected = false;
                 _hubDetected = false;
+                _ab9Detected = false;
+                _ab9SettingsApplied = false;
+                _ab9Manager?.Disconnect();
                 if (_telemetrySender != null) _telemetrySender.HubPresent = false;
                 _deviceManager.ResetWheelDetection();
                 _telemetrySender.DetectedDeviceMask = 0;
@@ -845,6 +876,30 @@ namespace MozaPlugin
             }
         }
 
+        /// <summary>
+        /// Attempt to open the AB9 shifter's COM port. Independent of the
+        /// wheelbase pipe — the AB9 enumerates as its own VID_346E composite
+        /// (PID 0x1000) and runs on a dedicated CDC port. Identity probe runs
+        /// on every successful (re-)connect; saved settings are pushed once
+        /// the first read response confirms the device is alive.
+        /// </summary>
+        private void TryConnectAb9()
+        {
+            if (_ab9Manager == null) return;
+            if (_ab9Detected)
+            {
+                // Connection dropped after a successful detection — clear so the
+                // next read response can re-trigger profile push.
+                _ab9Detected = false;
+                _ab9SettingsApplied = false;
+            }
+            if (_ab9Manager.TryConnect())
+            {
+                _ab9Manager.SendIdentityProbe();
+                _ab9Manager.RequestAllStoredSettings();
+            }
+        }
+
         private int _wheelPollMisses;
         private const int WheelMissThreshold = 3;
         private volatile string _lastKnownWheelModel = "";
@@ -1029,6 +1084,63 @@ namespace MozaPlugin
             _deviceManager.MarkWheelResponse(r.DeviceId);
             if (r.Name != null)
                 DetectDevices(r.Name, r.IntValue, r.DeviceId);
+        }
+
+        /// <summary>
+        /// Serial-message handler for the AB9 shifter's dedicated pipe. Marks the
+        /// device as detected on the first parseable response, pushes saved
+        /// profile settings once, and lets the AB9 settings UI snapshot the
+        /// latest device-reported values via <see cref="MozaAb9DeviceManager"/>.
+        /// </summary>
+        private void OnAb9MessageReceived(byte[] data)
+        {
+            if (IsShuttingDown) return;
+            if (data == null || data.Length < 2) return;
+
+            // Filter firmware debug noise (group 0x0E) before parsing.
+            if (data[0] == 0x0E) return;
+
+            var result = MozaResponseParser.Parse(data);
+            if (!result.HasValue) return;
+
+            var r = result.Value;
+            if (r.Name == null || !r.Name.StartsWith("ab9-", StringComparison.Ordinal))
+                return;
+
+            _ab9Manager.MarkDetected();
+            if (!_ab9Detected)
+            {
+                _ab9Detected = true;
+                ApplySavedAb9Settings();
+            }
+
+            SimHub.Logging.Current.Debug($"[Moza/AB9] {r.Name} = {r.IntValue}");
+        }
+
+        /// <summary>
+        /// Push the current profile's AB9 settings (mode + 5 sliders) to the
+        /// device. Runs once per AB9 connection — the device retains values in
+        /// flash, so re-pushing on every response would just create flash wear.
+        /// </summary>
+        private void ApplySavedAb9Settings()
+        {
+            if (_ab9SettingsApplied) return;
+            var profile = _settings?.ProfileStore?.CurrentProfile;
+            var ab9 = profile?.Ab9;
+            if (ab9 == null)
+            {
+                _ab9SettingsApplied = true;
+                return;
+            }
+
+            SimHub.Logging.Current.Info("[Moza/AB9] Applying saved AB9 settings");
+            _ab9Manager.SendMode(ab9.Mode);
+            _ab9Manager.SendSlider(Devices.Ab9Slider.MechanicalResistance, ab9.MechanicalResistance);
+            _ab9Manager.SendSlider(Devices.Ab9Slider.Spring, ab9.Spring);
+            _ab9Manager.SendSlider(Devices.Ab9Slider.NaturalDamping, ab9.NaturalDamping);
+            _ab9Manager.SendSlider(Devices.Ab9Slider.NaturalFriction, ab9.NaturalFriction);
+            _ab9Manager.SendSlider(Devices.Ab9Slider.MaxTorqueLimit, ab9.MaxTorqueLimit);
+            _ab9SettingsApplied = true;
         }
 
         /// <summary>
@@ -1752,6 +1864,18 @@ namespace MozaPlugin
             {
                 WriteProfileWheelSettingsToDevice(profile);
                 WriteProfileColorsToDevice(profile);
+            }
+
+            // --- AB9 active shifter (independent serial pipe) ---
+            if (profile.Ab9 != null && _ab9Detected)
+            {
+                var ab9 = profile.Ab9;
+                _ab9Manager.SendMode(ab9.Mode);
+                _ab9Manager.SendSlider(Devices.Ab9Slider.MechanicalResistance, ab9.MechanicalResistance);
+                _ab9Manager.SendSlider(Devices.Ab9Slider.Spring, ab9.Spring);
+                _ab9Manager.SendSlider(Devices.Ab9Slider.NaturalDamping, ab9.NaturalDamping);
+                _ab9Manager.SendSlider(Devices.Ab9Slider.NaturalFriction, ab9.NaturalFriction);
+                _ab9Manager.SendSlider(Devices.Ab9Slider.MaxTorqueLimit, ab9.MaxTorqueLimit);
             }
 
             // Persist _settings without re-capturing _data into the profile.

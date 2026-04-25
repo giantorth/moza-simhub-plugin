@@ -1542,6 +1542,16 @@ Scanned 5 captures for device→host traffic on session 0x03:
 
 Even with `enableManager.dashboards=[]` and filesystem listing showing empty `/home/moza/resource/dashes/`, PitHouse's UI sometimes displays dashboards as "already on device" and suppresses the upload RPC entirely. Indicates PitHouse keeps its own "what I last pushed to this wheel" record separate from what the wheel's session 0x09 state reports. Re-sync to empty requires either clearing PitHouse local cache OR presenting an entirely new wheel identity.
 
+### Cold-start: PitHouse skips tier_def push on reconnect (2026-04-24)
+
+When PitHouse is relaunched while the wheel is already enumerated (sim stayed up across PitHouse restart), PitHouse re-opens sessions 0x01/0x02/0x03 BUT sends only `00 00 00 00` keepalives on 0x01 — no tier_def push, no channel catalog ack. Without the tier_def cycle, PitHouse never sends `display_cfg` (`7c:23 46`) and therefore never asks the wheel to open dynamic upload sessions. Result: UI shows wheel connected but uploads silently no-op.
+
+Mechanism: PitHouse caches per-wheel-identity state across its own process lifecycle. On reconnect it short-circuits the tier_def negotiation. The trigger that re-arms PitHouse's push is the **device-side channel catalog** (sessions 0x01 + 0x02 wheel→host frames sent during initial handshake). The proactive_sender thread in `wheel_sim.py` only emits this catalog ONCE at sim startup, so PitHouse reconnect on a long-running sim sees no new catalog → cache stays sticky → no tier_def.
+
+Fix (sim, 2026-04-24): `_fire_device_init` now re-emits the channel catalog frames on every handshake — startup AND reconnect (via `_reset_connection_state` clearing `_device_init_started`). `proactive_sender` skips its one-shot catalog emit if `catalog_sent` is already True, avoiding duplicate sends. After this fix PitHouse pushes a fresh tier_def on every reconnect, display_cfg flows, uploads work.
+
+The user's prior workaround was `sim_reload` + `sim_start` after every PitHouse restart — Windows sees the underlying USB gadget drop and reattach, which forces PitHouse to re-enumerate and clear its cache. With the catalog-re-emit fix, that workaround is no longer required.
+
 ### configJson state push includes top-level fields many docs omit
 
 Doc § 857 captures the full 11-key schema (`TitleId, configJsonList, disableManager, displayVersion, enableManager, fontRefMap, imagePath, imageRefMap, resetVersion, rootDirPath, sortTag`). Earlier sim builds only emitted 5 (TitleId, configJsonList, disableManager, displayVersion, enableManager) and PitHouse rejected the state / failed to progress tier def. All 11 fields must be present; factory-fresh values for the missing 6 are `fontRefMap={}, imagePath=[], imageRefMap={}, resetVersion=10, rootDirPath="/home/moza/resource", sortTag=0`.
@@ -1688,7 +1698,8 @@ Earlier docs + sim code hardcoded session `0x06` as the file-transfer session (f
 | Firmware | Upload session | Source |
 |----------|----------------|--------|
 | 2025-11 (latestcaps captures) | `0x06` | `pithouse-switch-list-delete-upload-reupload.pcapng` |
-| 2026-04 (current user build) | `0x05` | Live sim capture 2026-04-24 |
+| 2026-04 (early observations) | `0x05` | Live sim capture 2026-04-24 |
+| 2026-04 (later live runs) | `0x07`, `0x09` | Live sim runs 2026-04-24 — both observed in same firmware build, port chosen at runtime by host's `7c:23` request. Sim now accepts any session in 0x04..0x0a as a candidate file-transfer session. |
 
 ### `7c:23` is a device-initiated session-open request, not just a page notification
 
@@ -1865,10 +1876,12 @@ Sim chunking (`chunk_session_payload`, `_chunk_catalog_message`) and all chunk-C
 
 ### Multi-round upload content (type=0x03) — zlib reassembly
 
-Large dashboards (≥ ~10KB compressed) are split across many type=0x03 sub-msgs. Every sub-msg in the same upload has identical structure:
+> **NOTE 2026-04-24**: this section described an 8-byte sub-msg header. That interpretation worked on session 0x07 captures by accident (chunk-stride misalignment landed on valid LZ77 boundaries) but failed on larger uploads / session 0x09. The real header is 6 bytes; continuations have a per-chunk variable header before the deflate continuation. See § "6-byte sub-msg header" and § "Per-chunk metadata trailer (continuation chunks)" below for the corrected layout. The legacy 8B-header parser is kept as a fallback in `_parse_upload` for older firmware, but new firmware should hit the 6B path.
+
+Large dashboards (≥ ~10KB compressed) are split across many type=0x03 sub-msgs. Original (legacy 8B-header) interpretation:
 
 ```
-[03] [size_LE:u32] [00 00 00]                  — 8B sub-msg header
+[03] [size_LE:u32] [00 00 00]                  — 8B sub-msg header (LEGACY — actually 6B; trailing 2 zeros are body, see below)
 [LOCAL TLV]                                    — 0x8c 0x00 + UTF-16LE Windows temp path + 00 00
 [REMOTE TLV]                                   — 0x70 0x00 + UTF-16LE /_moza_filetransfer_md5_<hex> + 00 00
 [0x10] [md5:16]
@@ -1878,15 +1891,17 @@ Large dashboards (≥ ~10KB compressed) are split across many type=0x03 sub-msgs
 [zlib_or_raw_deflate_chunk]                    — `78 9c` magic only on FIRST sub-msg; subsequent sub-msgs carry raw deflate continuation at the same byte offset
 ```
 
-Observed `size_LE = 0x1120 = 4384` for every sub-msg in a 506KB upload on the user's 2026-04 PitHouse; zlib data starts 769 bytes into each sub-msg (immediately after the 8B `compressed_header`). Path lengths can vary between uploads (different Windows temp filenames) so the zlib offset varies per upload — sim computes it by locating the `78 9c` magic in the FIRST sub-msg of the attempt, then slices every subsequent sub-msg at the same intra-msg offset.
+Observed `size_LE = 0x1120 = 4384` for every sub-msg in a 506KB upload on the user's 2026-04 PitHouse; under the 8B reading the zlib data starts 769 bytes into each sub-msg. Under the corrected 6B reading the same data starts at body[1267] in chunk0 and body[290] in continuations.
 
-**Reassembly algorithm** (`_parse_upload` in `sim/wheel_sim.py`):
+**Reassembly algorithm — legacy fallback** (`_parse_upload` in `sim/wheel_sim.py`):
 
 1. Anchor on the LAST type=0x02 metadata marker in the session buffer (PitHouse may retry → stale type=0x02 / type=0x03 blocks earlier in the buffer must be skipped).
 2. From the anchor, enumerate all following type=0x03 sub-msgs where `size_LE` is in the plausible 1000–10000 range.
 3. In the first sub-msg, find the `78 9c` zlib magic → derive `zoff_in_msg`.
-4. For each sub-msg (first and continuations), slice `buf[off + zoff_in_msg : off + 8 + size_LE]` and concatenate. This strips the 8B sub-msg header + path TLVs + md5 + tokens + compressed_header from every continuation.
+4. For each sub-msg (first and continuations), slice `buf[off + zoff_in_msg : off + 8 + size_LE]` and concatenate. This strips the (mistakenly-interpreted) 8B sub-msg header + path TLVs + md5 + tokens + compressed_header from every continuation.
 5. Feed the concatenated deflate stream through `zlib.decompressobj()`. If `d.eof`, the upload is complete; else it was truncated but still yields partial bytes which sim writes to its virtual FS (better to store partial mzdash than nothing).
+
+For new firmware always prefer the 6B-header path (`_parse_upload_6b`); see below.
 
 **`_scan_file_transfer_paths` anchoring.** The metadata-field extractor (md5, total_size, local path) also anchors on the LAST type=0x02 boundary for the same reason — otherwise on retries the sim ends up building reply bodies that concatenate paths from the stale attempt with paths from the fresh attempt, inflating body length and shifting the size field.
 
@@ -1907,7 +1922,42 @@ In the live 2026-04 upload payload (session 0x07, captured to `sim/logs/parse_up
 C:/Users/<user>/AppData/Local/MOZA Pit House/_dashes/<hash>/dashes/<NAME>/<NAME>.mzdash
 ```
 
-with `/` as separator. The `<NAME>` segment is the user-visible dashboard name. Sim's `extract_mzdash_path` falls back to this regex when no `/home/root/...` path is present, so the upload lands at `/home/root/resource/dashes/<NAME>/<NAME>.mzdash` in the virtual FS instead of the placeholder `uploaded-dashboard`. The decoded mzdash JSON itself is a widget tree (`actions/binding/borderStyle/children/...`) with no top-level `name`/`title` field, so the path is the only available source for the user-visible name.
+with `/` as separator. The `<NAME>` segment is the user-visible dashboard name. Sim's `extract_mzdash_path` falls back to this regex when no `/home/root/...` path is present, so the upload lands at `/home/root/resource/dashes/<NAME>/<NAME>.mzdash` in the virtual FS instead of the placeholder `uploaded-dashboard`. The decoded mzdash JSON has a top-level `name` field with the same dashboard name (verified once full decode succeeded — see § "6-byte sub-msg header" below), so either source agrees.
+
+### 6-byte sub-msg header (new firmware, 2026-04+)
+
+The sub-msg layout described in § "Multi-round upload content" used to be read with an **8-byte header** (`[type:1][size:4][pad:3]`) — the 5 trailing zeros after the size matched 5 bytes of pad. That interpretation **decoded successfully on session 0x07 captures** but only because the deflate continuation happened to start at a byte offset where 2 stray "extra" bytes (a misaligned chunk-stride) landed on valid LZ77 token boundaries. On other captures (session 0x09, larger dashboards) those same 2 extra bytes fell on invalid block-type bits and the stream errored mid-decode.
+
+The real header is **6 bytes**: `[type:1][size_LE:2][pad:3]`. Stride between consecutive sub-msgs is `6 + size`, NOT `8 + size`. The "5-zero" pattern earlier docs anchored on is actually `pad(3) + body[0:2]` where body[0..1] happens to be `00 00` for the type=0x02 metadata sub-msg (because the LOCAL path TLV starts `8c 00 ...` — body[0]=`8c`, but on closer inspection of where the type=0x03 chunk begins, the leading body bytes vary, so the regex is fragile either way). Use the 6B header and validate via stride.
+
+### Per-chunk metadata trailer (continuation chunks)
+
+In session 0x09 (and other multi-chunk uploads with the 6B header layout), each type=0x03 sub-msg body has the same shared TLV envelope at the start, then a per-chunk variable region:
+
+| Body offset | Bytes | Meaning |
+|-------------|-------|---------|
+| 0–280 | shared | LOCAL 0x8C path TLV + REMOTE 0x70 path TLV + `0x10` flag + 16B md5 + reserved + token. Identical across every chunk in one upload attempt. |
+| 281–283 | 3B LE counter | 0 for the first chunk; varies per continuation (signals stream-resume position; not a strict bytes_written, but tracks PitHouse's notion of progress). |
+| 284–289 | 7B constant | `03 92 16 00 00 0f fc` — observed identical in every continuation chunk and at the same offset in chunk0. |
+| 290+ | varies by chunk | If counter==0: `dest_path TLV` (UTF-16BE) + `compressed_header(8)`, then `78 9c` zlib magic begin at body[≈1267]. If counter>0: raw deflate continuation starts immediately at body[290]. |
+
+So the sim must use **two different intra-msg offsets**:
+- chunk0 (counter=0, has `78 9c` magic): deflate at body[zlib_magic_offset], typically ~1267.
+- chunk1+ (counter>0, no magic): deflate at body[290].
+
+### Multi-attempt interleaving in the buffer
+
+PitHouse retransmits cause chunks from different upload attempts to coexist in the session buffer. Each attempt has its own chunk0 (counter=0). Continuation chunks from one attempt do NOT cleanly continue another attempt's deflate stream — they belong to a different zlib instance.
+
+Sim's strategy (`_parse_upload_6b` in `sim/wheel_sim.py`):
+
+1. Walk the buffer with the 6B-header validator (`type ∈ {01,02,03,11}`, `pad == 00 00 00`, stride matches).
+2. Find chunk0 = the first type=0x03 chunk where `body[281:284] == 0` AND `78 9c` magic is present.
+3. Initialise `zlib.decompressobj()` with `body0[zoff:]`.
+4. Greedily extend: for each remaining type=0x03 chunk, scan continuation offsets in [280, 1500) and pick the offset that produces the longest clean decompression extension. Append that chunk's contribution.
+5. Repeat until no more chunks extend the stream OR `decompressobj.eof`.
+
+This handles partial uploads (PitHouse aborted mid-flight) and retransmit interleaving — the greedy walk stops when no chunk fits cleanly. Verified: 62KB session 0x09 buf with 14 type=0x03 chunks (mostly retransmits) → 82KB decoded mzdash JSON, root keys including `name='JDM Gauge Style 02'`, `version='1.1.1'`, `type='Window.qml'`.
 
 ### empty `enableManager.dashboards` no longer blocks handshake
 
@@ -1933,6 +1983,72 @@ Sim's `pedal_identity` in `WHEEL_MODELS['kspro']` covers these. PitHouse probes 
 ### Hub (dev 0x12) and base (dev 0x13) identity are byte-identical
 
 Confirmed on both CSP R9 and KSP R12 captures: real wheelbase answers dev 0x12 and dev 0x13 probes with the **same** identity values. They are aliases for a single physical device. Sim's `_build_device_identity` installs the `base_identity` block under both dev IDs accordingly. Do not synthesize differing values.
+
+## AB9 active shifter (2026-04-24)
+
+Captures: `usb-capture/AB9/{Shifter mode change,PitHouse settings change,Launch and H-pattern gear engage,SQ gear change}.pcapng` plus event-time spreadsheet `Moza AB9.xlsx`. Captured on Windows host with PitHouse driving the shifter while wheelbase was also attached.
+
+### USB enumeration
+
+AB9 enumerates as its **own** Moza composite USB device (VID `0x346E` PID `0x1000`), parallel to the wheelbase (PID `0x0006`). Same 3-interface layout: CDC ACM (EP 0x02 OUT / 0x82 IN, the Moza protocol bus) + HID (EP 0x03 OUT / 0x83 IN). Host writes to the AB9 use the AB9's own CDC pipe — they do **not** route through the wheelbase. HID-OUT (0x03) was never used in any capture; all configuration travels on CDC.
+
+Address-disambiguation (only Moza devs in capture): wheelbase OUTs target dev IDs 0x13/0x14/0x15/0x17/0x19/0x1A/0x1B/0x1E (full sub-bus). AB9 OUTs target only `Main/Hub (0x12)` — confirms AB9 has its own internal "Main" with no sub-devices.
+
+### Shifter mode set — `Group 0x1F → dev 0x12, cmd 0xD300`
+
+Six mode-change events at 5/10/15/20/25/30 s in the shifter-mode capture, each one 8-byte CDC OUT frame on the AB9:
+
+| PitHouse mode | `Config Data` byte |
+|---------------|--------------------|
+| 5+R Layout 1 | `0x00` |
+| 6+R Layout 1 | `0x04` |
+| 6+R Layout 2 | `0x05` |
+| 7+R Layout 1 | `0x06` |
+| 7+R Layout 2 | `0x07` |
+| Sequential   | `0x09` |
+
+Gaps `0x01..0x03`, `0x08` are presumably 5+R Layout 2 / other layouts not exercised. Frame shape: `7E 03 1F 12 D3 00 <val> <chk>`.
+
+### Stored-on-device settings — `Group 0x1F → dev 0x12`
+
+PitHouse-settings capture wrote 6 of the 10 sliders as 8-byte `Group 0x1F` frames with single-byte payload (decimal value):
+
+| PitHouse slider                 | Cmd ID  |
+|---------------------------------|---------|
+| Gear Shift Mechanical Resistance | `0xD600` |
+| Spring                           | `0xAF00` |
+| Natural Damping                  | `0xB000` |
+| Natural Friction                 | `0xB200` |
+| Maximum Output Torque Limit      | `0xA900` |
+
+Plus one larger write for **Gear Shift Vibration** (slider event at t=25s/30s in capture): 24-byte CDC frame, `Group 0x20 cmd 0x0A01`, 17-byte payload (the dissector mislabels group 0x20 as "Base Ambient LED Write"). Payload encodes the trigger pattern; high-value byte differs between intensity 100 (`33 2c …`) and intensity 0 (`00 00 …`) at the same payload offset.
+
+### Sliders that produced **no** USB write
+
+Four PitHouse-settings events generated **zero** host→device packets on either USB device:
+
+- **Gear Damping** (events at 15s, 20s)
+- **Gear Notchiness** (35s, 40s)
+- **Engine vibration intensity** (45s, 50s)
+- **Engine vibration frequency** (55s, 60s)
+
+Verified across both EP 0x02 OUT (CDC) and EP 0x03 OUT (HID, never used) on the AB9, and across all OUT pipes on the wheelbase. The slider moves were real (different from/to values per spreadsheet), so PitHouse either: (a) batches these to an "Apply" / save action that wasn't pressed during this capture, (b) renders engine vibration host-side and streams it as continuous output (not configuration), or (c) caches them locally until the next session/connect. Not yet disambiguated — needs a capture with the Apply button pressed, or a SimHub-driven RPM telemetry stream while engine-vib intensity is non-zero.
+
+### Shift-trigger feedback is firmware-driven; engine vibration needs telemetry
+
+The H-pattern (1st→7th + reverse, 18 engage/neutral transitions over 30 s) and SQ gear (6 up/down events incl. holds over 14 s) captures contain **no host→device FFB writes** during shifts. Only sparse identity probes and `Output(d4/d7/d8)` polls — same heartbeat traffic seen at idle. HID IN on EP 0x83 streams continuously at ~1 kHz regardless of shift activity.
+
+For *shift-triggered* effects (notchiness, gear-shift vibration, damping during engage): **firmware-driven**. Host pushes static configuration once, then AB9 firmware detects shifts mechanically, plays back stored vibration pattern + notch/damping per stored settings, and reports new gear via HID IN. Host plays no real-time role in shift feel.
+
+For *engine vibration* (intensity + frequency sliders) and any other RPM- or speed-modulated effect: **must consume game telemetry**, but path is **not visible in these captures because no sim was running**. Three plausible paths, none yet observed:
+
+1. `Group 0x43 (Telemetry / SerialStream)` pushed over AB9's own CDC pipe (PID `0x1000` EP `0x02` OUT) — mirrors how host pushes `0x43` to dev `0x14/0x15/0x17` on the wheelbase pipe (282 such frames in the PitHouse-idle capture, all targeting wheelbase sub-devices, none targeting AB9).
+2. HID Output reports on EP `0x03` OUT (interface 2). Endpoint exists but was unused across all four captures. Report descriptor was not re-fetched in capture (Windows cached), so its FFB output structure can't be inferred from this dataset.
+3. Wheelbase relays telemetry over its inter-device link to the AB9 — only plausible if the wheelbase has a side channel (CAN/CSP) we can't see on USB. Wheelbase OUT to dev `0x1A (Shifter)` in these captures contained only Heartbeat, no telemetry payload.
+
+Need a capture with a sim title running while engine vibration is enabled to disambiguate. Easiest test: open a game, log all OUT on PID `0x1000` and on the wheelbase pipe addressed to dev `0x1A`, and grep for `Group 0x43` or for any continuous HID OUT to EP `0x03` of the AB9.
+
+Same caveat applies to **why the four sliders (Gear Damping, Notchiness, Engine vib intensity, Engine vib frequency) had no setting write in the PitHouse-idle capture**: if they are host-applied modulators rather than firmware-stored parameters, they wouldn't generate a settings write on slider movement — they'd take effect only when the host starts feeding telemetry. PitHouse may also defer them to an explicit Apply/Save action that wasn't taken during this capture.
 
 ## Open questions
 

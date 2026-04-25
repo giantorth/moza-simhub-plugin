@@ -519,7 +519,7 @@ namespace MozaPlugin.Devices
             string key = sb.ToString();
             if (key == _lastRawDiagKey) return;
             _lastRawDiagKey = key;
-            SimHub.Logging.Current.Info($"[Moza] IndividualLEDs diag {key}");
+            SimHub.Logging.Current.Debug($"[Moza] IndividualLEDs diag {key}");
         }
 
         // Merge physical-layer Individual-LED overrides onto a logical-channel array.

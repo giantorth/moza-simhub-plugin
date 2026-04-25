@@ -105,6 +105,7 @@ namespace MozaPlugin
                 RefreshHandbrakeTab();
                 RefreshPedalsTab();
                 RefreshHubTab();
+                RefreshAb9Tab();
                 InitTelemetryTab();
                 RefreshExtendedLedGroups();
                 RefreshWheelFilesTab();
@@ -1746,6 +1747,127 @@ namespace MozaPlugin
             // Wheel pushes a refreshed configJson state after completelyRemove —
             // the next 500ms timer tick will refresh the grid via
             // RefreshWheelFilesTab → ts.WheelState.
+        }
+
+        // ===== AB9 Active Shifter Tab =====
+
+        // Tracks whether the slider/combo values have been seeded from the profile
+        // — without this, the first refresh tick would race the user's drag and
+        // immediately overwrite an in-flight slider value with the saved one.
+        private bool _ab9UiSeeded;
+
+        private void RefreshAb9Tab()
+        {
+            if (_plugin?.Ab9Manager == null) { Ab9Tab.Visibility = Visibility.Collapsed; return; }
+
+            bool connected = _plugin.Ab9Manager.IsConnected;
+            bool detected  = _plugin.IsAb9Detected;
+
+            Ab9Tab.Visibility = (connected || detected)
+                ? Visibility.Visible : Visibility.Collapsed;
+            if (!connected && !detected) { _ab9UiSeeded = false; return; }
+
+            Ab9StatusDot.Fill = detected
+                ? Brushes.LimeGreen
+                : (connected ? Brushes.Goldenrod : Brushes.Gray);
+            Ab9StatusLabel.Text = detected
+                ? "AB9 connected"
+                : "Probing AB9…";
+
+            if (_ab9UiSeeded) return;
+
+            // Seed the controls from the profile (or defaults). Suppress events
+            // so this seed pass doesn't fire WriteSlider for every control.
+            var ab9 = _plugin.Settings?.ProfileStore?.CurrentProfile?.Ab9 ?? new Ab9Settings();
+            _suppressEvents = true;
+            try
+            {
+                SetAb9ModeCombo(ab9.Mode);
+                SetAb9Slider(Ab9MechResistanceSlider, Ab9MechResistanceValue, ab9.MechanicalResistance);
+                SetAb9Slider(Ab9SpringSlider,         Ab9SpringValue,         ab9.Spring);
+                SetAb9Slider(Ab9DampingSlider,        Ab9DampingValue,        ab9.NaturalDamping);
+                SetAb9Slider(Ab9FrictionSlider,       Ab9FrictionValue,       ab9.NaturalFriction);
+                SetAb9Slider(Ab9MaxTorqueSlider,      Ab9MaxTorqueValue,      ab9.MaxTorqueLimit);
+            }
+            finally
+            {
+                _suppressEvents = false;
+            }
+            _ab9UiSeeded = true;
+        }
+
+        private void SetAb9Slider(Slider slider, TextBlock value, byte v)
+        {
+            slider.Value = v;
+            value.Text = v.ToString();
+        }
+
+        private void SetAb9ModeCombo(Ab9Mode mode)
+        {
+            for (int i = 0; i < Ab9ModeCombo.Items.Count; i++)
+            {
+                var item = Ab9ModeCombo.Items[i] as ComboBoxItem;
+                if (item?.Tag is string tag && byte.TryParse(tag, out byte val) && val == (byte)mode)
+                {
+                    Ab9ModeCombo.SelectedIndex = i;
+                    return;
+                }
+            }
+            Ab9ModeCombo.SelectedIndex = -1;
+        }
+
+        private Ab9Settings GetOrCreateAb9Profile()
+        {
+            var profile = _plugin.Settings?.ProfileStore?.CurrentProfile;
+            if (profile == null) return new Ab9Settings();
+            if (profile.Ab9 == null) profile.Ab9 = new Ab9Settings();
+            return profile.Ab9;
+        }
+
+        private void Ab9ModeCombo_Changed(object sender, SelectionChangedEventArgs e)
+        {
+            if (_suppressEvents) return;
+            if (Ab9ModeCombo.SelectedItem is not ComboBoxItem item) return;
+            if (item.Tag is not string tag || !byte.TryParse(tag, out byte val)) return;
+
+            var mode = (Ab9Mode)val;
+            GetOrCreateAb9Profile().Mode = mode;
+            _plugin.Ab9Manager?.SendMode(mode);
+            _plugin.SaveSettings();
+        }
+
+        private void Ab9MechResistanceSlider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e)
+            => HandleAb9SliderChanged(Ab9MechResistanceSlider, Ab9MechResistanceValue, Ab9Slider.MechanicalResistance, e.NewValue);
+
+        private void Ab9SpringSlider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e)
+            => HandleAb9SliderChanged(Ab9SpringSlider, Ab9SpringValue, Ab9Slider.Spring, e.NewValue);
+
+        private void Ab9DampingSlider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e)
+            => HandleAb9SliderChanged(Ab9DampingSlider, Ab9DampingValue, Ab9Slider.NaturalDamping, e.NewValue);
+
+        private void Ab9FrictionSlider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e)
+            => HandleAb9SliderChanged(Ab9FrictionSlider, Ab9FrictionValue, Ab9Slider.NaturalFriction, e.NewValue);
+
+        private void Ab9MaxTorqueSlider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e)
+            => HandleAb9SliderChanged(Ab9MaxTorqueSlider, Ab9MaxTorqueValue, Ab9Slider.MaxTorqueLimit, e.NewValue);
+
+        private void HandleAb9SliderChanged(Slider slider, TextBlock label, Ab9Slider which, double newValue)
+        {
+            if (_suppressEvents) return;
+            byte v = (byte)Math.Max(0, Math.Min(100, (int)Math.Round(newValue)));
+            label.Text = v.ToString();
+
+            var ab9 = GetOrCreateAb9Profile();
+            switch (which)
+            {
+                case Ab9Slider.MechanicalResistance: ab9.MechanicalResistance = v; break;
+                case Ab9Slider.Spring:               ab9.Spring = v;               break;
+                case Ab9Slider.NaturalDamping:       ab9.NaturalDamping = v;       break;
+                case Ab9Slider.NaturalFriction:      ab9.NaturalFriction = v;      break;
+                case Ab9Slider.MaxTorqueLimit:       ab9.MaxTorqueLimit = v;       break;
+            }
+            _plugin.Ab9Manager?.SendSlider(which, v);
+            _plugin.SaveSettings();
         }
 
         private static string Blank(string s) => string.IsNullOrEmpty(s) ? "—" : s;

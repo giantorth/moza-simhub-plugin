@@ -68,19 +68,16 @@ jobs:
           New-Item -ItemType Directory -Path $staging -Force
           Copy-Item ./bin/x86/Release/MozaPlugin.dll $staging/
           Compress-Archive -Path ./staging/* -DestinationPath ./MozaPlugin_dev.zip
-          Copy-Item ./MozaPlugin_dev.zip ./MozaPlugin_dev-${{ steps.vars.outputs.short_sha }}.zip
 
-      - name: Publish pre-release
+      - name: Publish sha-tagged pre-release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: dev-latest
-          name: "Development Build (${{ steps.vars.outputs.dev_version }})"
+          tag_name: dev-${{ steps.vars.outputs.short_sha }}
+          name: "${{ steps.vars.outputs.dev_version }}"
           prerelease: true
           make_latest: false
           fail_on_unmatched_files: true
-          files: |
-            MozaPlugin_dev.zip
-            MozaPlugin_dev-${{ steps.vars.outputs.short_sha }}.zip
+          files: MozaPlugin_dev.zip
           body: |
             ⚠️ **Pre-release — expect rough edges.** Use the latest stable release if you need reliability.
 
@@ -89,4 +86,47 @@ jobs:
             **Built:** ${{ steps.vars.outputs.build_timestamp }}
             **Changes since ${{ steps.vars.outputs.latest_tag }}:** https://github.com/${{ github.repository }}/compare/${{ steps.vars.outputs.latest_tag }}...${{ github.sha }}
 
-            Download `MozaPlugin_dev.zip` for the latest build, or `MozaPlugin_dev-<sha>.zip` to pin a specific build.
+            Stable link to most recent dev build: https://github.com/${{ github.repository }}/releases/tag/dev-latest
+
+      - name: Reset dev-latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: gh release delete dev-latest --yes --cleanup-tag --repo "$GITHUB_REPOSITORY" || true
+
+      - name: Publish dev-latest pre-release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: dev-latest
+          name: "dev-latest (${{ steps.vars.outputs.dev_version }})"
+          prerelease: true
+          make_latest: false
+          fail_on_unmatched_files: true
+          files: MozaPlugin_dev.zip
+          body: |
+            ⚠️ **Pre-release — expect rough edges.** Use the latest stable release if you need reliability.
+
+            Rolling pointer to newest dev build. For history, see [all dev releases](https://github.com/${{ github.repository }}/releases?q=dev-&expanded=true).
+
+            **Version:** `${{ steps.vars.outputs.dev_version }}`
+            **Commit:** [`${{ steps.vars.outputs.short_sha }}`](https://github.com/${{ github.repository }}/commit/${{ github.sha }}) — ${{ steps.vars.outputs.commit_subject }}
+            **Built:** ${{ steps.vars.outputs.build_timestamp }}
+            **Changes since ${{ steps.vars.outputs.latest_tag }}:** https://github.com/${{ github.repository }}/compare/${{ steps.vars.outputs.latest_tag }}...${{ github.sha }}
+            **Pinned tag for this build:** [`dev-${{ steps.vars.outputs.short_sha }}`](https://github.com/${{ github.repository }}/releases/tag/dev-${{ steps.vars.outputs.short_sha }})
+
+      - name: Prune dev-<sha> releases older than 60 days
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          cutoff=$(date -u -d '60 days ago' +%s)
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 500 \
+            --json tagName,createdAt \
+            --jq '.[] | select(.tagName | test("^dev-[0-9a-f]{7}$")) | "\(.tagName) \(.createdAt)"' \
+          | while read -r tag created; do
+              created_ts=$(date -u -d "$created" +%s)
+              if [ "$created_ts" -lt "$cutoff" ]; then
+                echo "Pruning $tag (created $created)"
+                gh release delete "$tag" --yes --cleanup-tag --repo "$GITHUB_REPOSITORY" || true
+              fi
+            done

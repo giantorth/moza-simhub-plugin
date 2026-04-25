@@ -698,6 +698,64 @@
                 </ScrollViewer>
             </TabItem>
 
+            <!-- ==================== AB9 SHIFTER TAB ==================== -->
+            <TabItem x:Name="Ab9Tab" Header="AB9 Shifter" Visibility="Collapsed">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="10">
+                    <StackPanel Margin="5">
+
+                        <TextBlock Text="AB9 Active Shifter" Style="{StaticResource SectionHeader}"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                            <Ellipse x:Name="Ab9StatusDot" Style="{StaticResource ConnectionDot}" Fill="Gray"/>
+                            <TextBlock x:Name="Ab9StatusLabel" Text="Searching for AB9..." VerticalAlignment="Center"/>
+                        </StackPanel>
+
+                        <TextBlock Text="Mechanical Layout" Style="{StaticResource SectionHeader}"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Mode" Style="{StaticResource SliderLabel}"/>
+                            <ComboBox x:Name="Ab9ModeCombo" Width="220" SelectionChanged="Ab9ModeCombo_Changed">
+                                <ComboBoxItem Content="5+R Layout 1" Tag="0"/>
+                                <ComboBoxItem Content="6+R Layout 1" Tag="4"/>
+                                <ComboBoxItem Content="6+R Layout 2" Tag="5"/>
+                                <ComboBoxItem Content="7+R Layout 1" Tag="6"/>
+                                <ComboBoxItem Content="7+R Layout 2" Tag="7"/>
+                                <ComboBoxItem Content="Sequential"   Tag="9"/>
+                            </ComboBox>
+                        </StackPanel>
+
+                        <TextBlock Text="Feel" Style="{StaticResource SectionHeader}"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Mechanical Resistance" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="Ab9MechResistanceSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="Ab9MechResistanceSlider_ValueChanged"/>
+                            <TextBlock x:Name="Ab9MechResistanceValue" Style="{StaticResource SliderValue}" Text="50"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Spring" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="Ab9SpringSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="Ab9SpringSlider_ValueChanged"/>
+                            <TextBlock x:Name="Ab9SpringValue" Style="{StaticResource SliderValue}" Text="50"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Natural Damping" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="Ab9DampingSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="Ab9DampingSlider_ValueChanged"/>
+                            <TextBlock x:Name="Ab9DampingValue" Style="{StaticResource SliderValue}" Text="50"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Natural Friction" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="Ab9FrictionSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="Ab9FrictionSlider_ValueChanged"/>
+                            <TextBlock x:Name="Ab9FrictionValue" Style="{StaticResource SliderValue}" Text="50"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Max Output Torque Limit" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="Ab9MaxTorqueSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="Ab9MaxTorqueSlider_ValueChanged"/>
+                            <TextBlock x:Name="Ab9MaxTorqueValue" Style="{StaticResource SliderValue}" Text="50"/>
+                        </StackPanel>
+
+                        <TextBlock TextWrapping="Wrap" Foreground="Gray" FontSize="11" Margin="0,12,0,0"
+                                   Text="Settings are written to the AB9 over its dedicated USB pipe and stored in the device. Slider drags are debounced; the final value is written when the drag ends."/>
+
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
             <!-- ==================== HUB TAB ==================== -->
             <TabItem x:Name="HubTab" Header="Hub" Visibility="Collapsed">
                 <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="10">

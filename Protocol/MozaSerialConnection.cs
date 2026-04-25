@@ -36,6 +36,11 @@ namespace MozaPlugin.Protocol
     {
         private const int StreamSlotCount = 11;
 
+        // Filter applied during port discovery. Receives the WMI-reported PID
+        // ("0x1000") or null for probe-based discovery where PID is unknown.
+        // Returns true to accept, false to skip. Default = accept all.
+        private readonly Func<string?, bool>? _pidFilter;
+
         private volatile SerialPort? _port;
         private Thread? _readThread;
         private Thread? _writeThread;
@@ -68,6 +73,18 @@ namespace MozaPlugin.Protocol
         /// </summary>
         public string? DiscoveredPid { get; private set; }
 
+        public MozaSerialConnection() : this(null) { }
+
+        /// <summary>
+        /// Construct a serial connection scoped to a subset of MOZA composite
+        /// devices. <paramref name="pidFilter"/> receives each candidate port's
+        /// PID (null under Wine probe discovery) and returns true to accept.
+        /// </summary>
+        public MozaSerialConnection(Func<string?, bool>? pidFilter)
+        {
+            _pidFilter = pidFilter;
+        }
+
         public bool Connect()
         {
             if (_shutdownRequested)
@@ -83,7 +100,7 @@ namespace MozaPlugin.Protocol
             if (_lastPortName != null && TryOpen(_lastPortName))
                 return true;
 
-            var (portName, pid) = FindMozaPort(() => _shutdownRequested);
+            var (portName, pid) = FindMozaPort(_pidFilter, () => _shutdownRequested);
             if (portName == null)
                 return false;
 
@@ -537,9 +554,17 @@ namespace MozaPlugin.Protocol
             }
         }
 
-        private static (string? PortName, string? Pid) FindMozaPort(Func<bool>? cancel = null)
+        /// <summary>
+        /// Enumerate every MOZA composite serial port currently visible via WMI,
+        /// returning <c>(portName, pid)</c> pairs in WMI iteration order. Empty
+        /// list when WMI is unavailable (probe-based discovery handles that path
+        /// inside <see cref="FindMozaPort"/>). Public so callers that need to
+        /// open more than one MOZA device — e.g. wheelbase + AB9 shifter — can
+        /// inspect the full topology before deciding which port belongs to whom.
+        /// </summary>
+        public static IReadOnlyList<(string PortName, string? Pid)> FindAllMozaPorts()
         {
-            // Try WMI-based discovery first (native Windows), loaded optionally via reflection
+            var results = new List<(string, string?)>();
             try
             {
                 var asm = Assembly.Load("System.Management");
@@ -556,28 +581,66 @@ namespace MozaPlugin.Protocol
                         var deviceId = prop.GetValue(obj, new object[] { "DeviceID" })?.ToString() ?? "";
                         var caption = prop.GetValue(obj, new object[] { "Caption" })?.ToString() ?? "";
 
-                        if (deviceId.IndexOf("VID_346E", StringComparison.OrdinalIgnoreCase) >= 0)
-                        {
-                            int comStart = caption.IndexOf("(COM");
-                            if (comStart >= 0)
-                            {
-                                int comEnd = caption.IndexOf(")", comStart);
-                                if (comEnd > comStart)
-                                {
-                                    var portName = caption.Substring(comStart + 1, comEnd - comStart - 1);
-                                    var pid = ExtractPid(deviceId);
-                                    SimHub.Logging.Current.Info($"[Moza] Found Moza device on {portName} PID={pid ?? "unknown"} (WMI)");
-                                    return (portName, pid);
-                                }
-                            }
-                        }
+                        if (deviceId.IndexOf("VID_346E", StringComparison.OrdinalIgnoreCase) < 0)
+                            continue;
+
+                        int comStart = caption.IndexOf("(COM");
+                        if (comStart < 0) continue;
+                        int comEnd = caption.IndexOf(")", comStart);
+                        if (comEnd <= comStart) continue;
+
+                        var portName = caption.Substring(comStart + 1, comEnd - comStart - 1);
+                        results.Add((portName, ExtractPid(deviceId)));
                     }
                 }
             }
-            catch (Exception ex)
+            catch
             {
-                SimHub.Logging.Current.Info($"[Moza] WMI discovery unavailable ({ex.GetType().Name}), trying probe");
+                // WMI unavailable (Wine/Proton). Caller falls back to probe path.
             }
+            return results;
+        }
+
+        private static (string? PortName, string? Pid) FindMozaPort(
+            Func<string?, bool>? pidFilter = null,
+            Func<bool>? cancel = null)
+        {
+            // Try WMI-based discovery first (native Windows). Iterate every Moza
+            // port and pick the first one that satisfies the optional PID filter
+            // — keeps wheelbase code from accidentally opening an attached AB9
+            // shifter when both enumerate as VID_346E composite devices.
+            var wmiPorts = FindAllMozaPorts();
+            if (wmiPorts.Count > 0)
+            {
+                foreach (var (portName, pid) in wmiPorts)
+                {
+                    if (pidFilter != null && !pidFilter(pid))
+                    {
+                        SimHub.Logging.Current.Debug(
+                            $"[Moza] Skipping {portName} PID={pid ?? "unknown"} (filtered)");
+                        continue;
+                    }
+                    SimHub.Logging.Current.Info(
+                        $"[Moza] Found Moza device on {portName} PID={pid ?? "unknown"} (WMI)");
+                    return (portName, pid);
+                }
+                // No match for this filter — silent at Debug level. Reconnect
+                // timer ticks every 5s, so Info would spam the log.
+                SimHub.Logging.Current.Debug("[Moza] No matching MOZA device found via WMI");
+                return (null, null);
+            }
+
+            // WMI unavailable — drop to probe. Probe path can't read PID, so a
+            // caller that requires a specific PID (e.g. AB9) must reject null
+            // in its filter; the wheelbase default filter accepts null.
+            if (pidFilter != null && !pidFilter(null))
+            {
+                SimHub.Logging.Current.Debug(
+                    "[Moza] WMI unavailable and probe path is filtered out; giving up");
+                return (null, null);
+            }
+
+            SimHub.Logging.Current.Debug("[Moza] WMI discovery returned no devices, trying probe");
 
             // Probe-based discovery: try opening each COM port and sending a Moza read command.
             // This works under Proton/Wine where COM ports are symlinked to /dev/ttyACM*.
@@ -625,7 +688,9 @@ namespace MozaPlugin.Protocol
                 }
             }
 
-            SimHub.Logging.Current.Info("[Moza] No MOZA device found on any COM port");
+            // Drop to Debug — reconnect timer fires every 5s, so Info-level
+            // would flood the log when no device is plugged in.
+            SimHub.Logging.Current.Debug("[Moza] No MOZA device found on any COM port");
             return (null, null);
         }
 
