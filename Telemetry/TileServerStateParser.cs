@@ -20,6 +20,11 @@ namespace MozaPlugin.Telemetry
     /// </summary>
     public sealed class TileServerStateParser
     {
+        // Hard cap on accumulated buffer. Real envelopes are <100 KB; anything
+        // beyond this is malformed input that would otherwise grow unbounded
+        // (sentinel mismatch in TryDecode returns null without trimming the buffer).
+        private const int MaxBufferBytes = 1 * 1024 * 1024;
+
         private readonly List<byte> _buf = new List<byte>();
         private TileServerState? _lastState;
 
@@ -36,6 +41,13 @@ namespace MozaPlugin.Telemetry
             {
                 _buf.RemoveRange(0, consumed);
                 _lastState = decoded;
+            }
+            else if (_buf.Count > MaxBufferBytes)
+            {
+                // Malformed input or sentinel never arrived — drop everything to
+                // bound memory; a fresh chunk that begins with valid sentinels
+                // can resume parsing cleanly.
+                _buf.Clear();
             }
             return decoded;
         }

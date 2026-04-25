@@ -38,7 +38,7 @@ namespace MozaPlugin.Devices
             { "CS V2.1", "cd485bdb-934d-4d06-8224-d24fb1f82bd7" },
             { "W17",     "503269ba-fc50-44d4-9844-8800da5f9f10" },  // CS Pro (firmware reports "W17", was "CSP")
             { "W18",     "14c84064-a968-43b9-ab92-a02f512632ce" },  // KS Pro (firmware reports "W18")
-            { "FSR2",    "c4f0cf35-e68c-4756-a04a-b2f8b5d6dbf3" },
+            { "W13",     "c4f0cf35-e68c-4756-a04a-b2f8b5d6dbf3" },  // FSR V2 (firmware reports "W13", was "FSR2")
         };
 
         /// <summary>
@@ -233,7 +233,15 @@ namespace MozaPlugin.Devices
                     Directory.CreateDirectory(dir);
 
                 var json = JsonConvert.SerializeObject(PrefixToGuid, Formatting.Indented);
-                File.WriteAllText(_registryPath, json);
+
+                // Atomic write: stage to a sibling .tmp first, then move into place.
+                // A crash mid-WriteAllText would otherwise truncate the existing
+                // registry to garbage and lose the GUID-to-prefix map on next load.
+                var tmpPath = _registryPath + ".tmp";
+                File.WriteAllText(tmpPath, json);
+                if (File.Exists(_registryPath))
+                    File.Delete(_registryPath);
+                File.Move(tmpPath, _registryPath);
             }
             catch (Exception ex)
             {

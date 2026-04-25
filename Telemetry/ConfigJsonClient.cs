@@ -64,7 +64,7 @@ namespace MozaPlugin.Telemetry
                         {
                             SimHub.Logging.Current.Info(
                                 $"[Moza] configJson state missing {missing.Count} expected top-level field(s): {shape}. " +
-                                "Firmware may be older than 2025-11 or schema has drifted — PitHouse UI may reject.");
+                                "Firmware may be older than 2025-11 or schema has drifted.");
                         }
                         catch { /* logging optional in unit tests */ }
                     }

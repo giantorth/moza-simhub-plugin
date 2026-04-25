@@ -25,6 +25,7 @@ namespace MozaPlugin
         private MozaSerialConnection _connection = null!;
         private MozaData _data = null!;
         private MozaDeviceManager _deviceManager = null!;
+        private MozaAb9DeviceManager _ab9Manager = null!;
         private MozaPluginSettings _settings = null!;
         private Timer _pollTimer = null!;
         private Timer _reconnectTimer = null!;
@@ -42,6 +43,8 @@ namespace MozaPlugin
         private bool _handbrakeDetected;
         private bool _pedalsDetected;
         private bool _hubDetected;
+        private bool _ab9Detected;
+        private bool _ab9SettingsApplied;
 
         // Guard against concurrent/duplicate telemetry Start() dispatch
         private int _telemetryStartRequested;
@@ -51,6 +54,11 @@ namespace MozaPlugin
 
         // Debounce disk writes during rapid slider changes
         private Timer? _saveDebounceTimer;
+
+        // Tracks the ProfileStore we subscribed CurrentProfileChanged on, so we can
+        // detach when ClearSettings replaces _settings (orphaned subscription would
+        // otherwise mutate plugin state via captured `this` from a dead store).
+        private MozaProfileStore? _subscribedProfileStore;
 
         private static readonly string[] StatusPollCommands = new[]
         {
@@ -179,9 +187,16 @@ namespace MozaPlugin
         /// Groups 0/1 (RPM/Buttons) are not tracked here — their presence is implied by
         /// any new-protocol wheel.
         /// </summary>
-        private readonly bool[] _wheelLedGroups = new bool[5];
-        internal bool IsWheelLedGroupPresent(int group) =>
-            group >= 2 && group <= 4 && _wheelLedGroups[group];
+        // Bit `g` set => group g detected. Stored as int so all reads/writes go
+        // through Interlocked, giving lock-free atomic visibility between the
+        // serial-message thread (which sets bits as group probes respond) and
+        // any reader (UI, device extensions, poll timer).
+        private int _wheelLedGroupMask;
+        internal bool IsWheelLedGroupPresent(int group)
+        {
+            if (group < 2 || group > 4) return false;
+            return (Volatile.Read(ref _wheelLedGroupMask) & (1 << group)) != 0;
+        }
         /// <summary>
         /// When true, the device extension owns wheel LED settings via its own profile system.
         /// Plugin profile application skips wheel settings to avoid conflicts.
@@ -255,6 +270,8 @@ namespace MozaPlugin
         internal bool IsHandbrakeDetected => _handbrakeDetected;
         internal bool IsPedalsDetected => _pedalsDetected;
         internal bool IsHubDetected => _hubDetected;
+        internal bool IsAb9Detected => _ab9Detected;
+        internal MozaAb9DeviceManager Ab9Manager => _ab9Manager;
 
         /// <summary>True if the wheel's internal Display sub-device responded to probe.</summary>
         internal bool IsDisplayDetected => _telemetrySender?.DisplayDetected ?? false;
@@ -268,64 +285,127 @@ namespace MozaPlugin
             // Clear shutdown flag from any previous plugin instance in this process.
             // SimHub may load+unload plugins without restarting, leaving this true.
             IsShuttingDown = false;
-            Instance = this;
             _pluginManager = pluginManager;
-            _data = new MozaData();
-            _settings = this.ReadCommonSettings<MozaPluginSettings>("MozaPluginSettings", () => new MozaPluginSettings());
 
-            // Null-guard for upgraded settings missing ProfileStore
-            if (_settings.ProfileStore == null)
-                _settings.ProfileStore = new MozaProfileStore();
-
-
-            // Restore blink colors from settings (write-only, can't be polled from device)
-            MozaProfile.UnpackColorsInto(_settings.WheelRpmBlinkColors, _data.WheelRpmBlinkColors);
-            MozaProfile.UnpackColorsInto(_settings.DashRpmBlinkColors, _data.DashRpmBlinkColors);
-
-            SimHub.Logging.Current.Info("[Moza] Initializing plugin");
-
-            MozaDeviceConstants.InitializeRegistry();
-
-            // Read SimHub's global temperature unit preference (set at first launch)
-            var tempUnit = pluginManager.GetPropertyValue("DataCorePlugin.GameData.TemperatureUnit");
-            _data.UseFahrenheit = string.Equals(tempUnit as string, "Fahrenheit", StringComparison.OrdinalIgnoreCase);
-            SimHub.Logging.Current.Info($"[Moza] Temperature unit: {(_data.UseFahrenheit ? "Fahrenheit" : "Celsius")}");
-
-            // Initialize the native profile system (detects current game, selects profile)
-            InitProfileSystem();
-
-            RegisterProperties(pluginManager);
-            RegisterActions();
-
-            _connection = new MozaSerialConnection();
-            _connection.MessageReceived += OnMessageReceived;
-
-            _deviceManager = new MozaDeviceManager(_connection);
-
-            _pollTimer = new Timer(2000);
-            _pollTimer.Elapsed += PollStatus;
-            _pollTimer.AutoReset = true;
-            _pollTimer.Start();
-
-            _reconnectTimer = new Timer(5000);
-            _reconnectTimer.Elapsed += (s, e) =>
+            try
             {
-                if (!_connection.IsConnected)
-                    TryConnect();
-            };
-            _reconnectTimer.AutoReset = true;
-            if (_settings.ConnectionEnabled)
-                _reconnectTimer.Start();
+                _data = new MozaData();
+                _settings = this.ReadCommonSettings<MozaPluginSettings>("MozaPluginSettings", () => new MozaPluginSettings());
 
-            _hidReader = new MozaHidReader(_data);
-            _hidReader.Start();
+                // Null-guard for upgraded settings missing ProfileStore
+                if (_settings.ProfileStore == null)
+                    _settings.ProfileStore = new MozaProfileStore();
 
-            _telemetrySender = new TelemetrySender(_connection);
-            ApplyTelemetrySettings();
-            // Don't start telemetry here — defer until wheel is detected.
-            // The session open probe requires the wheel to be present and responsive.
-            // StartTelemetryIfReady() is called from DetectDevices() when the wheel
-            // is first detected, and from profile application callbacks.
+
+                // Restore blink colors from settings (write-only, can't be polled from device)
+                MozaProfile.UnpackColorsInto(_settings.WheelRpmBlinkColors, _data.WheelRpmBlinkColors);
+                MozaProfile.UnpackColorsInto(_settings.DashRpmBlinkColors, _data.DashRpmBlinkColors);
+
+                SimHub.Logging.Current.Info("[Moza] Initializing plugin");
+
+                MozaDeviceConstants.InitializeRegistry();
+
+                // Read SimHub's global temperature unit preference (set at first launch)
+                var tempUnit = pluginManager.GetPropertyValue("DataCorePlugin.GameData.TemperatureUnit");
+                _data.UseFahrenheit = string.Equals(tempUnit as string, "Fahrenheit", StringComparison.OrdinalIgnoreCase);
+                SimHub.Logging.Current.Info($"[Moza] Temperature unit: {(_data.UseFahrenheit ? "Fahrenheit" : "Celsius")}");
+
+                // Initialize the native profile system (detects current game, selects profile)
+                InitProfileSystem();
+
+                RegisterProperties(pluginManager);
+                RegisterActions();
+
+                // Reject the AB9 shifter PID on the wheelbase pipe — both devices
+                // enumerate as VID_346E composite, and without this filter the
+                // wheelbase code path can grab the AB9 port and stall on probes.
+                // Probe-based discovery (PID = null, Wine/Proton) still works.
+                _connection = new MozaSerialConnection(pid => !MozaUsbIds.IsAb9Pid(pid));
+                _connection.MessageReceived += OnMessageReceived;
+
+                _deviceManager = new MozaDeviceManager(_connection);
+
+                _ab9Manager = new MozaAb9DeviceManager();
+                _ab9Manager.MessageReceived += OnAb9MessageReceived;
+
+                _pollTimer = new Timer(2000);
+                _pollTimer.Elapsed += PollStatus;
+                _pollTimer.AutoReset = true;
+                _pollTimer.Start();
+
+                _reconnectTimer = new Timer(5000);
+                _reconnectTimer.Elapsed += (s, e) =>
+                {
+                    if (!_connection.IsConnected)
+                        TryConnect();
+                    if (!_ab9Manager.IsConnected)
+                        TryConnectAb9();
+                };
+                _reconnectTimer.AutoReset = true;
+                if (_settings.ConnectionEnabled)
+                    _reconnectTimer.Start();
+
+                _hidReader = new MozaHidReader(_data);
+                _hidReader.Start();
+
+                _telemetrySender = new TelemetrySender(_connection);
+                ApplyTelemetrySettings();
+                // Don't start telemetry here — defer until wheel is detected.
+                // The session open probe requires the wheel to be present and responsive.
+                // StartTelemetryIfReady() is called from DetectDevices() when the wheel
+                // is first detected, and from profile application callbacks.
+
+                // Publish Instance only after all resources are wired so a partial-init
+                // throw can't leave a half-built plugin reachable from background callbacks.
+                Instance = this;
+            }
+            catch (Exception ex)
+            {
+                SimHub.Logging.Current.Error($"[Moza] Init failed: {ex}");
+                CleanupPartialInit();
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Tear down any resources allocated by Init() before it threw. Mirrors End()
+        /// but tolerates null fields and never sets IsShuttingDown (caller may retry).
+        /// </summary>
+        private void CleanupPartialInit()
+        {
+            try { _pollTimer?.Stop(); } catch { }
+            try { _reconnectTimer?.Stop(); } catch { }
+            try { _saveDebounceTimer?.Stop(); } catch { }
+            try { _telemetrySender?.Stop(); } catch { }
+            try
+            {
+                if (_connection != null)
+                    _connection.MessageReceived -= OnMessageReceived;
+            }
+            catch { }
+            try
+            {
+                if (_subscribedProfileStore != null)
+                {
+                    _subscribedProfileStore.CurrentProfileChanged -= OnProfileChanged;
+                    _subscribedProfileStore = null;
+                }
+            }
+            catch { }
+            try { _hidReader?.Dispose(); } catch { }
+            try { _telemetrySender?.Dispose(); } catch { }
+            try { _connection?.Dispose(); } catch { }
+            try
+            {
+                if (_ab9Manager != null)
+                    _ab9Manager.MessageReceived -= OnAb9MessageReceived;
+            }
+            catch { }
+            try { _ab9Manager?.Dispose(); } catch { }
+            try { _pollTimer?.Dispose(); } catch { }
+            try { _reconnectTimer?.Dispose(); } catch { }
+            try { _saveDebounceTimer?.Dispose(); } catch { }
+            _saveDebounceTimer = null;
         }
 
         public void DataUpdate(PluginManager pluginManager, ref GameData data)
@@ -348,22 +428,45 @@ namespace MozaPlugin
             try { this.SaveCommonSettings("MozaPluginSettings", _settings); } catch { }
             try { ClearLedsOnHardware(); } catch { }
 
-            // 3. Stop telemetry send loop before tearing down connection.
+            // 3. Detach event subscriptions so any in-flight callback from a still-running
+            //    background thread (HID/serial reader) cannot reach the plugin during teardown.
+            try
+            {
+                if (_connection != null)
+                    _connection.MessageReceived -= OnMessageReceived;
+            }
+            catch { }
+            try
+            {
+                if (_subscribedProfileStore != null)
+                    _subscribedProfileStore.CurrentProfileChanged -= OnProfileChanged;
+                _subscribedProfileStore = null;
+            }
+            catch { }
+
+            // 4. Stop telemetry send loop before tearing down connection.
             _telemetrySender?.Stop();
 
-            // 4. Dispose I/O sources before dropping Instance so late callbacks
+            // 5. Dispose I/O sources before dropping Instance so late callbacks
             //    see a live (but shutting-down) instance, not null.
             _hidReader?.Dispose();
             _telemetrySender?.Dispose();
             _connection?.Dispose();
+            try
+            {
+                if (_ab9Manager != null)
+                    _ab9Manager.MessageReceived -= OnAb9MessageReceived;
+            }
+            catch { }
+            _ab9Manager?.Dispose();
 
-            // 5. Dispose timers after I/O is gone.
+            // 6. Dispose timers after I/O is gone.
             _saveDebounceTimer?.Dispose();
             _saveDebounceTimer = null;
             _pollTimer?.Dispose();
             _reconnectTimer?.Dispose();
 
-            // 6. Null Instance last so any straggler callback can still no-op via IsShuttingDown.
+            // 7. Null Instance last so any straggler callback can still no-op via IsShuttingDown.
             Instance = null;
         }
 
@@ -384,20 +487,28 @@ namespace MozaPlugin
             ScheduleSave();
         }
 
+        private readonly object _saveDebounceLock = new object();
+
         /// <summary>
         /// Debounce disk writes: restart a 500ms timer on each call.
         /// Prevents dozens of writes per second during rapid slider drags.
         /// </summary>
         private void ScheduleSave()
         {
-            if (_saveDebounceTimer == null)
+            // Lazy-create under a lock — concurrent callers (UI thread + profile-change
+            // thread) would otherwise both see null, each create a Timer, and the loser's
+            // instance would leak (unstopped, unwatched, still referencing _settings).
+            lock (_saveDebounceLock)
             {
-                _saveDebounceTimer = new Timer(500) { AutoReset = false };
-                _saveDebounceTimer.Elapsed += (s, e) =>
-                    this.SaveCommonSettings("MozaPluginSettings", _settings);
+                if (_saveDebounceTimer == null)
+                {
+                    _saveDebounceTimer = new Timer(500) { AutoReset = false };
+                    _saveDebounceTimer.Elapsed += (s, e) =>
+                        this.SaveCommonSettings("MozaPluginSettings", _settings);
+                }
+                _saveDebounceTimer.Stop();
+                _saveDebounceTimer.Start();
             }
-            _saveDebounceTimer.Stop();
-            _saveDebounceTimer.Start();
         }
 
         internal void ClearSettings()
@@ -435,6 +546,10 @@ namespace MozaPlugin
                 _handbrakeDetected = false;
                 _pedalsDetected = false;
                 _hubDetected = false;
+                _ab9Detected = false;
+                _ab9SettingsApplied = false;
+                _ab9Manager?.Disconnect();
+                if (_telemetrySender != null) _telemetrySender.HubPresent = false;
                 _deviceManager.ResetWheelDetection();
                 _telemetrySender.DetectedDeviceMask = 0;
                 Interlocked.Exchange(ref _telemetryStartRequested, 0);
@@ -451,19 +566,23 @@ namespace MozaPlugin
 
         private void RegisterProperties(PluginManager pluginManager)
         {
-            this.AttachDelegate("Moza.BaseConnected", () => _data.IsBaseConnected);
-            this.AttachDelegate("Moza.McuTemp", () => ConvertTemp(_data.McuTemp));
-            this.AttachDelegate("Moza.MosfetTemp", () => ConvertTemp(_data.MosfetTemp));
-            this.AttachDelegate("Moza.MotorTemp", () => ConvertTemp(_data.MotorTemp));
-            this.AttachDelegate("Moza.BaseState", () => _data.BaseState);
-            this.AttachDelegate("Moza.FfbStrength", () => _data.FfbStrength / 10);
-            this.AttachDelegate("Moza.MaxAngle", () => _data.MaxAngle * 2);
+            // Null-guard each delegate: SimHub may invoke property getters during
+            // plugin reload windows where _data is unset, or after End() left fields
+            // intact but mid-teardown. A throw inside a property getter destabilises
+            // SimHub's property polling, so each getter returns a sentinel default.
+            this.AttachDelegate("Moza.BaseConnected", () => _data?.IsBaseConnected ?? false);
+            this.AttachDelegate("Moza.McuTemp", () => _data == null ? 0.0 : ConvertTemp(_data.McuTemp));
+            this.AttachDelegate("Moza.MosfetTemp", () => _data == null ? 0.0 : ConvertTemp(_data.MosfetTemp));
+            this.AttachDelegate("Moza.MotorTemp", () => _data == null ? 0.0 : ConvertTemp(_data.MotorTemp));
+            this.AttachDelegate("Moza.BaseState", () => _data?.BaseState ?? 0);
+            this.AttachDelegate("Moza.FfbStrength", () => (_data?.FfbStrength ?? 0) / 10);
+            this.AttachDelegate("Moza.MaxAngle", () => (_data?.MaxAngle ?? 0) * 2);
         }
 
         private double ConvertTemp(int raw)
         {
             double celsius = raw / 100.0;
-            return _data.UseFahrenheit ? celsius * 9.0 / 5.0 + 32.0 : celsius;
+            return (_data?.UseFahrenheit ?? false) ? celsius * 9.0 / 5.0 + 32.0 : celsius;
         }
 
         private void RegisterActions()
@@ -757,6 +876,30 @@ namespace MozaPlugin
             }
         }
 
+        /// <summary>
+        /// Attempt to open the AB9 shifter's COM port. Independent of the
+        /// wheelbase pipe — the AB9 enumerates as its own VID_346E composite
+        /// (PID 0x1000) and runs on a dedicated CDC port. Identity probe runs
+        /// on every successful (re-)connect; saved settings are pushed once
+        /// the first read response confirms the device is alive.
+        /// </summary>
+        private void TryConnectAb9()
+        {
+            if (_ab9Manager == null) return;
+            if (_ab9Detected)
+            {
+                // Connection dropped after a successful detection — clear so the
+                // next read response can re-trigger profile push.
+                _ab9Detected = false;
+                _ab9SettingsApplied = false;
+            }
+            if (_ab9Manager.TryConnect())
+            {
+                _ab9Manager.SendIdentityProbe();
+                _ab9Manager.RequestAllStoredSettings();
+            }
+        }
+
         private int _wheelPollMisses;
         private const int WheelMissThreshold = 3;
         private volatile string _lastKnownWheelModel = "";
@@ -769,7 +912,7 @@ namespace MozaPlugin
             _oldWheelDetected = false;
             _dashDetected = false;
             WheelModelInfo = null;
-            for (int g = 0; g < _wheelLedGroups.Length; g++) _wheelLedGroups[g] = false;
+            Interlocked.Exchange(ref _wheelLedGroupMask, 0);
             _data.ClearWheelIdentity();
             _deviceManager.ResetWheelDetection();
             _telemetrySender.DetectedDeviceMask = 0;
@@ -780,6 +923,7 @@ namespace MozaPlugin
 
         private void PollStatus(object sender, ElapsedEventArgs e)
         {
+            if (IsShuttingDown) return;
             if (!_connection.IsConnected) return;
 
             // Hot-swap detection: track whether the locked wheel is still responding
@@ -832,6 +976,11 @@ namespace MozaPlugin
 
         private void OnMessageReceived(byte[] data)
         {
+            // Bail out during shutdown — serial reader thread may deliver a frame
+            // after End() began detaching state. Without this, _data/_deviceManager
+            // accesses below could hit a half-disposed object.
+            if (IsShuttingDown) return;
+
             // Filter firmware debug noise before parsing/logging
             if (data.Length >= 1 && data[0] == 0x0E)
                 return;
@@ -918,16 +1067,80 @@ namespace MozaPlugin
             if (r.Name != null && r.Name.StartsWith("wheel-group", StringComparison.Ordinal))
             {
                 int g = r.Name.Length > 11 ? r.Name[11] - '0' : -1;
-                if (g >= 2 && g <= 4 && !_wheelLedGroups[g])
+                if (g >= 2 && g <= 4)
                 {
-                    _wheelLedGroups[g] = true;
-                    SimHub.Logging.Current.Info($"[Moza] Wheel LED group {g} detected");
+                    int bit = 1 << g;
+                    int prev;
+                    do
+                    {
+                        prev = _wheelLedGroupMask;
+                        if ((prev & bit) != 0) break;
+                    } while (Interlocked.CompareExchange(ref _wheelLedGroupMask, prev | bit, prev) != prev);
+                    if ((prev & bit) == 0)
+                        SimHub.Logging.Current.Info($"[Moza] Wheel LED group {g} detected");
                 }
             }
 
             _deviceManager.MarkWheelResponse(r.DeviceId);
             if (r.Name != null)
                 DetectDevices(r.Name, r.IntValue, r.DeviceId);
+        }
+
+        /// <summary>
+        /// Serial-message handler for the AB9 shifter's dedicated pipe. Marks the
+        /// device as detected on the first parseable response, pushes saved
+        /// profile settings once, and lets the AB9 settings UI snapshot the
+        /// latest device-reported values via <see cref="MozaAb9DeviceManager"/>.
+        /// </summary>
+        private void OnAb9MessageReceived(byte[] data)
+        {
+            if (IsShuttingDown) return;
+            if (data == null || data.Length < 2) return;
+
+            // Filter firmware debug noise (group 0x0E) before parsing.
+            if (data[0] == 0x0E) return;
+
+            var result = MozaResponseParser.Parse(data);
+            if (!result.HasValue) return;
+
+            var r = result.Value;
+            if (r.Name == null || !r.Name.StartsWith("ab9-", StringComparison.Ordinal))
+                return;
+
+            _ab9Manager.MarkDetected();
+            if (!_ab9Detected)
+            {
+                _ab9Detected = true;
+                ApplySavedAb9Settings();
+            }
+
+            SimHub.Logging.Current.Debug($"[Moza/AB9] {r.Name} = {r.IntValue}");
+        }
+
+        /// <summary>
+        /// Push the current profile's AB9 settings (mode + 5 sliders) to the
+        /// device. Runs once per AB9 connection — the device retains values in
+        /// flash, so re-pushing on every response would just create flash wear.
+        /// </summary>
+        private void ApplySavedAb9Settings()
+        {
+            if (_ab9SettingsApplied) return;
+            var profile = _settings?.ProfileStore?.CurrentProfile;
+            var ab9 = profile?.Ab9;
+            if (ab9 == null)
+            {
+                _ab9SettingsApplied = true;
+                return;
+            }
+
+            SimHub.Logging.Current.Info("[Moza/AB9] Applying saved AB9 settings");
+            _ab9Manager.SendMode(ab9.Mode);
+            _ab9Manager.SendSlider(Devices.Ab9Slider.MechanicalResistance, ab9.MechanicalResistance);
+            _ab9Manager.SendSlider(Devices.Ab9Slider.Spring, ab9.Spring);
+            _ab9Manager.SendSlider(Devices.Ab9Slider.NaturalDamping, ab9.NaturalDamping);
+            _ab9Manager.SendSlider(Devices.Ab9Slider.NaturalFriction, ab9.NaturalFriction);
+            _ab9Manager.SendSlider(Devices.Ab9Slider.MaxTorqueLimit, ab9.MaxTorqueLimit);
+            _ab9SettingsApplied = true;
         }
 
         /// <summary>
@@ -1213,6 +1426,7 @@ namespace MozaPlugin
                     if (!_hubDetected)
                     {
                         _hubDetected = true;
+                        if (_telemetrySender != null) _telemetrySender.HubPresent = true;
                         _deviceManager.ReadSettings(HubReadCommands);
                         SimHub.Logging.Current.Info("[Moza] Universal Hub detected");
                     }
@@ -1406,8 +1620,15 @@ namespace MozaPlugin
             // Init reads PluginManager.Instance.GameName and selects the matching profile
             store.Init();
 
+            // Detach any prior subscription before re-subscribing (ClearSettings
+            // replaces _settings, leaving the old store with a stale handler that
+            // would otherwise fire and mutate the new state via `this`).
+            if (_subscribedProfileStore != null && !ReferenceEquals(_subscribedProfileStore, store))
+                _subscribedProfileStore.CurrentProfileChanged -= OnProfileChanged;
+
             // Subscribe to profile changes (game switch, manual selection)
             store.CurrentProfileChanged += OnProfileChanged;
+            _subscribedProfileStore = store;
 
             // Apply the initially selected profile
             if (store.CurrentProfile != null)
@@ -1643,6 +1864,18 @@ namespace MozaPlugin
             {
                 WriteProfileWheelSettingsToDevice(profile);
                 WriteProfileColorsToDevice(profile);
+            }
+
+            // --- AB9 active shifter (independent serial pipe) ---
+            if (profile.Ab9 != null && _ab9Detected)
+            {
+                var ab9 = profile.Ab9;
+                _ab9Manager.SendMode(ab9.Mode);
+                _ab9Manager.SendSlider(Devices.Ab9Slider.MechanicalResistance, ab9.MechanicalResistance);
+                _ab9Manager.SendSlider(Devices.Ab9Slider.Spring, ab9.Spring);
+                _ab9Manager.SendSlider(Devices.Ab9Slider.NaturalDamping, ab9.NaturalDamping);
+                _ab9Manager.SendSlider(Devices.Ab9Slider.NaturalFriction, ab9.NaturalFriction);
+                _ab9Manager.SendSlider(Devices.Ab9Slider.MaxTorqueLimit, ab9.MaxTorqueLimit);
             }
 
             // Persist _settings without re-capturing _data into the profile.

@@ -1,10 +1,39 @@
 using System;
 using System.Windows.Controls;
+using MozaPlugin.Devices;
 using Newtonsoft.Json;
 using SimHub.Plugins.ProfilesCommon;
 
 namespace MozaPlugin
 {
+    /// <summary>
+    /// Persisted AB9 active shifter configuration. All slider values are 0..100
+    /// (matching the on-wire single-byte payload range). Stored per-profile so a
+    /// user can save game-specific feel presets alongside wheelbase FFB tuning.
+    /// </summary>
+    public sealed class Ab9Settings
+    {
+        public Ab9Mode Mode { get; set; } = Ab9Mode.SevenPlusR_L1;
+        public byte MechanicalResistance { get; set; } = 50;
+        public byte Spring { get; set; }              = 50;
+        public byte NaturalDamping { get; set; }      = 50;
+        public byte NaturalFriction { get; set; }     = 50;
+        public byte MaxTorqueLimit { get; set; }      = 50;
+
+        public Ab9Settings Clone()
+        {
+            return new Ab9Settings
+            {
+                Mode = Mode,
+                MechanicalResistance = MechanicalResistance,
+                Spring = Spring,
+                NaturalDamping = NaturalDamping,
+                NaturalFriction = NaturalFriction,
+                MaxTorqueLimit = MaxTorqueLimit,
+            };
+        }
+    }
+
     /// <summary>
     /// A named profile snapshot of all Moza device configuration.
     /// Extends SimHub's ProfileBase for native per-game profile switching.
@@ -104,6 +133,12 @@ namespace MozaPlugin
         public int[]? DashRpmBlinkColors { get; set; }   // [10]
         public int[]? DashFlagColors { get; set; }        // [6]
 
+        // ===== AB9 active shifter =====
+        // Null until the user touches the AB9 panel for this profile — leaves
+        // older serialized profiles untouched on load and avoids pushing default
+        // values to a device that isn't attached.
+        public Ab9Settings? Ab9 { get; set; }
+
         // ===== ProfileBase abstract implementation =====
 
         public override void CopyProfilePropertiesFrom(MozaProfile p)
@@ -170,6 +205,8 @@ namespace MozaPlugin
             DashRpmColors = CloneArray(p.DashRpmColors);
             DashRpmBlinkColors = CloneArray(p.DashRpmBlinkColors);
             DashFlagColors = CloneArray(p.DashFlagColors);
+
+            Ab9 = p.Ab9?.Clone();
         }
 
         // ===== Capture current state =====

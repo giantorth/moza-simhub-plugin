@@ -45,10 +45,22 @@ namespace MozaPlugin.Devices
             _suppressEvents = false;
 
             _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
-            _refreshTimer.Tick += (s, e) => RefreshDash();
+            _refreshTimer.Tick += OnRefreshTick;
 
-            Loaded += (s, e) => _refreshTimer.Start();
-            Unloaded += (s, e) => _refreshTimer.Stop();
+            Loaded += OnLoaded;
+            Unloaded += OnUnloaded;
+        }
+
+        private void OnRefreshTick(object? sender, EventArgs e) => RefreshDash();
+
+        private void OnLoaded(object sender, RoutedEventArgs e) => _refreshTimer.Start();
+
+        private void OnUnloaded(object sender, RoutedEventArgs e)
+        {
+            _refreshTimer.Stop();
+            _refreshTimer.Tick -= OnRefreshTick;
+            Loaded -= OnLoaded;
+            Unloaded -= OnUnloaded;
         }
 
         private bool ResolvePlugin()

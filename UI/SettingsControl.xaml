@@ -698,6 +698,64 @@
                 </ScrollViewer>
             </TabItem>
 
+            <!-- ==================== AB9 SHIFTER TAB ==================== -->
+            <TabItem x:Name="Ab9Tab" Header="AB9 Shifter" Visibility="Collapsed">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="10">
+                    <StackPanel Margin="5">
+
+                        <TextBlock Text="AB9 Active Shifter" Style="{StaticResource SectionHeader}"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                            <Ellipse x:Name="Ab9StatusDot" Style="{StaticResource ConnectionDot}" Fill="Gray"/>
+                            <TextBlock x:Name="Ab9StatusLabel" Text="Searching for AB9..." VerticalAlignment="Center"/>
+                        </StackPanel>
+
+                        <TextBlock Text="Mechanical Layout" Style="{StaticResource SectionHeader}"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Mode" Style="{StaticResource SliderLabel}"/>
+                            <ComboBox x:Name="Ab9ModeCombo" Width="220" SelectionChanged="Ab9ModeCombo_Changed">
+                                <ComboBoxItem Content="5+R Layout 1" Tag="0"/>
+                                <ComboBoxItem Content="6+R Layout 1" Tag="4"/>
+                                <ComboBoxItem Content="6+R Layout 2" Tag="5"/>
+                                <ComboBoxItem Content="7+R Layout 1" Tag="6"/>
+                                <ComboBoxItem Content="7+R Layout 2" Tag="7"/>
+                                <ComboBoxItem Content="Sequential"   Tag="9"/>
+                            </ComboBox>
+                        </StackPanel>
+
+                        <TextBlock Text="Feel" Style="{StaticResource SectionHeader}"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Mechanical Resistance" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="Ab9MechResistanceSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="Ab9MechResistanceSlider_ValueChanged"/>
+                            <TextBlock x:Name="Ab9MechResistanceValue" Style="{StaticResource SliderValue}" Text="50"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Spring" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="Ab9SpringSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="Ab9SpringSlider_ValueChanged"/>
+                            <TextBlock x:Name="Ab9SpringValue" Style="{StaticResource SliderValue}" Text="50"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Natural Damping" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="Ab9DampingSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="Ab9DampingSlider_ValueChanged"/>
+                            <TextBlock x:Name="Ab9DampingValue" Style="{StaticResource SliderValue}" Text="50"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Natural Friction" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="Ab9FrictionSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="Ab9FrictionSlider_ValueChanged"/>
+                            <TextBlock x:Name="Ab9FrictionValue" Style="{StaticResource SliderValue}" Text="50"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Max Output Torque Limit" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="Ab9MaxTorqueSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="Ab9MaxTorqueSlider_ValueChanged"/>
+                            <TextBlock x:Name="Ab9MaxTorqueValue" Style="{StaticResource SliderValue}" Text="50"/>
+                        </StackPanel>
+
+                        <TextBlock TextWrapping="Wrap" Foreground="Gray" FontSize="11" Margin="0,12,0,0"
+                                   Text="Settings are written to the AB9 over its dedicated USB pipe and stored in the device. Slider drags are debounced; the final value is written when the drag ends."/>
+
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
             <!-- ==================== HUB TAB ==================== -->
             <TabItem x:Name="HubTab" Header="Hub" Visibility="Collapsed">
                 <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="10">
@@ -778,7 +836,7 @@
                         <CheckBox x:Name="UploadDashboardCheck" Content="Upload dashboard on connect"
                                   Margin="0,8,0,4" Checked="UploadDashboard_Changed" Unchecked="UploadDashboard_Changed"/>
                         <TextBlock TextWrapping="Wrap" Foreground="Gray" FontSize="11" Margin="0,0,0,8"
-                                   Text="PitHouse uploads the dashboard file to the wheel on every connection. Disable to test telemetry without upload."/>
+                                   Text="Attempt to upload selected mzdash file.  Experimental."/>
                         <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
                             <TextBlock Text="Protocol version:" VerticalAlignment="Center" Margin="0,0,8,0"/>
                             <ComboBox x:Name="ProtocolVersionCombo" Width="320"
@@ -822,6 +880,41 @@
                         <StackPanel x:Name="ExtLedFlagsPanel" Visibility="Collapsed" Margin="0,4"/>
                     </StackPanel>
                 </ScrollViewer>
+            </TabItem>
+
+            <TabItem Header="Wheel Files">
+                <DockPanel Margin="10,5">
+                    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
+                        <TextBlock Text="Wheel Files" Style="{StaticResource SectionHeader}" Margin="0,0,16,0"/>
+                        <Button x:Name="WheelFilesRefreshButton" Content="Refresh" Padding="6,2"
+                                Click="WheelFilesRefresh_Click" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <TextBlock x:Name="WheelFilesStatusBox" VerticalAlignment="Center"
+                                   Foreground="Gray" FontSize="11" Text="—"/>
+                    </StackPanel>
+                    <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" Foreground="Gray" FontSize="11" Margin="0,0,0,8"
+                               Text="Dashboards the wheel reports via session 0x09 configJson state. Select a row and click Delete to issue a `completelyRemove` RPC on session 0x0a. List refreshes after every upload + on connect."/>
+                    <DataGrid x:Name="WheelFilesGrid" AutoGenerateColumns="False" IsReadOnly="True"
+                              CanUserAddRows="False" CanUserDeleteRows="False" CanUserResizeRows="False"
+                              SelectionMode="Single" HeadersVisibility="Column" GridLinesVisibility="Horizontal"
+                              BorderThickness="1" RowHeight="22">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="State" Binding="{Binding State}" Width="70"/>
+                            <DataGridTextColumn Header="Title" Binding="{Binding Title}" Width="*"/>
+                            <DataGridTextColumn Header="DirName" Binding="{Binding DirName}" Width="200"/>
+                            <DataGridTextColumn Header="Hash" Binding="{Binding HashShort}" Width="100"/>
+                            <DataGridTextColumn Header="Last modified" Binding="{Binding LastModified}" Width="160"/>
+                            <DataGridTemplateColumn Header="" Width="80">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <Button Content="Delete" Padding="6,1"
+                                                Click="WheelFilesDelete_Click"
+                                                Tag="{Binding}"/>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </DockPanel>
             </TabItem>
 
             <TabItem Header="Diagnostics">

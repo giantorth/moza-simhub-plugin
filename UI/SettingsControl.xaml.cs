@@ -44,13 +44,15 @@ namespace MozaPlugin
             {
                 Interval = TimeSpan.FromMilliseconds(33)
             };
-            _steeringAngleTimer.Tick += (s, e) => UpdateHidInputDisplays();
+            _steeringAngleTimer.Tick += OnSteeringAngleTick;
 
             Loaded   += OnLoadedStartTimers;
             Unloaded += OnUnloadedStopTimers;
 
             RequestAllSettings();
         }
+
+        private void OnSteeringAngleTick(object? sender, EventArgs e) => UpdateHidInputDisplays();
 
         private void OnLoadedStartTimers(object sender, RoutedEventArgs e)
         {
@@ -60,8 +62,14 @@ namespace MozaPlugin
 
         private void OnUnloadedStopTimers(object sender, RoutedEventArgs e)
         {
+            // Stop and detach so the dispatcher's timer queue can release this
+            // control even if the parent window keeps it pinned.
             _refreshTimer.Stop();
             _steeringAngleTimer.Stop();
+            _refreshTimer.Tick -= RefreshDisplay;
+            _steeringAngleTimer.Tick -= OnSteeringAngleTick;
+            Loaded -= OnLoadedStartTimers;
+            Unloaded -= OnUnloadedStopTimers;
         }
 
         private MozaPluginSettings _settings => _plugin.Settings;
@@ -97,8 +105,10 @@ namespace MozaPlugin
                 RefreshHandbrakeTab();
                 RefreshPedalsTab();
                 RefreshHubTab();
+                RefreshAb9Tab();
                 InitTelemetryTab();
                 RefreshExtendedLedGroups();
+                RefreshWheelFilesTab();
                 RefreshDiagnosticsTab();
             }
             finally
@@ -1632,6 +1642,232 @@ namespace MozaPlugin
             if (cfg.ModeCmd == null) return;
             if (modeCombo.SelectedIndex < 0) return;
             _device.WriteSetting(cfg.ModeCmd, modeCombo.SelectedIndex);
+        }
+
+        // ── Wheel Files tab ─────────────────────────────────────────────
+        // Shows the wheel-side dashboard inventory derived from the most-recent
+        // session 0x09 configJson state push. Per-row Delete issues a
+        // `completelyRemove` RPC over session 0x0a.
+
+        public sealed class WheelFileRow
+        {
+            public string State { get; set; } = "";       // "enabled" / "disabled"
+            public string Title { get; set; } = "";
+            public string DirName { get; set; } = "";
+            public string Hash { get; set; } = "";
+            public string HashShort => string.IsNullOrEmpty(Hash) ? "" :
+                (Hash.Length > 12 ? Hash.Substring(0, 12) + "…" : Hash);
+            public string LastModified { get; set; } = "";
+            public string Id { get; set; } = "";
+        }
+
+        private void RefreshWheelFilesTab()
+        {
+            if (WheelFilesGrid == null) return;
+            var ts = _plugin.TelemetrySender;
+            var state = ts?.WheelState;
+            var rows = new System.Collections.Generic.List<WheelFileRow>();
+            if (state != null)
+            {
+                foreach (var d in state.EnabledDashboards)
+                    rows.Add(new WheelFileRow
+                    {
+                        State = "enabled",
+                        Title = d.Title,
+                        DirName = d.DirName,
+                        Hash = d.Hash,
+                        LastModified = d.LastModified,
+                        Id = d.Id,
+                    });
+                foreach (var d in state.DisabledDashboards)
+                    rows.Add(new WheelFileRow
+                    {
+                        State = "disabled",
+                        Title = d.Title,
+                        DirName = d.DirName,
+                        Hash = d.Hash,
+                        LastModified = d.LastModified,
+                        Id = d.Id,
+                    });
+            }
+            // Preserve grid selection across refresh by DirName key.
+            string? prevDir = (WheelFilesGrid.SelectedItem as WheelFileRow)?.DirName;
+            WheelFilesGrid.ItemsSource = rows;
+            if (!string.IsNullOrEmpty(prevDir))
+            {
+                foreach (var r in rows)
+                    if (r.DirName == prevDir) { WheelFilesGrid.SelectedItem = r; break; }
+            }
+            if (WheelFilesStatusBox != null)
+            {
+                if (state == null)
+                    WheelFilesStatusBox.Text = "(no configJson state received yet)";
+                else
+                    WheelFilesStatusBox.Text =
+                        $"{rows.Count} dashboards (captured {state.CapturedAt:HH:mm:ss})";
+            }
+        }
+
+        private void WheelFilesRefresh_Click(object sender, RoutedEventArgs e)
+        {
+            RefreshWheelFilesTab();
+        }
+
+        private void WheelFilesDelete_Click(object sender, RoutedEventArgs e)
+        {
+            if (((Button)sender).Tag is not WheelFileRow row) return;
+            if (string.IsNullOrEmpty(row.Id))
+            {
+                System.Windows.MessageBox.Show(
+                    $"Cannot delete \"{row.Title}\": wheel did not assign an id.",
+                    "Moza", System.Windows.MessageBoxButton.OK,
+                    System.Windows.MessageBoxImage.Warning);
+                return;
+            }
+            var confirm = System.Windows.MessageBox.Show(
+                $"Delete \"{row.Title}\" from the wheel?\n\nDirName: {row.DirName}\nId: {row.Id}",
+                "Moza — confirm delete",
+                System.Windows.MessageBoxButton.OKCancel,
+                System.Windows.MessageBoxImage.Question);
+            if (confirm != System.Windows.MessageBoxResult.OK) return;
+            var ts = _plugin.TelemetrySender;
+            if (ts == null)
+            {
+                System.Windows.MessageBox.Show("Telemetry sender unavailable.",
+                    "Moza", System.Windows.MessageBoxButton.OK,
+                    System.Windows.MessageBoxImage.Error);
+                return;
+            }
+            byte[]? reply = ts.SendRpcCall("completelyRemove", row.Id);
+            if (reply == null)
+                System.Windows.MessageBox.Show(
+                    $"completelyRemove(\"{row.Id}\") timed out. The dashboard may still be present on the wheel.",
+                    "Moza", System.Windows.MessageBoxButton.OK,
+                    System.Windows.MessageBoxImage.Warning);
+            // Wheel pushes a refreshed configJson state after completelyRemove —
+            // the next 500ms timer tick will refresh the grid via
+            // RefreshWheelFilesTab → ts.WheelState.
+        }
+
+        // ===== AB9 Active Shifter Tab =====
+
+        // Tracks whether the slider/combo values have been seeded from the profile
+        // — without this, the first refresh tick would race the user's drag and
+        // immediately overwrite an in-flight slider value with the saved one.
+        private bool _ab9UiSeeded;
+
+        private void RefreshAb9Tab()
+        {
+            if (_plugin?.Ab9Manager == null) { Ab9Tab.Visibility = Visibility.Collapsed; return; }
+
+            bool connected = _plugin.Ab9Manager.IsConnected;
+            bool detected  = _plugin.IsAb9Detected;
+
+            Ab9Tab.Visibility = (connected || detected)
+                ? Visibility.Visible : Visibility.Collapsed;
+            if (!connected && !detected) { _ab9UiSeeded = false; return; }
+
+            Ab9StatusDot.Fill = detected
+                ? Brushes.LimeGreen
+                : (connected ? Brushes.Goldenrod : Brushes.Gray);
+            Ab9StatusLabel.Text = detected
+                ? "AB9 connected"
+                : "Probing AB9…";
+
+            if (_ab9UiSeeded) return;
+
+            // Seed the controls from the profile (or defaults). Suppress events
+            // so this seed pass doesn't fire WriteSlider for every control.
+            var ab9 = _plugin.Settings?.ProfileStore?.CurrentProfile?.Ab9 ?? new Ab9Settings();
+            _suppressEvents = true;
+            try
+            {
+                SetAb9ModeCombo(ab9.Mode);
+                SetAb9Slider(Ab9MechResistanceSlider, Ab9MechResistanceValue, ab9.MechanicalResistance);
+                SetAb9Slider(Ab9SpringSlider,         Ab9SpringValue,         ab9.Spring);
+                SetAb9Slider(Ab9DampingSlider,        Ab9DampingValue,        ab9.NaturalDamping);
+                SetAb9Slider(Ab9FrictionSlider,       Ab9FrictionValue,       ab9.NaturalFriction);
+                SetAb9Slider(Ab9MaxTorqueSlider,      Ab9MaxTorqueValue,      ab9.MaxTorqueLimit);
+            }
+            finally
+            {
+                _suppressEvents = false;
+            }
+            _ab9UiSeeded = true;
+        }
+
+        private void SetAb9Slider(Slider slider, TextBlock value, byte v)
+        {
+            slider.Value = v;
+            value.Text = v.ToString();
+        }
+
+        private void SetAb9ModeCombo(Ab9Mode mode)
+        {
+            for (int i = 0; i < Ab9ModeCombo.Items.Count; i++)
+            {
+                var item = Ab9ModeCombo.Items[i] as ComboBoxItem;
+                if (item?.Tag is string tag && byte.TryParse(tag, out byte val) && val == (byte)mode)
+                {
+                    Ab9ModeCombo.SelectedIndex = i;
+                    return;
+                }
+            }
+            Ab9ModeCombo.SelectedIndex = -1;
+        }
+
+        private Ab9Settings GetOrCreateAb9Profile()
+        {
+            var profile = _plugin.Settings?.ProfileStore?.CurrentProfile;
+            if (profile == null) return new Ab9Settings();
+            if (profile.Ab9 == null) profile.Ab9 = new Ab9Settings();
+            return profile.Ab9;
+        }
+
+        private void Ab9ModeCombo_Changed(object sender, SelectionChangedEventArgs e)
+        {
+            if (_suppressEvents) return;
+            if (Ab9ModeCombo.SelectedItem is not ComboBoxItem item) return;
+            if (item.Tag is not string tag || !byte.TryParse(tag, out byte val)) return;
+
+            var mode = (Ab9Mode)val;
+            GetOrCreateAb9Profile().Mode = mode;
+            _plugin.Ab9Manager?.SendMode(mode);
+            _plugin.SaveSettings();
+        }
+
+        private void Ab9MechResistanceSlider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e)
+            => HandleAb9SliderChanged(Ab9MechResistanceSlider, Ab9MechResistanceValue, Ab9Slider.MechanicalResistance, e.NewValue);
+
+        private void Ab9SpringSlider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e)
+            => HandleAb9SliderChanged(Ab9SpringSlider, Ab9SpringValue, Ab9Slider.Spring, e.NewValue);
+
+        private void Ab9DampingSlider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e)
+            => HandleAb9SliderChanged(Ab9DampingSlider, Ab9DampingValue, Ab9Slider.NaturalDamping, e.NewValue);
+
+        private void Ab9FrictionSlider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e)
+            => HandleAb9SliderChanged(Ab9FrictionSlider, Ab9FrictionValue, Ab9Slider.NaturalFriction, e.NewValue);
+
+        private void Ab9MaxTorqueSlider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e)
+            => HandleAb9SliderChanged(Ab9MaxTorqueSlider, Ab9MaxTorqueValue, Ab9Slider.MaxTorqueLimit, e.NewValue);
+
+        private void HandleAb9SliderChanged(Slider slider, TextBlock label, Ab9Slider which, double newValue)
+        {
+            if (_suppressEvents) return;
+            byte v = (byte)Math.Max(0, Math.Min(100, (int)Math.Round(newValue)));
+            label.Text = v.ToString();
+
+            var ab9 = GetOrCreateAb9Profile();
+            switch (which)
+            {
+                case Ab9Slider.MechanicalResistance: ab9.MechanicalResistance = v; break;
+                case Ab9Slider.Spring:               ab9.Spring = v;               break;
+                case Ab9Slider.NaturalDamping:       ab9.NaturalDamping = v;       break;
+                case Ab9Slider.NaturalFriction:      ab9.NaturalFriction = v;      break;
+                case Ab9Slider.MaxTorqueLimit:       ab9.MaxTorqueLimit = v;       break;
+            }
+            _plugin.Ab9Manager?.SendSlider(which, v);
+            _plugin.SaveSettings();
         }
 
         private static string Blank(string s) => string.IsNullOrEmpty(s) ? "—" : s;

@@ -57,10 +57,24 @@ namespace MozaPlugin.Devices
             _suppressEvents = false;
 
             _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
-            _refreshTimer.Tick += (s, e) => RefreshWheel();
+            _refreshTimer.Tick += OnRefreshTick;
 
-            Loaded += (s, e) => _refreshTimer.Start();
-            Unloaded += (s, e) => _refreshTimer.Stop();
+            Loaded += OnLoaded;
+            Unloaded += OnUnloaded;
+        }
+
+        private void OnRefreshTick(object? sender, EventArgs e) => RefreshWheel();
+
+        private void OnLoaded(object sender, RoutedEventArgs e) => _refreshTimer.Start();
+
+        private void OnUnloaded(object sender, RoutedEventArgs e)
+        {
+            // Stop the timer AND detach the Tick handler so the dispatcher's
+            // internal timer list cannot keep this control alive past unload.
+            _refreshTimer.Stop();
+            _refreshTimer.Tick -= OnRefreshTick;
+            Loaded -= OnLoaded;
+            Unloaded -= OnUnloaded;
         }
 
         private bool ResolvePlugin()
@@ -108,7 +122,7 @@ namespace MozaPlugin.Devices
                 var border = new Border
                 {
                     Width = 28, Height = 28,
-                    BorderBrush = new SolidColorBrush(Color.FromRgb(85, 85, 85)),
+                    BorderBrush = GetCachedBrush(85, 85, 85),
                     BorderThickness = new Thickness(1),
                     CornerRadius = new CornerRadius(3),
                     Margin = new Thickness(2, 0, 2, 0),
@@ -138,7 +152,7 @@ namespace MozaPlugin.Devices
                 var border = new Border
                 {
                     Width = 28, Height = 28,
-                    BorderBrush = new SolidColorBrush(Color.FromRgb(85, 85, 85)),
+                    BorderBrush = GetCachedBrush(85, 85, 85),
                     BorderThickness = new Thickness(1),
                     CornerRadius = new CornerRadius(3),
                     Cursor = Cursors.Hand,
@@ -240,7 +254,7 @@ namespace MozaPlugin.Devices
             var border = new Border
             {
                 Width = 28, Height = 28,
-                BorderBrush = new SolidColorBrush(Color.FromRgb(85, 85, 85)),
+                BorderBrush = GetCachedBrush(85, 85, 85),
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(3),
                 Cursor = Cursors.Hand,
@@ -287,7 +301,7 @@ namespace MozaPlugin.Devices
                 info.ColorSource[info.Index][0] = r;
                 info.ColorSource[info.Index][1] = g;
                 info.ColorSource[info.Index][2] = b;
-                border.Background = new SolidColorBrush(Color.FromRgb(r, g, b));
+                border.Background = GetCachedBrush(r, g, b);
 
                 info.OnChanged?.Invoke();
                 _plugin.SaveSettings();
@@ -419,13 +433,30 @@ namespace MozaPlugin.Devices
             }
         }
 
+        // Cache SolidColorBrush instances keyed by packed RGB. The 500ms refresh
+        // timer touches ~30 swatches per tick — without the cache that's 60
+        // SolidColorBrush allocations/sec doing nothing useful since most colors
+        // don't change between ticks.
+        private static readonly System.Collections.Generic.Dictionary<int, SolidColorBrush> s_brushCache
+            = new System.Collections.Generic.Dictionary<int, SolidColorBrush>();
+
+        private static SolidColorBrush GetCachedBrush(byte r, byte g, byte b)
+        {
+            int key = (r << 16) | (g << 8) | b;
+            if (s_brushCache.TryGetValue(key, out var brush)) return brush;
+            brush = new SolidColorBrush(Color.FromRgb(r, g, b));
+            brush.Freeze();
+            s_brushCache[key] = brush;
+            return brush;
+        }
+
         private static void UpdateSwatches(Border[] swatches, byte[][] colors, int count)
         {
             for (int i = 0; i < count && i < swatches.Length; i++)
             {
                 if (swatches[i] == null) continue;
                 var c = colors[i];
-                swatches[i].Background = new SolidColorBrush(Color.FromRgb(c[0], c[1], c[2]));
+                swatches[i].Background = GetCachedBrush(c[0], c[1], c[2]);
             }
         }
 

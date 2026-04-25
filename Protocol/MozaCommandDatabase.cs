@@ -296,6 +296,19 @@ namespace MozaPlugin.Protocol
             // Handbrake calibration (write-only, group 94)
             AddCommand("handbrake-cal-start", "handbrake", 0xFF, 94, new byte[] { 3 }, 2, "int");
             AddCommand("handbrake-cal-stop",  "handbrake", 0xFF, 94, new byte[] { 4 }, 2, "int");
+
+            // ===== AB9 ACTIVE SHIFTER (device: ab9, dev id 0x12, group 0x1F write / 0x1F read) =====
+            // Per docs/AB9-poc-plan.md and docs/moza-protocol.md § "AB9 active shifter".
+            // Wire format: 7E 03 1F 12 <cmdHi> <cmdLo> <value> <checksum>. Single-byte
+            // payload for sliders/mode. Response group on the wire is 0x9F; the parser
+            // toggles bit7 back to 0x1F before matching, so both Read- and WriteGroup
+            // are 0x1F here.
+            AddCommand("ab9-mode",                 "ab9", 0x1F, 0x1F, new byte[] { 0xD3, 0x00 }, 1, "int");
+            AddCommand("ab9-mech-resistance",      "ab9", 0x1F, 0x1F, new byte[] { 0xD6, 0x00 }, 1, "int");
+            AddCommand("ab9-spring",               "ab9", 0x1F, 0x1F, new byte[] { 0xAF, 0x00 }, 1, "int");
+            AddCommand("ab9-natural-damping",      "ab9", 0x1F, 0x1F, new byte[] { 0xB0, 0x00 }, 1, "int");
+            AddCommand("ab9-natural-friction",     "ab9", 0x1F, 0x1F, new byte[] { 0xB2, 0x00 }, 1, "int");
+            AddCommand("ab9-max-torque-limit",     "ab9", 0x1F, 0x1F, new byte[] { 0xA9, 0x00 }, 1, "int");
         }
 
         private static void AddCommand(string name, string device, byte readGroup, byte writeGroup,

@@ -55,7 +55,7 @@ namespace MozaPlugin.Devices
             // not split across RPM + Meter flag sub-device. Driving all 18 as one RPM strip.
             ("W18",     "KS Pro",     new WheelModelInfo(18, 14, false, null, 5)),  // firmware reports "W18" for KS Pro
             ("KS",      "KS",         new WheelModelInfo(10, 10, false, null, 0)),
-            ("FSR2",    "FSR V2",     new WheelModelInfo(10, 14, true,  null, 0)),
+            ("W13",     "FSR V2",     new WheelModelInfo(16, 10, false, null, 0)),  // firmware reports "W13" for FSR V2
             ("VGS",     "Vision GS",  new WheelModelInfo(10, 8,  false, null, 0)),
             ("TSW",     "TSW",        new WheelModelInfo(10, 14, false, null, 0)),
         };

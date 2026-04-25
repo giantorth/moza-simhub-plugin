@@ -24,6 +24,10 @@ namespace MozaPlugin.Protocol
         public const byte DeviceHandbrake = 27;
         public const byte DeviceEStop = 28;
         public const byte DeviceHub = 18;
+        // AB9 active shifter exposes a single internal device at id 0x12 on its own
+        // VID_346E PID_1000 composite USB device — same numeric value as DeviceMain
+        // but reached via the AB9's dedicated CDC pipe, not the wheelbase's.
+        public const byte DeviceAb9 = 18;
 
         // Read request groups
         public const byte BaseReadSettings = 40;   // FFB, angle, etc.

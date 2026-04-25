@@ -32,14 +32,38 @@ The simulator (`sim/wheel_sim.py`) serves two overlapping goals:
 
 ### Replay table (`ResponseReplay`)
 
-Loaded from PCAPNG files via tshark. Pairs host→device frames with device→host frames by:
+Loaded from two sources:
+
+**PCAPNG** via tshark (`load_pcapng`). Pairs host→device frames with device→host frames by:
 - Timestamp proximity (250ms window)
 - Expected response group = `req_group | 0x80`
 - Expected response device = `swap_nibbles(req_device)`
 
-First-observed response per `(group, device, payload)` key wins; subsequent observations are discarded.
+**JSON replay tables** via `load_json` — schema v1 format, one file per target device byte with entries keyed by `<group_hex>:<req_payload_hex>`:
 
-**Current replay table size**: 775 entries from `usb-capture/12-04-26/moza-startup.pcapng`.
+```json
+{
+  "schema": 1,
+  "device": 23,
+  "label": "wheel (device 0x17)",
+  "source": "usb-capture/<origin>.pcapng",
+  "entries": {
+    "40:2800": "7e04c07128020011",
+    ...
+  }
+}
+```
+
+First-observed response per `(group, device, payload)` key wins across all sources. Models specify their JSON tables via `replay_tables: [...]` on the profile; loader is invoked from standalone `main()` (first, so JSON wins on key collisions) and again from `mcp_server._apply_model` per-model.
+
+Extractor tool: `sim/extract_replay.py <capture.pcapng> --prefix <name>_ [--device 0x17] [--group 0x40]`. Walks a capture, pairs host/device frames, writes one consolidated JSON file per device byte observed.
+
+**Current ship set** (`sim/replay/`):
+
+| Model | Hub (0x12) | Base (0x13) | Wheel (0x17) | Pedal (0x19) | Total |
+|-------|-----------|-------------|--------------|--------------|-------|
+| kspro | 99 | 111 | 354 | 92 | 656 |
+| csp_r9 | 94 | 135 | 2003 | — | 2232 |
 
 **Self-test pass criteria**: `--replay-handshake` counts "missed replay" only when a frame whose key IS in the table fails to get a replay hit. Frames with no expected response (writes) don't count as failures — those are "orphans".
 
@@ -76,33 +100,58 @@ Wheel → host: group=`0xC3` (= `0x43 | 0x80`), device=`0x71` (nibble-swap of `0
 - `7C:00` type=`0x81` = session open request (either direction)
 - `7C:00` type=`0x01` = data chunk (either direction)
 - `7C:00` type=`0x00` = session end/close marker
-- `fc:00 [session] [ack_lo] [ack_hi]` = session ack (response to data chunks)
+- `fc:00 [session] [ack_lo] [ack_hi]` = session cumulative ACK — **both directions emit**. Host periodically sends `43:17:fc:00:[sess][seq]` meaning "I've acked up to seq X on session Y"; wheel emits `c3:71:fc:00:[sess][seq]` in reply. Sim's `_handle_wheel` consumes inbound `fc:00` silently — letting them fall through to the replay table returns a stale capture-time ack value that triggers PitHouse retransmit loops.
 
-**Session roles** (2025-11 firmware, verified against `usb-capture/latestcaps/automobilista2-wheel-connect-dash-change.pcapng` and prior captures):
+**Session roles** (verified across 2025-11 and 2026-04 firmware captures):
 
-| Session | Opened by | Role |
-|---------|-----------|------|
-| `0x01` | host | Management (wheel identity / log stream) |
-| `0x02` | host | Telemetry (tier def + `fc:00` acks) |
-| `0x03` | host | Aux config (tile-server / settings push) |
-| `0x04` | device | File transfer (.mzdash upload + device → host root dir listing) |
-| `0x06`, `0x08`, `0x0A` | device | Keepalive |
-| `0x09` | device | configJson RPC (dashboard state) |
+| Session | Opened by | Role | Notes |
+|---------|-----------|------|-------|
+| `0x01` | host | Management (wheel identity / log stream / channel catalog push from PitHouse) | |
+| `0x02` | host | Telemetry (tier def + `fc:00` acks) | |
+| `0x03` | host | Aux config (tile-server / settings push) | |
+| `0x04` | device | **Directory listing** (host type=0x08 → wheel type=0x0a) + **RPC** (session 0x0a-style calls, not file content) | Sim's dir-listing reply handler at `_handle_wheel` session 0x04 data path |
+| `0x05` / `0x06` / `0x07` (dynamic) | device, triggered by host `7c:23` | **File transfer** (.mzdash upload; session # varies per firmware build + UI flow — 0x05/0x06 seen in captures, 0x07 observed on a live 2026-04 PitHouse 2026-04-24) | Sim accepts any session in `0x04..0x0a` and gates file-transfer handlers on buffer content (presence of type=0x02 sub-msg) |
+| `0x08`, `0x0A` | device | Keepalive / control channel | Opened at device_init, rarely carries content |
+| `0x09` | device | configJson RPC (dashboard state) — zlib'd state JSON, 9-byte envelope | |
 
-Sim opens its device-side sessions via `resp_device_session_open(session, port)` ~150 ms after the host finishes opening 0x01/0x02. Port byte duplicated in the open payload; the constant `FD 02` trailer is required. See `docs/moza-protocol.md` § Device-initiated session open format.
+Sim opens its device-side sessions via `resp_device_session_open(session, port)` ~150 ms after the host finishes opening 0x01/0x02. For session `0x05`/`0x06`, the sim waits for the host's `7c:23 46 80 XX 00 YY 00 fe 01` trigger and opens session `YY` on demand — real firmware does the same. Port byte duplicated in the open payload; the constant `FD 02` trailer is required. See `docs/moza-protocol.md` § Device-initiated session open format + § Findings from 2026-04-24 session.
 
 ### Dashboard upload + configJson
 
-Upload flow (session 0x04, observed from 2025-11 firmware captures):
+Upload flow (2026-04+ firmware; session number varies):
 
-1. Device opens session 0x04 (type=0x81).
-2. Host sends sub-msg 1 (path registration TLVs, MD5, token, no content sentinel).
-3. Device echoes paths back (sub-msg 1 response).
-4. Host sends sub-msg 2 (path TLVs + UTF-16BE destination path + 12-byte pre-zlib header + zlib-compressed mzdash).
-5. Device acks content.
-6. Both sides exchange type=0x00 end markers.
+1. Host sends dir-listing probe on session `0x04` — sub-msg type=`0x08` asking for `/home/root`.
+2. Sim replies type=`0x0a` via `build_dir_listing_reply(echo_id)` (221B captured payload with fresh echo_id).
+3. Host sends `7c 23 46 80 XX 00 YY 00 fe 01` (port=`YY` session-open request).
+4. Sim emits device-initiated session open for session `YY` (0x05 on current PitHouse, 0x06 on 2025-11 captures).
+5. Host sends sub-msg type=`0x02` metadata on session `YY` — LOCAL path (`0x8C` marker on 2026-04+, `0x8A` on 2025-11) + md5 + bytes_written=0 + total_size BE + sentinel.
+6. Sim replies type=`0x01` ready-ack via `_queue_file_transfer_echo` + `build_file_transfer_response`.
+7. Host sends type=`0x03` content (zlib-compressed mzdash body).
+8. Sim replies type=`0x11` content-complete ack (bytes_written == total_size).
+9. Both sides exchange `7c:00 [session] 00` end markers.
 
-Sim decodes uploaded zlib blobs via `UploadTracker`; dashboard metadata extracted from the path (`/home/moza/resource/dashes/<name>/<name>.mzdash`) and JSON body. Decoded blobs visible through `sim_uploads`.
+Sim decodes uploaded zlib blobs via `UploadTracker`; dashboard name extracted from upload metadata path. Three shapes supported by `extract_mzdash_path`:
+- old firmware remote: `/home/root/resource/dashes/<name>/<name>.mzdash`
+- 2025-11 remote: `/home/root/resource/dashes/<name>.mzdash`
+- 2026-04 PitHouse: no remote path emitted at all — only a Windows-side stage path `<...>/MOZA Pit House/_dashes/<hash>/dashes/<name>/<name>.mzdash` from which `<name>` is parsed.
+
+Decoded blobs visible through `sim_uploads`. See `docs/moza-protocol.md` § Findings from 2026-04-24 for byte-level wire format.
+
+**Resolved 2026-04-24 — full upload pipeline works end-to-end.** Dashboard upload completes against PitHouse; sim writes the decoded mzdash body into its virtual FS. Fixes landed:
+
+1. **1-byte XOR status, not 4-byte trailer.** The mystery `93 71 e8 bd` / `fa cd 10 c6` bytes earlier docs chased were 1B of XOR checksum + 3B of the next chunk's 4-byte CRC32 misread by a buggy `extract_frames` helper that dropped the last 2 bytes of every frame. Real layout: message ends with `ff ff ff ff` sentinel + 1B `status = xor(body_bytes)`.
+2. **`size_LE = msg_len - 6`.** The "header" is effectively 6 bytes (type + size + 1B pad); the two `00 00` bytes that look like more pad are actually body start. Sim keeps an 8B header shape internally and sets `size = body_len + 2`.
+3. **4-byte CRC32-LE per chunk, not 3 bytes.** The 3-byte-truncated interpretation was the same capture-extract artifact as (1). All paths (`chunk_session_payload`, `_chunk_catalog_message`, `UploadTracker.feed`, `PitHouseUploadReassembler.add`) use 4-byte CRC.
+4. **Dynamic file-transfer session port.** Sim no longer hardcodes `{0x05, 0x06}`; any session in `0x04..0x0a` is treated as a file-transfer candidate and gated by whether the buffer contains a type=0x02 sub-msg (2026-04 PitHouse has landed uploads on session 0x07 in live runs).
+5. **Device-side reply seq starts at `port + 1`.** Separate counter from the host's session seq; earlier reuse of `_upload_next_seq` (host counter) put replies at `host_last + 1` which PitHouse silently dropped.
+6. **Per-round type=0x01 progress acks for large uploads.** PitHouse splits a 500KB mzdash across dozens of type=0x03 sub-msgs and won't continue past the first round without a wheel ack containing advancing `bytes_written`. Sim extracts decompressed byte count from the accumulated zlib stream each time `_queue_file_transfer_echo` fires and emits type=0x01 with that bw; final type=0x11 done-ack only fires once the deflate stream reaches EOF.
+7. **Anchored type=0x02 path scan.** `_scan_file_transfer_paths` locates the LAST type=0x02 metadata boundary in the session buffer before walking path TLVs, so retry attempts don't conflate fresh paths with stale ones from prior aborted attempts.
+8. **Zlib stream reassembly across split sub-msgs.** Only the first type=0x03 sub-msg carries `78 9c` zlib magic; continuations are raw deflate bytes at the same byte offset within their sub-msg (path TLVs + md5 + tokens + compressed_header in front, then deflate bytes). `_parse_upload` anchors on the first sub-msg, derives the intra-msg zlib offset, concatenates continuations using each sub-msg's own `size_LE`, and feeds into `zlib.decompressobj()` with partial-output tolerance (PitHouse-aborted transfers still yield whatever bytes arrived).
+9. **Session-open via `7c:23` now registers the port** in `device_opened_sessions`, so the session_end handler runs `_parse_upload` when the upload completes on a dynamically-opened session.
+
+See `docs/moza-protocol.md` § 1-byte XOR status, § Session data chunk CRC, and § Multi-round upload content for byte-level layout and the verification corpus.
+
+**Known workflow quirk.** Sim reload (`sim_reload` → `sim_start`) appears to Windows as a USB disconnect/reconnect; PitHouse re-enumerates cleanly. This is required after any upload abort because PitHouse caches mid-flight "upload in progress" state and won't re-handshake until it sees the wheel drop. Also **after restarting PitHouse**, sim must be reloaded once — otherwise PitHouse partially detects the wheel (display present but tier_def never arrives). Investigation pending.
 
 Session 0x09 configJson is a separate RPC:
 - Device pushes state JSON `{TitleId, configJsonList, disableManager, displayVersion, enableManager}` — 9-byte envelope (`flag + comp_size + uncomp_size`) + zlib stream on the first chunk.
@@ -227,8 +276,10 @@ See `usb-capture/CAPTURES.md` for the full list. Key files:
 | `usb-capture/connect-wheel-start-game.pcapng` | Connect wheel + game start | Used in `--replay-handshake` self-test |
 | `usb-capture/vgs-to-cs.pcapng` | VGS→CS device exchange | Reference only |
 | `usb-capture/09-04-26/dash-upload.pcapng` | Legacy (2026-04) dashboard upload flow | Reference for old session 0x01 upload + old configJson schema |
-| `usb-capture/latestcaps/automobilista2-wheel-connect-dash-change.pcapng` | 2025-11 firmware wheel connect + dashboard change | Reference for session 0x04 file transfer + 2025-11 configJson schema |
+| `usb-capture/latestcaps/automobilista2-wheel-connect-dash-change.pcapng` | 2025-11 firmware wheel connect + dashboard change | Reference for dir-listing type=0x08/0x0a exchange + 2025-11 configJson schema. Upload bytes here rode on session 0x06; 2026-04 firmware moved them to session 0x05. |
 | `usb-capture/latestcaps/automobilista2-dash-change.pcapng` | Warm dashboard switch (no open/close) | Reference for configJson state mutation on active dashboard change |
+| `usb-capture/latestcaps/pithouse-switch-list-delete-upload-reupload.pcapng` | 2026-04 CSP + R9 base full PitHouse UI session (switch / delete / upload / re-upload dashboards) | Source for `sim/replay/csp_r9_*.json` (2232 entries). Display cascade, session 0x06 file paths, hub + base identity bytes. |
+| `usb-capture/ksp/putOnWheelAndOpenPitHouse.pcapng` | KS Pro (W18) boot + PitHouse connect | Source for `kspro` profile + `sim/replay/kspro_*.json` (656 entries). Has pedal (dev 0x19) traffic. |
 
 The captures use `usbcom.data.out_payload` (host→device) and `usbcom.data.in_payload` (device→host). tshark must extract both fields — see `extract_from_pcapng()` in `wheel_sim.py` for the exact tshark invocation.
 
@@ -241,7 +292,12 @@ The captures use `usbcom.data.out_payload` (host→device) and `usbcom.data.in_p
 - Live mode via tty0tty + Proton: known-working for SimHub plugin testing.
 - USBIP gadget scripts (`setup_usbip_gadget.sh`, `teardown_usbip_gadget.sh`) written and syntax-clean; **not yet validated end-to-end against real PitHouse on Windows**.
 - Hardcoded probe responses: plugin base/hub probes (`_PROBE_SYNTH`) and PitHouse identity probes (`_PITHOUSE_ID_RSP`, built from `--model` selection) live in `wheel_sim.py`.
-- Multi-model support: `--model vgs` (default), `--model csp`, or `--model ks`. Identity strings, capability flags, and hardware IDs are derived from the selected model profile (`WHEEL_MODELS` dict). CSP identity extracted from `usb-capture/CSP captures/pithouse-complete.txt`. VGS identity + sub-device values + session-1/2 replay extracted from `usb-capture/connect-wheel-start-game.pcapng`. KS identity captured live from real R5 base + KS wheel via `sim/probe_wheel.py` (2026-04-20) — no dashboard, no display sub-device.
+- Multi-model support: `--model vgs` (default), `--model csp`, `--model ks`, `--model kspro`, or `--model es`. Identity strings, capability flags, and hardware IDs are derived from the selected model profile (`WHEEL_MODELS` dict).
+  - **VGS** — identity + sub-device values + session-1/2 replay extracted from `usb-capture/connect-wheel-start-game.pcapng`.
+  - **CSP** — identity rebuilt 2026-04-24 from `usb-capture/latestcaps/pithouse-switch-list-delete-upload-reupload.pcapng` (hw_id, serials, dev_type `01:02:06:06`, display dev_type `01:02:11:06` — verified byte-exact). Ships with 3 JSON replay tables in `sim/replay/csp_r9_*.json` covering hub + base + wheel identity cascade (2232 entries).
+  - **KS** — identity captured live from real R5 base + KS wheel via `sim/probe_wheel.py` (2026-04-20) — no dashboard, no display sub-device.
+  - **KS Pro (W18)** — added 2026-04-23 from `usb-capture/ksp/putOnWheelAndOpenPitHouse.pcapng`. Shares W17-HW RGB display hardware with CSP (same 12B display hw_id). 4 JSON replay tables in `sim/replay/kspro_*.json` (656 entries) including pedal (dev 0x19, 92 entries — KS Pro captures show real pedal traffic).
+  - **ES** — identity captured live from real R5 base + ES wheel (2026-04-23) — see ES caveat below.
 - Plugin ack race condition: fixed in `Telemetry/TelemetrySender.cs`.
 - Device-initiated session opens: sim proactively opens sessions 0x04/0x06/0x08/0x09/0x0A 150 ms after host brings up 0x01/0x02 — required for PitHouse's dashboard UI (session 0x09 populates `configJsonList`) and for the plugin's session 0x04 upload path.
 - Dashboard upload decode: `UploadTracker` reassembles FF-prefixed chunks, decompresses zlib, parses mzdash JSON + path. Uploads are persisted to `sim/logs/stored_dashboards.json` and surface through `sim_uploads` / `sim_stored_dashboards`.
@@ -257,16 +313,18 @@ Each profile in `sim/wheel_sim.py` declares the bytes the sim emits for one whee
 
 | Field | Probe | Response group | Extract from pcapng |
 |-------|-------|----------------|---------------------|
-| `name` | `0x07 0x17 [01]` | `0x87` | 16-byte ASCII, null-padded |
-| `sw_version` | `0x0f 0x17 [01]` | `0x8f` | 16-byte ASCII |
-| `hw_version` | `0x08 0x17 [01]` | `0x88` | 16-byte ASCII |
+| `name` | `0x07 0x17 [01]` | `0x87` | 16-byte ASCII, null-padded. PitHouse also sends short form `0x07 0x17` (no sub-byte) — sim entry `(0x43, 0x17, b'\x07')` returns same content |
+| `sw_version` | `0x0f 0x17 [01]` | `0x8f` | 16-byte ASCII. Short form `0x0f 0x17` (no sub) also handled |
+| `hw_version` | `0x08 0x17 [01]` | `0x88` | 16-byte ASCII. Short form `0x08 0x17` also handled |
 | `hw_sub` | `0x08 0x17 [02]` | `0x88` | 16-byte ASCII |
-| `serial0` | `0x10 0x17 [00]` | `0x90` | 16-byte ASCII — **must be real serial, placeholders break detection** |
+| `serial0` | `0x10 0x17 [00]` | `0x90` | 16-byte ASCII — **must be real serial, placeholders break detection**. Short form `0x10 0x17` also handled, defaults to sub=0x00 |
 | `serial1` | `0x10 0x17 [01]` | `0x90` | 16-byte ASCII |
 | `caps` | `0x05 0x17 [00 00 00 00]` | `0x85` | 4 bytes — bit `0x20` of byte 2 advertises a detachable RGB display (CSP); without it (VGS/KS) PitHouse skips the sub-device probe cascade |
-| `hw_id` | `0x06 0x17` | `0x86` | Variable-length bytes |
-| `dev_type` (optional) | `0x04 0x17 [00 00 00 00]` | `0x84` | 4 bytes. Defaults to `01:02:04:06` (VGS/CSP). KS real HW returns `01:02:05:06` — set explicitly on new profiles if real HW differs |
-| `identity_11` (optional) | `0x11 0x17 [04]` | `0x91` | Defaults to `04:01` (VGS/CSP). Real VGS/CSP both return this; `00:00` makes PitHouse mis-identify VGS. KS real HW returns `04:00` — set explicitly on new profiles if real HW differs. CSP tolerates the wrong value via the caps-bit 0x20 fallback path |
+| `hw_id` | `0x06 0x17` | `0x86` | Variable-length bytes — CSP real HW returns 12 bytes (`80 31 3b c0 00 20 30 04 4a 36 30 34`). Earlier docs had this as 8 bytes — wrong, correctly re-extracted 2026-04-24 |
+| `dev_type` (optional) | `0x04 0x17 [00 00 00 00]` | `0x84` | 4 bytes. VGS = `01:02:04:06`, **CSP = `01:02:06:06`** (corrected 2026-04-24 — earlier sim default `01:02:04:06` was wrong for CSP), KS = `01:02:05:06`, KSP = `01:02:05:06`, ES = `01:02:12:08`. Set explicitly on new profiles if real HW differs |
+| `identity_11` (optional) | `0x11 0x17 [04]` | `0x91` | Defaults to `04:01` (VGS/CSP). Real VGS/CSP both return this; `00:00` makes PitHouse mis-identify VGS. KS real HW returns `04:00`. PitHouse also sends short form `0x11 0x17` (no sub) — sim returns `0x91 0x04` (2 bytes, no trailing `0x01`) |
+
+**2026-04 firmware sends short-form probes** (no sub-byte) for cmd `02/07/08/0f/10/11` in place of the older sub-byte variants. See `docs/moza-protocol.md` § "Short-form identity probes" for aggregate counts across captures — the sub-byte variants `08:01`, `10:00`, etc. appear **zero** times in any capture; only short forms are observed. Sim now handles both (short form is required; sub-byte is dead code kept for historical firmware compat).
 
 ### Display sub-device (nested `display` dict)
 
@@ -280,6 +338,8 @@ Sent under `(group=0x43, device=0x17)` when SimHub plugin's `SendDisplayProbe` f
 - `session_layout` (`"legacy"` | `"vgs_combined"`): controls `build_device_catalog`:
   - `"legacy"` (default, CSP): session 1 carries the device description, session 2 carries the channel URL catalog.
   - `"vgs_combined"` (VGS): session 1 carries the tiny seed (`ff` + a 9-byte control TLV); session 2 carries the device description TLVs (split at real-HW boundaries 26/5/2/9/2 bytes, each chunk with its own CRC-32) followed by the channel catalog.
+- `session2_desc_chunks` (tuple, optional): override the default VGS 26/5/2/9/2 split for a different desc length. CSP desc is 42 bytes — correct split is `(24, 5, 2, 9, 2)` with chunk 1 ending on `0x0a` (not `0x05` — that was a mistranscription in older profiles). KSP desc is 44B with VGS-style split.
+- `replay_tables` (list[str], optional): paths (relative to repo root) to JSON replay tables (schema v1). Loaded by `ResponseReplay.load_json` at sim_start, before pcapng fallback. Used for hub/base/wheel/pedal identity cascades extracted from real captures — enables answering dev 0x12/0x13/0x19 probes in addition to dev 0x17. See `sim/replay/` for shipped tables. Extract your own with `sim/extract_replay.py <capture> --prefix <model>_`.
 - `catalog_pcapng` (string, optional): path (relative to repo root) to a real-hardware capture. When set, the sim replays session 1 and 2 wheel→host frames byte-for-byte from the capture instead of synthesizing via `build_device_catalog`. Synth only covers the opening description TLVs; real VGS sends ~150 follow-up TLVs on session 2 that PitHouse waits for before sending the full tier definition. VGS uses `usb-capture/connect-wheel-start-game.pcapng`; CSP falls back to synth (works because PitHouse's CSP path doesn't need the extended session 2 TLVs). Replayed chunk seqs are shifted at send time to match PitHouse's current port counter (see next item).
 - **Session-open ACK**: the wheel's `fc:00` reply to a session-open must echo the host's open seq (the bytes at payload offset 6–7), **not** constant zero. Real VGS: host opens with seq=N, wheel replies `fc 00 [sess] [N_lo] [N_hi]`. The sim previously hard-coded `ack_seq=0`, which only worked on PitHouse's very first connect (when its port counter happened to be 1); on reconnect the counter incremented to 2+ and PitHouse treated the `ack_seq=0` response as stale, stalling on its stored `ack_seq=3` state and never emitting tier definitions. `_handle_wheel` now passes `open_seq` into `resp_session_ack(...)` for every session open.
 - **Session-seq alignment**: PitHouse's session-open payload carries a monotonic port counter (the `[seq_lo] [seq_hi]` bytes right after `[flag_lo] [flag_hi]`). That counter increments on every disconnect/reconnect; the wheel must emit its first chunk at `host_open_seq + 3` on each session. The sim extracts the capture's baseline via `extract_catalog_open_seqs()` and records the runtime value in `WheelSimulator.session_open_seqs` when session opens arrive. `proactive_sender` then calls `rewrite_session_frame_seq()` to shift each replayed chunk's seq by `(host_open_seq - capture_open_seq)` and recompute the checksum. Without this shift PitHouse drops replayed chunks as out-of-order and never sends the full tier definition.
@@ -307,6 +367,58 @@ wheel — KS uses `01:02:05:06` / `04:00` where VGS/CSP use `01:02:04:06` /
 `04:01`. Both are optional fields on a model profile; omitting them gets the
 VGS/CSP defaults.
 
+#### ES wheel caveat
+
+ES (old-protocol) wheels share device ID `0x13` with the wheelbase — identity
+probes to wheel device `0x17` return nothing. Probe `0x13` instead and you get
+the **base** identity back (e.g. `R5 Black # MOT-1`, hw `RS21-D05-HW BM-C`).
+See `docs/moza-protocol.md` § "ES wheel identity caveat". The captured ES
+profile in `WHEEL_MODELS['es']` (R5 base + ES wheel, 2026-04-23) records:
+
+| Field | Value |
+|-------|-------|
+| name | `R5 Black # MOT-1` |
+| sw_version | `RS21-D05-MC WB` |
+| hw_version | `RS21-D05-HW BM-C` |
+| hw_sub | `U-V10` |
+| caps | `01 02 54 00` (no `0x20` RGB-display bit) |
+| dev_type | `01 02 12 08` (sub-byte 0x12; VGS/CSP=0x04, KS=0x05) |
+| identity_11 | `04 01` (default) |
+| hw_id | base hw_id (12 bytes, matches `/dev/serial/by-id/usb-Gudsen_MOZA_*`) |
+
+To re-capture from a different R5/ES combo:
+
+```bash
+python3 -c "import sys, time; sys.path.insert(0,'sim'); \
+from wheel_sim import build_frame, MSG_START, frame_payload, verify; \
+import serial; ser = serial.Serial('/dev/ttyACM0', 115200, timeout=0.05); \
+end=time.time()+0.3
+while time.time()<end: ser.read(4096)
+for grp,pl,lbl in [(0x07,b'\x01','name'),(0x0F,b'\x01','sw'),(0x08,b'\x01','hw'),
+    (0x08,b'\x02','hw_sub'),(0x10,b'\x00','serial0'),(0x10,b'\x01','serial1'),
+    (0x05,b'\x00\x00\x00\x00','caps'),(0x06,b'','hw_id'),
+    (0x04,b'\x00\x00\x00\x00','dev_type'),(0x11,b'\x04','id11')]:
+    ser.reset_input_buffer(); ser.write(build_frame(grp,0x13,pl)); ser.flush()
+    deadline=time.time()+0.8
+    while time.time()<deadline:
+        b=ser.read(1)
+        if not b or b[0]!=MSG_START: continue
+        n=ser.read(1); rest=ser.read(n[0]+3)
+        fr=bytes([MSG_START,n[0]])+rest
+        if verify(fr) and len(fr)>=4 and fr[2]==(grp|0x80):
+            print(lbl, frame_payload(fr).hex()); break"
+```
+
+Routing: the `es` profile sets `wheel_device: 0x13`, which makes
+`_build_identity_tables` key all wheel identity entries by `0x13`, makes the
+PitHouse identity dispatch and wheel-config-echo answer from `swap_nibbles(0x13)
+= 0x31`, and excludes `0x17` from the simulated-device set (heartbeats and
+keepalives to `0x17` get no ACK). An early gate in `_handle_core` drops every
+frame addressed to `0x17` silently — without it the replay table (built from
+VGS captures) would answer `0x17` identity probes with VGS values and confuse
+PitHouse. See "ES feature parity" in Pending work for what's still missing
+(brightness range, LED bitmask-only writes, wake-up handling).
+
 **PCAPNG capture only** — follow the steps below:
 
 1. Capture a real-hardware PitHouse startup into pcapng for the wheel.
@@ -317,7 +429,27 @@ VGS/CSP defaults.
 
 ## Pending work
 
-1. **More wheel models**: add profiles to `WHEEL_MODELS` for other display-equipped wheels (KS Pro/W18, FSR V2, etc.) as captures become available. Follow "Adding a new model" above — do not copy the CSP defaults blindly. Models currently supported: `vgs`, `csp`, `ks`.
+1. **More wheel models**: add profiles to `WHEEL_MODELS` for other display-equipped wheels (FSR V2, etc.) as captures become available. Follow "Adding a new model" above — do not copy the CSP defaults blindly. Models currently supported: `vgs`, `csp`, `ks`, `kspro`, `es`.
+2. **ES feature parity**: identity / plugin-probe / wheel-echo routing through `0x13` is wired (see `wheel_device` in `WHEEL_MODELS['es']`), and `0x17` traffic is dropped silently. Still missing: brightness range 0-15 enforcement, LED bitmask-only write semantics, ES wake-up sequence handling. Plugin-side ES code paths (`MozaLedDeviceManager.cs`) can be exercised today; wheel-side write semantics still echo unmodified.
+3. **Dashboard upload — full pipeline landed (2026-04-24)**. Protocol negotiation + multi-round progress acks + zlib reassembly all work end-to-end. Remaining follow-up:
+   - **Cold-start partial detect after PitHouse restart.** When PitHouse is relaunched while the sim is already running, PitHouse reaches `display_detected = true` but never pushes tier_def. A `sim_reload` + `sim_start` (which Windows sees as a USB drop+reattach) unblocks it every time. Likely PitHouse caches some identity-negotiation state per-wheel that becomes stale when the host process restarts; needs a capture diff between a working cold-boot (sim started first, PitHouse second) and a broken cold-boot (PitHouse started first, sim second) to pinpoint which probe we're not answering in the broken case.
+   - **Dashboard name extraction — resolved 2026-04-24.** 2026-04 PitHouse omits the `/home/root/resource/dashes/...` remote path entirely; the dashboard name is parsed from the Windows-side stage path (`_dashes/<hash>/dashes/<name>/<name>.mzdash`) by `extract_mzdash_path`. Falls back to `uploaded-dashboard` only when no path of any known shape is present.
+   - **176B opaque tail in dir-listing reply** (offset 45..220 of the 221B body, after `a9 88 01 00 00` magic). Entropy 6.94 bits/byte, position-9 byte varies per capture (nonce?). Not zlib at any offset/wbits mode tested. Replaying capture bytes works functionally but PitHouse may still cache-skip when it sees 11 factory dashboards listed. Also: the hardcoded reply is 221B where the real wheel emits 219B (same 1B-XOR trailer / 4B-CRC collapse as file-transfer); rebuild from raw capture chunks once more captures are available.
+4. **Session 1 device→host channel catalog emission**: real wheel emits ~250 chunks (~5.3 KB) of channel URL catalog, sim only emits on session 0x02. Attempted 2026-04-24 via `session1_emits_catalog` flag; regressed session opens. Needs throttling or different chunking.
+5. **Unknown application-level ACK for session 0x01 host tier-def push** (PitHouse pushes channel catalog + equalizer-gain names to wheel; sim buffers but doesn't explicitly ack the content).
+
+## Analysis tools (usb-capture/)
+
+Built 2026-04-24 to support deeper capture investigation:
+
+| Tool | Purpose |
+|------|---------|
+| `usb-capture/analyze_displays.py` | Walks every `.pcapng` under `usb-capture/`, classifies each as full-handshake / mid-session / specialty, quantifies session blob counts, display cascade probes, mcUid candidates, and per-capture sim-gap (probes sim can't answer with current identity tables). Output: `usb-capture/display-negotiation-inventory.md`. |
+| `usb-capture/decode_session.py` | Reassembles any session's byte stream (host or device direction) with 3-byte CRC stripping, runs envelope detection (zlib, UTF-16LE, MOZA TLV). `--session 1 --direction device` |
+| `usb-capture/message_content_decoder.py` | Walks a reassembled session stream emitting semantic messages (device_desc, field0_marker, channel_entry, zlib_stream, ff-envelope). WIP — TLV size-field rules need refinement for some block types. |
+| `usb-capture/sim_vs_real_diff.py` | For each host→wheel frame in a capture, compares the real wheel's response vs what sim would produce. Flags `no_handler` / `mismatch` / `extra_reply` divergences. Runs sim's `_build_identity_tables` for the chosen model to check coverage. |
+| `usb-capture/strip_tlv_decode.py` | Dumps `0xff`-prefix TLV blocks from a reassembled session (requires size-field format fix before it's fully useful for session 0x01 host push). |
+| `usb-capture/display-investigation-plan.md` | Plan document (2026-04-24) tracking step-by-step work on display-detection gap. Open checklist items survive this session's work. |
 
 ---
 
@@ -399,8 +531,8 @@ In `--mcp` mode the MCP server owns stdio (JSON-RPC transport). The simulator do
 
 | Tool | Description |
 |------|-------------|
-| `sim_start` | Connect to serial port and start simulation. Accepts optional `port` override. Enforces 5s reconnect cooldown. |
-| `sim_stop` | Disconnect serial port and stop simulation threads. Starts cooldown timer. |
+| `sim_start` | Connect to serial port and start simulation. Accepts optional `port` override. Enforces 5s reconnect cooldown. Cross-process port lock — a second wheel_sim (another MCP server or Claude session) trying the same port returns an error with the owner PID. |
+| `sim_stop` | Disconnect serial port and stop simulation threads. Starts cooldown timer. If the port is held by another wheel_sim process (no local session), signals SIGTERM / `taskkill /F` on the owner PID recorded in the lockfile so any session can stop the singular sim. |
 | `sim_reload` | Reload `wheel_sim.py` from disk to pick up code edits. Stops session if running; purges the cached module so the next `sim_start` imports fresh code. MCP server process stays alive — no `/mcp` reconnect needed. |
 | `sim_info` | Connection state, configured port, cooldown remaining. |
 
@@ -464,6 +596,12 @@ python3 sim/wheel_sim.py --model csp /dev/tnt0
 
 # Live mode as KS (no dashboard)
 python3 sim/wheel_sim.py --model ks /dev/tnt0
+
+# Live mode as KS Pro (W18, shares W17-HW RGB display)
+python3 sim/wheel_sim.py --model kspro /dev/tnt0
+
+# Live mode as ES (old-protocol; identity proxies through base 0x13)
+python3 sim/wheel_sim.py --model es /dev/tnt0
 
 # Console output (non-interactive, grep-friendly)
 python3 sim/wheel_sim.py --console /dev/tnt0
