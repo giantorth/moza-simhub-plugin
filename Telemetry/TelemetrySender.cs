@@ -186,6 +186,16 @@ namespace MozaPlugin.Telemetry
         public bool UploadDashboard { get; set; } = true;
 
         /// <summary>
+        /// True when MozaPlugin has detected a Universal Hub on the bus. Switches
+        /// the handshake to PitHouse's hub-attached ordering: open 0x03 before
+        /// 0x01/0x02, wait longer for the wheel's device-init session burst on
+        /// 0x05/0x07/0x09/0x0a, and skip the host-open fallback for the upload
+        /// session (racing it confuses the wheel state machine — see
+        /// usb-capture/ksp/mozahubstartup.pcapng).
+        /// </summary>
+        public bool HubPresent { get; set; }
+
+        /// <summary>
         /// Resolver invoked per frame for channels with a non-empty
         /// <see cref="ChannelDefinition.SimHubProperty"/>. Set by MozaPlugin before
         /// assigning <see cref="Profile"/>; bound into each TelemetryFrameBuilder at
@@ -296,15 +306,6 @@ namespace MozaPlugin.Telemetry
                 SendDashboardUpload();
 
             if (!_enabled) return;
-
-            // Open session 0x03 (doc [moza-protocol.md:620-625]: host opens 0x03
-            // 150-450ms after 0x01/0x02 on new firmware). Sim stubs this but real
-            // hardware expects it. Fire-and-forget: we don't rely on its ack.
-            // Tile-server data push deferred until after tier def — pushing
-            // immediately after open collided with the wheel's session 0x09
-            // configJson state burst (under Wine SerialPort R/W contention),
-            // costing 6 of 7 state chunks.
-            SendSessionOpen(0x03, 0x03);
 
             // Wait for wheel's pre-tier-def channel registration dump to quiet
             // down before transmitting our tier definition. Sim/real wheel pushes
@@ -436,6 +437,13 @@ namespace MozaPlugin.Telemetry
             }
             // Brief settle so the wheel processes the closes before we re-open.
             System.Threading.Thread.Sleep(100);
+
+            // PitHouse opens 0x03 (tile-server) BEFORE 0x01/0x02 when the wheel
+            // is behind a Universal Hub — verified in usb-capture/ksp/
+            // mozahubstartup.pcapng (t=25.920 0x03 OPEN, t=25.921 0x01+0x02
+            // OPEN). Direct-wheelbase tolerates either order. Fire-and-forget;
+            // 0x03 is a host→wheel push channel and the wheel does not ack.
+            SendSessionOpen(0x03, 0x03);
 
             byte mgmtPort = TryOpenSession(MgmtSession, OpenAckTimeoutMs);
             if (!_enabled || !_connection.IsConnected) return;
@@ -752,24 +760,37 @@ namespace MozaPlugin.Telemetry
             byte uploadSess = ChooseUploadSession();
             _uploadSession = uploadSess;
 
-            // Wait for the device to open the chosen session. Real wheel opens
-            // it ~40–400 ms after we open session 0x02 on a fresh connection.
-            // On a mid-connection restart (dashboard change) the device may not
-            // re-open — plugin's blanket close during handshake takes the
-            // session down, but firmware/sim won't necessarily re-initiate.
-            // Fall back to a host-initiated open so dashboard re-uploads work.
-            if (!_uploadSessionOpened.Wait(500))
+            // Wait for the device to open the chosen session. Direct-wheelbase
+            // wheel opens it ~40–400 ms after we open 0x01/0x02; behind a
+            // Universal Hub the burst can take ~2.1 s (usb-capture/ksp/
+            // mozahubstartup.pcapng: 0x05/0x07/0x09/0x0a opens at ~28.0–28.1 s,
+            // host opens 0x01/0x02 at 25.921 s).
+            //
+            // If after 3 s the wheel has not device-init any session in
+            // 0x04..0x0a, behaviour diverges by transport:
+            //   - Hub-attached: skip upload entirely. Host-opening 0x04 + push
+            //     racing the wheel's burst confuses the state machine and
+            //     causes the wheel to abort 0x09/0x0a opens, killing dash.
+            //   - Direct-wheelbase: fall back to host-initiated 0x04 open
+            //     (legacy behaviour, kept so dashboard re-uploads still work
+            //     on mid-connection restarts where the wheel doesn't re-init).
+            const int FtBurstWaitMs = 3000;
+            if (!_uploadSessionOpened.Wait(FtBurstWaitMs))
             {
+                if (HubPresent)
+                {
+                    SimHub.Logging.Current.Warn(
+                        $"[Moza] Upload session 0x{uploadSess:X2} not device-opened within " +
+                        $"{FtBurstWaitMs}ms (Universal Hub present) — skipping dashboard upload " +
+                        "to avoid racing wheel state machine. Tier def + telemetry will still send.");
+                    return;
+                }
                 SimHub.Logging.Current.Info(
-                    $"[Moza] Upload session 0x{uploadSess:X2} not opened by device within 500ms — host-opening for upload");
+                    $"[Moza] Upload session 0x{uploadSess:X2} not opened by device within " +
+                    $"{FtBurstWaitMs}ms — host-opening for upload");
                 SendSessionOpen(uploadSess, uploadSess);
-                // Give the wheel a moment to process + ack before we start
-                // pushing file-transfer chunks.
                 if (!_uploadSessionOpened.Wait(500))
                 {
-                    // Even the host-initiated open didn't produce an observed
-                    // open event. Proceed anyway — the wheel may silently accept
-                    // data. The ack waiters below will surface any actual failure.
                     SimHub.Logging.Current.Info(
                         $"[Moza] Upload session 0x{uploadSess:X2} host-open had no confirmation; proceeding with upload");
                     _uploadSessionOpened.Set();

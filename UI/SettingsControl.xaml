@@ -778,7 +778,7 @@
                         <CheckBox x:Name="UploadDashboardCheck" Content="Upload dashboard on connect"
                                   Margin="0,8,0,4" Checked="UploadDashboard_Changed" Unchecked="UploadDashboard_Changed"/>
                         <TextBlock TextWrapping="Wrap" Foreground="Gray" FontSize="11" Margin="0,0,0,8"
-                                   Text="PitHouse uploads the dashboard file to the wheel on every connection. Disable to test telemetry without upload."/>
+                                   Text="Attempt to upload selected mzdash file.  Experimental."/>
                         <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
                             <TextBlock Text="Protocol version:" VerticalAlignment="Center" Margin="0,0,8,0"/>
                             <ComboBox x:Name="ProtocolVersionCombo" Width="320"
