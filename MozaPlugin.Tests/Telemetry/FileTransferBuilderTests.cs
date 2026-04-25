@@ -50,10 +50,28 @@ namespace MozaPlugin.Tests.Telemetry
             byte[] md5 = new byte[16];
             byte[] msg = FileTransferBuilder.BuildPathRegistration(
                 "C:/tmp/local", "/home/root/staging", md5, token: 0x054Bu);
+            // Default = Legacy2025_11
             Assert.Equal(FileTransferBuilder.HeaderRoleHost, msg[0]);
             Assert.Equal(FileTransferBuilder.HeaderMaxChunkHost, msg[1]);
             Assert.Equal(0x01, msg[2]); // transfer type for sub-msg 1
             Assert.Equal(0x8C, msg[8]); // first TLV marker = local path
+        }
+
+        [Fact]
+        public void BuildPathRegistration_New2026_04_StartsWithTypeSizeHeader()
+        {
+            byte[] md5 = new byte[16];
+            byte[] msg = FileTransferBuilder.BuildPathRegistration(
+                "C:/tmp/local", "/home/root/staging", md5, token: 0x054Bu,
+                FileTransferWireFormat.New2026_04);
+            // 6B header: type / size_LE_2B / pad×3
+            Assert.Equal(0x01, msg[0]);   // transfer type
+            int sizeLE = msg[1] | (msg[2] << 8);
+            Assert.Equal(msg.Length - 6, sizeLE); // size_LE = body length
+            Assert.Equal(0x00, msg[3]);   // pad
+            Assert.Equal(0x00, msg[4]);
+            Assert.Equal(0x00, msg[5]);
+            Assert.Equal(0x8C, msg[6]);   // body[0] = LOCAL TLV marker
         }
 
         [Fact]
@@ -67,6 +85,29 @@ namespace MozaPlugin.Tests.Telemetry
             // Must contain UTF-16BE-encoded destination path
             byte[] needle = Encoding.BigEndianUnicode.GetBytes("/home/moza/resource/dashes/X/X.mzdash");
             Assert.NotEmpty(IndexesOf(msg, needle));
+        }
+
+        [Fact]
+        public void BuildFileContent_New2026_04_HeaderHasTypeAndSize()
+        {
+            byte[] md5 = new byte[16];
+            byte[] mzdash = Encoding.UTF8.GetBytes("dummy");
+            byte[] msg = FileTransferBuilder.BuildFileContent(
+                "local", "remote", md5, 0x054Bu,
+                "/home/moza/resource/dashes/X/X.mzdash", mzdash,
+                FileTransferWireFormat.New2026_04);
+            Assert.Equal(0x03, msg[0]); // transfer type for content push
+            int sizeLE = msg[1] | (msg[2] << 8);
+            Assert.Equal(msg.Length - 6, sizeLE);
+        }
+
+        [Fact]
+        public void BuildSubMsgHeader_New2026_04_RejectsOversizedBody()
+        {
+            // 16-bit size cap: body > 0xFFFF must split into multiple sub-msgs.
+            Assert.Throws<ArgumentOutOfRangeException>(() =>
+                FileTransferBuilder.BuildSubMsgHeader(0x03, 0x10000,
+                    FileTransferWireFormat.New2026_04));
         }
 
         [Fact]

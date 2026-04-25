@@ -21,7 +21,19 @@ namespace MozaPlugin.Telemetry
         public sealed class UploadPayload
         {
             public byte[] SubMsg1PathRegistration { get; set; } = Array.Empty<byte>();
+            /// <summary>
+            /// Single concatenation of all sub-msg 2 chunks. Convenience accessor;
+            /// callers driving the wire dance should iterate <see cref="SubMsg2Chunks"/>
+            /// instead so each sub-msg is sent as its own session-data burst.
+            /// </summary>
             public byte[] SubMsg2FileContent { get; set; } = Array.Empty<byte>();
+            /// <summary>
+            /// One or more file-content sub-msgs. Length 1 for legacy/2025-11 firmware;
+            /// length N≥1 for new firmware once true chunking lands. Iterate this and
+            /// chunk each entry through the session-data layer with its own seq range.
+            /// </summary>
+            public System.Collections.Generic.List<byte[]> SubMsg2Chunks { get; set; }
+                = new System.Collections.Generic.List<byte[]>();
             public uint Token { get; set; }
             public string DashboardName { get; set; } = "";
             public string Md5Hex { get; set; } = "";
@@ -29,7 +41,8 @@ namespace MozaPlugin.Telemetry
         }
 
         /// <summary>
-        /// Build a session 0x04 upload for <paramref name="mzdashContent"/>.
+        /// Build a file-transfer upload for <paramref name="mzdashContent"/>
+        /// using the legacy 2025-11 wire format.
         /// <paramref name="dashboardName"/> is used to construct the
         /// destination path (`/home/moza/resource/dashes/{name}/{name}.mzdash`)
         /// and should match the dashboard's `dirName` so PitHouse groups the
@@ -37,6 +50,16 @@ namespace MozaPlugin.Telemetry
         /// </summary>
         public static UploadPayload BuildUpload(byte[] mzdashContent, string dashboardName,
                                                 uint token, long timestampMs)
+            => BuildUpload(mzdashContent, dashboardName, token, timestampMs,
+                FileTransferWireFormat.Legacy2025_11);
+
+        /// <summary>
+        /// Build a file-transfer upload with the chosen wire format. New
+        /// firmware (2026-04+) requires <see cref="FileTransferWireFormat.New2026_04"/>.
+        /// </summary>
+        public static UploadPayload BuildUpload(byte[] mzdashContent, string dashboardName,
+                                                uint token, long timestampMs,
+                                                FileTransferWireFormat format)
         {
             if (mzdashContent == null) throw new ArgumentNullException(nameof(mzdashContent));
             if (string.IsNullOrEmpty(dashboardName))
@@ -46,12 +69,24 @@ namespace MozaPlugin.Telemetry
             string localTemp = FileTransferBuilder.BuildLocalTempPath(timestampMs);
             string remoteStaging = FileTransferBuilder.BuildRemoteStagingPath(md5Hex);
             string destPath = FileTransferBuilder.BuildDashboardDestPath(dashboardName);
+            var subMsg2Chunks = FileTransferBuilder.BuildFileContentChunked(
+                localTemp, remoteStaging, md5, token, destPath, mzdashContent, format);
+            // Concatenate for legacy callers that expect a single byte[].
+            int totalLen = 0;
+            foreach (var c in subMsg2Chunks) totalLen += c.Length;
+            byte[] subMsg2Concat = new byte[totalLen];
+            int off = 0;
+            foreach (var c in subMsg2Chunks)
+            {
+                Buffer.BlockCopy(c, 0, subMsg2Concat, off, c.Length);
+                off += c.Length;
+            }
             return new UploadPayload
             {
                 SubMsg1PathRegistration = FileTransferBuilder.BuildPathRegistration(
-                    localTemp, remoteStaging, md5, token),
-                SubMsg2FileContent = FileTransferBuilder.BuildFileContent(
-                    localTemp, remoteStaging, md5, token, destPath, mzdashContent),
+                    localTemp, remoteStaging, md5, token, format),
+                SubMsg2FileContent = subMsg2Concat,
+                SubMsg2Chunks = subMsg2Chunks,
                 Token = token,
                 DashboardName = dashboardName,
                 Md5Hex = md5Hex,

@@ -99,6 +99,7 @@ namespace MozaPlugin
                 RefreshHubTab();
                 InitTelemetryTab();
                 RefreshExtendedLedGroups();
+                RefreshWheelFilesTab();
                 RefreshDiagnosticsTab();
             }
             finally
@@ -1632,6 +1633,111 @@ namespace MozaPlugin
             if (cfg.ModeCmd == null) return;
             if (modeCombo.SelectedIndex < 0) return;
             _device.WriteSetting(cfg.ModeCmd, modeCombo.SelectedIndex);
+        }
+
+        // ── Wheel Files tab ─────────────────────────────────────────────
+        // Shows the wheel-side dashboard inventory derived from the most-recent
+        // session 0x09 configJson state push. Per-row Delete issues a
+        // `completelyRemove` RPC over session 0x0a.
+
+        public sealed class WheelFileRow
+        {
+            public string State { get; set; } = "";       // "enabled" / "disabled"
+            public string Title { get; set; } = "";
+            public string DirName { get; set; } = "";
+            public string Hash { get; set; } = "";
+            public string HashShort => string.IsNullOrEmpty(Hash) ? "" :
+                (Hash.Length > 12 ? Hash.Substring(0, 12) + "…" : Hash);
+            public string LastModified { get; set; } = "";
+            public string Id { get; set; } = "";
+        }
+
+        private void RefreshWheelFilesTab()
+        {
+            if (WheelFilesGrid == null) return;
+            var ts = _plugin.TelemetrySender;
+            var state = ts?.WheelState;
+            var rows = new System.Collections.Generic.List<WheelFileRow>();
+            if (state != null)
+            {
+                foreach (var d in state.EnabledDashboards)
+                    rows.Add(new WheelFileRow
+                    {
+                        State = "enabled",
+                        Title = d.Title,
+                        DirName = d.DirName,
+                        Hash = d.Hash,
+                        LastModified = d.LastModified,
+                        Id = d.Id,
+                    });
+                foreach (var d in state.DisabledDashboards)
+                    rows.Add(new WheelFileRow
+                    {
+                        State = "disabled",
+                        Title = d.Title,
+                        DirName = d.DirName,
+                        Hash = d.Hash,
+                        LastModified = d.LastModified,
+                        Id = d.Id,
+                    });
+            }
+            // Preserve grid selection across refresh by DirName key.
+            string? prevDir = (WheelFilesGrid.SelectedItem as WheelFileRow)?.DirName;
+            WheelFilesGrid.ItemsSource = rows;
+            if (!string.IsNullOrEmpty(prevDir))
+            {
+                foreach (var r in rows)
+                    if (r.DirName == prevDir) { WheelFilesGrid.SelectedItem = r; break; }
+            }
+            if (WheelFilesStatusBox != null)
+            {
+                if (state == null)
+                    WheelFilesStatusBox.Text = "(no configJson state received yet)";
+                else
+                    WheelFilesStatusBox.Text =
+                        $"{rows.Count} dashboards (captured {state.CapturedAt:HH:mm:ss})";
+            }
+        }
+
+        private void WheelFilesRefresh_Click(object sender, RoutedEventArgs e)
+        {
+            RefreshWheelFilesTab();
+        }
+
+        private void WheelFilesDelete_Click(object sender, RoutedEventArgs e)
+        {
+            if (((Button)sender).Tag is not WheelFileRow row) return;
+            if (string.IsNullOrEmpty(row.Id))
+            {
+                System.Windows.MessageBox.Show(
+                    $"Cannot delete \"{row.Title}\": wheel did not assign an id.",
+                    "Moza", System.Windows.MessageBoxButton.OK,
+                    System.Windows.MessageBoxImage.Warning);
+                return;
+            }
+            var confirm = System.Windows.MessageBox.Show(
+                $"Delete \"{row.Title}\" from the wheel?\n\nDirName: {row.DirName}\nId: {row.Id}",
+                "Moza — confirm delete",
+                System.Windows.MessageBoxButton.OKCancel,
+                System.Windows.MessageBoxImage.Question);
+            if (confirm != System.Windows.MessageBoxResult.OK) return;
+            var ts = _plugin.TelemetrySender;
+            if (ts == null)
+            {
+                System.Windows.MessageBox.Show("Telemetry sender unavailable.",
+                    "Moza", System.Windows.MessageBoxButton.OK,
+                    System.Windows.MessageBoxImage.Error);
+                return;
+            }
+            byte[]? reply = ts.SendRpcCall("completelyRemove", row.Id);
+            if (reply == null)
+                System.Windows.MessageBox.Show(
+                    $"completelyRemove(\"{row.Id}\") timed out. The dashboard may still be present on the wheel.",
+                    "Moza", System.Windows.MessageBoxButton.OK,
+                    System.Windows.MessageBoxImage.Warning);
+            // Wheel pushes a refreshed configJson state after completelyRemove —
+            // the next 500ms timer tick will refresh the grid via
+            // RefreshWheelFilesTab → ts.WheelState.
         }
 
         private static string Blank(string s) => string.IsNullOrEmpty(s) ? "—" : s;

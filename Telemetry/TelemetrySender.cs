@@ -53,17 +53,44 @@ namespace MozaPlugin.Telemetry
         private int _mgmtAckSeq;
         private readonly ManualResetEventSlim _mgmtResponseEvent = new ManualResetEventSlim(false);
 
-        // Session 0x04 file-transfer state. The device initiates session 0x04 with
-        // type=0x81 before we send sub-msg 1; it echoes paths back (sub-msg 1 rsp),
-        // then acks the content push (sub-msg 2 rsp), then sends type=0x00 end.
+        // File-transfer session state. The device initiates one or more sessions
+        // in 0x04..0x0a with type=0x81 before we send sub-msg 1; it echoes paths
+        // back (sub-msg 1 rsp), then acks the content push (sub-msg 2 rsp), then
+        // sends type=0x00 end. Session number is dynamic per firmware:
+        //   2025-11: wheel opens 0x04 device-init; plugin uploads on 0x04.
+        //   2026-04: wheel still opens 0x04 device-init but new firmware also
+        //            accepts uploads on other ports the host requests via
+        //            7c:23 46. Tracked here as `_uploadSession`.
         private readonly SessionRegistry _sessions = new SessionRegistry();
-        private readonly ManualResetEventSlim _session04Opened = new ManualResetEventSlim(false);
-        private readonly ManualResetEventSlim _session04SubMsg1Response = new ManualResetEventSlim(false);
-        private readonly ManualResetEventSlim _session04SubMsg2Response = new ManualResetEventSlim(false);
-        private readonly ManualResetEventSlim _session04EndReceived = new ManualResetEventSlim(false);
-        private int _session04InboundSeq;
-        private int _session04OutboundSeq;
-        private int _session04InboundMsgCount;
+        // Sessions in 0x04..0x0a that came up device-initiated. The first one
+        // observed wins as the upload target unless overridden via
+        // `UploadSessionOverride` (UI / test setting).
+        private readonly System.Collections.Generic.HashSet<byte> _ftCandidateSessions = new();
+        private byte _uploadSession = 0x04;  // default; updated when wheel device-inits a candidate session
+        private readonly ManualResetEventSlim _uploadSessionOpened = new ManualResetEventSlim(false);
+        private readonly ManualResetEventSlim _uploadSubMsg1Response = new ManualResetEventSlim(false);
+        private readonly ManualResetEventSlim _uploadSubMsg2Response = new ManualResetEventSlim(false);
+        private readonly ManualResetEventSlim _uploadEndReceived = new ManualResetEventSlim(false);
+        private int _uploadInboundSeq;
+        private int _uploadOutboundSeq;
+        private int _uploadInboundMsgCount;
+
+        /// <summary>
+        /// Forces a specific session number for dashboard upload. 0 = auto
+        /// (use first device-initiated session in 0x04..0x0a, falling back to
+        /// 0x04). Set non-zero to override — useful for testing with new
+        /// firmware that prefers 0x07 / 0x09.
+        /// </summary>
+        public byte UploadSessionOverride { get; set; } = 0;
+
+        /// <summary>
+        /// Wire format used to encode the upload sub-msg headers. Defaults to
+        /// <see cref="FileTransferWireFormat.Legacy2025_11"/> for backward
+        /// compatibility. Set to <see cref="FileTransferWireFormat.New2026_04"/>
+        /// when targeting 2026-04+ firmware.
+        /// </summary>
+        public FileTransferWireFormat UploadWireFormat { get; set; }
+            = FileTransferWireFormat.Legacy2025_11;
 
         // Session 0x09 configJson RPC state. Device proactively pushes its
         // dashboard state blob; we reply with the canonical dashboard library
@@ -93,12 +120,13 @@ namespace MozaPlugin.Telemetry
         private volatile System.Collections.Generic.List<string>? _wheelChannelCatalog;
         private volatile int _channelBufferLastActivityMs;
 
-        // Session 0x04 inbound dir-listing buffer. After upload, wheel pushes a
-        // fresh directory listing on 0x04 which lets us detect when the upload
-        // is actually live on the device (rather than just transmitted).
-        private readonly SessionDataReassembler _session04Inbox = new();
-        private volatile bool _session04DirListingRefreshed;
-        public bool Session04DirListingRefreshed => _session04DirListingRefreshed;
+        // Upload-session inbound dir-listing buffer. After upload, wheel pushes
+        // a fresh directory listing on the same session which lets us detect
+        // when the upload is actually live on the device (rather than just
+        // transmitted).
+        private readonly SessionDataReassembler _uploadInbox = new();
+        private volatile bool _uploadDirListingRefreshed;
+        public bool Session04DirListingRefreshed => _uploadDirListingRefreshed;
 
         // RPC on 0x09/0x0a (host→device management RPCs such as completelyRemove).
         // Replies come back from device in same zlib envelope as configJson state.
@@ -331,14 +359,16 @@ namespace MozaPlugin.Telemetry
             _connection.FlushPendingWrites();
             try { _ackReceived.Reset(); } catch (ObjectDisposedException) { }
             try { _mgmtResponseEvent.Reset(); } catch (ObjectDisposedException) { }
-            try { _session04Opened.Reset(); } catch (ObjectDisposedException) { }
-            try { _session04SubMsg1Response.Reset(); } catch (ObjectDisposedException) { }
-            try { _session04SubMsg2Response.Reset(); } catch (ObjectDisposedException) { }
-            try { _session04EndReceived.Reset(); } catch (ObjectDisposedException) { }
+            try { _uploadSessionOpened.Reset(); } catch (ObjectDisposedException) { }
+            try { _uploadSubMsg1Response.Reset(); } catch (ObjectDisposedException) { }
+            try { _uploadSubMsg2Response.Reset(); } catch (ObjectDisposedException) { }
+            try { _uploadEndReceived.Reset(); } catch (ObjectDisposedException) { }
             _sessions.Reset();
-            _session04InboundSeq = 0;
-            _session04OutboundSeq = 0;
-            _session04InboundMsgCount = 0;
+            _ftCandidateSessions.Clear();
+            _uploadSession = 0x04;
+            _uploadInboundSeq = 0;
+            _uploadOutboundSeq = 0;
+            _uploadInboundMsgCount = 0;
             _session09InboundSeq = 0;
             _session09OutboundSeq = 0;
             _session09ReplySent = false;
@@ -669,10 +699,34 @@ namespace MozaPlugin.Telemetry
         }
 
         /// <summary>
-        /// Upload the .mzdash dashboard file via the session 0x04 file-transfer
-        /// protocol (2025-11 firmware). Wheel opens session 0x04 from its own
-        /// side shortly after the host brings up mgmt + telemetry; we wait up
-        /// to 2 s for that open, then send:
+        /// Pick the file-transfer session number to upload on. Priority:
+        /// <list type="number">
+        ///   <item><see cref="UploadSessionOverride"/> if non-zero.</item>
+        ///   <item>0x04 if the wheel device-initiated it (legacy behaviour, all
+        ///   firmwares observed).</item>
+        ///   <item>The first session in 0x04..0x0a the wheel device-initiated
+        ///   (covers new firmware that may shift the file-transfer session).</item>
+        ///   <item>0x04 fallback if no candidate seen yet — the upload waiter
+        ///   will then either time out or proceed via host-initiated open.</item>
+        /// </list>
+        /// </summary>
+        private byte ChooseUploadSession()
+        {
+            if (UploadSessionOverride != 0) return UploadSessionOverride;
+            lock (_ftCandidateSessions)
+            {
+                if (_ftCandidateSessions.Contains((byte)0x04)) return 0x04;
+                foreach (byte b in new byte[] { 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a })
+                    if (_ftCandidateSessions.Contains(b)) return b;
+            }
+            return 0x04;
+        }
+
+        /// <summary>
+        /// Upload the .mzdash dashboard file via the file-transfer protocol.
+        /// Wheel opens the upload session from its own side shortly after the
+        /// host brings up mgmt + telemetry; we wait up to 2 s for that open,
+        /// then send:
         ///
         ///   1. Sub-msg 1 (path registration) — wait for device echo (~6 chunks)
         ///   2. Sub-msg 2 (file content push) — wait for device ack (~6 chunks)
@@ -680,6 +734,11 @@ namespace MozaPlugin.Telemetry
         ///
         /// Sizing follows PitHouse's observed 64-byte max chunk size; CRC32 per
         /// chunk via <see cref="TierDefinitionBuilder.ChunkMessage"/>.
+        ///
+        /// The session number is dynamic. 2025-11 firmware uses 0x04; 2026-04
+        /// firmware has been observed using 0x05 / 0x07 / 0x09 depending on
+        /// what the host requests via 7c:23 46. Plugin selects via
+        /// <see cref="ChooseUploadSession"/>.
         /// </summary>
         private void SendDashboardUpload()
         {
@@ -687,28 +746,33 @@ namespace MozaPlugin.Telemetry
             if (content == null || content.Length == 0) return;
             if (!_connection.IsConnected) return;
 
-            // Wait for the device to open session 0x04. Real wheel opens it
-            // ~40–400 ms after we open session 0x02 on a fresh connection. On a
-            // mid-connection restart (dashboard change) the device may not
-            // re-open — plugin's blanket close during handshake takes 0x04
-            // down, but firmware/sim won't necessarily re-initiate. Fall back
-            // to a host-initiated open so dashboard re-uploads work.
-            if (!_session04Opened.Wait(500))
+            // Resolve the upload session before any logging / state reset, so
+            // log lines reference the right port even if it changes mid-upload
+            // (it shouldn't — once chosen it stays for this transfer).
+            byte uploadSess = ChooseUploadSession();
+            _uploadSession = uploadSess;
+
+            // Wait for the device to open the chosen session. Real wheel opens
+            // it ~40–400 ms after we open session 0x02 on a fresh connection.
+            // On a mid-connection restart (dashboard change) the device may not
+            // re-open — plugin's blanket close during handshake takes the
+            // session down, but firmware/sim won't necessarily re-initiate.
+            // Fall back to a host-initiated open so dashboard re-uploads work.
+            if (!_uploadSessionOpened.Wait(500))
             {
                 SimHub.Logging.Current.Info(
-                    "[Moza] Session 0x04 not opened by device within 500ms — host-opening for upload");
-                SendSessionOpen(0x04, 0x04);
+                    $"[Moza] Upload session 0x{uploadSess:X2} not opened by device within 500ms — host-opening for upload");
+                SendSessionOpen(uploadSess, uploadSess);
                 // Give the wheel a moment to process + ack before we start
                 // pushing file-transfer chunks.
-                if (!_session04Opened.Wait(500))
+                if (!_uploadSessionOpened.Wait(500))
                 {
                     // Even the host-initiated open didn't produce an observed
                     // open event. Proceed anyway — the wheel may silently accept
-                    // data on 0x04. The ack waiters below will surface any
-                    // actual failure.
+                    // data. The ack waiters below will surface any actual failure.
                     SimHub.Logging.Current.Info(
-                        "[Moza] Session 0x04 host-open had no confirmation; proceeding with upload");
-                    _session04Opened.Set();
+                        $"[Moza] Upload session 0x{uploadSess:X2} host-open had no confirmation; proceeding with upload");
+                    _uploadSessionOpened.Set();
                 }
             }
 
@@ -725,66 +789,74 @@ namespace MozaPlugin.Telemetry
             string dashboardName = !string.IsNullOrEmpty(MzdashName) ? MzdashName : "dashboard";
             uint token = DashboardUploader.PickToken();
             long tsMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            var upload = DashboardUploader.BuildUpload(content, dashboardName, token, tsMs);
+            var upload = DashboardUploader.BuildUpload(content, dashboardName, token, tsMs, UploadWireFormat);
 
             SimHub.Logging.Current.Info(
-                $"[Moza] Uploading dashboard \"{dashboardName}\" via session 0x04: " +
+                $"[Moza] Uploading dashboard \"{dashboardName}\" via session 0x{uploadSess:X2} " +
+                $"(wire={UploadWireFormat}): " +
                 $"raw={upload.UncompressedSize}B md5={upload.Md5Hex} token=0x{token:X8}");
 
-            _session04SubMsg1Response.Reset();
-            _session04SubMsg2Response.Reset();
-            _session04EndReceived.Reset();
-            _session04InboundMsgCount = 0;
+            _uploadSubMsg1Response.Reset();
+            _uploadSubMsg2Response.Reset();
+            _uploadEndReceived.Reset();
+            _uploadInboundMsgCount = 0;
 
             // Sub-msg 1: path registration.
-            int seq1 = _session04OutboundSeq + 1;
+            int seq1 = _uploadOutboundSeq + 1;
             var subMsg1Frames = TierDefinitionBuilder.ChunkMessage(
-                upload.SubMsg1PathRegistration, 0x04, ref seq1);
+                upload.SubMsg1PathRegistration, uploadSess, ref seq1);
             foreach (var frame in subMsg1Frames)
             {
                 if (!_enabled || !_connection.IsConnected) return;
                 _connection.Send(frame);
             }
-            _session04OutboundSeq = seq1;
+            _uploadOutboundSeq = seq1;
 
             // Wait for device's path echo (capture shows ~6 chunks, arrives within ~200ms).
-            if (!_session04SubMsg1Response.Wait(2000))
-                SimHub.Logging.Current.Warn("[Moza] Session 0x04 sub-msg 1 response timeout");
+            if (!_uploadSubMsg1Response.Wait(2000))
+                SimHub.Logging.Current.Warn($"[Moza] Session 0x{uploadSess:X2} sub-msg 1 response timeout");
 
-            // Sub-msg 2: file content push.
-            _session04InboundMsgCount = 0; // reset so next threshold triggers sub-msg 2 event
-            int seq2 = _session04OutboundSeq + 1;
-            var subMsg2Frames = TierDefinitionBuilder.ChunkMessage(
-                upload.SubMsg2FileContent, 0x04, ref seq2);
-            foreach (var frame in subMsg2Frames)
+            // Sub-msg 2: file content push. May be split across multiple sub-msgs
+            // for new-firmware uploads when the body exceeds 0xFFFF bytes (TODO:
+            // true multi-sub-msg chunking; today this is single-element for both
+            // formats — see FileTransferBuilder.BuildFileContentChunked).
+            _uploadInboundMsgCount = 0; // reset so next threshold triggers sub-msg 2 event
+            int seq2 = _uploadOutboundSeq + 1;
+            for (int chunkIdx = 0; chunkIdx < upload.SubMsg2Chunks.Count; chunkIdx++)
             {
-                if (!_enabled || !_connection.IsConnected) return;
-                _connection.Send(frame);
+                var subMsg2 = upload.SubMsg2Chunks[chunkIdx];
+                var subMsg2Frames = TierDefinitionBuilder.ChunkMessage(subMsg2, uploadSess, ref seq2);
+                foreach (var frame in subMsg2Frames)
+                {
+                    if (!_enabled || !_connection.IsConnected) return;
+                    _connection.Send(frame);
+                }
             }
-            _session04OutboundSeq = seq2;
+            _uploadOutboundSeq = seq2;
 
-            if (!_session04SubMsg2Response.Wait(3000))
-                SimHub.Logging.Current.Warn("[Moza] Session 0x04 sub-msg 2 response timeout");
+            if (!_uploadSubMsg2Response.Wait(3000))
+                SimHub.Logging.Current.Warn($"[Moza] Session 0x{uploadSess:X2} sub-msg 2 response timeout");
 
-            // End marker on session 0x04.
-            SendSessionEnd(0x04, (ushort)_session04OutboundSeq);
+            // End marker on the upload session.
+            SendSessionEnd(uploadSess, (ushort)_uploadOutboundSeq);
 
-            if (_session04EndReceived.Wait(1000))
-                SimHub.Logging.Current.Info("[Moza] Dashboard upload complete (session 0x04 closed by device)");
+            if (_uploadEndReceived.Wait(1000))
+                SimHub.Logging.Current.Info($"[Moza] Dashboard upload complete (session 0x{uploadSess:X2} closed by device)");
             else
                 SimHub.Logging.Current.Info("[Moza] Dashboard upload finished; device did not echo end marker within 1s");
 
             // Wheel's 2025-11 firmware fires a post-upload state refresh on
-            // session 0x04 (updated directory listing) and session 0x09 (updated
-            // configJson state blob including the newly-uploaded dashboard).
-            // Continue pumping so OnMessageDuringPreamble can ack + consume those
-            // chunks before the preamble phase ends and the handler detaches.
-            int preRefreshCount = _session04InboundMsgCount;
+            // the upload session (updated directory listing) and session 0x09
+            // (updated configJson state blob including the newly-uploaded
+            // dashboard). Continue pumping so OnMessageDuringPreamble can ack
+            // + consume those chunks before the preamble phase ends and the
+            // handler detaches.
+            int preRefreshCount = _uploadInboundMsgCount;
             Thread.Sleep(500);
-            int refreshChunks = _session04InboundMsgCount - preRefreshCount;
+            int refreshChunks = _uploadInboundMsgCount - preRefreshCount;
             if (refreshChunks > 0)
                 SimHub.Logging.Current.Info(
-                    $"[Moza] Session 0x04 post-upload state refresh: {refreshChunks} chunks");
+                    $"[Moza] Session 0x{uploadSess:X2} post-upload state refresh: {refreshChunks} chunks");
         }
 
         /// <summary>
@@ -1094,7 +1166,16 @@ namespace MozaPlugin.Telemetry
                     info.DeviceInitiated = true;
                     info.Port = (byte)(openSeq & 0xFF);
                     SendSessionAck(session, (ushort)openSeq);
-                    if (session == 0x04) _session04Opened.Set();
+                    // Track every device-init session in the file-transfer-
+                    // eligible range so ChooseUploadSession() can pick. Once
+                    // a candidate matches our chosen upload session, signal
+                    // the upload-pump waiter.
+                    if (session >= 0x04 && session <= 0x0a)
+                    {
+                        lock (_ftCandidateSessions) _ftCandidateSessions.Add(session);
+                        if (session == _uploadSession || (UploadSessionOverride == 0 && session == 0x04))
+                            _uploadSessionOpened.Set();
+                    }
                     return;
                 }
 
@@ -1121,47 +1202,49 @@ namespace MozaPlugin.Telemetry
                         _mgmtResponseEvent.Set();
                     }
 
-                    // Session 0x04 file transfer: ack + count responses. Capture shows
+                    // File-transfer session: ack + count responses. Capture shows
                     // device sends sub-msg 1 echo (6 chunks) then sub-msg 2 ack
                     // (6 chunks) — simplest heuristic is to wait for a quiet period
                     // after some chunks, but sub-msg events fire once enough chunks
-                    // arrive to assume the device replied.
-                    if (session == 0x04)
+                    // arrive to assume the device replied. Session number is
+                    // dynamic (see ChooseUploadSession).
+                    if (session == _uploadSession)
                     {
-                        SendSessionAck(0x04, (ushort)seq);
-                        _session04InboundSeq = seq;
-                        _session04InboundMsgCount++;
-                        // After ~5 chunks on session 0x04 from the device, assume a
-                        // sub-msg reply has fully arrived (capture shows 6 chunks per
-                        // response). SendDashboardUpload resets the counter to 0
-                        // between sub-msg 1 and sub-msg 2, so both thresholds are 5.
-                        if (_session04InboundMsgCount >= 5 && !_session04SubMsg1Response.IsSet)
-                            _session04SubMsg1Response.Set();
-                        else if (_session04InboundMsgCount >= 5 && !_session04SubMsg2Response.IsSet)
-                            _session04SubMsg2Response.Set();
+                        SendSessionAck(session, (ushort)seq);
+                        _uploadInboundSeq = seq;
+                        _uploadInboundMsgCount++;
+                        // After ~5 chunks on the upload session from the device,
+                        // assume a sub-msg reply has fully arrived (capture shows
+                        // 6 chunks per response). SendDashboardUpload resets the
+                        // counter to 0 between sub-msg 1 and sub-msg 2, so both
+                        // thresholds are 5.
+                        if (_uploadInboundMsgCount >= 5 && !_uploadSubMsg1Response.IsSet)
+                            _uploadSubMsg1Response.Set();
+                        else if (_uploadInboundMsgCount >= 5 && !_uploadSubMsg2Response.IsSet)
+                            _uploadSubMsg2Response.Set();
 
                         // 2025-11 firmware also pushes a zlib-compressed directory
-                        // listing on session 0x04 (initial + post-upload refresh).
-                        // Reassemble + decompress so the plugin can confirm the
-                        // upload landed in the wheel's FS. Same 9-byte envelope
-                        // as session 0x09 configJson state.
-                        _session04Inbox.AddChunk(chunkPayload);
-                        byte[]? dirBlob = _session04Inbox.TryDecompress();
+                        // listing on the upload session (initial + post-upload
+                        // refresh). Reassemble + decompress so the plugin can
+                        // confirm the upload landed in the wheel's FS. Same
+                        // 9-byte envelope as session 0x09 configJson state.
+                        _uploadInbox.AddChunk(chunkPayload);
+                        byte[]? dirBlob = _uploadInbox.TryDecompress();
                         if (dirBlob != null)
                         {
-                            _session04Inbox.Clear();
-                            _session04DirListingRefreshed = true;
+                            _uploadInbox.Clear();
+                            _uploadDirListingRefreshed = true;
                             try
                             {
                                 string json = System.Text.Encoding.UTF8.GetString(dirBlob);
                                 SimHub.Logging.Current.Info(
-                                    $"[Moza] Session 0x04 dir listing: {dirBlob.Length} bytes, " +
+                                    $"[Moza] Session 0x{session:X2} dir listing: {dirBlob.Length} bytes, " +
                                     $"children≈{CountOccurrences(json, "\"name\"")}");
                             }
                             catch (Exception ex)
                             {
                                 SimHub.Logging.Current.Debug(
-                                    $"[Moza] Session 0x04 dir listing decode: {ex.Message}");
+                                    $"[Moza] Session 0x{session:X2} dir listing decode: {ex.Message}");
                             }
                         }
                     }
@@ -1251,7 +1334,7 @@ namespace MozaPlugin.Telemetry
                 if (type == 0x00)
                 {
                     if (session == _mgmtPort) _mgmtResponseEvent.Set();
-                    if (session == 0x04) _session04EndReceived.Set();
+                    if (session == _uploadSession) _uploadEndReceived.Set();
                 }
 
                 return;

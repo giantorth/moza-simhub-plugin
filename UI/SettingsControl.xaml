@@ -824,6 +824,41 @@
                 </ScrollViewer>
             </TabItem>
 
+            <TabItem Header="Wheel Files">
+                <DockPanel Margin="10,5">
+                    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
+                        <TextBlock Text="Wheel Files" Style="{StaticResource SectionHeader}" Margin="0,0,16,0"/>
+                        <Button x:Name="WheelFilesRefreshButton" Content="Refresh" Padding="6,2"
+                                Click="WheelFilesRefresh_Click" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <TextBlock x:Name="WheelFilesStatusBox" VerticalAlignment="Center"
+                                   Foreground="Gray" FontSize="11" Text="—"/>
+                    </StackPanel>
+                    <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" Foreground="Gray" FontSize="11" Margin="0,0,0,8"
+                               Text="Dashboards the wheel reports via session 0x09 configJson state. Select a row and click Delete to issue a `completelyRemove` RPC on session 0x0a. List refreshes after every upload + on connect."/>
+                    <DataGrid x:Name="WheelFilesGrid" AutoGenerateColumns="False" IsReadOnly="True"
+                              CanUserAddRows="False" CanUserDeleteRows="False" CanUserResizeRows="False"
+                              SelectionMode="Single" HeadersVisibility="Column" GridLinesVisibility="Horizontal"
+                              BorderThickness="1" RowHeight="22">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="State" Binding="{Binding State}" Width="70"/>
+                            <DataGridTextColumn Header="Title" Binding="{Binding Title}" Width="*"/>
+                            <DataGridTextColumn Header="DirName" Binding="{Binding DirName}" Width="200"/>
+                            <DataGridTextColumn Header="Hash" Binding="{Binding HashShort}" Width="100"/>
+                            <DataGridTextColumn Header="Last modified" Binding="{Binding LastModified}" Width="160"/>
+                            <DataGridTemplateColumn Header="" Width="80">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <Button Content="Delete" Padding="6,1"
+                                                Click="WheelFilesDelete_Click"
+                                                Tag="{Binding}"/>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </DockPanel>
+            </TabItem>
+
             <TabItem Header="Diagnostics">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="10,5">
