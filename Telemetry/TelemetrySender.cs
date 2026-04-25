@@ -253,8 +253,17 @@ namespace MozaPlugin.Telemetry
         // rate for the lifetime of the session.
         private int _startInProgress;
 
+        // Flipped to 1 by Dispose() so Stop() / SendRpcCall() / handlers can
+        // bail without touching disposed ManualResetEventSlim instances.
+        private int _disposed;
+
         public void Start()
         {
+            if (Volatile.Read(ref _disposed) != 0)
+            {
+                SimHub.Logging.Current.Warn("[Moza] Start() ignored — sender disposed");
+                return;
+            }
             if (Interlocked.CompareExchange(ref _startInProgress, 1, 0) != 0)
             {
                 SimHub.Logging.Current.Warn("[Moza] Start() ignored — already starting");
@@ -367,6 +376,12 @@ namespace MozaPlugin.Telemetry
             // otherwise frames keep flowing to the wheel for ~1.4 s after stop
             // (16 KB WriteBufferSize at 115200 baud).
             _connection.FlushPendingWrites();
+
+            // Wake any blocked SendRpcCall waiters so they unblock with a null
+            // reply rather than sit on Wait() until their per-call timeout fires
+            // (those callers may be on the SimHub UI thread).
+            DrainRpcWaiters();
+
             try { _ackReceived.Reset(); } catch (ObjectDisposedException) { }
             try { _mgmtResponseEvent.Reset(); } catch (ObjectDisposedException) { }
             try { _uploadSessionOpened.Reset(); } catch (ObjectDisposedException) { }
@@ -384,6 +399,28 @@ namespace MozaPlugin.Telemetry
             _session09ReplySent = false;
             // Reset so StartTelemetryIfReady() won't skip us on re-enable
             _framesSent = 0;
+        }
+
+        /// <summary>
+        /// Wake every outstanding RPC waiter with a null reply. Called from Stop()
+        /// and Dispose() so callers blocked in SendRpcCall.Wait() return promptly
+        /// instead of hitting their own timeout.
+        /// </summary>
+        private void DrainRpcWaiters()
+        {
+            ManualResetEventSlim[] waiters;
+            lock (_rpcLock)
+            {
+                if (_rpcWaiters.Count == 0) return;
+                waiters = new ManualResetEventSlim[_rpcWaiters.Count];
+                _rpcWaiters.Values.CopyTo(waiters, 0);
+                // Don't clear the dictionary here — the waiting SendRpcCall will
+                // remove its own entry under the lock and dispose its waiter.
+            }
+            foreach (var w in waiters)
+            {
+                try { w.Set(); } catch (ObjectDisposedException) { }
+            }
         }
 
         public void UpdateGameData(StatusDataBase? data)
@@ -958,6 +995,7 @@ namespace MozaPlugin.Telemetry
         public byte[]? SendRpcCall(string method, object arg, int timeoutMs = 2000)
         {
             if (!_connection.IsConnected) return null;
+            if (Volatile.Read(ref _disposed) != 0) return null;
             int id;
             var waiter = new ManualResetEventSlim(false);
             lock (_rpcLock)
@@ -1817,9 +1855,16 @@ namespace MozaPlugin.Telemetry
 
         public void Dispose()
         {
+            // Idempotent: SimHub may invoke Dispose more than once during plugin
+            // reload; double-dispose on ManualResetEventSlim throws.
+            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
             Stop();
-            _ackReceived.Dispose();
-            _mgmtResponseEvent.Dispose();
+            try { _ackReceived.Dispose(); } catch { }
+            try { _mgmtResponseEvent.Dispose(); } catch { }
+            try { _uploadSessionOpened.Dispose(); } catch { }
+            try { _uploadSubMsg1Response.Dispose(); } catch { }
+            try { _uploadSubMsg2Response.Dispose(); } catch { }
+            try { _uploadEndReceived.Dispose(); } catch { }
         }
 
         private class TierState

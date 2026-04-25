@@ -44,13 +44,15 @@ namespace MozaPlugin
             {
                 Interval = TimeSpan.FromMilliseconds(33)
             };
-            _steeringAngleTimer.Tick += (s, e) => UpdateHidInputDisplays();
+            _steeringAngleTimer.Tick += OnSteeringAngleTick;
 
             Loaded   += OnLoadedStartTimers;
             Unloaded += OnUnloadedStopTimers;
 
             RequestAllSettings();
         }
+
+        private void OnSteeringAngleTick(object? sender, EventArgs e) => UpdateHidInputDisplays();
 
         private void OnLoadedStartTimers(object sender, RoutedEventArgs e)
         {
@@ -60,8 +62,14 @@ namespace MozaPlugin
 
         private void OnUnloadedStopTimers(object sender, RoutedEventArgs e)
         {
+            // Stop and detach so the dispatcher's timer queue can release this
+            // control even if the parent window keeps it pinned.
             _refreshTimer.Stop();
             _steeringAngleTimer.Stop();
+            _refreshTimer.Tick -= RefreshDisplay;
+            _steeringAngleTimer.Tick -= OnSteeringAngleTick;
+            Loaded -= OnLoadedStartTimers;
+            Unloaded -= OnUnloadedStopTimers;
         }
 
         private MozaPluginSettings _settings => _plugin.Settings;

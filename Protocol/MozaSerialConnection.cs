@@ -441,7 +441,13 @@ namespace MozaPlugin.Protocol
             // Pooled stuffing buffer. Worst-case stuffed size is 2 * decoded size;
             // grows on demand if a larger frame arrives.
             byte[] stuffBuf = new byte[512];
-            int lastWriteTicks = Environment.TickCount - 1000;
+            // Monotonic 64-bit clock for write pacing. Replaces Environment.TickCount
+            // (signed Int32, wraps every ~24.8 days) so the 4ms gate stays correct
+            // across long uptime — Stopwatch.GetTimestamp ticks at high resolution
+            // and never wraps for any plausible session length.
+            long stopwatchFreq = System.Diagnostics.Stopwatch.Frequency;
+            long fourMsTicks = stopwatchFreq * 4 / 1000;
+            long lastWriteTs = System.Diagnostics.Stopwatch.GetTimestamp() - stopwatchFreq;
             bool lastWasOneShot = false;
 
             while (_running)
@@ -457,16 +463,19 @@ namespace MozaPlugin.Protocol
                 {
                     if (lastWasOneShot)
                     {
-                        int since = Environment.TickCount - lastWriteTicks;
-                        if (since < 4)
-                            Thread.Sleep(4 - since);
+                        long sinceTicks = System.Diagnostics.Stopwatch.GetTimestamp() - lastWriteTs;
+                        if (sinceTicks < fourMsTicks)
+                        {
+                            int sleepMs = (int)((fourMsTicks - sinceTicks) * 1000 / stopwatchFreq);
+                            if (sleepMs > 0) Thread.Sleep(sleepMs);
+                        }
                     }
                     if (WriteFrame(msg, ref stuffBuf))
                     {
                         writeCount++;
                         if (writeCount <= 5)
                             SimHub.Logging.Current.Info($"[Moza] Sent cmd #{writeCount}: {msg.Length} bytes, group=0x{(msg.Length > 2 ? msg[2] : 0):X2}");
-                        lastWriteTicks = Environment.TickCount;
+                        lastWriteTs = System.Diagnostics.Stopwatch.GetTimestamp();
                         lastWasOneShot = true;
                     }
                     didWork = true;
@@ -483,7 +492,7 @@ namespace MozaPlugin.Protocol
                         if (WriteFrame(slot, ref stuffBuf))
                         {
                             writeCount++;
-                            lastWriteTicks = Environment.TickCount;
+                            lastWriteTs = System.Diagnostics.Stopwatch.GetTimestamp();
                             lastWasOneShot = false;
                             didWork = true;
                         }
@@ -652,7 +661,14 @@ namespace MozaPlugin.Protocol
 
         private static byte[] BuildProbe(byte[] frame)
         {
-            frame[frame.Length - 1] = MozaProtocol.CalculateChecksum(frame, frame.Length - 1);
+            // Wire-level checksum so the probe stays valid if the payload ever
+            // contains a 0x7E byte (unstuffed wire writes a 0x7E payload byte
+            // raw, but the receiver decodes by collapsing 0x7E 0x7E → 0x7E and
+            // sums the wire-doubled byte twice). For the current static probes
+            // there are no 0x7E bytes from index 2 onward so the result equals
+            // CalculateChecksum, but using the wire variant prevents a silent
+            // failure if a future probe template is added with a 0x7E in it.
+            frame[frame.Length - 1] = MozaProtocol.CalculateWireChecksum(frame, frame.Length - 1);
             return frame;
         }
 

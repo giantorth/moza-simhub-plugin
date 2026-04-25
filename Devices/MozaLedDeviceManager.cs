@@ -491,9 +491,13 @@ namespace MozaPlugin.Devices
             for (int pos = dataLen; pos < bufferLen; pos += 4)
                 colorData[pos] = 0xFF;
 
+            // Reuse one 20-byte chunk buffer across the loop. WriteArray's
+            // BuildWriteMessage copies `payload` into its own list before this
+            // method returns, so overwriting `chunk` on the next iteration is
+            // safe and saves N-1 allocations per LED update at 60Hz.
+            var chunk = new byte[20];
             for (int pos = 0; pos < bufferLen; pos += 20)
             {
-                var chunk = new byte[20];
                 Array.Copy(colorData, pos, chunk, 0, 20);
                 plugin.DeviceManager.WriteArray(command, chunk);
             }

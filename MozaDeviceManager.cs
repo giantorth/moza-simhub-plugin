@@ -126,8 +126,13 @@ namespace MozaPlugin
         public void LockWheelId(byte deviceId)
         {
             if (_wheelDetected) return;
-            _wheelDetected = true;
+            // Publish the new id BEFORE flipping the detected flag so any thread
+            // observing _wheelDetected==true also sees the matching _wheelDeviceId.
+            // (Both fields are volatile; the assignment order is preserved by
+            // .NET's memory model so MarkWheelResponse won't see detected=true
+            // paired with a stale id.)
             _wheelDeviceId = deviceId;
+            _wheelDetected = true;
             SimHub.Logging.Current.Info($"[Moza] Wheel locked on device ID {_wheelDeviceId}");
         }
 
