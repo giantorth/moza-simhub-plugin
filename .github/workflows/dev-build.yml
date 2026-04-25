@@ -73,7 +73,7 @@ jobs:
       - name: Publish pre-release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: dev
+          tag_name: dev-latest
           name: "Development Build (${{ steps.vars.outputs.dev_version }})"
           prerelease: true
           make_latest: false

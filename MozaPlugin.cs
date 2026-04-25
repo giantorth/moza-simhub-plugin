@@ -435,6 +435,7 @@ namespace MozaPlugin
                 _handbrakeDetected = false;
                 _pedalsDetected = false;
                 _hubDetected = false;
+                if (_telemetrySender != null) _telemetrySender.HubPresent = false;
                 _deviceManager.ResetWheelDetection();
                 _telemetrySender.DetectedDeviceMask = 0;
                 Interlocked.Exchange(ref _telemetryStartRequested, 0);
@@ -1213,6 +1214,7 @@ namespace MozaPlugin
                     if (!_hubDetected)
                     {
                         _hubDetected = true;
+                        if (_telemetrySender != null) _telemetrySender.HubPresent = true;
                         _deviceManager.ReadSettings(HubReadCommands);
                         SimHub.Logging.Current.Info("[Moza] Universal Hub detected");
                     }

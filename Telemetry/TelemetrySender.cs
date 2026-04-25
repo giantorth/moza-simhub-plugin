@@ -307,6 +307,15 @@ namespace MozaPlugin.Telemetry
 
             if (!_enabled) return;
 
+            // Open session 0x03 (doc [moza-protocol.md:620-625]: host opens 0x03
+            // 150-450ms after 0x01/0x02 on new firmware). Sim stubs this but real
+            // hardware expects it. Fire-and-forget: we don't rely on its ack.
+            // Tile-server data push deferred until after tier def — pushing
+            // immediately after open collided with the wheel's session 0x09
+            // configJson state burst (under Wine SerialPort R/W contention),
+            // costing 6 of 7 state chunks.
+            SendSessionOpen(0x03, 0x03);
+
             // Wait for wheel's pre-tier-def channel registration dump to quiet
             // down before transmitting our tier definition. Sim/real wheel pushes
             // channel URLs on session 0x02 between session-open and tier-def;
@@ -437,13 +446,6 @@ namespace MozaPlugin.Telemetry
             }
             // Brief settle so the wheel processes the closes before we re-open.
             System.Threading.Thread.Sleep(100);
-
-            // PitHouse opens 0x03 (tile-server) BEFORE 0x01/0x02 when the wheel
-            // is behind a Universal Hub — verified in usb-capture/ksp/
-            // mozahubstartup.pcapng (t=25.920 0x03 OPEN, t=25.921 0x01+0x02
-            // OPEN). Direct-wheelbase tolerates either order. Fire-and-forget;
-            // 0x03 is a host→wheel push channel and the wheel does not ack.
-            SendSessionOpen(0x03, 0x03);
 
             byte mgmtPort = TryOpenSession(MgmtSession, OpenAckTimeoutMs);
             if (!_enabled || !_connection.IsConnected) return;
