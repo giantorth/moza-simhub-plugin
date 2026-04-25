@@ -97,14 +97,14 @@ Each wheel model has a dedicated SimHub device definition with the correct LED l
 | MOZA CS Pro | W17 | 18 | 14 | No | Contiguous |
 | MOZA KS Pro | W18 | 18 | 14 | No | RPM strip 3/12/3 (flags merged into RPM sequence) |
 | MOZA KS | KS | 10 | 10 | No | Contiguous |
-| MOZA FSR V2 | FSR2 | 10 | 14 | Yes | Contiguous |
+| MOZA FSR V2 | W13 | 16 | 10 | No | Contiguous |
 | MOZA Vision GS | VGS | 10 | 8 | No | Contiguous |
 | MOZA TSW | TSW | 10 | 14 | No | Contiguous |
 | MOZA Racing Wheel | *(generic)* | 10 | 14 | No | Contiguous (fallback for unknown models) |
 | MOZA Old Protocol Wheel | *(ES wheels)* | 10 | 0 | No | RPM LEDs only |
 | MOZA Dashboard | — | 10 | 0 | Yes | RPM + flag LEDs |
 
-On wheels with flag LEDs (FSR V2), SimHub sees a single combined telemetry strip laid out as `[flag 1-3][RPM 1-N][flag 4-6]`. Configure flag zones in SimHub's effects UI on those slots.
+On wheels with flag LEDs, SimHub sees a single combined telemetry strip laid out as `[flag 1-3][RPM 1-N][flag 4-6]`. Configure flag zones in SimHub's effects UI on those slots.
 
 If your wheel model isn't listed or incorrect, the generic "MOZA Racing Wheel" definition is deployed. Check the SimHub log for the `[Moza] Wheel model:` line and report the model name string so a dedicated definition can be added.
 
