@@ -24,7 +24,7 @@
       "MD5/c2657726876b11fd572b8b568af197cf.png": 1,
       "MD5/f0c45b151c2d7b0c7c536c7f481aabc8.png": 1
     },
-    "rootPath": "/home/moza/resource/dashes"
+    "rootPath": "/home/root/resource/dashes"
   },
   "displayVersion": 11,
   "enableManager": {
@@ -44,7 +44,7 @@
         ],
         "lastModified": "2025-11-21T07:45:36Z",
         "previewImageFilePaths": [
-          "/home/moza/resource/dashes/Rally V1/Rally V1.mzdash_v2_10_3_05.png"
+          "/home/root/resource/dashes/Rally V1/Rally V1.mzdash_v2_10_3_05.png"
         ],
         "resouceImageFilePaths": [],
         "title": "Rally V1"
@@ -64,7 +64,7 @@
         ],
         "lastModified": "2025-11-21T07:46:06Z",
         "previewImageFilePaths": [
-          "/home/moza/resource/dashes/Rally V5/Rally V5.mzdash_v2_10_3_05.png"
+          "/home/root/resource/dashes/Rally V5/Rally V5.mzdash_v2_10_3_05.png"
         ],
         "resouceImageFilePaths": [],
         "title": "Rally V5"
@@ -84,7 +84,7 @@
         ],
         "lastModified": "2025-11-27T04:14:08Z",
         "previewImageFilePaths": [
-          "/home/moza/resource/dashes/Rally V2/Rally V2.mzdash_v2_10_3_05.png"
+          "/home/root/resource/dashes/Rally V2/Rally V2.mzdash_v2_10_3_05.png"
         ],
         "resouceImageFilePaths": [],
         "title": "Rally V2"
@@ -104,7 +104,7 @@
         ],
         "lastModified": "2025-11-21T03:02:21Z",
         "previewImageFilePaths": [
-          "/home/moza/resource/dashes/Rally V3/Rally V3.mzdash_v2_10_3_05.png"
+          "/home/root/resource/dashes/Rally V3/Rally V3.mzdash_v2_10_3_05.png"
         ],
         "resouceImageFilePaths": [],
         "title": "Rally V3"
@@ -124,7 +124,7 @@
         ],
         "lastModified": "2025-12-16T07:21:29Z",
         "previewImageFilePaths": [
-          "/home/moza/resource/dashes/Rally V6/Rally V6.mzdash_v2_10_3_05.png"
+          "/home/root/resource/dashes/Rally V6/Rally V6.mzdash_v2_10_3_05.png"
         ],
         "resouceImageFilePaths": [
           "MD5/c2657726876b11fd572b8b568af197cf.png",
@@ -148,7 +148,7 @@
         ],
         "lastModified": "2025-11-21T04:13:16Z",
         "previewImageFilePaths": [
-          "/home/moza/resource/dashes/Rally V4/Rally V4.mzdash_v2_10_3_05.png"
+          "/home/root/resource/dashes/Rally V4/Rally V4.mzdash_v2_10_3_05.png"
         ],
         "resouceImageFilePaths": [],
         "title": "Rally V4"
@@ -168,7 +168,7 @@
         ],
         "lastModified": "2026-03-07T14:29:46Z",
         "previewImageFilePaths": [
-          "/home/moza/resource/dashes/Core/Core.mzdash_v2_10_3_05.png"
+          "/home/root/resource/dashes/Core/Core.mzdash_v2_10_3_05.png"
         ],
         "resouceImageFilePaths": [],
         "title": "Core"
@@ -188,7 +188,7 @@
         ],
         "lastModified": "2025-11-21T09:04:15Z",
         "previewImageFilePaths": [
-          "/home/moza/resource/dashes/Mono/Mono.mzdash_v2_10_3_05.png"
+          "/home/root/resource/dashes/Mono/Mono.mzdash_v2_10_3_05.png"
         ],
         "resouceImageFilePaths": [],
         "title": "Mono"
@@ -208,7 +208,7 @@
         ],
         "lastModified": "2025-11-21T09:03:48Z",
         "previewImageFilePaths": [
-          "/home/moza/resource/dashes/Pulse/Pulse.mzdash_v2_10_3_05.png"
+          "/home/root/resource/dashes/Pulse/Pulse.mzdash_v2_10_3_05.png"
         ],
         "resouceImageFilePaths": [
           "MD5/8b093bdee54da30d40bb9e98882bfe3c.png"
@@ -230,7 +230,7 @@
         ],
         "lastModified": "2025-11-21T09:04:18Z",
         "previewImageFilePaths": [
-          "/home/moza/resource/dashes/Nebula/Nebula.mzdash_v2_10_3_05.png"
+          "/home/root/resource/dashes/Nebula/Nebula.mzdash_v2_10_3_05.png"
         ],
         "resouceImageFilePaths": [
           "MD5/c0e1818a41ada8c274dcc8b89fd0a62a.png",
@@ -254,7 +254,7 @@
         ],
         "lastModified": "2025-11-21T09:04:11Z",
         "previewImageFilePaths": [
-          "/home/moza/resource/dashes/Grids/Grids.mzdash_v2_10_3_05.png"
+          "/home/root/resource/dashes/Grids/Grids.mzdash_v2_10_3_05.png"
         ],
         "resouceImageFilePaths": [],
         "title": "Grids"
@@ -269,7 +269,7 @@
       "MD5/c2657726876b11fd572b8b568af197cf.png": 1,
       "MD5/f0c45b151c2d7b0c7c536c7f481aabc8.png": 1
     },
-    "rootPath": "/home/moza/resource/dashes"
+    "rootPath": "/home/root/resource/dashes"
   },
   "fontRefMap": {},
   "imagePath": [
@@ -309,6 +309,6 @@
     "MD5/f0c45b151c2d7b0c7c536c7f481aabc8.png": 2
   },
   "resetVersion": 10,
-  "rootDirPath": "/home/moza/resource",
+  "rootDirPath": "/home/root/resource",
   "sortTag": 0
 }

@@ -137,6 +137,16 @@ def _id_str(s: str) -> bytes:
     """16-byte null-padded ASCII identity string."""
     return s.encode('ascii')[:16].ljust(16, b'\x00')
 
+def _id_slices(s: str, n: int = 4) -> List[bytes]:
+    """Split identity string into n 16-byte null-padded slices.
+
+    PitHouse queries longer identity strings via sequential sub-byte probes
+    (07:01, 07:02, …). Each slice answers one probe; unused trailing slices
+    are all-null, which PitHouse simply ignores if it stops at 01.
+    """
+    data = s.encode('ascii')[:n * 16].ljust(n * 16, b'\x00')
+    return [data[i * 16:(i + 1) * 16] for i in range(n)]
+
 # ── Wheel model profiles ──────────────────────────────────────────────────
 # Each profile defines the identity strings and protocol details for a
 # specific wheel model. Selected via --model CLI arg (default: vgs).
@@ -286,6 +296,22 @@ WHEEL_MODELS: Dict[str, dict] = {
             'sim/replay/csp_r9_base_13.json',
             'sim/replay/csp_r9_hub_12.json',
         ],
+        # Hub (0x12) + base (0x13) identity — PitHouse probes both addresses
+        # with the same identity cascade (02/04/05/06/07/08/09/0F/10/11). Real
+        # wheelbase returns identical values on both. Extracted byte-exact from
+        # csp_r9_hub_12.json / csp_r9_base_13.json.
+        'base_identity': {
+            # 20-char name — splits across 07:01 ("R9 Black # MOT-1") and 07:02 ("-V01").
+            'name': 'R9 Black # MOT-1-V01',
+            'hw_version': 'RS21-D01-HW BM-C',
+            'hw_sub': 'U-V40',
+            'sw_version': 'RS21-D01-MC WB',
+            'serial0': 'VoQ1K5UJYVHTJQs6',
+            'serial1': 'QE0XOh/ODpCPuVL1',
+            'hw_id': bytes.fromhex('47004a000951353033333834'),
+            'caps': bytes([0x01, 0x02, 0x50, 0x00]),
+            'dev_type': bytes([0x01, 0x02, 0x0e, 0x09]),
+        },
         'session1_desc': bytes.fromhex(
             '0701000000000c048ae5d086b2fcad7486dbe208041001'
             '0a0164000000050004020000000000000006 00'
@@ -346,6 +372,34 @@ WHEEL_MODELS: Dict[str, dict] = {
             'sim/replay/kspro_hub_12.json',
             'sim/replay/kspro_pedal_19.json',
         ],
+        # Hub (0x12) + base (0x13) identity — R12 wheelbase. Byte-exact from
+        # kspro_hub_12.json (identical to kspro_base_13.json).
+        'base_identity': {
+            'name': 'R12 Black # MOT-1-V01',
+            'hw_version': 'RS21-D07-HW BM-C',
+            'hw_sub': 'U-V10',
+            'sw_version': 'RS21-D07-MC WB',
+            'serial0': 'LNMgG2bHvDgjQuu9',
+            'serial1': 'Ls9zRh/ODpCPuVL1',
+            'hw_id': bytes.fromhex('2f0053000851353133383438'),
+            'caps': bytes([0x01, 0x02, 0x4b, 0x00]),
+            'dev_type': bytes([0x01, 0x02, 0x0e, 0x09]),
+        },
+        # Pedal (0x19) identity — SRP pedals (only device answering 0x19 in
+        # the KS Pro capture). Byte-exact from kspro_pedal_19.json.
+        'pedal_identity': {
+            'name': 'SRP',
+            'hw_version': 'RS21-D01-HW PM-C',
+            'hw_sub': 'U-V11',
+            'sw_version': 'RS21-D01-MC PB',
+            'serial0': 'HwcMQrwLiYmeguNn',
+            'serial1': 'djzMWB/ODpCPuVL1',
+            'hw_id': bytes.fromhex('200028000457484132343320'),
+            'caps': bytes([0x01, 0x02, 0x18, 0x00]),
+            'dev_type': bytes([0x01, 0x02, 0x02, 0x05]),
+            # Pedal returns 00:04 on cmd 09, while hub/base return 00:01.
+            'identity_09': bytes([0x00, 0x04]),
+        },
         # Byte-for-byte from capture session 0/port 2 frags 6..10
         # (chunk sizes 26/5/2/9/2 → 'vgs_combined' layout).
         'session1_desc': bytes.fromhex(
@@ -371,11 +425,51 @@ WHEEL_MODELS: Dict[str, dict] = {
     },
 }
 
+def _build_device_identity(dev_id: int, ident: dict) -> Dict[Tuple[int, int, bytes], bytes]:
+    """Build a (device, group, payload) → response map covering the identity
+    probe cascade for one non-wheel device (hub/base/pedal).
+
+    Groups answered: 02, 04, 05, 06, 07, 08, 09, 0F, 10, 11. Matches what
+    PitHouse sends per-device during post-connect enumeration.
+
+    `ident` keys: name, hw_version, hw_sub, sw_version, serial0, serial1,
+    hw_id (12B), caps (4B), dev_type (4B), [identity_09 (2B, default 00:01)].
+    """
+    slices = _id_slices(ident['name'])
+    entries: Dict[Tuple[int, int, bytes], bytes] = {
+        # Real frames carry a 1-byte `00` payload on cmd 02 probes — length byte
+        # = 1. Don't key on empty `b''` (won't match).
+        (dev_id, 0x02, b'\x00'):             bytes([0x02]),
+        (dev_id, 0x04, b'\x00\x00\x00\x00'): ident['dev_type'],
+        (dev_id, 0x05, b'\x00\x00\x00\x00'): ident['caps'],
+        (dev_id, 0x06, b''):                 ident['hw_id'],
+        (dev_id, 0x07, b'\x01'):             bytes([0x01]) + slices[0],
+        (dev_id, 0x08, b'\x01'):             bytes([0x01]) + _id_str(ident['hw_version']),
+        (dev_id, 0x08, b'\x02'):             bytes([0x02]) + _id_str(ident['hw_sub']),
+        (dev_id, 0x09, b''):                 ident.get('identity_09', bytes([0x00, 0x01])),
+        (dev_id, 0x0F, b'\x01'):             bytes([0x01]) + _id_str(ident['sw_version']),
+        (dev_id, 0x10, b'\x00'):             bytes([0x00]) + _id_str(ident['serial0']),
+        (dev_id, 0x10, b'\x01'):             bytes([0x01]) + _id_str(ident['serial1']),
+        (dev_id, 0x11, b'\x04'):             bytes([0x04, 0x01]),
+    }
+    # Multi-slice name (real hub/base return "R9 Black # MOT-1-V01" = 20 chars
+    # split across 07:01 + 07:02).
+    if len(ident['name']) > 16:
+        entries[(dev_id, 0x07, b'\x02')] = bytes([0x02]) + slices[1]
+    return entries
+
+
 def _build_identity_tables(model: dict) -> Tuple[
     Dict[Tuple[int, int, bytes], bytes],
     Dict[Tuple[int, bytes], bytes],
+    Dict[Tuple[int, int, bytes], bytes],
 ]:
-    """Build plugin probe and PitHouse identity tables from a wheel model profile.
+    """Build plugin probe, wheel identity, and per-device identity tables.
+
+    Returns (plugin_rsp, pithouse_rsp, device_rsp). `device_rsp` covers
+    hub/base/pedal identity probes — populated from model's base_identity
+    and pedal_identity blocks. Hub and base share the same answers (real
+    wheelbase returns identical values on both addresses).
 
     For ES wheels (wheel_device=0x13), wheel identity entries are keyed by 0x13
     instead of 0x17 — real ES wheels share device ID with the wheelbase and do
@@ -457,7 +551,10 @@ def _build_identity_tables(model: dict) -> Tuple[
     # PitHouse identity probes (groups 0x02–0x11, device 0x17)
     pithouse_rsp: Dict[Tuple[int, bytes], bytes] = {
         (0x09, b''):                 bytes([0x00, 0x01]),
-        (0x02, b''):                 bytes([0x02]),
+        # Real 02 probes carry a 1-byte `00` payload (length=1). Key was
+        # historically `b''` which never hit — replay covered it. Procedural
+        # now, replay only needed for wheels without JSON tables.
+        (0x02, b'\x00'):             bytes([0x02]),
         # dev_type varies per wheel — VGS/CSP real HW returns 01:02:04:06,
         # KS returns 01:02:05:06. Default matches VGS/CSP.
         (0x04, b'\x00\x00\x00\x00'): model.get('dev_type', bytes([0x01, 0x02, 0x04, 0x06])),
@@ -477,11 +574,25 @@ def _build_identity_tables(model: dict) -> Tuple[
         (0x11, b'\x04'):             model.get('identity_11', bytes([0x04, 0x01])),
     }
 
-    return plugin_rsp, pithouse_rsp
+    # Per-device identity (hub 0x12, base 0x13, pedal 0x19). Skipped when a
+    # model has no base_identity/pedal_identity block — VGS/KS currently rely
+    # on replay for hub/base probes. ES (wheel_device=0x13) uses its own
+    # wheel identity for the base address.
+    device_rsp: Dict[Tuple[int, int, bytes], bytes] = {}
+    base_ident = model.get('base_identity')
+    if base_ident:
+        device_rsp.update(_build_device_identity(0x12, base_ident))
+        device_rsp.update(_build_device_identity(0x13, base_ident))
+    pedal_ident = model.get('pedal_identity')
+    if pedal_ident:
+        device_rsp.update(_build_device_identity(0x19, pedal_ident))
+
+    return plugin_rsp, pithouse_rsp, device_rsp
 
 # Built at startup from selected --model. Populated by main().
 _PLUGIN_PROBE_RSP: Dict[Tuple[int, int, bytes], bytes] = {}
 _PITHOUSE_ID_RSP: Dict[Tuple[int, bytes], bytes] = {}
+_DEVICE_ID_RSP: Dict[Tuple[int, int, bytes], bytes] = {}
 _DISPLAY_MODEL_NAME: str = 'Display'
 # Selected wheel device (0x17 for new-protocol wheels, 0x13 for ES which shares
 # the wheelbase address). Populated by main() from the chosen model profile.
@@ -699,6 +810,64 @@ _DASH_UPLOAD_REPLY_CHUNKS: List[bytes] = [
 # Delay after last FF-prefix upload chunk before sending the reply stream.
 _DASH_UPLOAD_REPLY_IDLE_MS = 300
 
+# Captured type=0x0a directory-listing reply body (221B, minus the 8B header).
+# Payload is for `/home/root` with 11 factory dashboards present (extracted
+# from usb-capture/latestcaps/automobilista2-wheel-connect-dash-change.pcapng
+# frames 84803/84811). Structure:
+#     0a d5 00 00 00 00 00 00       — type=0x0a + size_LE(0xd5=213) + 3B pad
+#     14 00 [UTF-16LE "/home/root"] — path len + 20B path
+#     ff ff ff ff ff ff ff ff       — 8B constant
+#     [8B echo_id from probe]        — session/request id copied from probe
+#     00 00 00 00                   — 4B zeros
+#     a9 88 01 00 00                — 5B (possibly entry count / hash prefix)
+#     [166B opaque payload]          — file-listing data (format not decoded)
+#
+# Reply rebuilt at runtime: sim substitutes echo_id from each incoming probe.
+# The 166B opaque payload is replayed verbatim — PitHouse parses it back to
+# "wheel has 11 factory dashboards" regardless of what's actually in the sim's
+# FS. Works around PitHouse's cache-skip behavior by giving it SOMETHING to
+# parse instead of timing out on no reply. Empty-dir variant pending.
+# Reply layout (221B total — byte-exact from capture):
+#   offsets 0-7:   0a d5 00 00 00 00 00 00     — type=0x0a + size_LE(0xd5) + pad
+#   offsets 8-36:  14 00 + 19B UTF-16 path ("/home/root") + ff*8
+#   offsets 37-44: 8-byte echo_id (copied from probe)
+#   offsets 45-220: 176B opaque tail (zeros + counters + encoded listing)
+_DIR_LISTING_REPLY_PREFIX = bytes.fromhex(
+    '0ad500000000000014002f0068006f006d0065002f0072006f006f0074'
+    'ffffffffffffffff')
+_DIR_LISTING_REPLY_TAIL = bytes.fromhex(
+    '000000a9880100007897'
+    '9c858fcb0e82301045f7fd0a326b4d4a6dc3d4dfd09d7181741a9b5020848d12'
+    'fedd960831f57557f3383373676459105457579b9e1a2fd867a7b91235aed177'
+    '26eabc49c09eca818ece5340b7029147259075351ddc3d2269cb1b15aa60646e'
+    'b0321a2de717c125e9b0486ba475caa21405413ad61a676fcfb379a1945039df'
+    'e1fbe9a69c1118c877b0b626f6f2cbcf1f3e785f3cc392fef1b27ae8db760036'
+    'b1078bd55f55')
+
+
+def build_dir_listing_reply(echo_id: bytes, empty: bool = False) -> bytes:
+    """Build the type=0x0a directory-listing reply body that acknowledges a
+    session 0x04 type=0x08 `/home/root` probe. `echo_id` is the 8-byte
+    session/request identifier copied from the probe.
+
+    `empty=True` emits a minimal reply (8B header + 37B body = 45B) with only
+    the path, ff8, echo, and zero trailer — no entries. Intended to signal
+    "wheel has nothing under /home/root" so PitHouse invalidates its upload
+    cache and re-sends files fresh. `empty=False` replays the 176B opaque
+    tail from capture (signals "wheel has 11 factory dashboards"; format not
+    yet decoded).
+    """
+    if len(echo_id) != 8:
+        raise ValueError('echo_id must be 8 bytes')
+    if empty:
+        # Minimal reply: 8B header + 37B body (path + ff8 + echo).
+        # Body layout: 2B path_len + 19B path + 8B ff8 + 8B echo.
+        return (bytes([0x0a]) + (37).to_bytes(4, 'little') + b'\x00\x00\x00'
+                + bytes.fromhex('14002f0068006f006d0065002f0072006f006f0074'
+                                'ffffffffffffffff')
+                + echo_id)
+    return _DIR_LISTING_REPLY_PREFIX + echo_id + _DIR_LISTING_REPLY_TAIL
+
 # Delay after last session 0x04 chunk before emitting the sub-msg ack response.
 # Short enough that both sub-msg 1 and sub-msg 2 responses fit inside the plugin's
 # per-submsg wait windows (2 s and 3 s). See docs/moza-protocol.md §
@@ -714,41 +883,73 @@ def build_file_transfer_response(
     bytes_written: int,
     *,
     submsg_index: int,
-    max_chunk: int = 0x38,
 ) -> bytes:
-    """Build a device→host sub-msg 1 or sub-msg 2 response body for session 0x04.
+    """Build a device→host sub-msg 1 or sub-msg 2 response body for session 0x05/0x06.
 
-    Matches the wheel's observed format (see docs/moza-protocol.md for field
-    layout). `submsg_index` is 1 (path-registration ack) or 2 (content-complete
-    ack); controls the `role` byte and trailing status byte.
+    Wire format (verified 2026-04-24 against the four replies in
+    latestcaps/pithouse-switch-list-delete-upload-reupload.pcapng, both files).
+    The message is a 6-byte header + body (size field counts body bytes):
+
+        [type:1] [size_LE:u32] [pad:1=0x00]              (6B header)
+        [pad:2 = 0x00 0x00]                              (body starts here)
+        [0x70 0x00] [UTF-16LE remote path] [0x00 0x00]   (REMOTE TLV)
+        [0x8C 0x00] [UTF-16LE local path]  [0x00 0x00]   (LOCAL TLV)
+        [0x10] [md5:16]
+        [bytes_written:u32 BE] [total_size:u32 BE]
+        [0xFF 0xFF 0xFF 0xFF]                            (sentinel)
+        [status:1]                                       (XOR of body)
+
+    The "4-byte trailer" earlier docs chased was a misread: only 1 byte of
+    status follows the sentinel, and the next 3 bytes belong to the chunk's
+    truncated CRC32 (see `chunk_session_payload`). The status byte is the
+    8-bit XOR over the body bytes (excluding the status byte itself); for
+    file2 in the reference capture XOR returns 0x2e / 0x74 matching the
+    wire bytes.
+
+    Sim historically treated the header as 8B and emitted 4B ff*4 trailer,
+    which made each reply 3B too long and shifted every size/offset PitHouse
+    tried to parse. Current code keeps the 8B header shape for caller
+    compatibility but emits `size = body_len + 2` so PitHouse's 6B-header
+    parser lands on the same byte boundary.
+
+    `submsg_index` is 1 (path-registration ack, role=0x01) or 2 (content-complete
+    ack, role=0x11).
     """
     if submsg_index not in (1, 2):
         raise ValueError('submsg_index must be 1 or 2')
     role = 0x01 if submsg_index == 1 else 0x11
-    trailer = 0x6B if submsg_index == 1 else 0x25
     if len(md5) != 16:
         raise ValueError('md5 must be 16 bytes')
 
-    body = bytearray()
-    body.extend(bytes([role, max_chunk, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00]))
-    # TLV: remote path (0x84) — marker + 0x00 separator + UTF-16LE null-term
-    body.append(0x84)
-    body.append(0x00)
-    body.extend(remote_path.encode('utf-16-le'))
-    body.extend(b'\x00\x00')
-    # TLV: local path (0x8C) — same layout
-    body.append(0x8C)
-    body.append(0x00)
-    body.extend(local_path.encode('utf-16-le'))
-    body.extend(b'\x00\x00')
-    # Metadata trailer: flag + md5 + bytes_written (BE u32) + total_size (BE u32) + 0xFFFFFFFF + status
-    body.append(0x10)
-    body.extend(md5)
-    body.extend(bytes_written.to_bytes(4, 'big'))
-    body.extend(total_size.to_bytes(4, 'big'))
-    body.extend(b'\xff\xff\xff\xff')
-    body.append(trailer)
-    return bytes(body)
+    body_after_header = bytearray()
+    body_after_header.append(0x70)
+    body_after_header.append(0x00)
+    body_after_header.extend(remote_path.encode('utf-16-le'))
+    body_after_header.extend(b'\x00\x00')
+    body_after_header.append(0x8C)
+    body_after_header.append(0x00)
+    body_after_header.extend(local_path.encode('utf-16-le'))
+    body_after_header.extend(b'\x00\x00')
+    body_after_header.append(0x10)
+    body_after_header.extend(md5)
+    body_after_header.extend(bytes_written.to_bytes(4, 'big'))
+    body_after_header.extend(total_size.to_bytes(4, 'big'))
+    body_after_header.extend(b'\xff\xff\xff\xff')
+
+    # 1-byte XOR status: XOR of every byte emitted so far in body_after_header.
+    # (The real wheel also XORs the 2B `00 00` preamble between header and TLV,
+    # but XOR with 0 is a no-op so skipping those bytes yields the same value.)
+    status = 0
+    for b in body_after_header:
+        status ^= b
+    body_after_header.append(status)
+
+    # `size_LE` counts from (sim header end - 2) to end of body: with an 8B
+    # sim header that means body_len + 2. See moza-protocol.md § Findings
+    # 2026-04-24.
+    size = len(body_after_header) + 2
+    header = bytes([role]) + size.to_bytes(4, 'little') + bytes([0x00, 0x00, 0x00])
+    return header + bytes(body_after_header)
 
 # ── Frame parsing ────────────────────────────────────────────────────────────
 
@@ -1079,14 +1280,19 @@ def parse_v2_tier_def(data: bytes) -> Dict[int, List[dict]]:
 # ── Chunk reassembler ────────────────────────────────────────────────────────
 
 class ChunkBuffer:
-    """Accumulate 7C:00 type=0x01 data chunks, strip CRC32 trailer, reassemble.
+    """Accumulate 7C:00 type=0x01 data chunks, strip truncated-CRC32 trailer,
+    reassemble.
 
-    Pithouse sends two chunk formats on 7c:00 data: (a) [payload][CRC32] where
+    Pithouse sends two chunk formats on 7c:00 data: (a) [payload][CRC] where
     CRC covers the full payload (used for standalone small messages + the simhub
-    plugin's tier def), and (b) [flag:1][payload][CRC32] where CRC covers the
+    plugin's tier def), and (b) [flag:1][payload][CRC] where CRC covers the
     flag+payload and the flag byte is a chunk-level session marker that must be
     stripped before concatenation (used for pithouse's multi-chunk tier def
-    uploads on session 0x01). CRC match decides which format applies."""
+    uploads on session 0x01). CRC match decides which format applies.
+
+    Real wheel and PitHouse use a 3-byte truncated CRC32 (first 3 bytes of
+    zlib.crc32(net) LE). Legacy 4-byte CRC fallback kept for compatibility
+    with older tooling/captures."""
     def __init__(self):
         self._chunks: Dict[int, bytes] = {}
 
@@ -1094,13 +1300,19 @@ class ChunkBuffer:
         if len(raw) < 4:
             self._chunks[seq] = raw
             return
-        crc_wire = int.from_bytes(raw[-4:], 'little')
-        if zlib.crc32(raw[:-4]) == crc_wire:
+        crc4 = int.from_bytes(raw[-4:], 'little')
+        if zlib.crc32(bytes(raw[:-4])) == crc4:
             self._chunks[seq] = raw[:-4]
-        elif len(raw) >= 5 and zlib.crc32(raw[1:-4]) == crc_wire:
+            return
+        if len(raw) >= 5 and zlib.crc32(bytes(raw[1:-4])) == crc4:
             self._chunks[seq] = raw[1:-4]
-        else:
-            self._chunks[seq] = raw[:-4]
+            return
+        if len(raw) >= 3:
+            crc3 = raw[-3:]
+            if zlib.crc32(bytes(raw[:-3])).to_bytes(4, 'little')[:3] == crc3:
+                self._chunks[seq] = raw[:-3]
+                return
+        self._chunks[seq] = raw[:-4]
 
     def message(self) -> bytes:
         if not self._chunks:
@@ -1167,9 +1379,9 @@ class WheelFileSystem:
     implicit (derived from file paths). Persisted to sim/logs/wheel_fs.json.
 
     Relevant paths PitHouse expects:
-      /home/moza/resource/dashes/<name>/<name>.mzdash       — dashboard body
-      /home/moza/resource/dashes/<name>/<name>.mzdash_v2_10_3_05.png  — preview
-      /home/moza/resource/tile_server/<game>/...            — map tiles
+      /home/root/resource/dashes/<name>/<name>.mzdash       — dashboard body
+      /home/root/resource/dashes/<name>/<name>.mzdash_v2_10_3_05.png  — preview
+      /home/root/resource/tile_server/<game>/...            — map tiles
     """
 
     def __init__(self, persist_path: Optional[Path] = None):
@@ -1251,8 +1463,8 @@ class WheelFileSystem:
             canonical_md5 = bytes.fromhex(stored_hash).decode('ascii') if stored_hash else ''
         except (ValueError, UnicodeDecodeError):
             canonical_md5 = stored_hash
-        mzdash_path = f'/home/moza/resource/dashes/{dname}/{dname}.mzdash'
-        preview_path = f'/home/moza/resource/dashes/{dname}/{dname}.mzdash_v2_10_3_05.png'
+        mzdash_path = f'/home/root/resource/dashes/{dname}/{dname}.mzdash'
+        preview_path = f'/home/root/resource/dashes/{dname}/{dname}.mzdash_v2_10_3_05.png'
         self.write_file(mzdash_path, b'\x00' * 1024, md5_override=canonical_md5)
         self.write_file(preview_path, b'\x00' * 8192)
         return meta
@@ -1322,11 +1534,11 @@ class WheelFileSystem:
         return list(seen_dirs.values()) + children
 
     def dashboards(self) -> List[dict]:
-        """Walk /home/moza/resource/dashes/*/*.mzdash and return the 2025-11
+        """Walk /home/root/resource/dashes/*/*.mzdash and return the 2025-11
         firmware enableManager.dashboards schema. Each directory under
-        /home/moza/resource/dashes is treated as one dashboard whose title
+        /home/root/resource/dashes is treated as one dashboard whose title
         = dirName unless the .mzdash JSON body carries a `name` field."""
-        root = '/home/moza/resource/dashes/'
+        root = '/home/root/resource/dashes/'
         out: List[dict] = []
         dash_dirs: Dict[str, Dict[str, str]] = {}
         for p, meta in self._files.items():
@@ -1470,49 +1682,42 @@ def build_configjson_state(dashboards: List[dict], title_id: int = 1,
                 'idealDeviceInfos': [],
                 'lastModified': '',
                 'previewImageFilePaths': [
-                    f'/home/moza/resource/dashes/{name}/{name}.mzdash_v2_10_3_05.png'
+                    f'/home/root/resource/dashes/{name}/{name}.mzdash_v2_10_3_05.png'
                 ],
                 'resouceImageFilePaths': [],
                 'title': name,
             })
     # Derive configJsonList from the actual FS dashboards (by dirName) so
-    # uploads/deletes reflect the wheel's current state. Fall back to the
-    # factory 11-name placeholder when FS is empty — PitHouse's display
-    # detection silently stalls at pre-tier-def when the list is empty
-    # (verified 2026-04-22: setting configJsonList=[] caused sessions_opened
-    # to stay 0 and tier_def_received to stay false even though every other
-    # handshake step completed). See docs/moza-protocol.md § "configJsonList
-    # is NOT factory-canonical".
+    # uploads/deletes reflect the wheel's current state. When FS is empty,
+    # report an empty list — PitHouse's Dashboard Manager then treats the
+    # wheel as uninitialised and will RE-upload dashboards on click (instead
+    # of relying on its cache, which happens when any populated list is
+    # reported). Older sim comment warned this broke handshake but that was
+    # prior to rootDirPath and base_identity fixes — retest if regression.
     if canonical_list is None:
-        fs_names = [d.get('dirName') for d in dashboards if d.get('dirName')]
-        canonical_list = fs_names if fs_names else list(_CONFIGJSON_CANONICAL_LIST)
-    # When FS is empty and caller hasn't injected any dashboards, ship the
-    # factory's enableManager.dashboards list verbatim. Real wheel firmware
-    # ships these 11 entries baked in so PitHouse's Dashboard Manager sees a
-    # populated catalog on a freshly-flashed wheel. Empty list (sim's old
-    # default) made real session 9 payload 7231B; sim's 454B. The missing
-    # metadata appears to gate "fully detected" state.
-    if not dashboards and not enable_dashboards:
-        enable_dashboards = list(factory.get('enableManager', {}).get('dashboards', []))
+        canonical_list = [d.get('dirName') for d in dashboards if d.get('dirName')]
+    # enableManager.dashboards mirrors FS state: empty when wheel has no
+    # dashboards stored, so PitHouse doesn't short-circuit uploads on
+    # cached-state assumptions.
     state = {
         "TitleId": title_id,
         "configJsonList": canonical_list,
         "disableManager": {
             "dashboards": [],
             "imageRefMap": {},
-            "rootPath": "/home/moza/resource/dashes",
+            "rootPath": "/home/root/resource/dashes",
         },
         "displayVersion": display_version,
         "enableManager": {
             "dashboards": enable_dashboards,
             "imageRefMap": {},
-            "rootPath": "/home/moza/resource/dashes",
+            "rootPath": "/home/root/resource/dashes",
         },
         "fontRefMap": {},
         "imagePath": [],
         "imageRefMap": {},
         "resetVersion": 10,
-        "rootDirPath": "/home/moza/resource",
+        "rootDirPath": "/home/root/resource",
         "sortTag": 0,
     }
     uncompressed = json.dumps(state, separators=(',', ':')).encode('utf-8')
@@ -1542,7 +1747,7 @@ def build_configjson_state_from_factory() -> bytes:
 def _synthesize_empty_fs_skeleton() -> List[dict]:
     """Return the persistent directory structure a factory-fresh MOZA wheel
     reports on session 0x04 when no dashboards are installed. Real firmware
-    keeps `/home/moza/resource/dashes/` as a persistent path regardless of
+    keeps `/home/root/resource/dashes/` as a persistent path regardless of
     whether any mzdash files live there; PitHouse needs this to know where
     uploads should land.
     """
@@ -1621,19 +1826,29 @@ def build_session04_dir_listing(children: Optional[List[dict]] = None) -> bytes:
 
 
 def chunk_session_payload(session: int, start_seq: int, payload: bytes,
-                          chunk_size: int = 54) -> List[bytes]:
+                          chunk_size: int = 54,
+                          crc_bytes: int = 4) -> List[bytes]:
     """Split `payload` into per-chunk 7c:00 session-data frames with CRC32
-    trailer, matching the real wheel's on-wire layout. Real wheel chunks
-    are N=64 on the wire: 6-byte 7c:00 header + 54-byte net data + 4-byte
-    CRC32 trailer = 64-byte frame payload (verified against
-    usb-capture/latestcaps/automobilista2-wheel-connect-dash-change.pcapng,
-    2026-04-22). Earlier default of 58 pushed N to 68, which the plugin's
-    framer rejects silently (payloadLength > 64)."""
+    trailer. `crc_bytes` selects:
+      - 4: full CRC32-LE. What PitHouse's handshake/catalog/configJson paths
+        accept (tested against a user PitHouse 2026-04 build). Default.
+      - 3: 3-byte truncated CRC32-LE (first 3 bytes). What real wheel firmware
+        emits on every session (verified in all captures 2026-04-24) and
+        what PitHouse requires for the file-transfer reply path — 4 bytes
+        there compounds into a 3-byte offset shift that silently stalls
+        uploads at the content phase.
+
+    Empirically the handshake paths tolerate the extra byte (it lands in a
+    tolerated-padding region); the file-transfer reply path does not. Keeping
+    the 4-byte default preserves working handshake behaviour; callers who
+    emit wheel-wire-exact bytes (sub-msg 1/2 acks) pass `crc_bytes=3`."""
+    if crc_bytes not in (3, 4):
+        raise ValueError('crc_bytes must be 3 or 4')
     frames = []
     seq = start_seq
     for off in range(0, len(payload), chunk_size):
         net = payload[off:off + chunk_size]
-        crc = struct.pack('<I', zlib.crc32(net))
+        crc = struct.pack('<I', zlib.crc32(net))[:crc_bytes]
         chunk = net + crc
         frames.append(build_session_data_frame(session, seq, chunk))
         seq = (seq + 1) & 0xFFFF
@@ -1666,16 +1881,21 @@ class UploadTracker:
     def feed(self, session: int, chunk: bytes) -> Optional[dict]:
         """Append `chunk` to session buffer and return any newly-decoded blob.
         Handles CRC-aware trailer strip so callers can pass raw chunk payload
-        (including CRC32) without pre-processing — the per-chunk 4-byte CRC
-        would otherwise interleave with content and corrupt UTF-16LE path
-        decoding and zlib stream reassembly across chunks."""
+        (including the 4-byte CRC32) without pre-processing — the CRC would
+        otherwise interleave with content and corrupt UTF-16LE path decoding
+        and zlib stream reassembly across chunks.
+
+        Every chunk carries a 4-byte CRC32-LE trailer (verified against raw
+        tshark output of all captures 2026-04-24). The (b)-format variant
+        has a leading flag byte before the net data, also followed by a 4-byte
+        CRC."""
         self._log_chunk(session, chunk)
         buf = self._bufs.setdefault(session, bytearray())
         if len(chunk) >= 4:
             crc_wire = int.from_bytes(chunk[-4:], 'little')
-            if zlib.crc32(chunk[:-4]) == crc_wire:
+            if zlib.crc32(bytes(chunk[:-4])) == crc_wire:
                 chunk = chunk[:-4]
-            elif len(chunk) >= 5 and zlib.crc32(chunk[1:-4]) == crc_wire:
+            elif len(chunk) >= 5 and zlib.crc32(bytes(chunk[1:-4])) == crc_wire:
                 chunk = chunk[1:-4]
         buf.extend(chunk)
         return self._scan(session, buf)
@@ -1820,7 +2040,7 @@ class UploadTracker:
         """If `blob` JSON looks like a mzdash file or a configJson state,
         capture dashboard name + hash. mzdash files don't have a top-level
         `name`; dashboard name is carried in the session 0x04 file transfer
-        path (`/home/moza/resource/dashes/<name>/<name>.mzdash`), decoded by
+        path (`/home/root/resource/dashes/<name>/<name>.mzdash`), decoded by
         feed() from the same session's UTF-16LE chunks and attached below."""
         j = blob.get('json')
         # RPC-shape detection: dict with an `id` field + a key matching
@@ -1892,10 +2112,18 @@ class UploadTracker:
             })
 
     def extract_mzdash_path(self, session: int) -> Optional[str]:
-        """Scan session buffer for `/home/moza/resource/dashes/<name>/<name>.mzdash`
-        (UTF-16LE). PitHouse embeds this path in session 0x04 file transfers —
-        giving us the dashboard's dirName/title before we ever decompress the
-        file body."""
+        """Scan session buffer for the dashboard destination path (UTF-16LE).
+
+        Path shapes observed:
+        - Old firmware: `/home/root/resource/dashes/<name>/<name>.mzdash`
+          (in the host type=0x84 remote TLV on session 0x04).
+        - New firmware (2026+) remote TLV: `/home/root/resource/dashes/<name>.mzdash`
+          (in the host type=0x03 0x70 TLV on session 0x06).
+        - 2026-04 PitHouse: no remote path is sent at all. Only the
+          PitHouse-local stage path appears, of the shape
+          `<...>/MOZA Pit House/_dashes/<hash>/dashes/<name>/<name>.mzdash`
+          (sep is `/` or `\\`). Extract <name> from there as a fallback.
+        """
         buf = self._bufs.get(session)
         if not buf:
             return None
@@ -1904,8 +2132,16 @@ class UploadTracker:
         except Exception:
             return None
         import re as _re
-        m = _re.search(r'/home/moza/resource/dashes/([^/]+)/\1\.mzdash', text)
-        return m.group(1) if m else None
+        m = _re.search(r'/home/root/resource/dashes/([^/]+)/\1\.mzdash', text)
+        if m:
+            return m.group(1)
+        m = _re.search(r'/home/root/resource/dashes/([^/]+?)\.mzdash', text)
+        if m:
+            return m.group(1)
+        m = _re.search(r'[/\\]_dashes[/\\][^/\\]+[/\\]dashes[/\\]([^/\\]+)[/\\]\1\.mzdash', text)
+        if m:
+            return m.group(1)
+        return None
 
 
 def dash_upload_reply_loop(sim, alive, write_lock, log_fh, writer):
@@ -2096,6 +2332,7 @@ class WheelSimulator:
                  device_catalog: Optional[Dict[int, List[bytes]]] = None,
                  plugin_probe_rsp: Optional[Dict] = None,
                  pithouse_id_rsp: Optional[Dict] = None,
+                 device_id_rsp: Optional[Dict] = None,
                  display_model_name: str = '',
                  rpm_led_count: int = 10,
                  button_led_count: int = 14,
@@ -2104,6 +2341,7 @@ class WheelSimulator:
         self._replay = replay
         self._plugin_probe_rsp = plugin_probe_rsp if plugin_probe_rsp is not None else _PLUGIN_PROBE_RSP
         self._pithouse_id_rsp = pithouse_id_rsp if pithouse_id_rsp is not None else _PITHOUSE_ID_RSP
+        self._device_id_rsp = device_id_rsp if device_id_rsp is not None else _DEVICE_ID_RSP
         self._display_model_name = display_model_name or _DISPLAY_MODEL_NAME
         # Wheel device address: 0x17 for new-protocol wheels, 0x13 for ES.
         # Drives all wheel-routed dispatch + simulated-device set membership.
@@ -2111,7 +2349,11 @@ class WheelSimulator:
         self.wheel_device_rsp = swap_nibbles(self.wheel_device)
         # ES suppresses any response at 0x17 — real ES wheels don't enumerate
         # there. {0x12 hub, 0x13 base} for ES; {0x12, 0x13, 0x17} otherwise.
+        # Pedal 0x19 joins the set when the model has pedal_identity so
+        # heartbeat/keepalive ACKs don't drop silently.
         self._simulated_devices = {0x12, 0x13, self.wheel_device}
+        if any(dev == 0x19 for (dev, _, _) in self._device_id_rsp):
+            self._simulated_devices.add(0x19)
         self.mgmt_session = 0
         self.telem_session = 0
         self.sessions_opened = 0
@@ -2165,6 +2407,15 @@ class WheelSimulator:
         self._upload_next_seq: Dict[int, int] = {}
         self._upload_reply_timer = None  # type: Optional[threading.Timer]
         self._pending_sends: List[bytes] = []
+        # Device-side seq counter for file-transfer replies. Independent
+        # from the host's seq on the same session (7c:00 uses per-direction
+        # counters). Real wheel starts device-side seq at session-port + 1
+        # (e.g. port=6 → first data at seq 0x07); earlier sim code reused
+        # `_upload_next_seq` which tracks the host side and desynced PitHouse.
+        self._ft_reply_next_seq: Dict[int, int] = {}
+        # Per-session count of "type=0x03 rounds" we've sent a progress ack
+        # for. -1 = no first ack yet. 0xFFFF = upload finalized.
+        self._ft_rounds_acked: Dict[int, int] = {}
         # Session 0x04 file-transfer per-sub-msg ack state. Tracks how many
         # sub-msg responses we've emitted (1 after sub-msg 1, 2 after sub-msg 2)
         # and the running byte count for bytes_written.
@@ -2176,7 +2427,7 @@ class WheelSimulator:
         # session 0x04 FF-prefixed chunks; firing the recorded "stored dash"
         # reply mid-upload tricks PitHouse into aborting the real transfer.
         # Default: off. Re-enable per-session only after a full upload parses
-        # successfully via _parse_session04_upload.
+        # successfully via _parse_upload.
         self.dash_reply_enabled = False
         # RPC replies: track which rpc_log entries we've already responded to
         # and per-session outbound seq counters for our reply frames.
@@ -2263,13 +2514,25 @@ class WheelSimulator:
 
     def _fire_device_init(self) -> None:
         """Queue device-initiated session opens (0x04/0x06/0x08/0x09/0x0a) and
-        the initial configJson state push. Runs once, ~150ms after the host
-        has opened its sessions. Frames accumulate in _pending_sends and get
-        flushed piggybacked on the next handle() return path."""
+        the initial configJson state push. Runs ~150ms after the host has
+        opened its sessions — both at sim startup AND on PitHouse re-handshake
+        (host-side reset triggers `_reset_connection_state` which clears
+        `_device_init_started`, so this re-fires). Frames accumulate in
+        `_pending_sends` and get flushed piggybacked on the next handle()
+        return path."""
         frames: List[bytes] = []
         for sess, port, _ in _DEVICE_SESSIONS:
             frames.append(resp_device_session_open(sess, port))
             self.device_opened_sessions[sess] = port
+        # Channel catalog (sessions 0x01 + 0x02). Without this PitHouse keeps
+        # its cached tier_def from the prior handshake and skips re-pushing
+        # tier_def on reconnect — which gates display_cfg, which gates
+        # uploads. The proactive_sender thread only emits the catalog ONCE at
+        # sim startup, so reconnects need to re-emit it here.
+        for sess_id in sorted(self._device_catalog.keys()):
+            if sess_id in (0x01, 0x02):
+                frames.extend(self._device_catalog[sess_id])
+        self.catalog_sent = True
         # Initial configJson state push on session 0x09. 2025-11 firmware sends
         # one blob (single-entry, not the old 3-blob sequence); schema handled
         # by build_configjson_state(). Dashboards derived live from FS.
@@ -2278,17 +2541,14 @@ class WheelSimulator:
         self._session09_next_seq = 0x0100 + max(1, (len(state) + 53) // 54)
         # Root filesystem listing on session 0x04 — PitHouse uses this to
         # enumerate what's already on the wheel before a fresh upload.
-        # Content derived from virtual FS (empty default → empty root).
-        # When FS is empty, synthesize the persistent `/home/moza/resource/`
-        # directory tree — real wheel firmware keeps these dirs even with no
-        # dashboards installed. Without them, PitHouse sees a wheel with no
-        # filesystem and refuses to initiate uploads.
-        fs_children = self.fs.list_children('/')
-        if not fs_children:
-            fs_children = _synthesize_empty_fs_skeleton()
-        dir_listing = build_session04_dir_listing(fs_children)
-        frames.extend(chunk_session_payload(0x04, 0x0100, dir_listing))
-        self._session04_next_seq = 0x0100 + max(1, (len(dir_listing) + 53) // 54)
+        # Proactive emit here was in an invented format (zlib-JSON "temp"
+        # dummy entry) that PitHouse didn't recognise, so disabling. Real
+        # firmware sends dir-listings REACTIVELY in response to host type=0x08
+        # probes — handled in the session 0x04 data path via
+        # `build_dir_listing_reply`. Seq starts at 1 (real wheel uses low
+        # sequential seqs per direction; sim's earlier 0x0100 was made up and
+        # caused PitHouse to ignore replies).
+        self._session04_next_seq = 0x0001
         with self._pending_lock:
             self._pending_sends.extend(frames)
         self.cat_counts['device_init'] = self.cat_counts.get('device_init', 0) + len(frames)
@@ -2322,20 +2582,15 @@ class WheelSimulator:
         return len(frames)
 
     def _fire_state_refresh(self) -> None:
-        """Re-push configJson + session 0x04 dir listing after a FS mutation
+        """Re-push configJson state (session 0x09) after a FS mutation
         (upload, delete). PitHouse Dashboard Manager picks up the new state
-        without a full reconnect."""
+        without a full reconnect. Dir-listing (session 0x04) is reactive-only
+        now — PitHouse re-probes after the configJson update if it wants the
+        new directory view; we answer via `build_dir_listing_reply`."""
         state = build_configjson_state(self.fs.dashboards())
         seq09 = getattr(self, '_session09_next_seq', 0x0200)
         frames = chunk_session_payload(0x09, seq09, state)
         self._session09_next_seq = seq09 + max(1, (len(state) + 53) // 54)
-        fs_children = self.fs.list_children('/')
-        if not fs_children:
-            fs_children = _synthesize_empty_fs_skeleton()
-        dir_listing = build_session04_dir_listing(fs_children)
-        seq04 = getattr(self, '_session04_next_seq', 0x0200)
-        frames.extend(chunk_session_payload(0x04, seq04, dir_listing))
-        self._session04_next_seq = seq04 + max(1, (len(dir_listing) + 53) // 54)
         with self._pending_lock:
             self._pending_sends.extend(frames)
         self.cat_counts['state_refresh'] = self.cat_counts.get('state_refresh', 0) + len(frames)
@@ -2343,22 +2598,97 @@ class WheelSimulator:
             self.emitter.emit_event('state_refresh',
                 dashboards=len(self.fs.dashboards()), frames=len(frames))
 
-    def _parse_session04_upload(self, session: int) -> Optional[dict]:
-        """Called after a session 0x04 END marker. Reassembles chunks buffered
-        by UploadTracker, extracts the UTF-16LE destination path + decompresses
+    def _parse_upload(self, session: int) -> Optional[dict]:
+        """Called after a session END marker on the file-transfer session
+        (dynamic port; 0x04..0x0a observed). Reassembles chunks buffered by
+        UploadTracker, extracts the UTF-16LE destination path + decompresses
         the zlib body, and registers the dashboard in `stored_dashboards`.
         Returns the new dashboard entry (or None if parse failed)."""
         name = self._upload_tracker.extract_mzdash_path(session)
         buf = bytes(self._upload_tracker._bufs.get(session, b''))
+        import re as _re
+        try:
+            _dbg = Path(__file__).parent / 'logs' / 'parse_upload.log'
+            with _dbg.open('a') as _f:
+                zlib_offs = [m.start() for m in _re.finditer(rb'\x78[\x9c\xda]', buf)]
+                _f.write(f'[{time.strftime("%H:%M:%S")}] session=0x{session:02x} name={name!r} buf_len={len(buf)} zlib_offs={zlib_offs}\n')
+            # First call per session: dump full buffer for offline analysis
+            _dump_path = Path(__file__).parent / 'logs' / f'parse_upload_sess{session:02x}_buf.bin'
+            if not _dump_path.exists() and len(buf) > 100:
+                _dump_path.write_bytes(buf)
+        except Exception:
+            pass
         if not buf:
             return None
-        import re as _re
-        zlib_match = _re.search(rb'\x78[\x9c\xda]', buf)
-        if not zlib_match:
+        # PitHouse splits the dashboard zlib stream across many type=0x03
+        # sub-msgs. Only the FIRST msg of each upload attempt carries the
+        # `78 9c` zlib magic; subsequent msgs hold raw deflate continuation
+        # at the same fixed offset within the msg (8B msg header + LOCAL
+        # path TLV + REMOTE path TLV + 0x10 flag + 16B md5 + 4B reserved +
+        # 4B token + 8B compressed_header → zlib data starts at offset 769
+        # in the type=0x03 sub-msg for the 2026-04 firmware path lengths
+        # observed). Reassemble by anchoring on the most recent type=0x02
+        # metadata boundary, then concatenating zlib bytes from each
+        # following type=0x03 msg at the offset where the first one's magic
+        # lives.
+        attempts = []
+        for m in _re.finditer(rb'\x02..\x00\x00\x00\x00\x00', buf):
+            off = m.start()
+            size = int.from_bytes(buf[off+1:off+5], 'little')
+            if 100 < size < 400:
+                attempts.append(off)
+        if not attempts:
             return None
-        try:
-            decomp = zlib.decompress(buf[zlib_match.start():])
-        except zlib.error:
+        decomp = None
+        for a_off in reversed(attempts):  # try latest attempt first
+            next_a = len(buf)
+            for cand in attempts:
+                if cand > a_off:
+                    next_a = min(next_a, cand)
+            seg_end = next_a
+            type03_offs = []
+            for m in _re.finditer(rb'\x03..\x00\x00\x00\x00\x00', buf[a_off:seg_end]):
+                off = m.start() + a_off
+                size = int.from_bytes(buf[off+1:off+5], 'little')
+                if 1000 < size < 10000:
+                    type03_offs.append((off, size))
+            if not type03_offs:
+                continue
+            first_off, first_size = type03_offs[0]
+            first_end = min(first_off + 8 + first_size, len(buf))
+            zm = _re.search(rb'\x78[\x9c\xda]', buf[first_off:first_end])
+            if not zm:
+                continue
+            zoff_in_msg = zm.start()
+            zdata = bytearray()
+            for off, size in type03_offs:
+                end = min(off + 8 + size, len(buf))
+                if off + zoff_in_msg < end:
+                    zdata += buf[off + zoff_in_msg:end]
+            # Use decompressobj so partial streams (PitHouse aborted upload
+            # mid-flight) still yield whatever bytes did transmit. Better to
+            # save partial mzdash than nothing.
+            try:
+                d = zlib.decompressobj()
+                decomp = d.decompress(bytes(zdata))
+                if not decomp:
+                    decomp = None
+                else:
+                    try:
+                        with _dbg.open('a') as _f:
+                            _f.write(f'    decoded {len(decomp)}B from attempt @{a_off} '
+                                     f'(zoff_in_msg={zoff_in_msg}, msgs={len(type03_offs)}, zdata={len(zdata)}, eof={d.eof})\n')
+                    except Exception:
+                        pass
+                    break
+            except zlib.error as _ze:
+                try:
+                    with _dbg.open('a') as _f:
+                        _f.write(f'    fixed-offset decode FAILED for attempt @{a_off}: {_ze} '
+                                 f'(zoff_in_msg={zoff_in_msg}, msgs={len(type03_offs)}, zdata={len(zdata)})\n')
+                except Exception:
+                    pass
+        if decomp is None:
             return None
         # mzdash is JSON but may have embedded 0x7e escapes that broke decoding
         # in older capture tools. Real mzdash files parse cleanly via UTF-8.
@@ -2375,7 +2705,7 @@ class WheelSimulator:
         # Write to virtual FS at canonical path. dashboards() derives entries
         # live from this, so configJson state reflects the new file on next
         # _fire_state_refresh().
-        fs_path = f"/home/moza/resource/dashes/{dirname}/{dirname}.mzdash"
+        fs_path = f"/home/root/resource/dashes/{dirname}/{dirname}.mzdash"
         self.fs.write_file(fs_path, decomp)
         # Clear buffer so a repeat upload doesn't double-emit.
         self._upload_tracker._bufs[session] = bytearray()
@@ -2488,7 +2818,7 @@ class WheelSimulator:
                         or d.get('title') == arg
                         or (target_dirname and d.get('dirName') == target_dirname)):
                     n = self.fs.delete(
-                        f"/home/moza/resource/dashes/{d['dirName']}")
+                        f"/home/root/resource/dashes/{d['dirName']}")
                     if n:
                         removed += n
                         removed_names.append(d['dirName'])
@@ -2533,65 +2863,171 @@ class WheelSimulator:
                 method=method, id=rpc_id, session=f'0x{session:02x}',
                 frames=len(frames))
 
-    def _scan_file_transfer_paths(self, session: int) -> Tuple[Optional[str], Optional[str]]:
-        """Extract remote (0x84) and local (0x8C) TLV paths from the host's
-        session 0x04 buffer. Returns (remote, local). Either may be None if
-        not yet seen."""
+    def _scan_file_transfer_paths(self, session: int) -> Tuple[Optional[str], Optional[str], Optional[bytes], int]:
+        """Extract local path, synthesized remote path, md5 (16B), and
+        total_size from the host's session 0x06 upload buffer.
+
+        Host sub-msg wire format (type=0x02 meta or type=0x03 content):
+            [type:1] [size_LE:u32] [00 00 00]
+            [0x8A 0x00] [UTF-16LE Windows temp path] [0x00 0x00]
+            ([0x8A 0x00 | 0x70 0x00] [UTF-16LE second path] [0x00 0x00])?
+            [0x10] [md5:16]
+            [bytes_written:u32 BE] [total_size:u32 BE]
+            [0xFF 0xFF 0xFF 0xFF]
+
+        Returns (local_path, remote_path, md5, total_size). The wheel's
+        canonical remote path is synthesized from md5:
+        `/_moza_filetransfer_md5_<md5hex>`.
+        """
         buf = bytes(self._upload_tracker._bufs.get(session, b''))
         if not buf:
-            return (None, None)
-        remote = local = None
-        for marker, attr in ((0x84, 'remote'), (0x8C, 'local')):
-            off = buf.find(bytes([marker, 0x00]))
-            if off < 0:
-                continue
+            return (None, None, None, 0)
+        local = None
+        # Anchor on the LAST type=0x02 metadata sub-msg start so retries with
+        # fresh tmp paths don't get confused with stale path TLVs from earlier
+        # in the buffer. type=0x02 starts with `02 [size_LE:4] 00 00 00`; the
+        # local path TLV (0x8a/0x8c marker) follows immediately.
+        import re as _re_pf
+        last_meta = None
+        for m in _re_pf.finditer(rb'\x02..\x00\x00\x00\x00\x00', buf):
+            last_meta = m.start()
+        scan_start = last_meta if last_meta is not None else 0
+        # Find first UTF-16 path TLV — host's Windows local temp path.
+        # Marker varies by firmware: 0x8a (older), 0x8c (2026-04+).
+        off = -1
+        for marker in (b'\x8a\x00', b'\x8c\x00'):
+            off = buf.find(marker, scan_start)
+            if off >= 0:
+                break
+        if off >= 0:
             start = off + 2
-            # find UTF-16LE null terminator (00 00 pair on even boundary from start)
             end = start
             while end + 1 < len(buf):
                 if buf[end] == 0 and buf[end + 1] == 0:
                     break
                 end += 2
             try:
-                s = buf[start:end].decode('utf-16-le', errors='replace').rstrip('\x00')
+                local = buf[start:end].decode('utf-16-le', errors='replace').rstrip('\x00')
             except Exception:
+                local = None
+        # Locate metadata trailer. Layout relative to the 0x10 flag byte:
+        #   flag_off+0 ........ 0x10 (flag)
+        #   flag_off+1 .. +16 . md5 (16 bytes)
+        #   flag_off+17 .. +20  bytes_written (BE u32)
+        #   flag_off+21 .. +24  total_size (BE u32)
+        #   flag_off+25 .. +28  0xff 0xff 0xff 0xff (sentinel)
+        # Preceded by a `0x00 0x00` UTF-16 terminator from the last path TLV.
+        md5 = None
+        total_size = 0
+        scan = scan_start
+        while True:
+            flag_off = buf.find(b'\x10', scan)
+            if flag_off < 0:
+                break
+            scan = flag_off + 1
+            if flag_off < 2 or flag_off + 29 > len(buf):
                 continue
-            if attr == 'remote':
-                remote = s
-            else:
-                local = s
-        return (remote, local)
+            if buf[flag_off - 2:flag_off] != b'\x00\x00':
+                continue
+            if buf[flag_off + 25:flag_off + 29] != b'\xff\xff\xff\xff':
+                continue
+            md5 = buf[flag_off + 1:flag_off + 17]
+            total_size = int.from_bytes(buf[flag_off + 21:flag_off + 25], 'big')
+            break
+        remote = None
+        if md5 is not None:
+            remote = f'/_moza_filetransfer_md5_{md5.hex()}'
+        return (local, remote, md5, total_size)
 
     def _queue_file_transfer_echo(self, session: int) -> None:
-        """Build and queue a sub-msg 1 or sub-msg 2 response on session 0x04.
-        Fires after the host's session 0x04 traffic goes quiet for
-        _FILE_TRANSFER_ECHO_IDLE_MS; emits at most 2 responses per upload
-        (sub-msg 1 ack, sub-msg 2 ack). See docs/moza-protocol.md §
-        Sub-msg 1 / sub-msg 2 response format."""
-        if session != 0x04:
+        """Build and queue a type=0x01 or type=0x11 response on the given
+        file-transfer session. Session number is dynamic — real PitHouse
+        opens one of 0x04..0x08 depending on firmware build and upload-type;
+        we detect a file-transfer session by the presence of a type=0x02
+        metadata sub-msg in the reassembled session buffer (md5 + ff*4
+        sentinel pattern), not by hardcoded port number.
+
+        PitHouse's upload protocol:
+          host type=0x02 metadata  →  wheel type=0x01 ready-ack
+          host type=0x03 content   →  wheel type=0x11 complete-ack
+
+        Sim picks the response based on what host has actually sent so far.
+        Scans the reassembled session buffer for sub-msg type bytes: if a
+        type=0x03 chunk has arrived, emit type=0x11 (bytes_written=total);
+        otherwise emit type=0x01 (bytes_written=0). Emitting type=0x11 before
+        host sends type=0x03 causes PitHouse to error with "wheel claims
+        complete but I haven't sent content" → upload stalls.
+        """
+        if session < 0x04 or session > 0x0a:
+            # Sessions 0x01..0x03 are mgmt/telemetry/RPC, 0x0b+ unused.
             return
-        if self._ft_submsg_emitted >= 2:
+        local, remote, md5, total_size = self._scan_file_transfer_paths(session)
+        if md5 is None or remote is None:
+            # Host hasn't finished its metadata yet — nothing to ack.
             return
-        remote, local = self._scan_file_transfer_paths(session)
-        if remote is None:
-            # Host hasn't sent a path registration yet — nothing to ack.
-            return
-        # MD5: pull from filename `_moza_filetransfer_md5_{hex}` if present;
-        # otherwise compute over whatever zlib content we've buffered.
-        md5_hex = ''
+        # Count type=0x03 sub-msgs in buffer and total content bytes received.
+        # PitHouse splits large uploads into many type=0x03 rounds; each round
+        # needs its own type=0x11 progress ack before the next round will
+        # flow. Real wheel firmware presumably tracks received bytes and emits
+        # type=0x11 with bytes_written=received_so_far per round; only the
+        # last round (zlib EOF) gets total_size.
+        buf = bytes(self._upload_tracker._bufs.get(session, b''))
         import re as _re
-        m = _re.search(r'_moza_filetransfer_md5_([0-9a-fA-F]{32})', remote)
-        if m:
-            md5_hex = m.group(1).lower()
-        if md5_hex:
-            md5 = bytes.fromhex(md5_hex)
+        rounds = 0
+        bytes_received = 0
+        zlib_eof = False
+        zlib_bytes = b''
+        for m in _re.finditer(rb'\x03..\x00\x00\x00\x00\x00', buf):
+            off = m.start()
+            size = int.from_bytes(buf[off+1:off+5], 'little')
+            content_end = min(off + 8 + size, len(buf))
+            if content_end - off < 10:
+                continue
+            rounds += 1
+            zm = _re.search(rb'\x78[\x9c\xda]', buf[off:content_end])
+            if zm:
+                zoff = off + zm.start()
+                zlib_bytes += bytes(buf[zoff:content_end])
+        # Try concat zlib decode (assumes single continuous stream split
+        # across many type=0x03 sub-msgs). Use whichever yields more bytes:
+        # decompressed-decoded count, or raw-content bytes received via
+        # `_ft_received_bytes`. The decoded count plateaus after the first
+        # msg when subsequent msgs carry raw deflate continuations without
+        # their own `78 9c` magic; the raw byte counter keeps advancing so
+        # progress acks never flatline.
+        try:
+            d = zlib.decompressobj()
+            if zlib_bytes:
+                dec = d.decompress(zlib_bytes)
+                zlib_eof = d.eof
+                bytes_received = len(dec)
+        except zlib.error:
+            pass
+        # Use raw-content byte counter if it's larger / decode plateaued.
+        raw_received = getattr(self, '_ft_received_bytes', 0)
+        if raw_received > bytes_received:
+            bytes_received = raw_received
+        if total_size and bytes_received > total_size:
+            bytes_received = total_size
+
+        # First ack: type=0x01 after host sends type=0x02 metadata. No content
+        # yet → bytes_written = 0.
+        rounds_acked = getattr(self, '_ft_rounds_acked', {}).get(session, -1)
+        if rounds_acked < 0:
+            submsg_index = 1
+            bytes_written = 0
+        elif not zlib_eof:
+            # Progress ack: type=0x01 variant with bytes_written advancing so
+            # PitHouse knows wheel accepted this round and continues pushing.
+            if rounds <= rounds_acked:
+                # No new round since last ack; don't spam.
+                return
+            submsg_index = 1
+            bytes_written = bytes_received
         else:
-            import hashlib as _hashlib
-            buf = bytes(self._upload_tracker._bufs.get(session, b''))
-            md5 = _hashlib.md5(buf).digest()
-        total_size = max(self._ft_received_bytes, 1)
-        submsg_index = self._ft_submsg_emitted + 1
-        bytes_written = 0 if submsg_index == 1 else total_size
+            # zlib stream reached EOF → final done-ack.
+            submsg_index = 2
+            bytes_written = total_size
         local_path = local or ''
         body = build_file_transfer_response(
             remote_path=remote,
@@ -2601,17 +3037,32 @@ class WheelSimulator:
             bytes_written=bytes_written,
             submsg_index=submsg_index,
         )
-        # Chunk the body into 56-byte payload pieces (max_chunk=0x38 observed).
-        seq = self._upload_next_seq.get(session, 0)
-        chunks = []
-        max_chunk = 0x38
-        for i in range(0, len(body), max_chunk):
-            chunks.append(build_session_data_frame(session, seq, body[i:i + max_chunk]))
-            seq = (seq + 1) & 0xFFFF
-        self._upload_next_seq[session] = seq
+        # File-transfer reply path: user's PitHouse (2026-04) appears to use
+        # the same 4-byte CRC32 framing on file-transfer chunks as on
+        # handshake chunks. Earlier switch to 3-byte CRC here left PitHouse
+        # stalled after type=0x02 metadata → type=0x01 ack (no type=0x03
+        # content forthcoming). Reverted to 4B 2026-04-24.
+        #
+        # Device-side seq is independent from host's seq on the same session.
+        # Real wheel starts device-side seq at port+1 (e.g. port=6 → first
+        # data chunk at seq 0x07). Default to that convention.
+        port = self.device_opened_sessions.get(session, session)
+        seq = self._ft_reply_next_seq.get(session, (port + 1) & 0xFFFF)
+        chunks = chunk_session_payload(session, seq, body, crc_bytes=4)
+        seq = (seq + max(1, (len(body) + 53) // 54)) & 0xFFFF
+        self._ft_reply_next_seq[session] = seq
         with self._pending_lock:
             self._pending_sends.extend(chunks)
         self.cat_counts['ft_ack'] = self.cat_counts.get('ft_ack', 0) + len(chunks)
+        if not hasattr(self, '_ft_rounds_acked'):
+            self._ft_rounds_acked = {}
+        # Track which "round count" we've already acked. First ack (no content
+        # yet) sets to 0. Each progress ack updates to current rounds. Final
+        # done-ack sets to a sentinel so no further acks fire.
+        if submsg_index == 1:
+            self._ft_rounds_acked[session] = rounds
+        else:
+            self._ft_rounds_acked[session] = 0xFFFF
         self._ft_submsg_emitted = submsg_index
         if self.emitter:
             self.emitter.emit_event('ft_ack',
@@ -2625,7 +3076,7 @@ class WheelSimulator:
 
         Gated by `dash_reply_enabled`. Replay mid-upload causes PitHouse to
         skip its file transfer (it believes the dash is already stored). Only
-        fire after a real upload parses — `_parse_session04_upload` flips the
+        fire after a real upload parses — `_parse_upload` flips the
         flag to True for that specific session."""
         if session in self._upload_replied:
             return
@@ -2709,6 +3160,16 @@ class WheelSimulator:
             if id_rsp is not None:
                 self._record('identity', frame)
                 return [build_frame(group | 0x80, self.wheel_device_rsp, id_rsp)]
+
+        # Per-device identity (hub 0x12, base 0x13, pedal 0x19). Same identity
+        # cascade as wheel but keyed by (device, group, payload) so each
+        # address answers with its own values. Replaces per-device replay
+        # entries for groups 02/04/05/06/07/08/09/0F/10/11.
+        dev_key = (device, group, bytes(frame_payload(frame)))
+        dev_id_rsp = self._device_id_rsp.get(dev_key)
+        if dev_id_rsp is not None:
+            self._record('dev_identity', frame)
+            return [build_frame(group | 0x80, swap_nibbles(device), dev_id_rsp)]
 
         if group == 0x0E:
             self._record('fw_debug', frame)
@@ -2893,12 +3354,63 @@ class WheelSimulator:
                               'utf16' if blob.get('utf16') else 'binary'))
                 # Drain any newly-parsed RPC calls → dispatch + queue replies.
                 self._drain_rpc_log()
-                # File-transfer per-sub-msg ack (session 0x04 only). Real
-                # firmware emits a 6-chunk ack after each sub-message (path
-                # registration, then file content). Accumulate host's
-                # received bytes for the `bytes_written` field and schedule
-                # a timer that fires once the burst goes quiet.
-                if session == 0x04 and chunk:
+
+                # Directory-listing probe (host sub-msg type 0x08). Originally
+                # observed on session 0x04; session number is dynamic (PitHouse
+                # picks one of 0x04..0x0a depending on firmware build / UI
+                # flow). Detect by content — `08 2c 00 00 00 00 00 00 14 00
+                # [UTF-16 "/home/root"] ff*8 [8B echo_id] ff ff ff ff ...`.
+                # Without a type=0x0a reply, PitHouse stalls here and silently
+                # falls back to its local cache, skipping any subsequent
+                # dashboard upload.
+                if (0x04 <= session <= 0x0a and len(chunk) >= 45
+                        and chunk[0] == 0x08
+                        and chunk[8:10] == b'\x14\x00'):
+                    # Probe layout:
+                    #   [0..7]   08 + size_LE + 3B pad
+                    #   [8..9]   14 00 (path length field; field value = 20
+                    #            but only 19B of path follow — firmware quirk)
+                    #   [10..28] 19B UTF-16LE "/home/root" (no null terminator)
+                    #   [29..36] ff*8
+                    #   [37..44] 8B echo_id (request identifier)
+                    echo_id = bytes(chunk[37:45])
+                    # Replay captured 221B reply byte-exact (with fresh
+                    # echo_id). Minimal 45B variant was being rejected by
+                    # PitHouse; full captured bytes at least pass the format
+                    # check even if they carry "11 factory dashboards" info
+                    # (which PitHouse's cache reconciles separately).
+                    reply_body = build_dir_listing_reply(echo_id)
+                    rseq = getattr(self, '_session04_next_seq', 0x0001)
+                    # chunk_session_payload gives byte-exact 54-byte chunks
+                    # with CRC32 trailers — matches real wheel wire format.
+                    reply_chunks = chunk_session_payload(session, rseq, reply_body)
+                    self._session04_next_seq = rseq + max(
+                        1, (len(reply_body) + 53) // 54)
+                    with self._pending_lock:
+                        self._pending_sends.extend(reply_chunks)
+                    self.cat_counts['dir_listing'] = (
+                        self.cat_counts.get('dir_listing', 0) + len(reply_chunks))
+                    if self.emitter:
+                        self.emitter.emit_event('dir_listing_reply',
+                            session=f'0x{session:02x}', chunks=len(reply_chunks),
+                            echo_id=echo_id.hex())
+
+                # File-transfer per-sub-msg ack — any session opened via the
+                # host's 7c:23 trigger could carry an upload. Real PitHouse
+                # opens several ports (0x04, 0x06, 0x07, 0x08 observed during
+                # handshake) and picks one dynamically for each upload. Only
+                # arm the ack timer if the session buffer already shows a
+                # type=0x02 sub-msg header (`02 XX XX XX XX 00 00 00`) —
+                # avoids false-triggering on plain session keepalives /
+                # RPC traffic during handshake.
+                _session_buf = self._upload_tracker._bufs.get(session, b'')
+                _has_type_02 = any(
+                    len(_session_buf) >= off + 8
+                    and _session_buf[off] == 0x02
+                    and _session_buf[off + 5:off + 8] == b'\x00\x00\x00'
+                    for off in range(0, max(0, len(_session_buf) - 7))
+                )
+                if 0x04 <= session <= 0x0a and chunk and _has_type_02:
                     self._ft_received_bytes += len(chunk)
                     if self._ft_echo_timer is not None:
                         try:
@@ -2967,11 +3479,14 @@ class WheelSimulator:
                 if self.emitter:
                     self.emitter.emit_event('session_end',
                         session=f'0x{session:02x}', ack_seq=ack_seq)
-                # If this was the file-transfer session, try to parse the
-                # uploaded mzdash and re-push configJson state so PitHouse's
-                # UI reflects the new dashboard.
-                if session in self.device_opened_sessions and session == 0x04:
-                    entry = self._parse_session04_upload(session)
+                # If this was a file-transfer session (dynamic port), try to
+                # parse the uploaded mzdash and re-push configJson state so
+                # PitHouse's UI reflects the new dashboard. Session number
+                # varies (0x04..0x0a) per firmware build; detect file-transfer
+                # by having seen a type=0x02 metadata sub-msg in the buffer.
+                if (session in self.device_opened_sessions
+                        and 0x04 <= session <= 0x0a):
+                    entry = self._parse_upload(session)
                     if entry is not None:
                         self._fire_state_refresh()
             return tag, responses
@@ -2993,9 +3508,33 @@ class WheelSimulator:
             return 'display_probe', responses
 
         # ── 7C:23/27/1E display commands (host→wheel) ──────────────────
-        # One-way notifications — no response expected. Silent consume.
-        # 7C:23 = dashboard activate, 7C:27 = page cycle config,
-        # 7C:1E = display settings push (brightness/timeout/orientation — all models).
+        # 7C:23 = dashboard-activate / session-open request
+        # 7C:27 = page-cycle config
+        # 7C:1E = display settings push (brightness/timeout/orientation)
+        #
+        # Specific 7C:23 variant `7c 23 46 80 XX 00 YY 00 fe 01` (10B) is a
+        # session-open REQUEST from host: bytes [6:8] = requested port (LE
+        # u16). Wheel opens the requested session in response, allowing the
+        # host to then stream upload content on that session. Without this
+        # reply, PitHouse's UI blocks: dir-listing OK, upload button clicked,
+        # but no wire traffic on session 0x06.
+        #
+        # Captured variants (pithouse-switch-list-delete-upload-reupload.pcapng
+        # + automobilista2-wheel-connect-dash-change.pcapng):
+        #   `7c 23 46 80 08 00 06 00 fe 01` → open session 0x06 (x3)
+        if (cmd1 == 0x7C and cmd2 == 0x23 and len(payload) >= 8
+                and payload[2] == 0x46 and payload[3] == 0x80
+                and payload[7] == 0x00):
+            req_port = payload[6]
+            responses.append(resp_device_session_open(req_port, req_port))
+            # Track the dynamically-opened session so the session_end handler
+            # can gate `_parse_upload` on it and the mzdash content actually
+            # gets extracted after the upload completes.
+            self.device_opened_sessions[req_port] = req_port
+            if self.emitter:
+                self.emitter.emit_event('session_open_triggered',
+                    port=req_port, cmd='7c:23')
+            return 'display_cfg', responses
         if cmd1 == 0x7C and cmd2 in (0x1E, 0x23, 0x27):
             return 'display_cfg', responses
 
@@ -3375,8 +3914,10 @@ def rewrite_session_frame_seq(frame: bytes, new_seq: int) -> bytes:
 def _chunk_catalog_message(session: int, message: bytes, start_seq: int) -> List[bytes]:
     """Chunk a TLV message into 7C:00 session data frames (wheel→host).
 
-    Each chunk gets a CRC-32 trailer. Max 54 net bytes per chunk (58 with CRC).
-    Returns complete Moza wire frames ready to send.
+    Each chunk gets a 4-byte CRC32-LE trailer. Matches what the sim has
+    always emitted on catalog / channel-URL enumeration and what user
+    PitHouse (2026-04 build) accepts on both handshake and file-transfer
+    reply paths.
     """
     MAX_NET = 54
     frames: List[bytes] = []
@@ -3942,25 +4483,32 @@ def cmd_live(port: str, db: Dict[str, dict], replay: Optional[ResponseReplay] = 
             return
 
         time.sleep(0.05)
-        for s in catalog_sessions:
-            sim._bufs.pop(s, None)
-        with write_lock:
-            log_fh.write(f'{_ts()} -- [proactive   ] sending device catalog for sessions {catalog_sessions}\n')
+        # Catalog may already have been queued by _fire_device_init (which now
+        # emits it on every handshake — startup AND reconnect). Skip the
+        # one-shot proactive emit in that case to avoid duplicate sends.
+        if sim.catalog_sent:
+            with write_lock:
+                log_fh.write(f'{_ts()} -- [proactive   ] catalog already sent by _fire_device_init, skipping\n')
+        else:
+            for s in catalog_sessions:
+                sim._bufs.pop(s, None)
+            with write_lock:
+                log_fh.write(f'{_ts()} -- [proactive   ] sending device catalog for sessions {catalog_sessions}\n')
 
-        # Replay frames verbatim — wheel-direction seqs are independent of the
-        # host's session-open seq. Matches pre-multi-model burst pacing.
-        for sess_id in catalog_sessions:
-            if sess_id not in (0x01, 0x02):
-                continue
-            for frame in sim._device_catalog[sess_id]:
-                with write_lock:
-                    _write(frame, 'catalog')
-                sim.proactive_sent += 1
-                time.sleep(0.001)
+            # Replay frames verbatim — wheel-direction seqs are independent of the
+            # host's session-open seq. Matches pre-multi-model burst pacing.
+            for sess_id in catalog_sessions:
+                if sess_id not in (0x01, 0x02):
+                    continue
+                for frame in sim._device_catalog[sess_id]:
+                    with write_lock:
+                        _write(frame, 'catalog')
+                    sim.proactive_sent += 1
+                    time.sleep(0.001)
 
-        sim.catalog_sent = True
-        if sim.emitter:
-            sim.emitter.emit_event('catalog_sent', frames=sim.proactive_sent)
+            sim.catalog_sent = True
+            if sim.emitter:
+                sim.emitter.emit_event('catalog_sent', frames=sim.proactive_sent)
         with write_lock:
             log_fh.write(f'{_ts()} -- [proactive   ] catalog complete, {sim.proactive_sent} frames sent\n')
 
@@ -4048,9 +4596,9 @@ def main():
         output_mode = 'mcp'
 
     # Populate global identity tables from selected model
-    global _PLUGIN_PROBE_RSP, _PITHOUSE_ID_RSP, _DISPLAY_MODEL_NAME, _WHEEL_DEVICE
+    global _PLUGIN_PROBE_RSP, _PITHOUSE_ID_RSP, _DEVICE_ID_RSP, _DISPLAY_MODEL_NAME, _WHEEL_DEVICE
     model = WHEEL_MODELS[args.model]
-    _PLUGIN_PROBE_RSP, _PITHOUSE_ID_RSP = _build_identity_tables(model)
+    _PLUGIN_PROBE_RSP, _PITHOUSE_ID_RSP, _DEVICE_ID_RSP = _build_identity_tables(model)
     _DISPLAY_MODEL_NAME = model.get('display', {}).get('name', '')
     _WHEEL_DEVICE = model.get('wheel_device', DEV_WHEEL)
     print(f'[Model: {model["friendly"]} ({model["name"]}), Display: {_DISPLAY_MODEL_NAME}]',

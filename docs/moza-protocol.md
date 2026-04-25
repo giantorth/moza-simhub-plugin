@@ -214,7 +214,7 @@ Assumed from device naming conventions (unverified):
 | `W17` | CS Pro | 18 RPM LEDs, no flag LEDs (firmware reports `W17`) |
 | `W18` | KS Pro | 18 RPM LEDs, no flag LEDs (firmware reports `W18`) |
 | `KS` | KS | 10 button LEDs, no flag LEDs |
-| `FSR2` | FSR V2 | Has flag LEDs |
+| `W13` | FSR V2 | 16 RPM LEDs, 10 buttons, no flag LEDs (firmware reports `W13`) |
 | `TSW` | TSW | 14 button LEDs, no flag LEDs |
 
 ### ES wheel identity caveat
@@ -762,14 +762,17 @@ Known methods (observed via pithouse sim capture, 2026-04-21):
 
 ## Dashboard upload protocol
 
-### OPEN QUESTION — which upload path is current?
+### Upload paths — firmware version matrix
 
-Two upload structures described across captures. Not yet confirmed whether these are:
-- (a) Two different upload paths firmware supports in parallel
-- (b) Same path described from different capture/understanding eras (one stale)
-- (c) Different firmware versions (2026-04 vs 2025-11)
+Three upload protocol variants observed across firmware generations:
 
-Both documented below; **plugin currently implements Path B** (session 0x04, sub-msg 1/2 — matches 2025-11 firmware). Path A code path was removed when 2025-11 firmware shipped and only recognised Path B. Needs investigation whether older firmware still requires Path A in parallel.
+| Firmware | Upload session | Sub-msg types | Paths marker | Docs section |
+|----------|----------------|---------------|--------------|--------------|
+| 2026-04 (legacy, `09-04-26/dash-upload.pcapng`) | Session 0x01 mgmt | FF-prefix envelopes, 3 fields | n/a (binary fields) | Path A below |
+| 2025-11 (latestcaps) | Session 0x04 | type=0x02/0x03 host, 0x01/0x11 wheel | `0x8A` LOCAL | Path B below |
+| 2026-04+ (current PitHouse) | Session 0x05 or 0x06 (dynamic via `7c:23` trigger) | type=0x02/0x03 host, 0x01/0x11 wheel | `0x8C` LOCAL | "2026-04-24 findings" below |
+
+**Plugin** currently implements Path B (session 0x04, 0x84/0x8C markers, BE sizes). Sim implements the 2026-04+ variant (dynamic session, 0x8C marker). For current PitHouse builds, see `§ Findings from 2026-04-24 session` below — Paths A and B are retained for historical firmware compatibility but neither matches current wire behavior.
 
 ### Path A — session 0x01 host-initiated FF-prefix upload (plugin implementation)
 
@@ -1542,6 +1545,394 @@ Even with `enableManager.dashboards=[]` and filesystem listing showing empty `/h
 ### configJson state push includes top-level fields many docs omit
 
 Doc § 857 captures the full 11-key schema (`TitleId, configJsonList, disableManager, displayVersion, enableManager, fontRefMap, imagePath, imageRefMap, resetVersion, rootDirPath, sortTag`). Earlier sim builds only emitted 5 (TitleId, configJsonList, disableManager, displayVersion, enableManager) and PitHouse rejected the state / failed to progress tier def. All 11 fields must be present; factory-fresh values for the missing 6 are `fontRefMap={}, imagePath=[], imageRefMap={}, resetVersion=10, rootDirPath="/home/moza/resource", sortTag=0`.
+
+## Findings from 2026-04-24 deep-dive (CSP on R9)
+
+Captures: `usb-capture/latestcaps/pithouse-switch-list-delete-upload-reupload.pcapng` (49 MB, CSP wheel on R9 base, VID/PID `346e:0002`, 2026-04 firmware) and `usb-capture/ksp/putOnWheelAndOpenPitHouse.pcapng` (KS Pro connect).
+
+### Short-form identity probes (grp 0x43, dev 0x17) — no sub-byte variant
+
+PitHouse sends BOTH a sub-byte form (`43:17:08:01`) and a SHORT form (`43:17:08`) for display identity probes. Across all 23 captures analyzed, the short form is used 9–16× per capture for each of cmd `02/07/08/0f/10/11`; the sub-byte form for cmd `08/0f/10/11` appears **zero** times. Sim entries `(0x43, 0x17, b'\x08\x01')` etc. in `_build_identity_tables` are dead code; the short form `(0x43, 0x17, b'\x08')` is what gets hit on real hardware.
+
+Short-form responses observed (byte-exact):
+
+| Probe | Response | Notes |
+|-------|----------|-------|
+| `43:17:07` | `c3:71:87:01:<16B name>` | Same as long-form `07:01` |
+| `43:17:08` | `c3:71:88:01:<16B hw_version>` | Sub-byte 0x01 defaulted |
+| `43:17:0f` | `c3:71:8f:01:<16B sw_version>` | Sub-byte 0x01 defaulted |
+| `43:17:10` | `c3:71:90:00:<16B serial0>` | Sub-byte 0x00 defaulted |
+| `43:17:11` | `c3:71:91:04` | 2B not 3B; no trailing 0x01 sub |
+
+### Hub (dev 0x12) and base (dev 0x13) identity cascade
+
+PitHouse issues the same identity probe set (cmd `02/04/05/06/07/08/0e/0f/10/11`) to **hub** (0x12) and **base** (0x13) on top of the wheel (0x17) probes. A wheel-only sim leaves ~8000 probes unanswered per connect, and without the `R9 Black # MOT-...` / `RS21-D01-MC PB` identity responses PitHouse treats hub/base as stranger devices and never progresses Dashboard Manager to "fully detected". Hub + base JSON replay tables (`sim/replay/csp_r9_hub_12.json`, `csp_r9_base_13.json`) cover 99 + 111 entries respectively.
+
+Grp 0x28/0x29/0x2a/0x2b also target base with scalar queries — extracted to same JSON table.
+
+### Session cumulative ACKs — `fc:00 [sess] [seq_lo] [seq_hi]` (5-byte payload)
+
+Both directions emit cumulative session acks:
+
+```
+7E 05 [grp] [dev] FC 00 [sess] [seq_lo] [seq_hi] [cksum]
+```
+
+Real wheel: `grp=C3 dev=71`. Host: `grp=43 dev=17`. `seq_hi` is usually `0x00` (acks fit in 1 byte). `sess` is the session byte being acked. Values don't have to match the current chunk seq — it's a cumulative window ack, so `fc:00:01:04` means "I've processed up to seq 4 on session 1".
+
+Sim previously had this on emit (`resp_session_ack`) but had NO consumer for inbound `fc:00` from host — they fell through to the replay table which returned a stale capture-time ack that confused PitHouse's retry logic. `_handle_wheel` now consumes them silently.
+
+### Session data chunk CRC format
+
+All session `7c:00` data chunks carry a **4-byte CRC-32 LE** trailer on the net body. Earlier analysis (2026-04-24) reported a 3-byte truncated CRC based on offset miscounts during capture reassembly; re-verification against the same captures confirms 4 bytes. `chunk_session_payload` in `sim/wheel_sim.py` encodes chunks as `[54B net data] + [CRC32_LE:4]`, matching wire format on both firmware generations. Direct raw chunking without the CRC (earlier `_queue_file_transfer_echo` implementation) is rejected by PitHouse silently.
+
+### Session 1 device→host content differs from sim's emit
+
+Real CSP wheel emits on session 0x01 device→host (direction: wheel→host):
+- seq 5: `ff 00 00 00` (1B content `ff` + 3B CRC)
+- seq 6: `03 04 00 00 00 01 00 00 00 [3B CRC]` (field 0 = 1 marker)
+- seq 7+: channel entries — **same TLV format as session 2 channel catalog** (`04 [size_LE4] [idx] v1/gameData/<name>`) plus a final `06 04 00 00 00 [count_LE4]` total
+
+Total: ~250 chunks, ~5.3 KB per capture. Session 1 is **NOT** for device description — that lives on session 2 only in this firmware. Sim currently emits session1_desc on session 1, which is the opposite of what real wheel does.
+
+Session 0x02 device→host starts with device description (24/5/2/9/2 byte chunks for CSP — **not** the VGS 26/5/2/9/2 split), then continues with channel catalog + zlib streams.
+
+### CSP session 2 desc chunk sizes: 24/5/2/9/2 (42B), not 26/5/2/9/2 (44B)
+
+CSP session1_desc byte-exact from capture seq 6-10:
+
+```
+chunk 1 (24B): 07 01 00 00 00 00 0c 04 8a e5 d0 86 b2 fc ad 74 86 db e2 08 04 10 01 0a
+chunk 2  (5B): 01 64 00 00 00
+chunk 3  (2B): 05 00
+chunk 4  (9B): 04 02 00 00 00 00 00 00 00
+chunk 5  (2B): 06 00
+```
+
+Last byte of chunk 1 is `0a`, not `05`. The `05` seen in some older notes is a mistranscription — real CSP desc ends chunk 1 with `0a` (TLV type 0x0a marker starting the next logical block).
+
+### `43:17:fc:00:*` probe family is host-side ACK, NOT a real probe
+
+`43:17:FC:00:[sess][seq_lo][seq_hi]` appearing 1000+ times in captures is PitHouse emitting its own cumulative ACK back to the wheel — not a probe expecting a response. Sim shouldn't answer these from a replay table; the replay's capture-time ack value is stale. Consume silently in `_handle_wheel`.
+
+### Hub/base identity probes are 0x00-prefixed, not empty-payload
+
+Sim's `_build_identity_tables` keys pithouse_rsp by `(grp, payload_suffix)` where wheel probes use suffix `b'\x01'` (sub 01). Hub/base probes on grp `02/04/05/06/07/08/0f/10/11` to dev `0x12` / `0x13` use suffix `b''` (empty) with LEN=1 frames. Response payload IS still 16-byte identity string. Sim's wheel-only pithouse_rsp doesn't match dev 0x12/0x13 probes — they fall through to replay table, which works when populated from a matching-wheel capture.
+
+### dev_type sub-byte table (CSP verified)
+
+`0x04 response` payload `01 02 [DT] [06]` where `DT` varies:
+
+| Wheel | DT byte | Source |
+|-------|---------|--------|
+| VGS | 0x04 | capture, old |
+| CSP | **0x06** (not 0x04!) | 2026-04 capture — sim default `0x04` is wrong for CSP |
+| KS | 0x05 | live probe |
+| KSP | 0x05 | KSP capture |
+| ES | 0x12 (base-proxied) | live probe |
+
+Display sub-device `0x04 response` payload `01 02 [DDT] [06]`:
+
+| Wheel | DDT byte |
+|-------|----------|
+| CSP | 0x11 (not 0x0d!) — fixed in profile 2026-04-24 |
+| VGS | 0x08 |
+
+### hw_id must match between session1_desc and cmd 0x06
+
+Real wheel embeds 12-byte display hw_id inside session1_desc at byte offset 8. Sim's cmd 0x06 response returns `model['display']['hw_id']`. Randomising either (mcp_server `_apply_model` did this on every sim_start for cache-busting) creates a mismatch that PitHouse detects and downgrades display detection. Fix: profile-defined hw_id used verbatim, no randomisation.
+
+### enableManager.dashboards — factory-populated on empty FS
+
+Real wheel on empty FS still advertises 11 factory-baked dashboards with full metadata in `enableManager.dashboards` (hash, id, idealDeviceInfos, previewImageFilePaths, title). configJson state payload ~7.2 KB uncompressed. Sim previously emitted 454 B (empty enableManager.dashboards) which leaves Dashboard Manager's UI in a half-state. Fix: fall back to factory's enableManager.dashboards entries from `sim/factory_configjson_state.json` when FS has no user-uploaded content.
+
+Keep `disableManager`, `imageRefMap`, `imagePath` empty — copying those from factory state regressed session 0x03 open retry loop.
+
+### Dev 0x19 is pedal (newer firmware)
+
+`23:19:*` and `25:19:*` probe families (observed in KS Pro capture) target a pedal sub-device. Real KSP capture shows 70+ identity responses from dev 0x19 with `RS21-D01-MC PB` / `RS21-D01-HW PM-C` strings and UTF-8 debug log stream (param writes, calibration status). Sim's wheel-only personality drops these probes silently; PitHouse keeps re-probing. Covered in `sim/replay/kspro_pedal_19.json` (92 entries) for KS Pro profile only.
+
+### Session 0x06 file-transfer paths (2026-04 firmware only)
+
+In the 2026-04 CSP capture, session 0x06 carries **UTF-16LE file paths + MD5 hashes** as part of the file-transfer staging:
+
+```
+C:/Users/Tove/AppData/Local/Temp/_moza_filetransfer_tmp_1777043733868
+p/_moza_filetransfer_md5_a6f0ff161012456174ef5060fcba280b
+```
+
+267 blobs, 14.7 KB per capture. Sim currently treats session 0x06 as a simple keepalive (via `_DEVICE_SESSIONS`). Earlier firmware captures had session 0x06 as keepalive-only — this is a newer-firmware expansion of the session's role.
+
+### Channel catalog TLV framing
+
+`_build_session2_message` format, verified against capture bytes:
+
+```
+FF                          marker
+03 04 00 00 00 01 00 00 00  field 0 = 1
+04 [size_LE4] [idx_u8] [url_ascii...]  channel entry, one per URL
+03 04 00 00 00 02 00 00 00  field 0 = 2
+06 04 00 00 00 [count_LE4]  total-channel-count
+```
+
+Wheel emits this on BOTH session 0x01 and session 0x02 (real CSP, 2026-04). Sim emits on session 0x02 only.
+
+## Findings from 2026-04-24 session (firmware upload path on new builds)
+
+Investigation was driven by PitHouse refusing to commit dashboard upload bytes to the wire against the sim — UI showed "resources syncing" indefinitely after user clicked upload. Traffic inspection revealed multiple protocol assumptions wrong for the current (2026-04) PitHouse build.
+
+### File upload session is NOT 0x06 — varies per firmware
+
+Earlier docs + sim code hardcoded session `0x06` as the file-transfer session (from the 2025-11 pithouse-switch-list-delete-upload-reupload.pcapng capture). **2026-04 PitHouse opens session `0x05` instead and streams the upload there.** Sim must treat the session number as dynamic — discovered at runtime from the host's session-open request.
+
+| Firmware | Upload session | Source |
+|----------|----------------|--------|
+| 2025-11 (latestcaps captures) | `0x06` | `pithouse-switch-list-delete-upload-reupload.pcapng` |
+| 2026-04 (current user build) | `0x05` | Live sim capture 2026-04-24 |
+
+### `7c:23` is a device-initiated session-open request, not just a page notification
+
+`7C:23` was documented as "dashboard-activate notify" (one-way). It is actually a **host → wheel session-open request** for a specific protocol variant:
+
+```
+7c 23 46 80 [seq:u16 LE] [port:u16 LE] fe 01     (10B)
+```
+
+- `46 80` is constant across all captures
+- `[port]` is the session number the host wants the wheel to open
+- Wheel replies with device-initiated session open:
+  `7c 00 [port] 81 [port:u16 LE] [port:u16 LE] fd 02`
+
+Observed variants in the captures:
+
+| Host payload | Upload session port | Observed |
+|--------------|---------------------|----------|
+| `7c 23 46 80 06 00 04 00 fe 01` | 4 | No session open followed (2025-11 captures) |
+| `7c 23 46 80 08 00 06 00 fe 01` | 6 | 3× session-open in upload capture |
+| `7c 23 46 80 0a 00 08 00 fe 01` | 8 | 1× variant, not session-open in that capture |
+| `7c 23 46 80 07 00 05 00 fe 01` | 5 | Observed 2026-04 firmware, triggers session 0x05 open |
+
+Byte 4 (`[seq_lo]`) appears to be a sequence counter; the low nibble of byte 5 (`[seq_hi]` / port) selects the session. Not every variant triggers a session open — something else gates which `7c:23` opens a session and which is purely a dashboard-page notification. Current sim heuristic: any `7c 23 46 80 ... xx 00 fe 01` where byte 6 is the port opens that session. Works for observed captures.
+
+### Session 0x04 directory-listing probe/reply format
+
+Right after session 0x04 opens, **host sends a type=0x08 probe** asking for `/home/root` directory contents. Wheel must reply with **type=0x0a** or PitHouse falls back to its cache and silently skips any pending uploads (even though UI shows wheel FS as empty).
+
+Host probe layout (51B body, tagged `display_cfg` by sim until 2026-04-24):
+
+```
+offset 0..7    08 [size_LE:u32=0x2c=44] [00 00 00]    header
+offset 8..9    14 00                                   path_len field (u16 LE = 20)
+offset 10..28  2f 00 68 00 6f 00 6d 00 65 00 2f 00 72 00 6f 00 6f 00 74   19B UTF-16LE "/home/root" — NO trailing null despite path_len=20 (firmware quirk)
+offset 29..36  ff ff ff ff ff ff ff ff                8B constant
+offset 37..44  xx xx xx xx xx xx xx xx                8B echo_id (request identifier)
+offset 45..48  ff ff ff ff                            trailer sentinel
+```
+
+Wheel reply (221B body observed across both latestcaps captures):
+
+```
+offset 0..7    0a [size_LE:u32=0xd5=213] [00 00 00]   header
+offset 8..9    14 00                                   path_len
+offset 10..28  [path]                                  19B UTF-16LE "/home/root"
+offset 29..36  ff ff ff ff ff ff ff ff                8B constant
+offset 37..44  [echo_id]                               ECHOED FROM PROBE
+offset 45..47  00 00 00                                3B zero
+offset 48..52  a9 88 01 00 00                          5B constant (function unknown; maybe magic)
+offset 53..220 [176B opaque tail]                      format undecoded (see below)
+```
+
+**Sim implementation**: `build_dir_listing_reply(echo_id)` at `sim/wheel_sim.py` ~line 850. Replays the captured 176B tail byte-exact, substituting only echo_id at runtime.
+
+### Dir-listing reply 176B tail — NOT decodable as zlib
+
+The 176B payload after the 5B `a9 88 01 00 00` magic is NOT zlib-compressed despite the `78` byte at offset 53 suggesting a zlib CMF header. Investigation:
+
+- Position 53: `78` (constant across captures)
+- Position 54: varies per capture (`97` in automobilista2, `a5` in pithouse-switch) — nonce/salt candidate
+- Position 55 onward: identical across two captures with same wheel state (11 factory dashboards)
+- No valid zlib header at any offset 45..70 with wbits `-15`, `15`, or `31`
+- Not adler32, not CRC32 of known inputs, not derivable from md5/sizes
+- Entropy 6.94 bits/byte → high but not maximal (consistent with compressed or encrypted data)
+
+Candidates: custom compression, RC4-style stream cipher keyed on echo_id, or a hash of firmware state. **Recommend firmware reverse-engineering to decode.** Replay works functionally (PitHouse accepts format) but cache-skip logic is not defeated by it.
+
+### File-transfer sub-message format — LOCAL marker varies
+
+Host upload (session 0x05/0x06 depending on firmware) sub-messages:
+
+```
+[type:1] [size_LE:u32] [00 00 00]                    8B header
+[marker:u16] [UTF-16LE path] [00 00]                 first path TLV (Windows local temp)
+[marker:u16] [UTF-16LE path] [00 00]                 second path TLV (remote or local again)
+10                                                   flag byte
+[md5:16]                                             md5 of upload file
+[bytes_written:u32 BE]                               BIG ENDIAN u32 (NOT little-endian)
+[total_size:u32 BE]                                  BIG ENDIAN u32
+ff ff ff ff                                          sentinel
+[trailer:4]                                          unknown 4B value (see below)
+```
+
+| Sub-msg type | Direction | Role |
+|--------------|-----------|------|
+| `0x02` | host → wheel | Upload metadata (path + md5 + size) |
+| `0x03` | host → wheel | Upload content (includes zlib file body) |
+| `0x08` | host → wheel | Directory-listing probe (session 0x04) |
+| `0x00` | host → wheel | RPC call (session 0x04 / 0x0a, zlib-compressed JSON) |
+| `0x01` | wheel → host | Ready-ack (response to `0x02`) |
+| `0x11` | wheel → host | Content-complete ack (response to `0x03`) |
+| `0x0a` | wheel → host | Dir-listing reply (response to `0x08`) |
+
+**LOCAL path marker byte changed between firmware versions:**
+
+| Firmware | LOCAL marker | REMOTE marker |
+|----------|--------------|---------------|
+| 2025-11 (latestcaps) | `0x8A 0x00` | `0x70 0x00` (in wheel reply) / second `0x8A` (in host type=0x02) |
+| 2026-04 (current) | `0x8C 0x00` | `0x70 0x00` |
+
+Sim code in `_scan_file_transfer_paths` accepts both `0x8A` and `0x8C` markers for compatibility.
+
+### Upload protocol handshake sequence
+
+Small-file flow (2025-11 firmware, `pithouse-switch-list-delete-upload-reupload.pcapng`, ~1.9KB mzdash):
+
+1. Session 0x04 already open (from device_init). Host sends type=0x08 dir-listing probe with `/home/root`.
+2. Wheel replies type=0x0a with populated directory listing.
+3. Host sends `7c 23 46 80 08 00 06 00 fe 01` (session-open request, port=6).
+4. Wheel emits device-initiated session-open for session 0x06 (`7c 00 06 81 06 00 06 00 fd 02`).
+5. Host sends type=0x02 metadata on session 0x06 (316B for small file, 320B seen for 500KB).
+6. Wheel replies type=0x01 ready-ack on session 0x06 (290B, echoes both path TLVs + md5 + size, bytes_written=0).
+7. Host sends type=0x03 content on session 0x06 (one sub-msg, ~2192B for 1902B mzdash, contains zlib stream).
+8. Wheel replies type=0x11 complete-ack (290B, bytes_written == total_size).
+9. Host sends session_end `7c 00 06 00 ...`. Wheel sends session_end.
+
+**Large-file flow (2026-04 firmware, observed 2026-04-24, ~500KB dashboard):** PitHouse splits the upload into many type=0x03 sub-msgs. Sim must emit a per-round progress ack or PitHouse stalls.
+
+1–6. Same as small-file flow.
+7. Host sends FIRST type=0x03 content sub-msg (size_field=4384, full path TLVs + 8B `compressed_header` + zlib data starting with `78 9c` magic).
+8. Wheel emits type=0x01 progress ack with `bytes_written = decompressed_bytes_so_far`.
+9. Host sends NEXT type=0x03 sub-msg (same paths echoed + raw deflate continuation, no `78 9c` magic at the same fixed offset within the msg).
+10. Steps 8–9 repeat per round.
+11. Once full zlib stream is reassembled and reaches deflate EOF, wheel emits type=0x11 complete-ack with `bytes_written = total_size`.
+12. Host + wheel exchange session_end.
+
+**Session number is dynamic.** Earlier docs hardcoded session `0x05` / `0x06`; in fresh 2026-04 PitHouse runs we have observed `0x07` carrying the upload (the `7c:23` trigger from the host picked port 7). Sim now treats any session in `0x04..0x0a` as a candidate file-transfer session and gates by buffer content (presence of a type=0x02 sub-msg).
+
+**Device-side reply seq is independent from the host's seq counter on the same session.** Real wheel starts its file-transfer reply seq at `port + 1` (e.g. port 6 → first wheel→host data chunk at seq `0x07`). Sim previously reused the host's `_upload_next_seq` counter, which on a port-6 upload started replies at the host's last seq + 1 (≈ `0x11`); PitHouse silently dropped those out-of-window chunks. Fixed via `_ft_reply_next_seq[session]` initialised to `port + 1`.
+
+**Per-round progress ack.** For each new type=0x03 round detected in the buffer, sim emits another type=0x01 with the latest `bytes_written` value. Without this, PitHouse halts the upload after the first round (the protocol behaves like a per-round flow-control credit). `_ft_rounds_acked[session]` tracks how many rounds have been acked so duplicate keepalive timers don't re-fire on the same round.
+
+**Stuck-state recovery.** Sim reload (`mcp__wheel-sim-windows__sim_reload` then `sim_start`) appears to Windows as a USB disconnect → reconnect, forcing PitHouse to drop its cached "upload in progress" state and re-handshake cleanly. Required after any PitHouse retry-loop wedges (UI stuck on "resources syncing" with no wire activity).
+
+### 1-byte XOR status after `ff*4` sentinel (not a 4-byte trailer)
+
+**Resolved 2026-04-24.** The "4-byte trailer" chased in earlier revisions of this section was a misread. Only **1 byte** follows the `ff ff ff ff` sentinel. That byte is an **8-bit XOR checksum** over the body bytes — specifically, XOR of every byte from the first TLV marker through the final `ff` of the sentinel, producing a single byte appended as the message terminator. The 3 bytes that visually "looked like part of the trailer" in capture hex dumps were actually 3 of the 4 bytes of the chunk's 4-byte CRC32 — the last CRC byte and the frame checksum were getting silently dropped by a buggy capture-extract helper, making a 4+1 = 5-byte tail look like a 4-byte trailer.
+
+Verified across every `type=0x01/0x02/0x03/0x08/0x0a/0x11` message with clean chunk CRCs in:
+
+- `latestcaps/pithouse-switch-list-delete-upload-reupload.pcapng` (both files, both directions)
+- `09-04-26/dash-upload.pcapng` (legacy session 0x04 path)
+- `12-04-26-2/moza-startup-1.pcapng` (handshake/telemetry)
+
+For every message, `status == xor_over_body_bytes`. Example (file2 `type=0x01` ready-ack, 2025-11 capture): body XOR = `0x2e`, last byte on wire = `0x2e`.
+
+**Message layout** (confirmed, replaces earlier speculation):
+
+```
+[type:1] [size_LE:u32] [pad:1]             — 6-byte header
+[pad:2 = 00 00]                            — body begins here
+[REMOTE path TLV]                          — 0x70 0x00 + UTF-16LE + 00 00
+[LOCAL  path TLV]                          — 0x8A/0x8C 0x00 + UTF-16LE + 00 00  (firmware-dependent)
+[flag:1 = 0x10]
+[md5:16]
+[bytes_written:u32 BE]
+[total_size:u32 BE]
+[ff ff ff ff]                              — sentinel
+[status:1]                                 — XOR(every body byte above)
+```
+
+`size_LE` counts every byte after the first 6 (i.e. `msg_len = size + 6`). The two `00 00` bytes that follow the 6-byte header look like they could be extra header pad, but they are part of the body and contribute to the XOR (as zeros they are no-ops).
+
+**Sim impact.** The pre-2026-04-24 sim emitted a 4-byte `ff ff ff ff` trailer — 3 bytes longer than the real wheel — and set `size_LE = body_len` assuming an 8-byte header. Both errors compounded: PitHouse parsed size field, walked N bytes into the body, and its internal state machine's `next_message_offset` pointer landed 3 bytes past the real message end, at which point the sentinel scan / status XOR check failed and PitHouse sat on "resources syncing" waiting for a message it would never recognise. `build_file_transfer_response` in `sim/wheel_sim.py` now emits a 1-byte XOR status byte and sets `size = body_len + 2`.
+
+### Session data chunk CRC — 4 bytes LE
+
+**Verified 2026-04-24 (again).** Each session `7c:00` data chunk carries a **4-byte CRC32-LE** trailer over the net body. A previous revision of this section briefly claimed 3 bytes; that claim was an artifact of a buggy `extract_frames` helper that dropped the last 2 bytes of each frame (real CRC's last byte + frame checksum). When raw tshark output is inspected directly every chunk's last 4 bytes match `zlib.crc32(net)` LE exactly.
+
+Full chunk wire layout: 6-byte `7c:00:sess:01:seq_lo:seq_hi` + 54-byte net data + 4-byte CRC32-LE = 64-byte payload = 69-byte frame (with `7e/N/group/device/cksum` framing, `N = 0x40`). The final chunk of a message is shorter; it still carries a 4-byte CRC over its (smaller) net data.
+
+Sim chunking (`chunk_session_payload`, `_chunk_catalog_message`) and all chunk-CRC-aware ingestion paths (`UploadTracker.feed`, `PitHouseUploadReassembler.add`) use 4-byte CRC. `chunk_session_payload` exposes a `crc_bytes` knob for future firmware variants but defaults to 4.
+
+### Multi-round upload content (type=0x03) — zlib reassembly
+
+Large dashboards (≥ ~10KB compressed) are split across many type=0x03 sub-msgs. Every sub-msg in the same upload has identical structure:
+
+```
+[03] [size_LE:u32] [00 00 00]                  — 8B sub-msg header
+[LOCAL TLV]                                    — 0x8c 0x00 + UTF-16LE Windows temp path + 00 00
+[REMOTE TLV]                                   — 0x70 0x00 + UTF-16LE /_moza_filetransfer_md5_<hex> + 00 00
+[0x10] [md5:16]
+[reserved:4]
+[token:4]
+[compressed_header:8]                          — uncomp_sz BE + comp_sz LE (mixed endian)
+[zlib_or_raw_deflate_chunk]                    — `78 9c` magic only on FIRST sub-msg; subsequent sub-msgs carry raw deflate continuation at the same byte offset
+```
+
+Observed `size_LE = 0x1120 = 4384` for every sub-msg in a 506KB upload on the user's 2026-04 PitHouse; zlib data starts 769 bytes into each sub-msg (immediately after the 8B `compressed_header`). Path lengths can vary between uploads (different Windows temp filenames) so the zlib offset varies per upload — sim computes it by locating the `78 9c` magic in the FIRST sub-msg of the attempt, then slices every subsequent sub-msg at the same intra-msg offset.
+
+**Reassembly algorithm** (`_parse_upload` in `sim/wheel_sim.py`):
+
+1. Anchor on the LAST type=0x02 metadata marker in the session buffer (PitHouse may retry → stale type=0x02 / type=0x03 blocks earlier in the buffer must be skipped).
+2. From the anchor, enumerate all following type=0x03 sub-msgs where `size_LE` is in the plausible 1000–10000 range.
+3. In the first sub-msg, find the `78 9c` zlib magic → derive `zoff_in_msg`.
+4. For each sub-msg (first and continuations), slice `buf[off + zoff_in_msg : off + 8 + size_LE]` and concatenate. This strips the 8B sub-msg header + path TLVs + md5 + tokens + compressed_header from every continuation.
+5. Feed the concatenated deflate stream through `zlib.decompressobj()`. If `d.eof`, the upload is complete; else it was truncated but still yields partial bytes which sim writes to its virtual FS (better to store partial mzdash than nothing).
+
+**`_scan_file_transfer_paths` anchoring.** The metadata-field extractor (md5, total_size, local path) also anchors on the LAST type=0x02 boundary for the same reason — otherwise on retries the sim ends up building reply bodies that concatenate paths from the stale attempt with paths from the fresh attempt, inflating body length and shifting the size field.
+
+### configJson state `rootDirPath` changed between firmware versions
+
+| Firmware | `rootDirPath` | `rootPath` (enableManager/disableManager) |
+|----------|---------------|-------------------------------------------|
+| 2025-11 | `/home/moza/resource` | `/home/moza/resource/dashes` |
+| 2026-04 | `/home/root/resource` | `/home/root/resource/dashes` |
+
+Sim updated 2026-04-24 to emit the `/home/root` variant. Previewed upload paths in session 0x04 type=0x03 sub-msg use `/home/root/resource/dashes/<Name>.mzdash` (flat — no subdirectory unlike older `/home/moza/resource/dashes/<Name>/<Name>.mzdash`).
+
+### 2026-04 PitHouse omits the remote dashboard path
+
+In the live 2026-04 upload payload (session 0x07, captured to `sim/logs/parse_upload_sess07_buf.bin`), the host TLV stream contains **no** `/home/root/resource/dashes/...` UTF-16LE string at all. The only path-shaped data is the PitHouse Windows stage path:
+
+```
+C:/Users/<user>/AppData/Local/MOZA Pit House/_dashes/<hash>/dashes/<NAME>/<NAME>.mzdash
+```
+
+with `/` as separator. The `<NAME>` segment is the user-visible dashboard name. Sim's `extract_mzdash_path` falls back to this regex when no `/home/root/...` path is present, so the upload lands at `/home/root/resource/dashes/<NAME>/<NAME>.mzdash` in the virtual FS instead of the placeholder `uploaded-dashboard`. The decoded mzdash JSON itself is a widget tree (`actions/binding/borderStyle/children/...`) with no top-level `name`/`title` field, so the path is the only available source for the user-visible name.
+
+### empty `enableManager.dashboards` no longer blocks handshake
+
+Prior doc (circa 2026-04-22) warned that empty `enableManager.dashboards` in session 0x09 configJson state caused sessions_opened to stay 0 and tier_def_received to stay false. **No longer reproducible (2026-04-24).** Sim now reports `configJsonList: []` and `enableManager.dashboards: []` without regression — handshake completes, display_detected=true, tier_def_received=true. The older observation likely interacted with some other gate that has since been addressed (rootDirPath, hub/base identity, short-form probes). Leaving the factory fallback in place did not trigger uploads either; it only reinforced PitHouse's cache-skip when dashboards matched factory names.
+
+### Pedal device 0x19 identity (KS Pro capture)
+
+Extracted byte-exact 2026-04-23 from `usb-capture/ksp/putOnWheelAndOpenPitHouse.pcapng`:
+
+| Field | Pedal (dev 0x19) |
+|-------|------------------|
+| name | `SRP` (null-padded) |
+| hw_version | `RS21-D01-HW PM-C` |
+| hw_sub | `U-V11` |
+| sw_version | `RS21-D01-MC PB` |
+| dev_type | `01 02 02 05` |
+| caps | `01 02 18 00` |
+| hw_id | `20 00 28 00 04 57 48 41 32 34 33 20` (`" .(..WHA243 "`) |
+| identity_09 | `00 04` (hub/base return `00 01`) |
+
+Sim's `pedal_identity` in `WHEEL_MODELS['kspro']` covers these. PitHouse probes pedal on KS Pro captures; sim answers via procedural per-device identity dispatch.
+
+### Hub (dev 0x12) and base (dev 0x13) identity are byte-identical
+
+Confirmed on both CSP R9 and KSP R12 captures: real wheelbase answers dev 0x12 and dev 0x13 probes with the **same** identity values. They are aliases for a single physical device. Sim's `_build_device_identity` installs the `base_identity` block under both dev IDs accordingly. Do not synthesize differing values.
 
 ## Open questions
 

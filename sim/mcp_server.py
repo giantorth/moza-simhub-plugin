@@ -10,15 +10,29 @@ device catalog) is passed in via configure() before starting.
 """
 
 import json
+import os
+import platform
+import re
+import signal
+import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
+try:
+    import fcntl as _fcntl
+    _HAS_FCNTL = True
+except ImportError:
+    _HAS_FCNTL = False
+    import msvcrt as _msvcrt
+
 from mcp.server.fastmcp import FastMCP
 
 _server = FastMCP("wheel-sim")
+_IS_WINDOWS = platform.system() == 'Windows'
 
 # ── Lifecycle state ──────────────────────────────────────────────────────────
 
@@ -26,7 +40,14 @@ _sim = None           # WheelSimulator instance (created on sim_start)
 _session = None       # _SimSession instance (serial + threads)
 _config = {}          # Stored by configure()
 _last_disconnect = 0.0  # monotonic timestamp of last sim_stop
-_COOLDOWN_SEC = 5.0
+_COOLDOWN_SEC = 7.0
+
+# Cross-process port lock. Only one wheel_sim may bind a given serial port
+# across all MCP server processes (wheel-sim-linux, wheel-sim-windows, etc.).
+# Lock file is keyed by port slug; OS advisory lock on the fh guarantees
+# auto-release on process death.
+_lock_fh = None
+_lock_path: Optional[Path] = None
 
 
 class _SimSession:
@@ -187,6 +208,124 @@ def configure(*, port: str, db: dict, replay, device_catalog: dict,
     })
 
 
+def _port_lock_path(port: str) -> Path:
+    slug = re.sub(r'[^A-Za-z0-9]+', '_', port).strip('_') or 'default'
+    return Path(tempfile.gettempdir()) / f'wheel_sim_{slug}.lock'
+
+
+def _try_file_lock(fh) -> bool:
+    try:
+        if _HAS_FCNTL:
+            _fcntl.flock(fh.fileno(), _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+        else:
+            fh.seek(0)
+            _msvcrt.locking(fh.fileno(), _msvcrt.LK_NBLCK, 1)
+        return True
+    except (OSError, BlockingIOError):
+        return False
+
+
+def _release_file_lock(fh) -> None:
+    try:
+        if _HAS_FCNTL:
+            _fcntl.flock(fh.fileno(), _fcntl.LOCK_UN)
+        else:
+            fh.seek(0)
+            _msvcrt.locking(fh.fileno(), _msvcrt.LK_UNLCK, 1)
+    except OSError:
+        pass
+
+
+def _read_lockfile(path: Path) -> dict:
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return {}
+
+
+def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if _IS_WINDOWS:
+        out = subprocess.run(
+            ['tasklist', '/FI', f'PID eq {pid}', '/NH'],
+            capture_output=True, text=True,
+        )
+        return str(pid) in out.stdout
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def _kill_pid(pid: int) -> None:
+    if _IS_WINDOWS:
+        subprocess.run(
+            ['taskkill', '/F', '/PID', str(pid)],
+            capture_output=True, check=False,
+        )
+    else:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+
+
+def _acquire_port_lock(port: str) -> Optional[dict]:
+    """Acquire cross-process lock for `port`. Returns None on success;
+    returns owner info dict when port is already held by a live process."""
+    global _lock_fh, _lock_path
+    path = _port_lock_path(port)
+    fh = open(path, 'a+')
+    if not _try_file_lock(fh):
+        existing = _read_lockfile(path)
+        pid = int(existing.get('pid', 0) or 0)
+        if pid and _pid_alive(pid):
+            fh.close()
+            return {
+                "pid": pid,
+                "port": existing.get('port', port),
+                "started": existing.get('started'),
+            }
+        # Lock held by a dead process — OS should have released it. Retry once.
+        if not _try_file_lock(fh):
+            fh.close()
+            return {"pid": pid, "port": port, "stale": True}
+    fh.seek(0)
+    fh.truncate()
+    fh.write(json.dumps({
+        "pid": os.getpid(),
+        "port": port,
+        "started": time.time(),
+    }))
+    fh.flush()
+    _lock_fh = fh
+    _lock_path = path
+    return None
+
+
+def _release_port_lock() -> None:
+    global _lock_fh, _lock_path
+    if _lock_fh is not None:
+        _release_file_lock(_lock_fh)
+        try:
+            _lock_fh.close()
+        except Exception:
+            pass
+        _lock_fh = None
+    if _lock_path is not None:
+        try:
+            _lock_path.unlink()
+        except FileNotFoundError:
+            pass
+        except Exception:
+            pass
+        _lock_path = None
+
+
 def _no_sim():
     return {"error": "Simulator not running. Call sim_start first."}
 
@@ -217,10 +356,11 @@ def _apply_model(ws_mod, model_name: str) -> dict:
     # but mismatch with session1_desc embedded values broke display
     # detection. When user wants exact capture-derived identity, model-
     # profile values must flow through unchanged.
-    plugin_probe_rsp, pithouse_id_rsp = ws_mod._build_identity_tables(model)
+    plugin_probe_rsp, pithouse_id_rsp, device_id_rsp = ws_mod._build_identity_tables(model)
     display_model_name = model.get('display', {}).get('name', '')
     # Also set module globals for backward compat with standalone mode
     ws_mod._PLUGIN_PROBE_RSP, ws_mod._PITHOUSE_ID_RSP = plugin_probe_rsp, pithouse_id_rsp
+    ws_mod._DEVICE_ID_RSP = device_id_rsp
     ws_mod._DISPLAY_MODEL_NAME = display_model_name
 
     db = _config.get('db', {})
@@ -263,6 +403,7 @@ def _apply_model(ws_mod, model_name: str) -> dict:
         'c7_23_reps': int(model.get('_7c23_reps', 13)),
         'plugin_probe_rsp': plugin_probe_rsp,
         'pithouse_id_rsp': pithouse_id_rsp,
+        'device_id_rsp': device_id_rsp,
         'display_model_name': display_model_name,
         'replay': replay_override,
     }
@@ -271,15 +412,16 @@ def _apply_model(ws_mod, model_name: str) -> dict:
 @_server.tool()
 def sim_start(port: Optional[str] = None, model: Optional[str] = None) -> dict:
     """Start the simulator on a serial port. Uses configured port/model if omitted.
-    Model choices: vgs, csp, ks. Enforces 5s cooldown after disconnect."""
+    Model choices: vgs, csp, ks."""
     global _sim, _session, _last_disconnect
 
     if _session is not None:
         return {"error": "Simulator already running", "port": _config.get('port', '')}
 
-    cooldown_remaining = _COOLDOWN_SEC - (time.monotonic() - _last_disconnect)
-    if _last_disconnect > 0 and cooldown_remaining > 0:
-        return {"error": f"Cooldown active. {cooldown_remaining:.1f}s remaining before reconnect allowed."}
+    if _last_disconnect > 0:
+        remaining = _COOLDOWN_SEC - (time.monotonic() - _last_disconnect)
+        if remaining > 0:
+            time.sleep(remaining)
 
     if not _config:
         return {"error": "MCP server not configured. Was --mcp used with wheel_sim.py?"}
@@ -288,14 +430,27 @@ def sim_start(port: Optional[str] = None, model: Optional[str] = None) -> dict:
     if not use_port:
         return {"error": "No port specified"}
 
+    # Cross-process port lock. Blocks a second wheel_sim (any MCP server,
+    # any Claude session) from binding the same port. Released on sim_stop
+    # or process death.
+    conflict = _acquire_port_lock(use_port)
+    if conflict:
+        return {
+            "error": f"Port {use_port} already in use by another wheel_sim (pid {conflict.get('pid')})",
+            "owner": conflict,
+            "hint": "Call sim_stop from any session to kill the owner.",
+        }
+
     try:
         import serial
     except ImportError:
+        _release_port_lock()
         return {"error": "pyserial not installed"}
 
     try:
         ser = serial.Serial(use_port, baudrate=115200, timeout=None)
     except (serial.SerialException, OSError) as e:
+        _release_port_lock()
         return {"error": f"Cannot open {use_port}: {e}"}
 
     _ws = _load_wheel_sim()
@@ -304,6 +459,7 @@ def sim_start(port: Optional[str] = None, model: Optional[str] = None) -> dict:
     if model:
         if model not in _ws.WHEEL_MODELS:
             ser.close()
+            _release_port_lock()
             return {"error": f"Unknown model '{model}'. Available: {sorted(_ws.WHEEL_MODELS.keys())}"}
         overrides = _apply_model(_ws, model)
     else:
@@ -311,12 +467,14 @@ def sim_start(port: Optional[str] = None, model: Optional[str] = None) -> dict:
         # Apply default model identity tables
         default_model = _config.get('model', {})
         if default_model:
-            plugin_probe_rsp, pithouse_id_rsp = _ws._build_identity_tables(default_model)
+            plugin_probe_rsp, pithouse_id_rsp, device_id_rsp = _ws._build_identity_tables(default_model)
             display_model_name = default_model.get('display', {}).get('name', '')
             _ws._PLUGIN_PROBE_RSP, _ws._PITHOUSE_ID_RSP = plugin_probe_rsp, pithouse_id_rsp
+            _ws._DEVICE_ID_RSP = device_id_rsp
             _ws._DISPLAY_MODEL_NAME = display_model_name
             overrides['plugin_probe_rsp'] = plugin_probe_rsp
             overrides['pithouse_id_rsp'] = pithouse_id_rsp
+            overrides['device_id_rsp'] = device_id_rsp
             overrides['display_model_name'] = display_model_name
 
     use_device_catalog = overrides.get('device_catalog', _config['device_catalog'])
@@ -337,6 +495,7 @@ def sim_start(port: Optional[str] = None, model: Optional[str] = None) -> dict:
         use_device_catalog,
         plugin_probe_rsp=overrides.get('plugin_probe_rsp'),
         pithouse_id_rsp=overrides.get('pithouse_id_rsp'),
+        device_id_rsp=overrides.get('device_id_rsp'),
         display_model_name=overrides.get('display_model_name', ''),
         rpm_led_count=int(use_model.get('rpm_led_count', 10)),
         button_led_count=int(use_model.get('button_led_count', 14)),
@@ -361,18 +520,58 @@ def sim_start(port: Optional[str] = None, model: Optional[str] = None) -> dict:
 
 @_server.tool()
 def sim_stop() -> dict:
-    """Stop the simulator and close the serial port. Starts 5s reconnect cooldown."""
+    """Stop the simulator and close the serial port.
+    If the sim is owned by a different process (another MCP server / Claude
+    session), sends SIGTERM/taskkill to the owner PID recorded in the port
+    lockfile."""
     global _sim, _session, _last_disconnect
 
-    if _session is None:
+    if _session is not None:
+        _session.stop()
+        _session = None
+        _sim = None
+        _last_disconnect = time.monotonic()
+        _release_port_lock()
+        return {"status": "stopped"}
+
+    # No local session — check the configured port's lockfile for a
+    # cross-process owner and signal it.
+    use_port = _config.get('port', '')
+    if not use_port:
         return {"error": "Simulator not running"}
+    path = _port_lock_path(use_port)
+    if not path.exists():
+        return {"error": "Simulator not running"}
+    info = _read_lockfile(path)
+    pid = int(info.get('pid', 0) or 0)
+    if not pid or not _pid_alive(pid):
+        try:
+            path.unlink()
+        except Exception:
+            pass
+        return {"error": "Simulator not running"}
+    if pid == os.getpid():
+        # This process holds the lock but has no session — inconsistent state.
+        _release_port_lock()
+        return {"status": "stopped", "note": "cleared stale local lock"}
 
-    _session.stop()
-    _session = None
-    _sim = None
+    _kill_pid(pid)
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline and _pid_alive(pid):
+        time.sleep(0.1)
+    still_alive = _pid_alive(pid)
+    if not still_alive:
+        try:
+            path.unlink()
+        except Exception:
+            pass
     _last_disconnect = time.monotonic()
-
-    return {"status": "stopped", "cooldown_sec": _COOLDOWN_SEC}
+    return {
+        "status": "stopped" if not still_alive else "signal_sent",
+        "cross_process": True,
+        "killed_pid": pid,
+        "owner_port": info.get('port'),
+    }
 
 
 @_server.tool()
@@ -387,6 +586,7 @@ def sim_reload() -> dict:
         _session = None
         _sim = None
         _last_disconnect = time.monotonic()
+        _release_port_lock()
         stopped = True
 
     # Purge cached wheel_sim module so next _load_wheel_sim() gets fresh code
@@ -398,16 +598,9 @@ def sim_reload() -> dict:
 
 @_server.tool()
 def sim_info() -> dict:
-    """Connection info: running state, port, cooldown status."""
+    """Connection info: running state, port."""
     running = _session is not None
-    result = {"running": running, "port": _config.get('port', '')}
-    if not running and _last_disconnect > 0:
-        elapsed = time.monotonic() - _last_disconnect
-        if elapsed < _COOLDOWN_SEC:
-            result["cooldown_remaining"] = round(_COOLDOWN_SEC - elapsed, 1)
-        else:
-            result["cooldown_remaining"] = 0
-    return result
+    return {"running": running, "port": _config.get('port', '')}
 
 
 # ── Query tools ──────────────────────────────────────────────────────────────
@@ -625,7 +818,7 @@ def sim_rpc_log() -> list:
 def sim_fs_tree(path: Optional[str] = None) -> dict:
     """Snapshot of the simulated wheel filesystem. Default returns all files
     (path → size/md5/mtime). Pass `path` to limit to a subtree prefix (e.g.
-    "/home/moza/resource/dashes"). Uploads write here; deletes (via
+    "/home/root/resource/dashes"). Uploads write here; deletes (via
     completelyRemove RPC) remove from here."""
     if _sim is None:
         return _no_sim()
