@@ -218,7 +218,7 @@ namespace MozaPlugin.Devices
             }
             catch (Exception ex)
             {
-                SimHub.Logging.Current.Warn($"[Moza] Could not load wheel GUID registry: {ex.Message}");
+                MozaLog.Warn($"[Moza] Could not load wheel GUID registry: {ex.Message}");
             }
         }
 
@@ -245,7 +245,7 @@ namespace MozaPlugin.Devices
             }
             catch (Exception ex)
             {
-                SimHub.Logging.Current.Warn($"[Moza] Could not save wheel GUID registry: {ex.Message}");
+                MozaLog.Warn($"[Moza] Could not save wheel GUID registry: {ex.Message}");
             }
         }
     }

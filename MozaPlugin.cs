@@ -273,11 +273,22 @@ namespace MozaPlugin
         internal bool IsAb9Detected => _ab9Detected;
         internal MozaAb9DeviceManager Ab9Manager => _ab9Manager;
 
-        /// <summary>True if the wheel's internal Display sub-device responded to probe.</summary>
-        internal bool IsDisplayDetected => _telemetrySender?.DisplayDetected ?? false;
+        /// <summary>True if the wheel's internal Display sub-device responded to probe.
+        /// Reads `_data.DisplayModelName` so detection works as soon as the wheel-detection
+        /// display probe (sent via <see cref="MozaDeviceManager.SendDisplayProbe"/>) gets
+        /// answered — independent of whether <see cref="TelemetrySender"/> has started.
+        /// The dashboard-telemetry UI section is gated on this flag, so detection must
+        /// happen BEFORE the user can pick a profile (otherwise the section stays hidden
+        /// and there's no way to opt in to telemetry).</summary>
+        internal bool IsDisplayDetected =>
+            !string.IsNullOrEmpty(_data?.DisplayModelName)
+            || (_telemetrySender?.DisplayDetected ?? false);
 
-        /// <summary>Display sub-device model name (e.g. "Display"), or empty.</summary>
-        internal string DisplayModelName => _telemetrySender?.DisplayModelName ?? "";
+        /// <summary>Display sub-device model name (e.g. "W18 Display"), or empty.</summary>
+        internal string DisplayModelName =>
+            !string.IsNullOrEmpty(_data?.DisplayModelName)
+                ? _data!.DisplayModelName
+                : (_telemetrySender?.DisplayModelName ?? "");
         internal MozaProfileStore ProfileStore => _settings?.ProfileStore!;
 
         public void Init(PluginManager pluginManager)
@@ -301,14 +312,26 @@ namespace MozaPlugin
                 MozaProfile.UnpackColorsInto(_settings.WheelRpmBlinkColors, _data.WheelRpmBlinkColors);
                 MozaProfile.UnpackColorsInto(_settings.DashRpmBlinkColors, _data.DashRpmBlinkColors);
 
-                SimHub.Logging.Current.Info("[Moza] Initializing plugin");
+                MozaLog.Info("[Moza] Initializing plugin");
+
+                // Consume one-shot "start capture on next launch" arm flag. Done before
+                // any device connect / probe traffic so the capture covers the full
+                // connect handshake. Flag is cleared and persisted immediately so a
+                // crash mid-init doesn't leave it armed forever.
+                if (_settings.StartCaptureOnNextLaunch)
+                {
+                    _settings.StartCaptureOnNextLaunch = false;
+                    try { this.SaveCommonSettings("MozaPluginSettings", _settings); } catch { }
+                    global::MozaPlugin.Diagnostics.SerialTrafficCapture.Instance.Start();
+                    MozaLog.Info("[Moza] Serial traffic capture armed from previous session — capturing now");
+                }
 
                 MozaDeviceConstants.InitializeRegistry();
 
                 // Read SimHub's global temperature unit preference (set at first launch)
                 var tempUnit = pluginManager.GetPropertyValue("DataCorePlugin.GameData.TemperatureUnit");
                 _data.UseFahrenheit = string.Equals(tempUnit as string, "Fahrenheit", StringComparison.OrdinalIgnoreCase);
-                SimHub.Logging.Current.Info($"[Moza] Temperature unit: {(_data.UseFahrenheit ? "Fahrenheit" : "Celsius")}");
+                MozaLog.Info($"[Moza] Temperature unit: {(_data.UseFahrenheit ? "Fahrenheit" : "Celsius")}");
 
                 // Initialize the native profile system (detects current game, selects profile)
                 InitProfileSystem();
@@ -361,7 +384,7 @@ namespace MozaPlugin
             }
             catch (Exception ex)
             {
-                SimHub.Logging.Current.Error($"[Moza] Init failed: {ex}");
+                MozaLog.Error($"[Moza] Init failed: {ex}");
                 CleanupPartialInit();
                 throw;
             }
@@ -417,7 +440,7 @@ namespace MozaPlugin
         public void End(PluginManager pluginManager)
         {
             IsShuttingDown = true;
-            SimHub.Logging.Current.Info("[Moza] Shutting down plugin");
+            MozaLog.Info("[Moza] Shutting down plugin");
 
             // 1. Stop timers first so no new callbacks fire against disposed state.
             _saveDebounceTimer?.Stop();
@@ -526,7 +549,7 @@ namespace MozaPlugin
             if (enabled)
             {
                 _reconnectTimer.Start();
-                SimHub.Logging.Current.Info("[Moza] Connection enabled");
+                MozaLog.Info("[Moza] Connection enabled");
             }
             else
             {
@@ -555,7 +578,7 @@ namespace MozaPlugin
                 Interlocked.Exchange(ref _telemetryStartRequested, 0);
                 _wheelPollMisses = 0;
                 _lastKnownWheelModel = "";
-                SimHub.Logging.Current.Info("[Moza] Connection disabled");
+                MozaLog.Info("[Moza] Connection disabled");
             }
         }
 
@@ -590,7 +613,7 @@ namespace MozaPlugin
             this.AddAction("Moza.ClearLeds", (a, b) =>
             {
                 ClearLedsOnHardware();
-                SimHub.Logging.Current.Info("[Moza] LEDs cleared via action");
+                MozaLog.Info("[Moza] LEDs cleared via action");
             });
         }
 
@@ -833,7 +856,7 @@ namespace MozaPlugin
             // before the background thread increments FramesSent)
             if (Interlocked.CompareExchange(ref _telemetryStartRequested, 1, 0) != 0) return;
 
-            SimHub.Logging.Current.Info("[Moza] Wheel detected and telemetry enabled — starting telemetry sender");
+            MozaLog.Info("[Moza] Wheel detected and telemetry enabled — starting telemetry sender");
             ThreadPool.QueueUserWorkItem(_ => _telemetrySender.Start());
         }
 
@@ -861,7 +884,7 @@ namespace MozaPlugin
                 if (_connection.Connect())
                 {
                     _unmatched = 0;
-                    SimHub.Logging.Current.Info("[Moza] Connected to MOZA device");
+                    MozaLog.Info("[Moza] Connected to MOZA device");
                     _deviceManager.ReadSettings(StatusPollCommands);
                     _deviceManager.ProbeWheelDetection();
                     _deviceManager.ReadSetting("dash-rpm-indicator-mode");
@@ -906,7 +929,7 @@ namespace MozaPlugin
 
         private void ResetWheelDetection(string reason)
         {
-            SimHub.Logging.Current.Info($"[Moza] {reason}");
+            MozaLog.Info($"[Moza] {reason}");
             _telemetrySender.Stop();
             _newWheelDetected = false;
             _oldWheelDetected = false;
@@ -1033,7 +1056,7 @@ namespace MozaPlugin
                 {
                     byte grp = MozaProtocol.ToggleBit7(data[0]);
                     byte dev = MozaProtocol.SwapNibbles(data[1]);
-                    SimHub.Logging.Current.Info(
+                    MozaLog.Info(
                         $"[Moza] Unmatched #{_unmatched}: rawGroup=0x{data[0]:X2} group=0x{grp:X2} " +
                         $"rawDev=0x{data[1]:X2} dev={dev} len={data.Length} " +
                         $"payload={BitConverter.ToString(data, 2, Math.Min(data.Length - 2, 8))}");
@@ -1077,7 +1100,7 @@ namespace MozaPlugin
                         if ((prev & bit) != 0) break;
                     } while (Interlocked.CompareExchange(ref _wheelLedGroupMask, prev | bit, prev) != prev);
                     if ((prev & bit) == 0)
-                        SimHub.Logging.Current.Info($"[Moza] Wheel LED group {g} detected");
+                        MozaLog.Info($"[Moza] Wheel LED group {g} detected");
                 }
             }
 
@@ -1114,7 +1137,7 @@ namespace MozaPlugin
                 ApplySavedAb9Settings();
             }
 
-            SimHub.Logging.Current.Debug($"[Moza/AB9] {r.Name} = {r.IntValue}");
+            MozaLog.Debug($"[Moza/AB9] {r.Name} = {r.IntValue}");
         }
 
         /// <summary>
@@ -1133,7 +1156,7 @@ namespace MozaPlugin
                 return;
             }
 
-            SimHub.Logging.Current.Info("[Moza/AB9] Applying saved AB9 settings");
+            MozaLog.Info("[Moza/AB9] Applying saved AB9 settings");
             _ab9Manager.SendMode(ab9.Mode);
             _ab9Manager.SendSlider(Devices.Ab9Slider.MechanicalResistance, ab9.MechanicalResistance);
             _ab9Manager.SendSlider(Devices.Ab9Slider.Spring, ab9.Spring);
@@ -1156,16 +1179,16 @@ namespace MozaPlugin
             // below, because UpdateFromArray has already stored the raw 12 bytes.
             if (commandName == "wheel-mcu-uid" && _data.WheelMcuUid.Length > 0)
             {
-                SimHub.Logging.Current.Info(
+                MozaLog.Info(
                     $"[Moza] Wheel MCU UID ({_data.WheelMcuUid.Length}B): " +
-                    BitConverter.ToString(_data.WheelMcuUid).Replace("-", ""));
+                    MozaLog.RedactBytesHex(_data.WheelMcuUid));
                 return;
             }
             if (commandName == "display-mcu-uid" && _data.DisplayMcuUid.Length > 0)
             {
-                SimHub.Logging.Current.Info(
+                MozaLog.Info(
                     $"[Moza] Display MCU UID ({_data.DisplayMcuUid.Length}B): " +
-                    BitConverter.ToString(_data.DisplayMcuUid).Replace("-", ""));
+                    MozaLog.RedactBytesHex(_data.DisplayMcuUid));
                 return;
             }
 
@@ -1180,7 +1203,7 @@ namespace MozaPlugin
             if (commandName == "base-mcu-temp" && !_baseDetected)
             {
                 _baseDetected = true;
-                SimHub.Logging.Current.Info("[Moza] Base detected");
+                MozaLog.Info("[Moza] Base detected");
                 // Apply profile first (queues writes), then read settings (queues reads).
                 // Since the write queue is FIFO, the device processes writes before reads,
                 // so read responses reflect the values we just wrote.
@@ -1199,7 +1222,7 @@ namespace MozaPlugin
                         DeployDeviceDefinition("MOZA Dashboard", "MozaPlugin.Devices.Dash.device.json");
                         ApplySavedDashSettings();
                         _deviceManager.ReadSettings(DashSettingsReadCommands);
-                        SimHub.Logging.Current.Info("[Moza] Dashboard detected");
+                        MozaLog.Info("[Moza] Dashboard detected");
                     }
                     break;
 
@@ -1218,8 +1241,15 @@ namespace MozaPlugin
                         // Match PitHouse's full 12-frame identity handshake (adds the 7 probes
                         // ReadSetting doesn't cover: 0x09/0x02/0x04/0x05/0x06/0x08-sub2/0x11).
                         _deviceManager.SendPithouseIdentityProbe(deviceId);
+                        // Probe the wheel's Display sub-device. Runs at wheel detect
+                        // — independent of TelemetrySender — so IsDisplayDetected
+                        // flips before the user picks a profile. The dashboard-
+                        // telemetry UI section is gated on detection; without this
+                        // probe, that section stays hidden and the user can never
+                        // opt in.
+                        _deviceManager.SendDisplayProbe();
                         _deviceManager.ReadSettingsPaced(NewWheelSettingsReadCommands);
-                        SimHub.Logging.Current.Info($"[Moza] New-protocol wheel detected on ID {deviceId}");
+                        MozaLog.Info($"[Moza] New-protocol wheel detected on ID {deviceId}");
                         StartTelemetryIfReady();
                     }
                     else if (deviceId != _deviceManager.WheelDeviceId)
@@ -1258,7 +1288,7 @@ namespace MozaPlugin
                         {
                             _lastKnownWheelModel = currentModel;
                             WheelModelInfo = Devices.WheelModelInfo.FromModelName(currentModel);
-                            SimHub.Logging.Current.Info(
+                            MozaLog.Info(
                                 $"[Moza] Wheel model: {currentModel} " +
                                 $"(rpm={WheelModelInfo.RpmLedCount}, buttons={WheelModelInfo.ButtonLedCount}, flags={WheelModelInfo.HasFlagLeds}, knobs={WheelModelInfo.KnobCount})");
                             // Load this wheel model's persisted slot (brightness/modes/inputs)
@@ -1279,98 +1309,98 @@ namespace MozaPlugin
                     }
                     else
                     {
-                        SimHub.Logging.Current.Info(
+                        MozaLog.Info(
                             $"[Moza] Wheel model (ES/base): {_data.WheelModelName}");
                     }
                     break;
 
                 case "wheel-sw-version":
-                    SimHub.Logging.Current.Info($"[Moza] Wheel FW: {_data.WheelSwVersion}");
+                    MozaLog.Info($"[Moza] Wheel FW: {_data.WheelSwVersion}");
                     break;
 
                 case "wheel-serial-b":
                     if (!string.IsNullOrEmpty(_data.WheelSerialNumber))
-                        SimHub.Logging.Current.Info($"[Moza] Wheel serial: {_data.WheelSerialNumber}");
+                        MozaLog.Info($"[Moza] Wheel serial: {MozaLog.RedactId(_data.WheelSerialNumber)}");
                     break;
 
                 case "wheel-hw-sub":
                     if (!string.IsNullOrEmpty(_data.WheelHwSubVersion))
-                        SimHub.Logging.Current.Info($"[Moza] Wheel HW sub: {_data.WheelHwSubVersion}");
+                        MozaLog.Info($"[Moza] Wheel HW sub: {_data.WheelHwSubVersion}");
                     break;
 
                 case "wheel-mcu-uid":
                     if (_data.WheelMcuUid.Length > 0)
-                        SimHub.Logging.Current.Info(
+                        MozaLog.Info(
                             $"[Moza] Wheel MCU UID ({_data.WheelMcuUid.Length}B): " +
-                            BitConverter.ToString(_data.WheelMcuUid).Replace("-", ""));
+                            MozaLog.RedactBytesHex(_data.WheelMcuUid));
                     break;
 
                 case "wheel-device-type":
                     if (_data.WheelDeviceType.Length > 0)
-                        SimHub.Logging.Current.Info(
+                        MozaLog.Info(
                             $"[Moza] Wheel device type: {BitConverter.ToString(_data.WheelDeviceType)}");
                     break;
 
                 case "wheel-capabilities":
                     if (_data.WheelCapabilities.Length > 0)
-                        SimHub.Logging.Current.Info(
+                        MozaLog.Info(
                             $"[Moza] Wheel capabilities: {BitConverter.ToString(_data.WheelCapabilities)}");
                     break;
 
                 case "wheel-presence":
-                    SimHub.Logging.Current.Info(
+                    MozaLog.Info(
                         $"[Moza] Wheel presence/ready: sub_device_count={_data.WheelSubDeviceCount}");
                     break;
 
                 case "wheel-device-presence":
-                    SimHub.Logging.Current.Info(
+                    MozaLog.Info(
                         $"[Moza] Wheel device presence byte: 0x{_data.WheelDevicePresence:X2}");
                     break;
 
                 case "wheel-identity-11":
                     if (_data.WheelIdentity11.Length > 0)
-                        SimHub.Logging.Current.Info(
+                        MozaLog.Info(
                             $"[Moza] Wheel identity-11: {BitConverter.ToString(_data.WheelIdentity11)}");
                     break;
 
                 // Display sub-device identity responses (wrapped via 0x43)
                 case "display-model-name":
                     if (!string.IsNullOrEmpty(_data.DisplayModelName))
-                        SimHub.Logging.Current.Info($"[Moza] Display model: {_data.DisplayModelName}");
+                        MozaLog.Info($"[Moza] Display model: {_data.DisplayModelName}");
                     break;
                 case "display-hw-version":
                     if (!string.IsNullOrEmpty(_data.DisplayHwVersion))
-                        SimHub.Logging.Current.Info($"[Moza] Display HW: {_data.DisplayHwVersion}");
+                        MozaLog.Info($"[Moza] Display HW: {_data.DisplayHwVersion}");
                     break;
                 case "display-sw-version":
                     if (!string.IsNullOrEmpty(_data.DisplaySwVersion))
-                        SimHub.Logging.Current.Info($"[Moza] Display FW: {_data.DisplaySwVersion}");
+                        MozaLog.Info($"[Moza] Display FW: {_data.DisplaySwVersion}");
                     break;
                 case "display-serial":
                     if (!string.IsNullOrEmpty(_data.DisplaySerialNumber))
-                        SimHub.Logging.Current.Info($"[Moza] Display serial: {_data.DisplaySerialNumber}");
+                        MozaLog.Info($"[Moza] Display serial: {MozaLog.RedactId(_data.DisplaySerialNumber)}");
                     break;
                 case "display-presence":
-                    SimHub.Logging.Current.Info(
+                    MozaLog.Info(
                         $"[Moza] Display presence/ready: sub_device_count={_data.DisplaySubDeviceCount}");
                     break;
                 case "display-device-presence":
-                    SimHub.Logging.Current.Info(
+                    MozaLog.Info(
                         $"[Moza] Display device presence byte: 0x{_data.DisplayDevicePresence:X2}");
                     break;
                 case "display-device-type":
                     if (_data.DisplayDeviceType.Length > 0)
-                        SimHub.Logging.Current.Info(
+                        MozaLog.Info(
                             $"[Moza] Display device type: {BitConverter.ToString(_data.DisplayDeviceType)}");
                     break;
                 case "display-capabilities":
                     if (_data.DisplayCapabilities.Length > 0)
-                        SimHub.Logging.Current.Info(
+                        MozaLog.Info(
                             $"[Moza] Display capabilities: {BitConverter.ToString(_data.DisplayCapabilities)}");
                     break;
                 case "display-identity-11":
                     if (_data.DisplayIdentity11.Length > 0)
-                        SimHub.Logging.Current.Info(
+                        MozaLog.Info(
                             $"[Moza] Display identity-11: {BitConverter.ToString(_data.DisplayIdentity11)}");
                     break;
                 case "display-mcu-uid":
@@ -1391,7 +1421,7 @@ namespace MozaPlugin
                         _deviceManager.SendPithouseIdentityProbe(deviceId);
                         _deviceManager.ReadSettingsPaced(OldWheelSettingsReadCommands);
                         DeployDeviceDefinitionForOldProto();
-                        SimHub.Logging.Current.Info($"[Moza] Old-protocol wheel detected on ID {deviceId}");
+                        MozaLog.Info($"[Moza] Old-protocol wheel detected on ID {deviceId}");
                         StartTelemetryIfReady();
                     }
                     else if (deviceId != _deviceManager.WheelDeviceId)
@@ -1408,7 +1438,7 @@ namespace MozaPlugin
                         _handbrakeDetected = true;
                         ApplySavedHandbrakeSettings();
                         _deviceManager.ReadSettings(HandbrakeSettingsReadCommands);
-                        SimHub.Logging.Current.Info("[Moza] Handbrake detected");
+                        MozaLog.Info("[Moza] Handbrake detected");
                     }
                     break;
 
@@ -1418,7 +1448,7 @@ namespace MozaPlugin
                         _pedalsDetected = true;
                         ApplySavedPedalSettings();
                         _deviceManager.ReadSettings(PedalsSettingsReadCommands);
-                        SimHub.Logging.Current.Info("[Moza] Pedals detected");
+                        MozaLog.Info("[Moza] Pedals detected");
                     }
                     break;
 
@@ -1428,7 +1458,7 @@ namespace MozaPlugin
                         _hubDetected = true;
                         if (_telemetrySender != null) _telemetrySender.HubPresent = true;
                         _deviceManager.ReadSettings(HubReadCommands);
-                        SimHub.Logging.Current.Info("[Moza] Universal Hub detected");
+                        MozaLog.Info("[Moza] Universal Hub detected");
                     }
                     break;
             }
@@ -1439,7 +1469,7 @@ namespace MozaPlugin
         /// </summary>
         private void ApplySavedWheelSettings()
         {
-            SimHub.Logging.Current.Info("[Moza] Applying saved wheel settings");
+            MozaLog.Info("[Moza] Applying saved wheel settings");
 
             // Pre-populate _data from saved settings so the UI shows correct values
             // immediately, before device responses arrive.
@@ -1503,7 +1533,7 @@ namespace MozaPlugin
         /// </summary>
         private void ApplySavedDashSettings()
         {
-            SimHub.Logging.Current.Info("[Moza] Applying saved dash settings");
+            MozaLog.Info("[Moza] Applying saved dash settings");
 
             // Pre-populate _data from saved settings so the UI shows correct values
             _data.DashRpmBrightness = _settings.DashRpmBrightness;
@@ -1529,7 +1559,7 @@ namespace MozaPlugin
         {
             var profile = _settings.ProfileStore.CurrentProfile;
             if (profile == null) return;
-            SimHub.Logging.Current.Info("[Moza] Applying saved handbrake settings");
+            MozaLog.Info("[Moza] Applying saved handbrake settings");
 
             if (profile.HandbrakeMode >= 0)
             {
@@ -1573,7 +1603,7 @@ namespace MozaPlugin
         {
             var profile = _settings.ProfileStore.CurrentProfile;
             if (profile == null) return;
-            SimHub.Logging.Current.Info("[Moza] Applying saved pedal settings");
+            MozaLog.Info("[Moza] Applying saved pedal settings");
 
             if (profile.PedalsThrottleDir >= 0)
             {
@@ -1633,11 +1663,11 @@ namespace MozaPlugin
             // Apply the initially selected profile
             if (store.CurrentProfile != null)
             {
-                SimHub.Logging.Current.Info($"[Moza] Initial profile: {store.CurrentProfile.Name}");
+                MozaLog.Info($"[Moza] Initial profile: {store.CurrentProfile.Name}");
                 if (_settings.AutoApplyProfileOnLaunch)
                     ApplyProfile(store.CurrentProfile);
                 else
-                    SimHub.Logging.Current.Info("[Moza] Skipping auto-apply (disabled in Options)");
+                    MozaLog.Info("[Moza] Skipping auto-apply (disabled in Options)");
             }
         }
 
@@ -1646,7 +1676,7 @@ namespace MozaPlugin
             var profile = _settings.ProfileStore.CurrentProfile;
             if (profile != null)
             {
-                SimHub.Logging.Current.Info($"[Moza] Profile changed: {profile.Name}");
+                MozaLog.Info($"[Moza] Profile changed: {profile.Name}");
                 ApplyProfile(profile);
             }
         }
@@ -1656,14 +1686,14 @@ namespace MozaPlugin
         /// </summary>
         internal void ApplyProfile(MozaProfile profile)
         {
-            SimHub.Logging.Current.Info($"[Moza] Applying profile: {profile.Name}");
+            MozaLog.Info($"[Moza] Applying profile: {profile.Name}");
 
             // Guard: a profile with all core base settings at zero was captured from
             // uninitialized device data (first-launch race condition). Reset them to
             // sentinels so they're skipped — the device keeps its own values.
             if (profile.Limit == 0 && profile.FfbStrength == 0 && profile.Torque == 0 && profile.Speed == 0)
             {
-                SimHub.Logging.Current.Warn("[Moza] Profile has zeroed base settings — resetting to sentinels");
+                MozaLog.Warn("[Moza] Profile has zeroed base settings — resetting to sentinels");
                 profile.Limit = -1; profile.FfbStrength = -1; profile.Torque = -1; profile.Speed = -1;
                 profile.Damper = -1; profile.Friction = -1; profile.Inertia = -1; profile.Spring = -1;
                 profile.SpeedDamping = -1; profile.SpeedDampingPoint = -1;
@@ -1777,7 +1807,7 @@ namespace MozaPlugin
 
             // --- FFB Curve (X breakpoints always fixed at 20/40/60/80) ---
             // Always write fixed X breakpoints when base is connected (device may not persist them)
-            SimHub.Logging.Current.Info($"[Moza] ApplyProfile curve: IsBaseConnected={_data.IsBaseConnected} Y1={profile.FfbCurveY1} Y2={profile.FfbCurveY2} Y3={profile.FfbCurveY3} Y4={profile.FfbCurveY4} Y5={profile.FfbCurveY5}");
+            MozaLog.Info($"[Moza] ApplyProfile curve: IsBaseConnected={_data.IsBaseConnected} Y1={profile.FfbCurveY1} Y2={profile.FfbCurveY2} Y3={profile.FfbCurveY3} Y4={profile.FfbCurveY4} Y5={profile.FfbCurveY5}");
             if (_data.IsBaseConnected)
             {
                 _deviceManager.WriteSetting("base-ffb-curve-x1", 20);
@@ -2043,7 +2073,7 @@ namespace MozaPlugin
         /// </summary>
         internal void ApplyWheelExtensionSettings(MozaWheelExtensionSettings extSettings)
         {
-            SimHub.Logging.Current.Info("[Moza] Applying wheel device extension settings");
+            MozaLog.Info("[Moza] Applying wheel device extension settings");
 
             // Update _settings and _data in-memory. ApplyTo already routes into
             // the correct per-model slot and only updates flat fields when this
@@ -2133,7 +2163,7 @@ namespace MozaPlugin
         /// </summary>
         internal void ApplyDashExtensionSettings(MozaDashExtensionSettings extSettings)
         {
-            SimHub.Logging.Current.Info("[Moza] Applying dash device extension settings");
+            MozaLog.Info("[Moza] Applying dash device extension settings");
 
             // Update _settings and _data in-memory
             extSettings.ApplyTo(_settings, _data);
@@ -2207,7 +2237,7 @@ namespace MozaPlugin
                     }
                     catch (Exception parseEx)
                     {
-                        SimHub.Logging.Current.Warn(
+                        MozaLog.Warn(
                             $"[Moza] Could not parse existing device.json for '{deviceName}', rewriting: {parseEx.Message}");
                         stale = true;
                     }
@@ -2224,14 +2254,14 @@ namespace MozaPlugin
 
                 DeviceDefinitionDeployed = true;
                 string action = stale ? "Refreshed" : "Deployed";
-                SimHub.Logging.Current.Info(
+                MozaLog.Info(
                     $"[Moza] {action} device definition: {deviceName} " +
                     $"(guid={guid}, telemetryLeds={expectedTelemetryCount}, rpm={rpmCount}, flags={hasFlagLeds}, " +
                     $"buttons={buttonCount}, pid={pid}, restart SimHub to pick up changes)");
             }
             catch (Exception ex)
             {
-                SimHub.Logging.Current.Error($"[Moza] Error deploying device definition '{deviceName}': {ex.Message}");
+                MozaLog.Error($"[Moza] Error deploying device definition '{deviceName}': {ex.Message}");
             }
         }
 
@@ -2353,7 +2383,7 @@ namespace MozaPlugin
                 {
                     if (stream == null)
                     {
-                        SimHub.Logging.Current.Warn($"[Moza] Embedded resource not found: {resourceName}");
+                        MozaLog.Warn($"[Moza] Embedded resource not found: {resourceName}");
                         return;
                     }
 
@@ -2370,25 +2400,25 @@ namespace MozaPlugin
                     if (discoveredPid != null)
                     {
                         json = json.Replace("__DETECT_PID__", discoveredPid);
-                        SimHub.Logging.Current.Info($"[Moza] Patched device PID to {discoveredPid} for {deviceName}");
+                        MozaLog.Info($"[Moza] Patched device PID to {discoveredPid} for {deviceName}");
                     }
                     else
                     {
                         // Fallback: no PID discovered (e.g. probe-based discovery under Wine).
                         // Use 0x0004 as a reasonable default.
                         json = json.Replace("__DETECT_PID__", "0x0004");
-                        SimHub.Logging.Current.Info($"[Moza] No PID discovered, using fallback 0x0004 for {deviceName}");
+                        MozaLog.Info($"[Moza] No PID discovered, using fallback 0x0004 for {deviceName}");
                     }
 
                     File.WriteAllText(deviceJsonPath, json);
                 }
 
                 DeviceDefinitionDeployed = true;
-                SimHub.Logging.Current.Info($"[Moza] Deployed device definition: {deviceName} (restart SimHub to add it)");
+                MozaLog.Info($"[Moza] Deployed device definition: {deviceName} (restart SimHub to add it)");
             }
             catch (Exception ex)
             {
-                SimHub.Logging.Current.Error($"[Moza] Error deploying device definition '{deviceName}': {ex.Message}");
+                MozaLog.Error($"[Moza] Error deploying device definition '{deviceName}': {ex.Message}");
             }
         }
 

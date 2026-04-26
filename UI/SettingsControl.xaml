@@ -122,7 +122,7 @@
                         <TextBlock Text="Core Settings" Style="{StaticResource SectionHeader}"/>
                         <StackPanel Orientation="Horizontal" Margin="0,4">
                             <TextBlock Text="Wheel Rotation Angle" Style="{StaticResource SliderLabel}"/>
-                            <Slider x:Name="RotationSlider" Style="{StaticResource SettingSlider}" Minimum="90" Maximum="2700" TickFrequency="90" ValueChanged="RotationSlider_ValueChanged"/>
+                            <Slider x:Name="RotationSlider" Style="{StaticResource SettingSlider}" Minimum="90" Maximum="2700" TickFrequency="10" SmallChange="10" LargeChange="10" IsSnapToTickEnabled="True" ValueChanged="RotationSlider_ValueChanged"/>
                             <TextBlock x:Name="RotationValue" Style="{StaticResource SliderValue}" Text="900°"/>
                         </StackPanel>
                         <StackPanel Orientation="Horizontal" Margin="0,4">
@@ -920,9 +920,49 @@
             <TabItem Header="Diagnostics">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="10,5">
+                        <!-- Serial traffic capture -->
+                        <TextBlock Text="Serial traffic capture" Style="{StaticResource SectionHeader}"/>
+                        <TextBlock TextWrapping="Wrap" Foreground="Gray" FontSize="11" Margin="0,0,0,8"
+                                   Text="Records every TX/RX frame on the wheelbase and AB9 serial pipes with timestamps. Data lives in memory only — nothing is saved between SimHub launches. Click Stop to view the buffer; click Export to save a ZIP bundle (capture log + diagnostics dump + [Moza] log lines)."/>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                            <Button x:Name="SerialCaptureToggleButton" Content="Start capture" Padding="6,2"
+                                    Click="SerialCaptureToggle_Click" MinWidth="120"/>
+                            <TextBlock x:Name="SerialCaptureStatusText" Text="idle" VerticalAlignment="Center"
+                                       Margin="10,0,0,0" Foreground="Gray" FontSize="11"/>
+                        </StackPanel>
+
+                        <CheckBox x:Name="StartCaptureOnNextLaunchCheck"
+                                  Content="Start capture on next launch (one-shot — auto-clears after firing)"
+                                  Click="StartCaptureOnNextLaunch_Click"
+                                  Margin="0,0,0,8"
+                                  ToolTip="Arms the capture so it begins immediately when the plugin re-initializes (next SimHub launch or plugin reload). Useful for catching connect/handshake traffic that's hard to arm in time manually."/>
+
+                        <TextBox x:Name="SerialCaptureOutputBox" FontFamily="Consolas" FontSize="11"
+                                 IsReadOnly="True" TextWrapping="NoWrap" AcceptsReturn="True"
+                                 VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
+                                 Height="220" Margin="0,0,0,6" Visibility="Collapsed"/>
+
+                        <StackPanel Orientation="Horizontal">
+                            <Button x:Name="SerialCaptureExportButton" Content="Export bundle (ZIP)…"
+                                    Padding="6,2" Click="SerialCaptureExport_Click" IsEnabled="False"/>
+                            <Button x:Name="SerialCaptureCopyButton" Content="Copy capture to clipboard"
+                                    Padding="6,2" Click="SerialCaptureCopy_Click"
+                                    Margin="6,0,0,0" IsEnabled="False"/>
+                        </StackPanel>
+
+                        <Separator Margin="0,12,0,8"/>
+
                         <TextBlock Text="Diagnostics" Style="{StaticResource SectionHeader}"/>
                         <TextBlock TextWrapping="Wrap" Foreground="Gray" FontSize="11" Margin="0,0,0,8"
                                    Text="Live dump of wheel identity, display sub-device identity, dashboard state from the wheel's configJson RPC, and session/connection info. Refreshes ~1/s."/>
+
+                        <!-- Plugin info -->
+                        <TextBlock Text="Plugin" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                        <TextBlock x:Name="DiagPluginBox" FontFamily="Consolas" FontSize="11"
+                                   TextWrapping="Wrap" Text="—" Margin="0,0,0,10"/>
+
+                        <Separator Margin="0,4,0,8"/>
 
                         <!-- Wheel identity -->
                         <TextBlock Text="Wheel identity" FontWeight="SemiBold" Margin="0,0,0,6"/>

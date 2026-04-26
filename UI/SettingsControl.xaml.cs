@@ -7,6 +7,7 @@ using System.Windows.Media;
 using System.Windows.Shapes;
 using System.Windows.Threading;
 using MozaPlugin.Devices;
+using SerialTrafficCapture = MozaPlugin.Diagnostics.SerialTrafficCapture;
 
 namespace MozaPlugin
 {
@@ -33,6 +34,15 @@ namespace MozaPlugin
             LimitWheelUpdatesCheck.IsChecked = plugin.Settings.LimitWheelUpdates;
             WheelKeepaliveCheck.IsChecked = plugin.Settings.WheelKeepalive;
             AlwaysResendBitmaskCheck.IsChecked = plugin.Settings.AlwaysResendBitmask;
+            StartCaptureOnNextLaunchCheck.IsChecked = plugin.Settings.StartCaptureOnNextLaunch;
+            // Reflect any in-flight capture (e.g. armed from a previous session
+            // and started in MozaPlugin.Init) so the user sees Stop instead of
+            // a stale Start button when they open the Diagnostics tab.
+            if (SerialTrafficCapture.Instance.Enabled)
+            {
+                SerialCaptureToggleButton.Content = "Stop capture";
+                SerialCaptureStatusText.Text = "capturing… (armed from prior session — click Stop when ready)";
+            }
             _suppressEvents = false;
 
             InitProfilesTab();
@@ -1168,11 +1178,19 @@ namespace MozaPlugin
         private void RefreshDiagnosticsTab()
         {
             if (DiagWheelIdentityBox == null) return;
+            DiagPluginBox.Text = BuildPluginInfoText();
             DiagWheelIdentityBox.Text = BuildWheelIdentityText();
             DiagDisplayIdentityBox.Text = BuildDisplayIdentityText();
             DiagDashboardStateBox.Text = BuildDashboardStateText();
             DiagTileServerBox.Text = BuildTileServerText();
             DiagSessionBox.Text = BuildSessionStateText();
+        }
+
+        private string BuildPluginInfoText()
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.Append($"Version:        {GetPluginVersion()}");
+            return sb.ToString();
         }
 
         private string BuildWheelIdentityText()
@@ -1285,7 +1303,16 @@ namespace MozaPlugin
 
         private void DiagCopyAll_Click(object sender, System.Windows.RoutedEventArgs e)
         {
+            try { System.Windows.Clipboard.SetText(BuildDiagnosticsDump()); }
+            catch { /* clipboard may be contested under Wine */ }
+        }
+
+        private string BuildDiagnosticsDump()
+        {
             var sb = new System.Text.StringBuilder();
+            sb.AppendLine("=== Plugin ===");
+            sb.AppendLine(DiagPluginBox.Text);
+            sb.AppendLine();
             sb.AppendLine("=== Wheel identity ===");
             sb.AppendLine(DiagWheelIdentityBox.Text);
             sb.AppendLine();
@@ -1300,9 +1327,172 @@ namespace MozaPlugin
             sb.AppendLine();
             sb.AppendLine("=== Session state ===");
             sb.AppendLine(DiagSessionBox.Text);
-            try { System.Windows.Clipboard.SetText(sb.ToString()); }
-            catch { /* clipboard may be contested under Wine */ }
+            return sb.ToString();
         }
+
+        // ── Serial traffic capture ───────────────────────────────────────
+        // Last buffer rendered to text on Stop. Held so Export and Copy
+        // operate on the same snapshot regardless of how long the user
+        // takes to click them; cleared on next Start.
+        private string? _serialCaptureRendered;
+        private System.Collections.Generic.IReadOnlyList<SerialTrafficCapture.Entry>? _serialCaptureSnapshot;
+
+        private void SerialCaptureToggle_Click(object sender, System.Windows.RoutedEventArgs e)
+        {
+            var cap = SerialTrafficCapture.Instance;
+            if (!cap.Enabled)
+            {
+                cap.Start();
+                _serialCaptureRendered = null;
+                _serialCaptureSnapshot = null;
+                SerialCaptureToggleButton.Content = "Stop capture";
+                SerialCaptureOutputBox.Visibility = System.Windows.Visibility.Collapsed;
+                SerialCaptureOutputBox.Text = string.Empty;
+                SerialCaptureExportButton.IsEnabled = false;
+                SerialCaptureCopyButton.IsEnabled = false;
+                SerialCaptureStatusText.Text = "capturing… (open another tab and use the device, then come back to stop)";
+                return;
+            }
+
+            var snap = cap.Stop();
+            _serialCaptureSnapshot = snap;
+            _serialCaptureRendered = SerialTrafficCapture.Format(snap);
+            SerialCaptureToggleButton.Content = "Start capture";
+            SerialCaptureStatusText.Text = $"stopped — {snap.Count} frames captured";
+            SerialCaptureOutputBox.Text = _serialCaptureRendered;
+            SerialCaptureOutputBox.Visibility = System.Windows.Visibility.Visible;
+            SerialCaptureExportButton.IsEnabled = true;
+            SerialCaptureCopyButton.IsEnabled = snap.Count > 0;
+        }
+
+        private void SerialCaptureCopy_Click(object sender, System.Windows.RoutedEventArgs e)
+        {
+            if (string.IsNullOrEmpty(_serialCaptureRendered)) return;
+            try { System.Windows.Clipboard.SetText(_serialCaptureRendered); }
+            catch { /* clipboard contested; ignore */ }
+        }
+
+        private void StartCaptureOnNextLaunch_Click(object sender, System.Windows.RoutedEventArgs e)
+        {
+            if (_suppressEvents) return;
+            _plugin.Settings.StartCaptureOnNextLaunch = StartCaptureOnNextLaunchCheck.IsChecked == true;
+            _plugin.SaveSettings();
+        }
+
+        private void SerialCaptureExport_Click(object sender, System.Windows.RoutedEventArgs e)
+        {
+            // Refuse export while capture is still running — user request: only
+            // surface data after Stop. The button is disabled in that state too,
+            // but guard here in case of a race.
+            if (SerialTrafficCapture.Instance.Enabled) return;
+
+            var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
+            var dlg = new Microsoft.Win32.SaveFileDialog
+            {
+                FileName = $"moza-diagnostics-bundle-{stamp}.zip",
+                Filter = "ZIP archive (*.zip)|*.zip",
+                DefaultExt = ".zip",
+                AddExtension = true,
+                OverwritePrompt = true,
+            };
+            if (dlg.ShowDialog(System.Windows.Window.GetWindow(this)) != true) return;
+
+            try
+            {
+                BuildAndWriteBundle(dlg.FileName);
+                SerialCaptureStatusText.Text = $"exported to {dlg.FileName}";
+            }
+            catch (Exception ex)
+            {
+                MozaLog.Error($"[Moza] Diagnostics export failed: {ex}");
+                System.Windows.MessageBox.Show(
+                    System.Windows.Window.GetWindow(this),
+                    $"Export failed: {ex.Message}",
+                    "MOZA Control",
+                    System.Windows.MessageBoxButton.OK,
+                    System.Windows.MessageBoxImage.Error);
+            }
+        }
+
+        private void BuildAndWriteBundle(string zipPath)
+        {
+            var captureText = _serialCaptureRendered ?? "(no capture buffer — click Start, exercise the device, then Stop)\n";
+            var diagText = BuildDiagnosticsDump();
+
+            // [Moza] log lines come straight from MozaLog's in-process ring
+            // buffer — every plugin call site goes through that wrapper, so
+            // the snapshot is guaranteed current without depending on
+            // SimHub's rolling-file flush cadence or path layout.
+            var logText = MozaLog.Snapshot();
+            var logEntryCount = MozaLog.Count;
+
+            // Header gives the receiver a quick idea of what the bundle contains
+            // and when it was produced — saves a hunt through the files when a
+            // user e-mails just the zip with no description.
+            var manifest = new System.Text.StringBuilder();
+            manifest.AppendLine("MOZA Control diagnostics bundle");
+            manifest.AppendLine($"Created (local):     {DateTime.Now:yyyy-MM-dd HH:mm:ss zzz}");
+            manifest.AppendLine($"Plugin version:      {GetPluginVersion()}");
+            manifest.AppendLine($"OS:                  {Environment.OSVersion}");
+            manifest.AppendLine($"CLR:                 {Environment.Version}");
+            manifest.AppendLine();
+            manifest.AppendLine("Files:");
+            manifest.AppendLine("  serial-capture.txt   – TX/RX frames captured between Start/Stop (timestamps in local time)");
+            manifest.AppendLine("  diagnostics.txt      – snapshot of the Diagnostics tab text");
+            manifest.AppendLine($"  moza-log.txt         – [Moza] log lines from MozaLog ring buffer ({logEntryCount} entries)");
+            manifest.AppendLine();
+            manifest.AppendLine("Capture summary:");
+            if (_serialCaptureSnapshot != null)
+            {
+                manifest.AppendLine($"  Started (UTC):     {SerialTrafficCapture.Instance.StartedAtUtc:yyyy-MM-dd HH:mm:ss}");
+                manifest.AppendLine($"  Frames:            {_serialCaptureSnapshot.Count}");
+            }
+            else
+            {
+                manifest.AppendLine("  (no capture buffer was active when this bundle was produced)");
+            }
+
+            using (var fs = new System.IO.FileStream(zipPath, System.IO.FileMode.Create, System.IO.FileAccess.Write))
+            using (var zip = new System.IO.Compression.ZipArchive(fs, System.IO.Compression.ZipArchiveMode.Create))
+            {
+                WriteZipEntry(zip, "manifest.txt", manifest.ToString());
+                WriteZipEntry(zip, "serial-capture.txt", captureText);
+                WriteZipEntry(zip, "diagnostics.txt", diagText);
+                WriteZipEntry(zip, "moza-log.txt", logText);
+            }
+        }
+
+        private static void WriteZipEntry(System.IO.Compression.ZipArchive zip, string name, string content)
+        {
+            var entry = zip.CreateEntry(name, System.IO.Compression.CompressionLevel.Optimal);
+            using (var s = entry.Open())
+            using (var w = new System.IO.StreamWriter(s, new System.Text.UTF8Encoding(false)))
+                w.Write(content);
+        }
+
+        private static string GetPluginVersion()
+        {
+            // AssemblyInformationalVersion carries the full semver string set by
+            // CI via /p:Version=<x.y.z-dev.sha>, including the pre-release tag.
+            // AssemblyVersion is a System.Version (numeric only) and silently
+            // drops any -suffix, so we prefer informational here. SDK may append
+            // "+<git-sha>" via SourceRevisionId — strip it for display.
+            try
+            {
+                var asm = System.Reflection.Assembly.GetExecutingAssembly();
+                var info = (System.Reflection.AssemblyInformationalVersionAttribute?)Attribute
+                    .GetCustomAttribute(asm, typeof(System.Reflection.AssemblyInformationalVersionAttribute));
+                var s = info?.InformationalVersion;
+                if (!string.IsNullOrEmpty(s))
+                {
+                    int plus = s!.IndexOf('+');
+                    return plus >= 0 ? s.Substring(0, plus) : s;
+                }
+                return asm.GetName().Version?.ToString() ?? "unknown";
+            }
+            catch { return "unknown"; }
+        }
+
 
         // ===== Experimental LED diagnostics (groups 2/3/4 + Meter flags) =====
 
@@ -1871,8 +2061,8 @@ namespace MozaPlugin
         }
 
         private static string Blank(string s) => string.IsNullOrEmpty(s) ? "—" : s;
-        private static string Redact(string s) => string.IsNullOrEmpty(s) ? "—" : new string('*', s.Length);
-        private static string RedactBytes(byte[] b) => b == null || b.Length == 0 ? "—" : new string('*', b.Length * 2);
+        private static string Redact(string s) => MozaLog.RedactId(s);
+        private static string RedactBytes(byte[] b) => MozaLog.RedactBytesHex(b);
         private static string Hex(byte[] b) => b == null || b.Length == 0 ? "—" : BitConverter.ToString(b);
         private static string HexRaw(byte[] b) => b == null || b.Length == 0 ? "—" : BitConverter.ToString(b).Replace("-", "");
         private static string JoinList(System.Collections.Generic.IReadOnlyList<string> l)

@@ -144,7 +144,7 @@ namespace MozaPlugin.Protocol
                 }
                 catch (Exception ex)
                 {
-                    SimHub.Logging.Current.Info($"[Moza] HID error: {ex.Message}");
+                    MozaLog.Info($"[Moza] HID error: {ex.Message}");
                 }
 
                 _data.IsHidConnected = false;
@@ -308,7 +308,7 @@ namespace MozaPlugin.Protocol
                         long n = System.Threading.Interlocked.Increment(ref _hidParseErrorCount);
                         // Log first, then every 1000th error to avoid spam.
                         if (n == 1 || n % 1000 == 0)
-                            SimHub.Logging.Current.Debug($"[Moza] HID parse error #{n}: {ex.Message}");
+                            MozaLog.Debug($"[Moza] HID parse error #{n}: {ex.Message}");
                     }
                 };
                 receiver.Stopped += (sender, e) =>
@@ -319,7 +319,7 @@ namespace MozaPlugin.Protocol
                 try
                 {
                     receiver.Start(stream);
-                    SimHub.Logging.Current.Info(
+                    MozaLog.Info(
                         $"[Moza] HID device opened: {device.GetFriendlyName()} " +
                         $"(VID {device.VendorID:X4} PID {device.ProductID:X4}, " +
                         $"usages: {string.Join(", ", usages.Keys.Select(u => $"0x{u:X8}"))})");
@@ -337,7 +337,7 @@ namespace MozaPlugin.Protocol
             }
             catch (Exception ex)
             {
-                SimHub.Logging.Current.Info($"[Moza] HID device read error ({device.GetFriendlyName()}): {ex.Message}");
+                MozaLog.Info($"[Moza] HID device read error ({device.GetFriendlyName()}): {ex.Message}");
             }
         }
 

@@ -64,20 +64,20 @@ namespace MozaPlugin.Devices
                         {
                             prop.GetSetMethod(nonPublic: true)!.Invoke(lmd.ledModuleSettings, new object[] { _ledDriver });
                             _driverInjected = true;
-                            SimHub.Logging.Current.Info("[Moza] Injected virtual LED driver for dashboard");
+                            MozaLog.Info("[Moza] Injected virtual LED driver for dashboard");
                         }
                         else
                         {
-                            SimHub.Logging.Current.Warn("[Moza] Could not find DeviceDriver setter on LedModuleSettings (dash)");
+                            MozaLog.Warn("[Moza] Could not find DeviceDriver setter on LedModuleSettings (dash)");
                         }
                         return;
                     }
                 }
-                SimHub.Logging.Current.Info("[Moza] No LedModuleDevice found on dash device instance");
+                MozaLog.Info("[Moza] No LedModuleDevice found on dash device instance");
             }
             catch (Exception ex)
             {
-                SimHub.Logging.Current.Error($"[Moza] Error injecting dash LED driver: {ex.Message}");
+                MozaLog.Error($"[Moza] Error injecting dash LED driver: {ex.Message}");
             }
         }
 
@@ -91,7 +91,7 @@ namespace MozaPlugin.Devices
             if (plugin != null)
             {
                 plugin.DashDeviceExtensionActive = false;
-                SimHub.Logging.Current.Info("[Moza] Dash device extension ended");
+                MozaLog.Info("[Moza] Dash device extension ended");
             }
         }
 

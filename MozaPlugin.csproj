@@ -16,6 +16,12 @@
     <Copyright>Copyright 2026</Copyright>
     <UseWPF>true</UseWPF>
     <ImportWindowsDesktopTargets>true</ImportWindowsDesktopTargets>
+    <!-- Force Platform=x86 so csproj-only builds (no sln) emit to bin\x86\<Config>\
+         — matches the path sln-driven Release|x86 builds use, which the deploy
+         scripts hard-code. Without this, `dotnet build MozaPlugin.csproj` defaults
+         to Platform=AnyCPU and lands in bin\Release\, silently producing a stale
+         deploy. Sln-level Release|x86 still wins because it sets Platform up front. -->
+    <Platform Condition="'$(Platform)' == '' or '$(Platform)' == 'AnyCPU'">x86</Platform>
   </PropertyGroup>
 
   <ItemGroup>
@@ -50,6 +56,8 @@
       <HintPath>libs\SimHub\HidSharp.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.IO.Compression.FileSystem" />
   </ItemGroup>
 
   <ItemGroup>

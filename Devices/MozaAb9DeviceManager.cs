@@ -84,6 +84,7 @@ namespace MozaPlugin.Devices
             // none of the existing probes target it. Caller can still flip the
             // module to "found" via TryConnect when WMI lists it.
             _connection = new MozaSerialConnection(MozaUsbIds.IsAb9Pid);
+            _connection.CaptureLabel = "ab9";
         }
 
         /// <summary>
@@ -97,7 +98,7 @@ namespace MozaPlugin.Devices
             if (_connection.IsConnected) return true;
             bool ok = _connection.Connect();
             if (ok)
-                SimHub.Logging.Current.Info("[Moza/AB9] Connected to AB9 shifter");
+                MozaLog.Info("[Moza/AB9] Connected to AB9 shifter");
             return ok;
         }
 
@@ -117,7 +118,7 @@ namespace MozaPlugin.Devices
         {
             if (_detected) return;
             _detected = true;
-            SimHub.Logging.Current.Info("[Moza/AB9] AB9 active shifter detected");
+            MozaLog.Info("[Moza/AB9] AB9 active shifter detected");
         }
 
         /// <summary>

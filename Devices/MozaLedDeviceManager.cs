@@ -202,7 +202,7 @@ namespace MozaPlugin.Devices
                     _ledsAwake = true;
                     plugin.DeviceManager.WriteSetting("wheel-old-send-telemetry", 0x3FF);
                     plugin.DeviceManager.WriteSetting("wheel-old-send-telemetry", 0);
-                    SimHub.Logging.Current.Info("[Moza] ES wheel LED wake-up sent");
+                    MozaLog.Info("[Moza] ES wheel LED wake-up sent");
                 }
 
                 bool limitUpdates = plugin.Settings.LimitWheelUpdates;
@@ -519,7 +519,7 @@ namespace MozaPlugin.Devices
             string key = sb.ToString();
             if (key == _lastRawDiagKey) return;
             _lastRawDiagKey = key;
-            SimHub.Logging.Current.Debug($"[Moza] IndividualLEDs diag {key}");
+            MozaLog.Debug($"[Moza] IndividualLEDs diag {key}");
         }
 
         // Merge physical-layer Individual-LED overrides onto a logical-channel array.

@@ -73,6 +73,38 @@ namespace MozaPlugin
             SendRawProbe(0x11, deviceId, new byte[] { 0x04 });                   // identity-11
         }
 
+        /// <summary>
+        /// Probe the wheel's Display sub-device via the group 0x43 wrapper (same
+        /// frames PitHouse sends, mirrored from <see cref="Telemetry.TelemetrySender.SendDisplayProbe"/>).
+        /// Responses arrive as 0xC3 / 0x71 frames and are decoded by
+        /// <see cref="Protocol.MozaResponseParser.ParseDisplayIdentity"/> →
+        /// <see cref="Telemetry.MozaData"/> (display-* command names). Runs at wheel
+        /// detect so <see cref="MozaPlugin.IsDisplayDetected"/> flips independent
+        /// of telemetry start — required because the UI gates the dashboard-telemetry
+        /// section on detection, and the user can't pick a profile until that
+        /// section is visible.
+        /// </summary>
+        public void SendDisplayProbe()
+        {
+            if (!_connection.IsConnected) return;
+            byte dev = MozaProtocol.DeviceWheel;
+            byte g = MozaProtocol.TelemetrySendGroup; // 0x43
+            // Heartbeat
+            SendRawProbe(g, dev, new byte[] { 0x00 });
+            // Identity cascade
+            SendRawProbe(g, dev, new byte[] { 0x09 });
+            SendRawProbe(g, dev, new byte[] { 0x04, 0x00, 0x00, 0x00, 0x00 });
+            SendRawProbe(g, dev, new byte[] { 0x06 });
+            SendRawProbe(g, dev, new byte[] { 0x02, 0x00 });
+            SendRawProbe(g, dev, new byte[] { 0x05, 0x00, 0x00, 0x00, 0x00 });
+            // Version queries
+            SendRawProbe(g, dev, new byte[] { 0x07, 0x01 });
+            SendRawProbe(g, dev, new byte[] { 0x0F, 0x01 });
+            SendRawProbe(g, dev, new byte[] { 0x11, 0x04 });
+            SendRawProbe(g, dev, new byte[] { 0x08, 0x01 });
+            SendRawProbe(g, dev, new byte[] { 0x10, 0x00 });
+        }
+
         private void SendRawProbe(byte group, byte deviceId, byte[]? payload)
         {
             int payloadLen = payload?.Length ?? 0;
@@ -133,7 +165,7 @@ namespace MozaPlugin
             // paired with a stale id.)
             _wheelDeviceId = deviceId;
             _wheelDetected = true;
-            SimHub.Logging.Current.Info($"[Moza] Wheel locked on device ID {_wheelDeviceId}");
+            MozaLog.Info($"[Moza] Wheel locked on device ID {_wheelDeviceId}");
         }
 
         public bool ReadSettingForDevice(string commandName, byte deviceId)

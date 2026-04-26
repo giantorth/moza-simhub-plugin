@@ -67,6 +67,12 @@ namespace MozaPlugin
         // value hasn't changed. Fixes wheels that don't pick up new colors without a bitmask write.
         public bool AlwaysResendBitmask { get; set; } = false;
 
+        // One-shot flag: arm capture from the Diagnostics tab so it's already running when
+        // the plugin re-initializes (catches early connect/handshake traffic that the user
+        // can't normally arm in time). Cleared on Init the moment capture is started, so
+        // it never persists past one launch.
+        public bool StartCaptureOnNextLaunch { get; set; } = false;
+
         // ===== Profile system (SimHub native) =====
         public MozaProfileStore ProfileStore { get; set; } = new MozaProfileStore();
 

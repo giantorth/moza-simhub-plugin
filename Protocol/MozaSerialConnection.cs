@@ -6,6 +6,7 @@ using System.IO.Ports;
 using System.Linq;
 using System.Reflection;
 using System.Threading;
+using MozaPlugin.Diagnostics;
 
 
 namespace MozaPlugin.Protocol
@@ -66,6 +67,13 @@ namespace MozaPlugin.Protocol
 
         public event Action<byte[]>? MessageReceived;
         public bool IsConnected => _port?.IsOpen == true;
+
+        /// <summary>
+        /// Label used when traffic on this connection is recorded by
+        /// <see cref="SerialTrafficCapture"/>. Set by the owner (e.g. "wheelbase",
+        /// "ab9") so the export can disambiguate frames from each pipe.
+        /// </summary>
+        public string CaptureLabel { get; set; } = "wheelbase";
 
         /// <summary>
         /// The HID Product ID discovered from WMI during device enumeration.
@@ -158,12 +166,12 @@ namespace MozaPlugin.Protocol
                 _lastPortName = portName;
                 Interlocked.Exchange(ref _consecutiveIoErrors, 0);
                 _portFailureLogged = false;
-                SimHub.Logging.Current.Info($"[Moza] Connected to {portName}");
+                MozaLog.Info($"[Moza] Connected to {portName}");
                 return true;
             }
             catch (Exception ex)
             {
-                SimHub.Logging.Current.Error($"[Moza] Failed to connect to {portName}: {ex.Message}");
+                MozaLog.Error($"[Moza] Failed to connect to {portName}: {ex.Message}");
                 return false;
             }
         }
@@ -188,7 +196,7 @@ namespace MozaPlugin.Protocol
             if (p != null)
             {
                 try { p.Close(); }
-                catch (Exception ex) { SimHub.Logging.Current.Debug($"[Moza] Port close: {ex.Message}"); }
+                catch (Exception ex) { MozaLog.Debug($"[Moza] Port close: {ex.Message}"); }
             }
 
             _readThread?.Join(1000);
@@ -229,7 +237,7 @@ namespace MozaPlugin.Protocol
             lock (_lock)
             {
                 try { _port?.DiscardOutBuffer(); }
-                catch (Exception ex) { SimHub.Logging.Current.Debug($"[Moza] DiscardOutBuffer: {ex.Message}"); }
+                catch (Exception ex) { MozaLog.Debug($"[Moza] DiscardOutBuffer: {ex.Message}"); }
             }
         }
 
@@ -244,13 +252,13 @@ namespace MozaPlugin.Protocol
 
             if (!_portFailureLogged)
             {
-                SimHub.Logging.Current.Error($"[Moza] {label} error: {ex.GetType().Name}: {ex.Message}");
+                MozaLog.Error($"[Moza] {label} error: {ex.GetType().Name}: {ex.Message}");
             }
 
             if (count >= PortDeadThreshold && !_portFailureLogged)
             {
                 _portFailureLogged = true;
-                SimHub.Logging.Current.Warn(
+                MozaLog.Warn(
                     $"[Moza] Port wedged after {count} consecutive I/O errors — closing for reconnect");
                 lock (_lock)
                 {
@@ -265,7 +273,7 @@ namespace MozaPlugin.Protocol
 
         private void ReadLoop()
         {
-            SimHub.Logging.Current.Info("[Moza] Read thread started");
+            MozaLog.Info("[Moza] Read thread started");
             int messageCount = 0;
             // Bulk read buffer — drains all available bytes from the OS read
             // buffer in one SerialPort.Read() call, then parses frames from
@@ -373,7 +381,7 @@ namespace MozaPlugin.Protocol
                         {
                             int nn = Math.Min(8, Math.Max(0, decoded));
                             string first8a = nn > 0 ? BitConverter.ToString(raw, 0, nn) : "(empty)";
-                            SimHub.Logging.Current.Info(
+                            MozaLog.Info(
                                 $"[Moza] DROP frame-error: decoded={decoded}/{needed} len={payloadLength} first8={first8a}");
                             // Skip past the bad start byte and try to resync.
                             cursor = frameStart + 1;
@@ -392,7 +400,7 @@ namespace MozaPlugin.Protocol
                         {
                             int nn = Math.Min(8, raw.Length);
                             string first8a = nn > 0 ? BitConverter.ToString(raw, 0, nn) : "(empty)";
-                            SimHub.Logging.Current.Info(
+                            MozaLog.Info(
                                 $"[Moza] DROP checksum mismatch: expected=0x{expected:X2} actual=0x{actual:X2} " +
                                 $"len={payloadLength} group=0x{raw[0]:X2} dev=0x{raw[1]:X2} first8={first8a}");
                             cursor = frameStart + 1;
@@ -406,7 +414,7 @@ namespace MozaPlugin.Protocol
                         messageCount++;
                         if (messageCount <= 5)
                         {
-                            SimHub.Logging.Current.Info(
+                            MozaLog.Info(
                                 $"[Moza] Received msg #{messageCount}: len={payloadLength} " +
                                 $"group=0x{data[0]:X2} dev=0x{data[1]:X2} ({data.Length} bytes)");
                         }
@@ -422,10 +430,11 @@ namespace MozaPlugin.Protocol
                             string first8 = bodyLen > 0
                                 ? BitConverter.ToString(data, 8, Math.Min(8, bodyLen))
                                 : "(empty)";
-                            SimHub.Logging.Current.Info(
+                            MozaLog.Debug(
                                 $"[Moza] WIRE sess=0x{sess:X2} type=0x{type:X2} seq={seqWire} " +
                                 $"totalLen={data.Length} payload={bodyLen}B first8={first8}");
                         }
+                        SerialTrafficCapture.Instance.RecordRx(CaptureLabel, data);
                         MessageReceived?.Invoke(data);
                         // Move cursor past the consumed wire bytes.
                         cursor = wirePos;
@@ -453,7 +462,7 @@ namespace MozaPlugin.Protocol
 
         private void WriteLoop()
         {
-            SimHub.Logging.Current.Info("[Moza] Write thread started");
+            MozaLog.Info("[Moza] Write thread started");
             int writeCount = 0;
             // Pooled stuffing buffer. Worst-case stuffed size is 2 * decoded size;
             // grows on demand if a larger frame arrives.
@@ -491,7 +500,7 @@ namespace MozaPlugin.Protocol
                     {
                         writeCount++;
                         if (writeCount <= 5)
-                            SimHub.Logging.Current.Info($"[Moza] Sent cmd #{writeCount}: {msg.Length} bytes, group=0x{(msg.Length > 2 ? msg[2] : 0):X2}");
+                            MozaLog.Info($"[Moza] Sent cmd #{writeCount}: {msg.Length} bytes, group=0x{(msg.Length > 2 ? msg[2] : 0):X2}");
                         lastWriteTs = System.Diagnostics.Stopwatch.GetTimestamp();
                         lastWasOneShot = true;
                     }
@@ -545,6 +554,7 @@ namespace MozaPlugin.Protocol
                 // hanging SimHub shutdown.
                 _port?.Write(stuffBuf, 0, len);
                 Interlocked.Exchange(ref _consecutiveIoErrors, 0);
+                SerialTrafficCapture.Instance.RecordTx(CaptureLabel, msg);
                 return true;
             }
             catch (Exception ex)
@@ -616,17 +626,17 @@ namespace MozaPlugin.Protocol
                 {
                     if (pidFilter != null && !pidFilter(pid))
                     {
-                        SimHub.Logging.Current.Debug(
+                        MozaLog.Debug(
                             $"[Moza] Skipping {portName} PID={pid ?? "unknown"} (filtered)");
                         continue;
                     }
-                    SimHub.Logging.Current.Info(
+                    MozaLog.Info(
                         $"[Moza] Found Moza device on {portName} PID={pid ?? "unknown"} (WMI)");
                     return (portName, pid);
                 }
                 // No match for this filter — silent at Debug level. Reconnect
                 // timer ticks every 5s, so Info would spam the log.
-                SimHub.Logging.Current.Debug("[Moza] No matching MOZA device found via WMI");
+                MozaLog.Debug("[Moza] No matching MOZA device found via WMI");
                 return (null, null);
             }
 
@@ -635,12 +645,12 @@ namespace MozaPlugin.Protocol
             // in its filter; the wheelbase default filter accepts null.
             if (pidFilter != null && !pidFilter(null))
             {
-                SimHub.Logging.Current.Debug(
+                MozaLog.Debug(
                     "[Moza] WMI unavailable and probe path is filtered out; giving up");
                 return (null, null);
             }
 
-            SimHub.Logging.Current.Debug("[Moza] WMI discovery returned no devices, trying probe");
+            MozaLog.Debug("[Moza] WMI discovery returned no devices, trying probe");
 
             // Probe-based discovery: try opening each COM port and sending a Moza read command.
             // This works under Proton/Wine where COM ports are symlinked to /dev/ttyACM*.
@@ -669,7 +679,7 @@ namespace MozaPlugin.Protocol
                 var (responded, reachable) = ProbeWithTimeout(port, 600, baseProbe: true);
                 if (responded)
                 {
-                    SimHub.Logging.Current.Info($"[Moza] Found Moza base on {port} (probe)");
+                    MozaLog.Info($"[Moza] Found Moza base on {port} (probe)");
                     return (port, null);
                 }
                 if (!reachable) unreachable.Add(port);
@@ -683,14 +693,14 @@ namespace MozaPlugin.Protocol
                 var (responded, _) = ProbeWithTimeout(port, 600, baseProbe: false);
                 if (responded)
                 {
-                    SimHub.Logging.Current.Info($"[Moza] Found Moza hub on {port} (probe)");
+                    MozaLog.Info($"[Moza] Found Moza hub on {port} (probe)");
                     return (port, null);
                 }
             }
 
             // Drop to Debug — reconnect timer fires every 5s, so Info-level
             // would flood the log when no device is plugged in.
-            SimHub.Logging.Current.Debug("[Moza] No MOZA device found on any COM port");
+            MozaLog.Debug("[Moza] No MOZA device found on any COM port");
             return (null, null);
         }
 
@@ -755,7 +765,7 @@ namespace MozaPlugin.Protocol
             t.Start();
             if (!t.Join(timeoutMs))
             {
-                SimHub.Logging.Current.Debug($"[Moza] Probe {portName}: timed out after {timeoutMs}ms, skipping");
+                MozaLog.Debug($"[Moza] Probe {portName}: timed out after {timeoutMs}ms, skipping");
                 return (false, false);
             }
             return (responded, reachable);
@@ -796,7 +806,7 @@ namespace MozaPlugin.Protocol
             }
             catch (Exception ex)
             {
-                SimHub.Logging.Current.Debug($"[Moza] Probe {portName}: {ex.GetType().Name}");
+                MozaLog.Debug($"[Moza] Probe {portName}: {ex.GetType().Name}");
                 return (false, false);
             }
         }

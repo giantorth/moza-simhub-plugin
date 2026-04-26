@@ -13,6 +13,7 @@
        This avoids referencing the net48 DLL which has WPF and SimHub
        dependencies that cannot load on Linux under .NET 9. -->
   <ItemGroup>
+    <Compile Include="..\Diagnostics\MozaLog.cs" Link="Src\Diagnostics\MozaLog.cs" />
     <Compile Include="..\Protocol\MozaProtocol.cs" Link="Src\Protocol\MozaProtocol.cs" />
     <Compile Include="..\Protocol\MozaCommand.cs" Link="Src\Protocol\MozaCommand.cs" />
     <Compile Include="..\Protocol\MozaCommandDatabase.cs" Link="Src\Protocol\MozaCommandDatabase.cs" />

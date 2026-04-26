@@ -126,7 +126,7 @@ namespace MozaPlugin.Telemetry
 
                 // float and double handled via WriteFloat/WriteDouble
                 default:
-                    SimHub.Logging.Current.Debug($"[Moza] TelemetryEncoder: unknown compression '{compression}', raw cast");
+                    MozaLog.Debug($"[Moza] TelemetryEncoder: unknown compression '{compression}', raw cast");
                     return (uint)(int)gameValue;
             }
         }

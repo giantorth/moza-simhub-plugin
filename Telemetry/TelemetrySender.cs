@@ -90,7 +90,7 @@ namespace MozaPlugin.Telemetry
         /// when targeting 2026-04+ firmware.
         /// </summary>
         public FileTransferWireFormat UploadWireFormat { get; set; }
-            = FileTransferWireFormat.Legacy2025_11;
+            = FileTransferWireFormat.New2026_04;
 
         // Session 0x09 configJson RPC state. Device proactively pushes its
         // dashboard state blob; we reply with the canonical dashboard library
@@ -261,12 +261,12 @@ namespace MozaPlugin.Telemetry
         {
             if (Volatile.Read(ref _disposed) != 0)
             {
-                SimHub.Logging.Current.Warn("[Moza] Start() ignored — sender disposed");
+                MozaLog.Warn("[Moza] Start() ignored — sender disposed");
                 return;
             }
             if (Interlocked.CompareExchange(ref _startInProgress, 1, 0) != 0)
             {
-                SimHub.Logging.Current.Warn("[Moza] Start() ignored — already starting");
+                MozaLog.Warn("[Moza] Start() ignored — already starting");
                 return;
             }
             try
@@ -308,11 +308,34 @@ namespace MozaPlugin.Telemetry
             // Bail out if Stop() was called while we were probing
             if (!_enabled) return;
 
-            // Upload the dashboard file to the wheel on session 0x01 (mgmt port).
-            // PitHouse does this on every connection — the wheel may require a fresh
-            // upload before accepting tier definitions or telemetry frames.
+            // Prime session 0x09 (configJson state push channel). Wheels we've
+            // observed (KS Pro on Universal Hub, plugin v0.8.3) only open
+            // 0x05/0x07 in their device-init burst, NOT 0x09 — leaving the
+            // configJson handshake stuck and the wheel display unable to
+            // resolve which dashboard is active. Pithouse encourages 0x09 by
+            // sending an empty data frame on it before any clean session
+            // opens (mozahubstartup.pcapng frame 639 t=2.345). Mirror that
+            // here so wheels include 0x09 in their burst.
+            SendSessionPrime(0x09, 0x0001);
+
+            // Dashboard upload runs as a background task, NOT inline. Reasons:
+            //   1. Different wheel firmwares device-init the upload session
+            //      (0x04..0x0a) at very different times — observed 40 ms (older
+            //      direct-base firmware) up to ~11 s (KS Pro on RS21-W18-MC SW,
+            //      direct base; diagnostics bundle 20260426-115430o). A
+            //      foreground wait long enough to cover the slow case stalls
+            //      tier def + telemetry timer for the same duration.
+            //   2. Host-opening the upload session as a fallback races the
+            //      wheel's eventual late device-init burst — wheel responds by
+            //      closing session 0x02 mid-tier-def, killing telemetry.
+            //
+            // Decoupled flow: tier def + display config + telemetry timer fire
+            // immediately. Upload waits in the background for the wheel to
+            // device-init an FT session, then sends. If the wheel never opens
+            // one (very old firmware or wheels without dash) the background
+            // task times out at 60 s and exits silently.
             if (UploadDashboard && MzdashContent != null && _mgmtPort != 0)
-                SendDashboardUpload();
+                ThreadPool.QueueUserWorkItem(_ => RunBackgroundDashboardUpload());
 
             if (!_enabled) return;
 
@@ -460,10 +483,21 @@ namespace MozaPlugin.Telemetry
         /// 3-miss threshold) would fire mid-handshake and reset the wheel state,
         /// looping forever before telemetry could start.
         ///
-        /// Pre-probe blanket close is retained: if the previous SimHub instance
-        /// crashed without sending end markers, the wheel firmware still holds
-        /// sessions 0x01/0x02 as open and a fresh SendSessionOpen would be
-        /// ignored. Closing 0x01..0x10 first reclaims any stale slot.
+        /// Pre-probe close is targeted to host-managed sessions only (0x01..0x03):
+        /// if the previous SimHub instance crashed without sending end markers,
+        /// the wheel firmware still holds those sessions as open and a fresh
+        /// SendSessionOpen would be ignored. We close just enough to reclaim
+        /// the host-managed slots.
+        ///
+        /// Wheel-managed sessions (0x04..0x0a) are LEFT ALONE. Wheel device-
+        /// inits these to push state (0x05/0x07 file-transfer ack, 0x09 config-
+        /// Json state, 0x0a RPC). Closing them severs wheel-side state and
+        /// prevents the wheel from re-pushing configJson on session 0x09 —
+        /// without that handshake the dashboard never renders. Pithouse never
+        /// closes these sessions at startup either; verified in
+        /// usb-capture/ksp/mozahubstartup.pcapng (no host close-burst, wheel
+        /// device-inits 0x09 t=28.123 after host primes it with data on 0x09
+        /// at t=2.345 / 6.346).
         /// </summary>
         private void ProbeAndOpenSessions()
         {
@@ -474,9 +508,10 @@ namespace MozaPlugin.Telemetry
             const byte TelemSession = 0x02;
             const int OpenAckTimeoutMs = 500;
 
-            // Reclaim any sessions left open by a prior SimHub crash/kill.
-            SimHub.Logging.Current.Info("[Moza] Closing any stale sessions (0x01..0x10)...");
-            for (byte port = 1; port <= 0x10; port++)
+            // Reclaim any HOST-managed sessions left open by a prior SimHub
+            // crash/kill. Don't touch 0x04..0x10 — those are wheel-managed.
+            MozaLog.Info("[Moza] Closing any stale host sessions (0x01..0x03)...");
+            for (byte port = 1; port <= 0x03; port++)
             {
                 if (!_connection.IsConnected) return;
                 SendSessionClose(port);
@@ -493,13 +528,13 @@ namespace MozaPlugin.Telemetry
             if (telemetryPort != 0)
             {
                 FlagByte = telemetryPort;
-                SimHub.Logging.Current.Info(
+                MozaLog.Info(
                     $"[Moza] Sessions opened: mgmt=0x{mgmtPort:X2} telem=0x{telemetryPort:X2}");
             }
             else if (mgmtPort != 0)
             {
                 FlagByte = mgmtPort;
-                SimHub.Logging.Current.Warn(
+                MozaLog.Warn(
                     $"[Moza] Telem session 0x{TelemSession:X2} did not ack, using mgmt 0x{mgmtPort:X2} for telemetry");
             }
             else
@@ -507,7 +542,7 @@ namespace MozaPlugin.Telemetry
                 // No acks — proceed anyway using PitHouse defaults. Real wheels
                 // may silently accept data on 0x02 even without an explicit ack.
                 FlagByte = TelemSession;
-                SimHub.Logging.Current.Warn(
+                MozaLog.Warn(
                     "[Moza] No session acks received, proceeding with defaults mgmt=0x01 telem=0x02");
                 _mgmtPort = MgmtSession;
             }
@@ -536,7 +571,7 @@ namespace MozaPlugin.Telemetry
                     return session;
 
                 // Stale ack (different session) — discard and keep waiting.
-                SimHub.Logging.Current.Debug(
+                MozaLog.Debug(
                     $"[Moza] OpenSession 0x{session:X2}: ignoring stale ack for 0x{_lastAckedSession:X2}");
                 _ackReceived.Reset();
                 _lastAckedSession = 0;
@@ -652,7 +687,7 @@ namespace MozaPlugin.Telemetry
                 foreach (var t in profile.Tiers) originalCh += t.Channels.Count;
                 foreach (var t in filtered.Tiers) filteredCh += t.Channels.Count;
                 if (filteredCh < originalCh)
-                    SimHub.Logging.Current.Info(
+                    MozaLog.Info(
                         $"[Moza] Tier def filtered to wheel catalog: " +
                         $"{filteredCh}/{originalCh} channels retained");
                 profile = filtered;
@@ -670,7 +705,7 @@ namespace MozaPlugin.Telemetry
 
                 int channelCount = 0;
                 foreach (var t in profile.Tiers) channelCount += t.Channels.Count;
-                SimHub.Logging.Current.Info(
+                MozaLog.Info(
                     $"[Moza] Sending v0 URL subscription: " +
                     $"{message.Length} bytes in {frames.Count} chunks " +
                     $"on session 0x{FlagByte:X2} ({channelCount} channels)");
@@ -694,7 +729,7 @@ namespace MozaPlugin.Telemetry
                 byte[] message = TierDefinitionBuilder.BuildTierDefinitionMessage(profile, 0x00);
                 var frames = TierDefinitionBuilder.ChunkMessage(message, FlagByte, ref seq);
 
-                SimHub.Logging.Current.Info(
+                MozaLog.Info(
                     $"[Moza] Sending v2 tier definition: flagBase=0x00, " +
                     $"preamble ({preambleFrames.Count} chunks)" +
                     $" + {message.Length} bytes in {frames.Count} chunks " +
@@ -734,14 +769,14 @@ namespace MozaPlugin.Telemetry
                 var frames = TierDefinitionBuilder.ChunkMessage(payload, 0x03, ref seq);
                 foreach (var frame in frames)
                     _connection.Send(frame);
-                SimHub.Logging.Current.Info(
+                MozaLog.Info(
                     $"[Moza] Sent empty tile-server state on session 0x03: " +
                     $"{json.Length}B JSON → {payload.Length}B (12B env + zlib) → " +
                     $"{frames.Count} chunk(s)");
             }
             catch (Exception ex)
             {
-                SimHub.Logging.Current.Debug($"[Moza] SendTileServerState failed: {ex.Message}");
+                MozaLog.Debug($"[Moza] SendTileServerState failed: {ex.Message}");
             }
         }
 
@@ -787,61 +822,65 @@ namespace MozaPlugin.Telemetry
         /// what the host requests via 7c:23 46. Plugin selects via
         /// <see cref="ChooseUploadSession"/>.
         /// </summary>
+        /// <summary>
+        /// Background upload entry point. Runs on a worker thread so a slow-to-
+        /// open file-transfer session (KS Pro on RS21-W18-MC SW: ~11 s) doesn't
+        /// stall tier def + telemetry start. Waits up to 60 s for the wheel to
+        /// device-init any session in 0x04..0x0a, then runs the legacy upload
+        /// path. If the wait expires, logs and bails — the wheel will render a
+        /// previously-cached dashboard, or nothing if it has none.
+        ///
+        /// Stop() flips _enabled to false and the next checkpoint exits cleanly.
+        /// </summary>
+        private void RunBackgroundDashboardUpload()
+        {
+            try
+            {
+                if (!_enabled || !_connection.IsConnected) return;
+
+                // 60 s ceiling: covers the slowest firmware observed (~11 s) with
+                // headroom. If the wheel hasn't opened an FT session by then it
+                // either doesn't support uploads on this firmware or is wedged —
+                // either way, retrying won't help and host-opening 0x04 races the
+                // wheel's eventual late burst (closes session 0x02, kills telemetry).
+                const int FtBurstWaitMs = 60000;
+                if (!_uploadSessionOpened.Wait(FtBurstWaitMs))
+                {
+                    MozaLog.Warn(
+                        $"[Moza] No file-transfer session device-opened within " +
+                        $"{FtBurstWaitMs}ms — skipping dashboard upload. " +
+                        "Wheel may render previously-cached dashboard.");
+                    return;
+                }
+
+                if (!_enabled || !_connection.IsConnected) return;
+                SendDashboardUpload();
+            }
+            catch (Exception ex)
+            {
+                MozaLog.Warn($"[Moza] Background dashboard upload failed: {ex.Message}");
+            }
+        }
+
         private void SendDashboardUpload()
         {
             var content = MzdashContent;
             if (content == null || content.Length == 0) return;
             if (!_connection.IsConnected) return;
 
-            // Resolve the upload session before any logging / state reset, so
-            // log lines reference the right port even if it changes mid-upload
-            // (it shouldn't — once chosen it stays for this transfer).
+            // Pick the upload session from the wheel's device-init burst.
+            // Picker prefers 0x04 if device-initiated; otherwise first of
+            // 0x05..0x0a. Caller (RunBackgroundDashboardUpload) already
+            // waited for at least one to open.
             byte uploadSess = ChooseUploadSession();
             _uploadSession = uploadSess;
-
-            // Wait for the device to open the chosen session. Direct-wheelbase
-            // wheel opens it ~40–400 ms after we open 0x01/0x02; behind a
-            // Universal Hub the burst can take ~2.1 s (usb-capture/ksp/
-            // mozahubstartup.pcapng: 0x05/0x07/0x09/0x0a opens at ~28.0–28.1 s,
-            // host opens 0x01/0x02 at 25.921 s).
-            //
-            // If after 3 s the wheel has not device-init any session in
-            // 0x04..0x0a, behaviour diverges by transport:
-            //   - Hub-attached: skip upload entirely. Host-opening 0x04 + push
-            //     racing the wheel's burst confuses the state machine and
-            //     causes the wheel to abort 0x09/0x0a opens, killing dash.
-            //   - Direct-wheelbase: fall back to host-initiated 0x04 open
-            //     (legacy behaviour, kept so dashboard re-uploads still work
-            //     on mid-connection restarts where the wheel doesn't re-init).
-            const int FtBurstWaitMs = 3000;
-            if (!_uploadSessionOpened.Wait(FtBurstWaitMs))
-            {
-                if (HubPresent)
-                {
-                    SimHub.Logging.Current.Warn(
-                        $"[Moza] Upload session 0x{uploadSess:X2} not device-opened within " +
-                        $"{FtBurstWaitMs}ms (Universal Hub present) — skipping dashboard upload " +
-                        "to avoid racing wheel state machine. Tier def + telemetry will still send.");
-                    return;
-                }
-                SimHub.Logging.Current.Info(
-                    $"[Moza] Upload session 0x{uploadSess:X2} not opened by device within " +
-                    $"{FtBurstWaitMs}ms — host-opening for upload");
-                SendSessionOpen(uploadSess, uploadSess);
-                if (!_uploadSessionOpened.Wait(500))
-                {
-                    SimHub.Logging.Current.Info(
-                        $"[Moza] Upload session 0x{uploadSess:X2} host-open had no confirmation; proceeding with upload");
-                    _uploadSessionOpened.Set();
-                }
-            }
 
             // Skip-if-unchanged: if the wheel already reported this dashboard
             // as loaded (via session 0x09 state) and the MD5 matches, don't
             // re-upload. Saves ~1 s of handshake per reconnect.
             if (CanSkipUpload(content))
             {
-                SimHub.Logging.Current.Info(
+                MozaLog.Info(
                     $"[Moza] Dashboard \"{MzdashName}\" already loaded on wheel (hash match) — skipping upload");
                 return;
             }
@@ -849,9 +888,20 @@ namespace MozaPlugin.Telemetry
             string dashboardName = !string.IsNullOrEmpty(MzdashName) ? MzdashName : "dashboard";
             uint token = DashboardUploader.PickToken();
             long tsMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            var upload = DashboardUploader.BuildUpload(content, dashboardName, token, tsMs, UploadWireFormat);
 
-            SimHub.Logging.Current.Info(
+            // Probe-based wire-format selection. Older wheels (VGS, GS V2P,
+            // CS V2.1, etc.) accept Legacy2025_11; newer wheels (W17 CS Pro /
+            // W18 KS Pro / W13 FSR V2 on 2026-04+ firmware) silently drop
+            // Legacy and only ack New2026_04. Identity probes (`wheel-sw-version`
+            // = `RS21-W18-MC SW`) carry no build/version field, so we can't
+            // pick from a string match. Try the user-configured format first
+            // (default New2026_04 — most wheels in the wild now), and on
+            // sub-msg 1 ack timeout, fall back to the other format.
+            bool fellBack = false;
+            DashboardUploader.UploadPayload upload =
+                DashboardUploader.BuildUpload(content, dashboardName, token, tsMs, UploadWireFormat);
+
+            MozaLog.Info(
                 $"[Moza] Uploading dashboard \"{dashboardName}\" via session 0x{uploadSess:X2} " +
                 $"(wire={UploadWireFormat}): " +
                 $"raw={upload.UncompressedSize}B md5={upload.Md5Hex} token=0x{token:X8}");
@@ -874,7 +924,48 @@ namespace MozaPlugin.Telemetry
 
             // Wait for device's path echo (capture shows ~6 chunks, arrives within ~200ms).
             if (!_uploadSubMsg1Response.Wait(2000))
-                SimHub.Logging.Current.Warn($"[Moza] Session 0x{uploadSess:X2} sub-msg 1 response timeout");
+            {
+                // Probe fallback: flip wire format and retry sub-msg 1 once.
+                // If the second format also times out, the wheel/session is
+                // wedged for some other reason — log and continue (sub-msg 2
+                // will likely time out too, but the rest of the preamble
+                // tier-def + display config still proceeds).
+                var fallback = UploadWireFormat == FileTransferWireFormat.New2026_04
+                    ? FileTransferWireFormat.Legacy2025_11
+                    : FileTransferWireFormat.New2026_04;
+                MozaLog.Warn(
+                    $"[Moza] Session 0x{uploadSess:X2} sub-msg 1 ack timeout with " +
+                    $"wire={UploadWireFormat} — retrying with wire={fallback}");
+
+                UploadWireFormat = fallback;
+                fellBack = true;
+                upload = DashboardUploader.BuildUpload(content, dashboardName, token, tsMs, UploadWireFormat);
+
+                _uploadSubMsg1Response.Reset();
+                _uploadSubMsg2Response.Reset();
+                _uploadInboundMsgCount = 0;
+
+                seq1 = _uploadOutboundSeq + 1;
+                subMsg1Frames = TierDefinitionBuilder.ChunkMessage(
+                    upload.SubMsg1PathRegistration, uploadSess, ref seq1);
+                foreach (var frame in subMsg1Frames)
+                {
+                    if (!_enabled || !_connection.IsConnected) return;
+                    _connection.Send(frame);
+                }
+                _uploadOutboundSeq = seq1;
+
+                if (!_uploadSubMsg1Response.Wait(2000))
+                    MozaLog.Warn(
+                        $"[Moza] Session 0x{uploadSess:X2} sub-msg 1 ack timeout on fallback " +
+                        $"wire={UploadWireFormat} — wheel may not be in upload-ready state");
+                else
+                    MozaLog.Info(
+                        $"[Moza] Wire format auto-detected: wheel accepts {UploadWireFormat} " +
+                        "(cached for this session)");
+            }
+            // Suppress unused warning when fallback didn't fire.
+            _ = fellBack;
 
             // Sub-msg 2: file content push. May be split across multiple sub-msgs
             // for new-firmware uploads when the body exceeds 0xFFFF bytes (TODO:
@@ -895,15 +986,15 @@ namespace MozaPlugin.Telemetry
             _uploadOutboundSeq = seq2;
 
             if (!_uploadSubMsg2Response.Wait(3000))
-                SimHub.Logging.Current.Warn($"[Moza] Session 0x{uploadSess:X2} sub-msg 2 response timeout");
+                MozaLog.Warn($"[Moza] Session 0x{uploadSess:X2} sub-msg 2 response timeout");
 
             // End marker on the upload session.
             SendSessionEnd(uploadSess, (ushort)_uploadOutboundSeq);
 
             if (_uploadEndReceived.Wait(1000))
-                SimHub.Logging.Current.Info($"[Moza] Dashboard upload complete (session 0x{uploadSess:X2} closed by device)");
+                MozaLog.Info($"[Moza] Dashboard upload complete (session 0x{uploadSess:X2} closed by device)");
             else
-                SimHub.Logging.Current.Info("[Moza] Dashboard upload finished; device did not echo end marker within 1s");
+                MozaLog.Info("[Moza] Dashboard upload finished; device did not echo end marker within 1s");
 
             // Wheel's 2025-11 firmware fires a post-upload state refresh on
             // the upload session (updated directory listing) and session 0x09
@@ -915,7 +1006,7 @@ namespace MozaPlugin.Telemetry
             Thread.Sleep(500);
             int refreshChunks = _uploadInboundMsgCount - preRefreshCount;
             if (refreshChunks > 0)
-                SimHub.Logging.Current.Info(
+                MozaLog.Info(
                     $"[Moza] Session 0x{uploadSess:X2} post-upload state refresh: {refreshChunks} chunks");
         }
 
@@ -949,13 +1040,16 @@ namespace MozaPlugin.Telemetry
         }
 
         /// <summary>
-        /// Fire once per session: reply to the device's session 0x09 state blob
-        /// with a <c>configJson()</c> canonical library list. Wheel uses this to
-        /// refresh its <c>configJsonList</c> field, which PitHouse reads back
-        /// from <see cref="WheelDashboardState.ConfigJsonList"/>. Sent as
-        /// chunked 7c:00 data on session 0x09 with per-chunk CRC32.
+        /// Fire once per session: reply to the wheel's configJson state blob
+        /// with a <c>configJson()</c> canonical library list. Wheel uses this
+        /// to refresh its <c>configJsonList</c> field, which PitHouse reads
+        /// back from <see cref="WheelDashboardState.ConfigJsonList"/>. Sent
+        /// on the SAME session the wheel pushed state on (older firmware =
+        /// 0x09; KS Pro / 2026-04+ firmware = 0x0a per
+        /// usb-capture/ksp/mozahubstartup.pcapng OUT seq=0x0010..0x0017,
+        /// decompressed: <c>{"configJson()":{"dashboards":[...]},"id":11}</c>).
         /// </summary>
-        private void MaybeSendConfigJsonReply(WheelDashboardState state)
+        private void MaybeSendConfigJsonReply(WheelDashboardState state, byte session)
         {
             if (_session09ReplySent) return;
             if (CanonicalDashboardList == null || CanonicalDashboardList.Count == 0)
@@ -969,7 +1063,7 @@ namespace MozaPlugin.Telemetry
 
             byte[] reply = ConfigJsonClient.BuildConfigJsonReply(CanonicalDashboardList);
             int seq = _session09OutboundSeq + 1;
-            var frames = TierDefinitionBuilder.ChunkMessage(reply, 0x09, ref seq);
+            var frames = TierDefinitionBuilder.ChunkMessage(reply, session, ref seq);
             foreach (var frame in frames)
             {
                 if (!_enabled || !_connection.IsConnected) return;
@@ -977,8 +1071,8 @@ namespace MozaPlugin.Telemetry
             }
             _session09OutboundSeq = seq;
             _session09ReplySent = true;
-            SimHub.Logging.Current.Info(
-                $"[Moza] Sent configJson() reply on session 0x09: " +
+            MozaLog.Info(
+                $"[Moza] Sent configJson() reply on session 0x{session:X2}: " +
                 $"{CanonicalDashboardList.Count} dashboards, {frames.Count} chunks");
         }
 
@@ -1105,7 +1199,7 @@ namespace MozaPlugin.Telemetry
             }
             catch (Exception ex)
             {
-                SimHub.Logging.Current.Debug($"[Moza] RPC reply parse failed: {ex.Message}");
+                MozaLog.Debug($"[Moza] RPC reply parse failed: {ex.Message}");
             }
         }
 
@@ -1228,14 +1322,15 @@ namespace MozaPlugin.Telemetry
                     info.Port = (byte)(openSeq & 0xFF);
                     SendSessionAck(session, (ushort)openSeq);
                     // Track every device-init session in the file-transfer-
-                    // eligible range so ChooseUploadSession() can pick. Once
-                    // a candidate matches our chosen upload session, signal
-                    // the upload-pump waiter.
+                    // eligible range so ChooseUploadSession() can pick. Signal
+                    // the upload-pump waiter on any FT-eligible open — the
+                    // upload pump re-runs ChooseUploadSession() after the wait
+                    // so bursts that don't include 0x04 (KS Pro on Universal
+                    // Hub opens 0x05/0x07/0x09/0x0a) still resolve correctly.
                     if (session >= 0x04 && session <= 0x0a)
                     {
                         lock (_ftCandidateSessions) _ftCandidateSessions.Add(session);
-                        if (session == _uploadSession || (UploadSessionOverride == 0 && session == 0x04))
-                            _uploadSessionOpened.Set();
+                        _uploadSessionOpened.Set();
                     }
                     return;
                 }
@@ -1298,43 +1393,50 @@ namespace MozaPlugin.Telemetry
                             try
                             {
                                 string json = System.Text.Encoding.UTF8.GetString(dirBlob);
-                                SimHub.Logging.Current.Info(
+                                MozaLog.Info(
                                     $"[Moza] Session 0x{session:X2} dir listing: {dirBlob.Length} bytes, " +
                                     $"children≈{CountOccurrences(json, "\"name\"")}");
                             }
                             catch (Exception ex)
                             {
-                                SimHub.Logging.Current.Debug(
+                                MozaLog.Debug(
                                     $"[Moza] Session 0x{session:X2} dir listing decode: {ex.Message}");
                             }
                         }
                     }
 
-                    // Session 0x09 configJson state blob. Parsing may return the
-                    // freshly-decoded state when the reassembler completes a
-                    // full blob; that's our trigger to send the host→device
-                    // configJson() reply advertising our dashboard library.
-                    if (session == 0x09)
+                    // configJson state push from wheel. Older firmware uses
+                    // session 0x09; KS Pro / 2026-04+ firmware moved it to
+                    // session 0x0a (verified in usb-capture/ksp/mozahubstartup.pcapng:
+                    // sess=0x09 carries only empty heartbeats, sess=0x0a carries
+                    // 9.5 KB compressed configJson state with `00 [size:4 LE]
+                    // [count:4] 78 9c [zlib]` envelope; Pithouse host replies on
+                    // sess=0x0a with `{"configJson()": {...dashboards...}, "id": N}`).
+                    // Listen on both — the wheel only pushes on whichever its
+                    // firmware uses, and the parser drops malformed blobs.
+                    if (session == 0x09 || session == 0x0a)
                     {
-                        SendSessionAck(0x09, (ushort)seq);
-                        _session09InboundSeq = seq;
+                        SendSessionAck(session, (ushort)seq);
+                        if (session == 0x09) _session09InboundSeq = seq;
                         try
                         {
-                            SimHub.Logging.Current.Info(
-                                $"[Moza] session 0x09 inbound chunk: seq={seq} payload={chunkPayload.Length}B " +
+                            MozaLog.Info(
+                                $"[Moza] session 0x{session:X2} inbound chunk: seq={seq} payload={chunkPayload.Length}B " +
                                 $"first8={BitConverter.ToString(chunkPayload, 0, Math.Min(8, chunkPayload.Length))}");
                         }
                         catch { }
                         var state = _configJson.OnChunk(chunkPayload);
-                        if (state != null) MaybeSendConfigJsonReply(state);
+                        if (state != null) MaybeSendConfigJsonReply(state, session);
                     }
 
                     // Session 0x0a: RPC reply channel. Host sends `{method(): arg, id}`
                     // calls, wheel replies with `{id, result}` in the same zlib
                     // envelope. Reassemble and hand off to RPC waiters.
+                    // Ack already sent by the configJson handler above (sess 0x09/0x0a
+                    // share the same handler) — DON'T double-ack here, the wheel sees
+                    // the duplicate as a sequence-number violation and retransmits.
                     if (session == 0x0a)
                     {
-                        SendSessionAck(0x0a, (ushort)seq);
                         _session0aInbox.AddChunk(chunkPayload);
                         byte[]? replyBlob = _session0aInbox.TryDecompress();
                         if (replyBlob != null)
@@ -1350,9 +1452,17 @@ namespace MozaPlugin.Telemetry
                     //   FF 01 00 [comp_size+4 u32 LE] FF 00 [uncomp_size u24 BE]
                     // Feed through TileServerStateParser; ack to keep the
                     // session alive regardless.
-                    if (session == 0x03)
+                    // Tile-server state push from wheel. Older firmware uses
+                    // session 0x03 (host-opened); KS Pro / 2026-04+ firmware
+                    // moved the wheel-side push to session 0x0b (verified in
+                    // usb-capture/ksp/mozahubstartup.pcapng: sess=0x0b carries
+                    // 750 B with `ff 01 00 d1 00 00 00 ff 00 00 01 8e 78 9c`
+                    // 12-byte envelope decompressing to
+                    // `{"map":{...},"root":"/home/moza/resource/tile_map/",...}`).
+                    // Listen on both — only one applies per firmware.
+                    if (session == 0x03 || session == 0x0b)
                     {
-                        SendSessionAck(0x03, (ushort)seq);
+                        SendSessionAck(session, (ushort)seq);
                         // Strip CRC from tail (last 4 bytes) before handing to parser
                         if (chunkPayload.Length >= 4)
                         {
@@ -1363,9 +1473,9 @@ namespace MozaPlugin.Telemetry
                             {
                                 try
                                 {
-                                    SimHub.Logging.Current.Info(
-                                        $"[Moza] Tile-server state received: root='{tile.Root}' " +
-                                        $"version={tile.Version} games={tile.Games.Count} " +
+                                    MozaLog.Info(
+                                        $"[Moza] Tile-server state received on session 0x{session:X2}: " +
+                                        $"root='{tile.Root}' version={tile.Version} games={tile.Games.Count} " +
                                         $"any_populated={tile.AnyPopulated}");
                                 }
                                 catch { /* logging optional */ }
@@ -1414,7 +1524,7 @@ namespace MozaPlugin.Telemetry
                 {
                     _displayModelName = System.Text.Encoding.ASCII.GetString(data, 4, nameLen);
                     _displayDetected = true;
-                    SimHub.Logging.Current.Info($"[Moza] Display sub-device detected: \"{_displayModelName}\"");
+                    MozaLog.Info($"[Moza] Display sub-device detected: \"{_displayModelName}\"");
                 }
             }
         }
@@ -1475,7 +1585,7 @@ namespace MozaPlugin.Telemetry
             if (channels.Count > 0)
             {
                 _wheelChannelCatalog = channels;
-                SimHub.Logging.Current.Info(
+                MozaLog.Info(
                     $"[Moza] Wheel channel catalog ({channels.Count}): {string.Join(", ", channels)}");
             }
         }
@@ -1607,7 +1717,7 @@ namespace MozaPlugin.Telemetry
             }
             catch (Exception ex)
             {
-                SimHub.Logging.Current.Warn($"[Moza] Telemetry send error: {ex.Message}");
+                MozaLog.Warn($"[Moza] Telemetry send error: {ex.Message}");
             }
         }
 
@@ -1667,6 +1777,35 @@ namespace MozaPlugin.Telemetry
                 0x00
             };
             frame[9] = MozaProtocol.CalculateWireChecksum(frame);
+            _connection.Send(frame);
+        }
+
+        /// <summary>
+        /// Prime a wheel-managed session with a zero-length data frame to
+        /// encourage the wheel to device-init its end. Pithouse does this on
+        /// session 0x09 (configJson state push) at startup — verified in
+        /// usb-capture/ksp/mozahubstartup.pcapng frames 639/1211 (host sends
+        /// `7c 00 09 01 [seq] [ack] 00 00` at t=2.345/6.346, wheel device-inits
+        /// 0x09 type=0x81 at t=28.123 as part of its 0x05/0x07/0x09/0x0a burst).
+        /// Wheels that have never had the host prime 0x09 only open 0x05/0x07
+        /// in the burst, leaving configJson handshake stuck and dashboard
+        /// rendering blocked.
+        /// </summary>
+        private void SendSessionPrime(byte session, ushort seq)
+        {
+            var frame = new byte[]
+            {
+                MozaProtocol.MessageStart, 0x0A,
+                MozaProtocol.TelemetrySendGroup, MozaProtocol.DeviceWheel,
+                0x7C, 0x00,
+                session, 0x01,                  // type=0x01 (data chunk)
+                (byte)(seq & 0xFF),
+                (byte)(seq >> 8),
+                0x00, 0x00,                     // ack_seq = 0
+                0x00, 0x00,                     // 2 bytes of empty data (matches Pithouse)
+                0x00                            // checksum placeholder
+            };
+            frame[frame.Length - 1] = MozaProtocol.CalculateWireChecksum(frame);
             _connection.Send(frame);
         }
 
