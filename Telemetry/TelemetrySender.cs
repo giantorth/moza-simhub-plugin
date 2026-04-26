@@ -473,10 +473,21 @@ namespace MozaPlugin.Telemetry
         /// 3-miss threshold) would fire mid-handshake and reset the wheel state,
         /// looping forever before telemetry could start.
         ///
-        /// Pre-probe blanket close is retained: if the previous SimHub instance
-        /// crashed without sending end markers, the wheel firmware still holds
-        /// sessions 0x01/0x02 as open and a fresh SendSessionOpen would be
-        /// ignored. Closing 0x01..0x10 first reclaims any stale slot.
+        /// Pre-probe close is targeted to host-managed sessions only (0x01..0x03):
+        /// if the previous SimHub instance crashed without sending end markers,
+        /// the wheel firmware still holds those sessions as open and a fresh
+        /// SendSessionOpen would be ignored. We close just enough to reclaim
+        /// the host-managed slots.
+        ///
+        /// Wheel-managed sessions (0x04..0x0a) are LEFT ALONE. Wheel device-
+        /// inits these to push state (0x05/0x07 file-transfer ack, 0x09 config-
+        /// Json state, 0x0a RPC). Closing them severs wheel-side state and
+        /// prevents the wheel from re-pushing configJson on session 0x09 —
+        /// without that handshake the dashboard never renders. Pithouse never
+        /// closes these sessions at startup either; verified in
+        /// usb-capture/ksp/mozahubstartup.pcapng (no host close-burst, wheel
+        /// device-inits 0x09 t=28.123 after host primes it with data on 0x09
+        /// at t=2.345 / 6.346).
         /// </summary>
         private void ProbeAndOpenSessions()
         {
@@ -487,9 +498,10 @@ namespace MozaPlugin.Telemetry
             const byte TelemSession = 0x02;
             const int OpenAckTimeoutMs = 500;
 
-            // Reclaim any sessions left open by a prior SimHub crash/kill.
-            MozaLog.Info("[Moza] Closing any stale sessions (0x01..0x10)...");
-            for (byte port = 1; port <= 0x10; port++)
+            // Reclaim any HOST-managed sessions left open by a prior SimHub
+            // crash/kill. Don't touch 0x04..0x10 — those are wheel-managed.
+            MozaLog.Info("[Moza] Closing any stale host sessions (0x01..0x03)...");
+            for (byte port = 1; port <= 0x03; port++)
             {
                 if (!_connection.IsConnected) return;
                 SendSessionClose(port);
