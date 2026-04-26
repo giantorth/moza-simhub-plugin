@@ -1178,11 +1178,19 @@ namespace MozaPlugin
         private void RefreshDiagnosticsTab()
         {
             if (DiagWheelIdentityBox == null) return;
+            DiagPluginBox.Text = BuildPluginInfoText();
             DiagWheelIdentityBox.Text = BuildWheelIdentityText();
             DiagDisplayIdentityBox.Text = BuildDisplayIdentityText();
             DiagDashboardStateBox.Text = BuildDashboardStateText();
             DiagTileServerBox.Text = BuildTileServerText();
             DiagSessionBox.Text = BuildSessionStateText();
+        }
+
+        private string BuildPluginInfoText()
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.Append($"Version:        {GetPluginVersion()}");
+            return sb.ToString();
         }
 
         private string BuildWheelIdentityText()
@@ -1302,6 +1310,9 @@ namespace MozaPlugin
         private string BuildDiagnosticsDump()
         {
             var sb = new System.Text.StringBuilder();
+            sb.AppendLine("=== Plugin ===");
+            sb.AppendLine(DiagPluginBox.Text);
+            sb.AppendLine();
             sb.AppendLine("=== Wheel identity ===");
             sb.AppendLine(DiagWheelIdentityBox.Text);
             sb.AppendLine();
@@ -1461,9 +1472,22 @@ namespace MozaPlugin
 
         private static string GetPluginVersion()
         {
+            // AssemblyInformationalVersion carries the full semver string set by
+            // CI via /p:Version=<x.y.z-dev.sha>, including the pre-release tag.
+            // AssemblyVersion is a System.Version (numeric only) and silently
+            // drops any -suffix, so we prefer informational here. SDK may append
+            // "+<git-sha>" via SourceRevisionId — strip it for display.
             try
             {
                 var asm = System.Reflection.Assembly.GetExecutingAssembly();
+                var info = (System.Reflection.AssemblyInformationalVersionAttribute?)Attribute
+                    .GetCustomAttribute(asm, typeof(System.Reflection.AssemblyInformationalVersionAttribute));
+                var s = info?.InformationalVersion;
+                if (!string.IsNullOrEmpty(s))
+                {
+                    int plus = s!.IndexOf('+');
+                    return plus >= 0 ? s.Substring(0, plus) : s;
+                }
                 return asm.GetName().Version?.ToString() ?? "unknown";
             }
             catch { return "unknown"; }
@@ -2037,8 +2061,8 @@ namespace MozaPlugin
         }
 
         private static string Blank(string s) => string.IsNullOrEmpty(s) ? "—" : s;
-        private static string Redact(string s) => string.IsNullOrEmpty(s) ? "—" : new string('*', s.Length);
-        private static string RedactBytes(byte[] b) => b == null || b.Length == 0 ? "—" : new string('*', b.Length * 2);
+        private static string Redact(string s) => MozaLog.RedactId(s);
+        private static string RedactBytes(byte[] b) => MozaLog.RedactBytesHex(b);
         private static string Hex(byte[] b) => b == null || b.Length == 0 ? "—" : BitConverter.ToString(b);
         private static string HexRaw(byte[] b) => b == null || b.Length == 0 ? "—" : BitConverter.ToString(b).Replace("-", "");
         private static string JoinList(System.Collections.Generic.IReadOnlyList<string> l)

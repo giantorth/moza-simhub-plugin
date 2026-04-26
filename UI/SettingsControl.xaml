@@ -957,6 +957,13 @@
                         <TextBlock TextWrapping="Wrap" Foreground="Gray" FontSize="11" Margin="0,0,0,8"
                                    Text="Live dump of wheel identity, display sub-device identity, dashboard state from the wheel's configJson RPC, and session/connection info. Refreshes ~1/s."/>
 
+                        <!-- Plugin info -->
+                        <TextBlock Text="Plugin" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                        <TextBlock x:Name="DiagPluginBox" FontFamily="Consolas" FontSize="11"
+                                   TextWrapping="Wrap" Text="—" Margin="0,0,0,10"/>
+
+                        <Separator Margin="0,4,0,8"/>
+
                         <!-- Wheel identity -->
                         <TextBlock Text="Wheel identity" FontWeight="SemiBold" Margin="0,0,0,6"/>
                         <TextBlock x:Name="DiagWheelIdentityBox" FontFamily="Consolas" FontSize="11"

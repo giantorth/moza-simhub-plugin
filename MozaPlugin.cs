@@ -1178,14 +1178,14 @@ namespace MozaPlugin
             {
                 MozaLog.Info(
                     $"[Moza] Wheel MCU UID ({_data.WheelMcuUid.Length}B): " +
-                    BitConverter.ToString(_data.WheelMcuUid).Replace("-", ""));
+                    MozaLog.RedactBytesHex(_data.WheelMcuUid));
                 return;
             }
             if (commandName == "display-mcu-uid" && _data.DisplayMcuUid.Length > 0)
             {
                 MozaLog.Info(
                     $"[Moza] Display MCU UID ({_data.DisplayMcuUid.Length}B): " +
-                    BitConverter.ToString(_data.DisplayMcuUid).Replace("-", ""));
+                    MozaLog.RedactBytesHex(_data.DisplayMcuUid));
                 return;
             }
 
@@ -1316,7 +1316,7 @@ namespace MozaPlugin
 
                 case "wheel-serial-b":
                     if (!string.IsNullOrEmpty(_data.WheelSerialNumber))
-                        MozaLog.Info($"[Moza] Wheel serial: {_data.WheelSerialNumber}");
+                        MozaLog.Info($"[Moza] Wheel serial: {MozaLog.RedactId(_data.WheelSerialNumber)}");
                     break;
 
                 case "wheel-hw-sub":
@@ -1328,7 +1328,7 @@ namespace MozaPlugin
                     if (_data.WheelMcuUid.Length > 0)
                         MozaLog.Info(
                             $"[Moza] Wheel MCU UID ({_data.WheelMcuUid.Length}B): " +
-                            BitConverter.ToString(_data.WheelMcuUid).Replace("-", ""));
+                            MozaLog.RedactBytesHex(_data.WheelMcuUid));
                     break;
 
                 case "wheel-device-type":
@@ -1374,7 +1374,7 @@ namespace MozaPlugin
                     break;
                 case "display-serial":
                     if (!string.IsNullOrEmpty(_data.DisplaySerialNumber))
-                        MozaLog.Info($"[Moza] Display serial: {_data.DisplaySerialNumber}");
+                        MozaLog.Info($"[Moza] Display serial: {MozaLog.RedactId(_data.DisplaySerialNumber)}");
                     break;
                 case "display-presence":
                     MozaLog.Info(

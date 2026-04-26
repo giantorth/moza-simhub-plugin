@@ -75,5 +75,35 @@ namespace MozaPlugin
                 return sb.ToString();
             }
         }
+
+        // Number of trailing characters left visible when redacting an
+        // identifier (serial number, MCU UID hex). Short enough to avoid
+        // leaking the full ID, long enough to disambiguate when comparing
+        // logs to a physical sticker.
+        private const int RedactTailChars = 4;
+
+        /// <summary>
+        /// Redact a string identifier, leaving only the last
+        /// <see cref="RedactTailChars"/> characters visible. Returns "—" for
+        /// null/empty, all-asterisks if the value is shorter than the tail.
+        /// </summary>
+        public static string RedactId(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return "—";
+            if (s.Length <= RedactTailChars) return new string('*', s.Length);
+            return new string('*', s.Length - RedactTailChars) + s.Substring(s.Length - RedactTailChars);
+        }
+
+        /// <summary>
+        /// Hex-encode a byte array and redact all but the trailing
+        /// <see cref="RedactTailChars"/> hex characters. Returns "—" for
+        /// null/empty.
+        /// </summary>
+        public static string RedactBytesHex(byte[] b)
+        {
+            if (b == null || b.Length == 0) return "—";
+            var hex = BitConverter.ToString(b).Replace("-", "");
+            return RedactId(hex);
+        }
     }
 }
