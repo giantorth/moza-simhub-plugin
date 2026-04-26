@@ -38,7 +38,7 @@ namespace MozaPlugin.Devices
             var typeId = LinkedDevice.DeviceDescriptor.DeviceTypeID ?? "";
             _expectedModelPrefix = MozaDeviceConstants.GetWheelModelPrefix(typeId);
 
-            SimHub.Logging.Current.Info(
+            MozaLog.Info(
                 $"[Moza] WheelDeviceExtension Init — DeviceTypeID={typeId}, modelPrefix={_expectedModelPrefix ?? "(null)"}");
 
             // Injection is deferred to DataUpdate() — calling it here would run before
@@ -100,20 +100,20 @@ namespace MozaPlugin.Devices
                             if (plugin != null)
                                 plugin.DeviceExtensionActive = true;
 
-                            SimHub.Logging.Current.Info("[Moza] Injected virtual LED driver — effects UI should be available");
+                            MozaLog.Info("[Moza] Injected virtual LED driver — effects UI should be available");
                         }
                         else
                         {
-                            SimHub.Logging.Current.Warn("[Moza] Could not find DeviceDriver setter on LedModuleSettings");
+                            MozaLog.Warn("[Moza] Could not find DeviceDriver setter on LedModuleSettings");
                         }
                         return;
                     }
                 }
-                SimHub.Logging.Current.Info("[Moza] No LedModuleDevice found on device instance");
+                MozaLog.Info("[Moza] No LedModuleDevice found on device instance");
             }
             catch (Exception ex)
             {
-                SimHub.Logging.Current.Error($"[Moza] Error injecting LED driver: {ex.Message}");
+                MozaLog.Error($"[Moza] Error injecting LED driver: {ex.Message}");
             }
         }
 
@@ -129,7 +129,7 @@ namespace MozaPlugin.Devices
                 plugin.DeviceExtensionActive = false;
                 if (_expectedModelPrefix != null)
                     plugin.UnregisterActiveModelPrefix(_expectedModelPrefix);
-                SimHub.Logging.Current.Info("[Moza] Device extension ended");
+                MozaLog.Info("[Moza] Device extension ended");
             }
         }
 
@@ -153,7 +153,7 @@ namespace MozaPlugin.Devices
                     {
                         lmd.ledModuleSettings.ButtonsCount = modelInfo.ButtonLedCount;
                         _buttonsCountSet = true;
-                        SimHub.Logging.Current.Info($"[Moza] Set ButtonsCount={modelInfo.ButtonLedCount} for {MozaPlugin.Instance!.Data.WheelModelName}");
+                        MozaLog.Info($"[Moza] Set ButtonsCount={modelInfo.ButtonLedCount} for {MozaPlugin.Instance!.Data.WheelModelName}");
                         break;
                     }
                 }

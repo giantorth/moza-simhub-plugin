@@ -261,12 +261,12 @@ namespace MozaPlugin.Telemetry
         {
             if (Volatile.Read(ref _disposed) != 0)
             {
-                SimHub.Logging.Current.Warn("[Moza] Start() ignored — sender disposed");
+                MozaLog.Warn("[Moza] Start() ignored — sender disposed");
                 return;
             }
             if (Interlocked.CompareExchange(ref _startInProgress, 1, 0) != 0)
             {
-                SimHub.Logging.Current.Warn("[Moza] Start() ignored — already starting");
+                MozaLog.Warn("[Moza] Start() ignored — already starting");
                 return;
             }
             try
@@ -475,7 +475,7 @@ namespace MozaPlugin.Telemetry
             const int OpenAckTimeoutMs = 500;
 
             // Reclaim any sessions left open by a prior SimHub crash/kill.
-            SimHub.Logging.Current.Info("[Moza] Closing any stale sessions (0x01..0x10)...");
+            MozaLog.Info("[Moza] Closing any stale sessions (0x01..0x10)...");
             for (byte port = 1; port <= 0x10; port++)
             {
                 if (!_connection.IsConnected) return;
@@ -493,13 +493,13 @@ namespace MozaPlugin.Telemetry
             if (telemetryPort != 0)
             {
                 FlagByte = telemetryPort;
-                SimHub.Logging.Current.Info(
+                MozaLog.Info(
                     $"[Moza] Sessions opened: mgmt=0x{mgmtPort:X2} telem=0x{telemetryPort:X2}");
             }
             else if (mgmtPort != 0)
             {
                 FlagByte = mgmtPort;
-                SimHub.Logging.Current.Warn(
+                MozaLog.Warn(
                     $"[Moza] Telem session 0x{TelemSession:X2} did not ack, using mgmt 0x{mgmtPort:X2} for telemetry");
             }
             else
@@ -507,7 +507,7 @@ namespace MozaPlugin.Telemetry
                 // No acks — proceed anyway using PitHouse defaults. Real wheels
                 // may silently accept data on 0x02 even without an explicit ack.
                 FlagByte = TelemSession;
-                SimHub.Logging.Current.Warn(
+                MozaLog.Warn(
                     "[Moza] No session acks received, proceeding with defaults mgmt=0x01 telem=0x02");
                 _mgmtPort = MgmtSession;
             }
@@ -536,7 +536,7 @@ namespace MozaPlugin.Telemetry
                     return session;
 
                 // Stale ack (different session) — discard and keep waiting.
-                SimHub.Logging.Current.Debug(
+                MozaLog.Debug(
                     $"[Moza] OpenSession 0x{session:X2}: ignoring stale ack for 0x{_lastAckedSession:X2}");
                 _ackReceived.Reset();
                 _lastAckedSession = 0;
@@ -652,7 +652,7 @@ namespace MozaPlugin.Telemetry
                 foreach (var t in profile.Tiers) originalCh += t.Channels.Count;
                 foreach (var t in filtered.Tiers) filteredCh += t.Channels.Count;
                 if (filteredCh < originalCh)
-                    SimHub.Logging.Current.Info(
+                    MozaLog.Info(
                         $"[Moza] Tier def filtered to wheel catalog: " +
                         $"{filteredCh}/{originalCh} channels retained");
                 profile = filtered;
@@ -670,7 +670,7 @@ namespace MozaPlugin.Telemetry
 
                 int channelCount = 0;
                 foreach (var t in profile.Tiers) channelCount += t.Channels.Count;
-                SimHub.Logging.Current.Info(
+                MozaLog.Info(
                     $"[Moza] Sending v0 URL subscription: " +
                     $"{message.Length} bytes in {frames.Count} chunks " +
                     $"on session 0x{FlagByte:X2} ({channelCount} channels)");
@@ -694,7 +694,7 @@ namespace MozaPlugin.Telemetry
                 byte[] message = TierDefinitionBuilder.BuildTierDefinitionMessage(profile, 0x00);
                 var frames = TierDefinitionBuilder.ChunkMessage(message, FlagByte, ref seq);
 
-                SimHub.Logging.Current.Info(
+                MozaLog.Info(
                     $"[Moza] Sending v2 tier definition: flagBase=0x00, " +
                     $"preamble ({preambleFrames.Count} chunks)" +
                     $" + {message.Length} bytes in {frames.Count} chunks " +
@@ -734,14 +734,14 @@ namespace MozaPlugin.Telemetry
                 var frames = TierDefinitionBuilder.ChunkMessage(payload, 0x03, ref seq);
                 foreach (var frame in frames)
                     _connection.Send(frame);
-                SimHub.Logging.Current.Info(
+                MozaLog.Info(
                     $"[Moza] Sent empty tile-server state on session 0x03: " +
                     $"{json.Length}B JSON → {payload.Length}B (12B env + zlib) → " +
                     $"{frames.Count} chunk(s)");
             }
             catch (Exception ex)
             {
-                SimHub.Logging.Current.Debug($"[Moza] SendTileServerState failed: {ex.Message}");
+                MozaLog.Debug($"[Moza] SendTileServerState failed: {ex.Message}");
             }
         }
 
@@ -812,20 +812,20 @@ namespace MozaPlugin.Telemetry
             {
                 if (HubPresent)
                 {
-                    SimHub.Logging.Current.Warn(
+                    MozaLog.Warn(
                         $"[Moza] No file-transfer session device-opened within " +
                         $"{FtBurstWaitMs}ms (Universal Hub present) — skipping dashboard upload " +
                         "to avoid racing wheel state machine. Tier def + telemetry will still send.");
                     return;
                 }
                 _uploadSession = 0x04;
-                SimHub.Logging.Current.Info(
+                MozaLog.Info(
                     $"[Moza] No upload session device-opened within " +
                     $"{FtBurstWaitMs}ms — host-opening 0x04 for upload");
                 SendSessionOpen(_uploadSession, _uploadSession);
                 if (!_uploadSessionOpened.Wait(500))
                 {
-                    SimHub.Logging.Current.Info(
+                    MozaLog.Info(
                         $"[Moza] Upload session 0x{_uploadSession:X2} host-open had no confirmation; proceeding with upload");
                     _uploadSessionOpened.Set();
                 }
@@ -842,7 +842,7 @@ namespace MozaPlugin.Telemetry
             // re-upload. Saves ~1 s of handshake per reconnect.
             if (CanSkipUpload(content))
             {
-                SimHub.Logging.Current.Info(
+                MozaLog.Info(
                     $"[Moza] Dashboard \"{MzdashName}\" already loaded on wheel (hash match) — skipping upload");
                 return;
             }
@@ -852,7 +852,7 @@ namespace MozaPlugin.Telemetry
             long tsMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             var upload = DashboardUploader.BuildUpload(content, dashboardName, token, tsMs, UploadWireFormat);
 
-            SimHub.Logging.Current.Info(
+            MozaLog.Info(
                 $"[Moza] Uploading dashboard \"{dashboardName}\" via session 0x{uploadSess:X2} " +
                 $"(wire={UploadWireFormat}): " +
                 $"raw={upload.UncompressedSize}B md5={upload.Md5Hex} token=0x{token:X8}");
@@ -875,7 +875,7 @@ namespace MozaPlugin.Telemetry
 
             // Wait for device's path echo (capture shows ~6 chunks, arrives within ~200ms).
             if (!_uploadSubMsg1Response.Wait(2000))
-                SimHub.Logging.Current.Warn($"[Moza] Session 0x{uploadSess:X2} sub-msg 1 response timeout");
+                MozaLog.Warn($"[Moza] Session 0x{uploadSess:X2} sub-msg 1 response timeout");
 
             // Sub-msg 2: file content push. May be split across multiple sub-msgs
             // for new-firmware uploads when the body exceeds 0xFFFF bytes (TODO:
@@ -896,15 +896,15 @@ namespace MozaPlugin.Telemetry
             _uploadOutboundSeq = seq2;
 
             if (!_uploadSubMsg2Response.Wait(3000))
-                SimHub.Logging.Current.Warn($"[Moza] Session 0x{uploadSess:X2} sub-msg 2 response timeout");
+                MozaLog.Warn($"[Moza] Session 0x{uploadSess:X2} sub-msg 2 response timeout");
 
             // End marker on the upload session.
             SendSessionEnd(uploadSess, (ushort)_uploadOutboundSeq);
 
             if (_uploadEndReceived.Wait(1000))
-                SimHub.Logging.Current.Info($"[Moza] Dashboard upload complete (session 0x{uploadSess:X2} closed by device)");
+                MozaLog.Info($"[Moza] Dashboard upload complete (session 0x{uploadSess:X2} closed by device)");
             else
-                SimHub.Logging.Current.Info("[Moza] Dashboard upload finished; device did not echo end marker within 1s");
+                MozaLog.Info("[Moza] Dashboard upload finished; device did not echo end marker within 1s");
 
             // Wheel's 2025-11 firmware fires a post-upload state refresh on
             // the upload session (updated directory listing) and session 0x09
@@ -916,7 +916,7 @@ namespace MozaPlugin.Telemetry
             Thread.Sleep(500);
             int refreshChunks = _uploadInboundMsgCount - preRefreshCount;
             if (refreshChunks > 0)
-                SimHub.Logging.Current.Info(
+                MozaLog.Info(
                     $"[Moza] Session 0x{uploadSess:X2} post-upload state refresh: {refreshChunks} chunks");
         }
 
@@ -978,7 +978,7 @@ namespace MozaPlugin.Telemetry
             }
             _session09OutboundSeq = seq;
             _session09ReplySent = true;
-            SimHub.Logging.Current.Info(
+            MozaLog.Info(
                 $"[Moza] Sent configJson() reply on session 0x09: " +
                 $"{CanonicalDashboardList.Count} dashboards, {frames.Count} chunks");
         }
@@ -1106,7 +1106,7 @@ namespace MozaPlugin.Telemetry
             }
             catch (Exception ex)
             {
-                SimHub.Logging.Current.Debug($"[Moza] RPC reply parse failed: {ex.Message}");
+                MozaLog.Debug($"[Moza] RPC reply parse failed: {ex.Message}");
             }
         }
 
@@ -1300,13 +1300,13 @@ namespace MozaPlugin.Telemetry
                             try
                             {
                                 string json = System.Text.Encoding.UTF8.GetString(dirBlob);
-                                SimHub.Logging.Current.Info(
+                                MozaLog.Info(
                                     $"[Moza] Session 0x{session:X2} dir listing: {dirBlob.Length} bytes, " +
                                     $"children≈{CountOccurrences(json, "\"name\"")}");
                             }
                             catch (Exception ex)
                             {
-                                SimHub.Logging.Current.Debug(
+                                MozaLog.Debug(
                                     $"[Moza] Session 0x{session:X2} dir listing decode: {ex.Message}");
                             }
                         }
@@ -1322,7 +1322,7 @@ namespace MozaPlugin.Telemetry
                         _session09InboundSeq = seq;
                         try
                         {
-                            SimHub.Logging.Current.Info(
+                            MozaLog.Info(
                                 $"[Moza] session 0x09 inbound chunk: seq={seq} payload={chunkPayload.Length}B " +
                                 $"first8={BitConverter.ToString(chunkPayload, 0, Math.Min(8, chunkPayload.Length))}");
                         }
@@ -1365,7 +1365,7 @@ namespace MozaPlugin.Telemetry
                             {
                                 try
                                 {
-                                    SimHub.Logging.Current.Info(
+                                    MozaLog.Info(
                                         $"[Moza] Tile-server state received: root='{tile.Root}' " +
                                         $"version={tile.Version} games={tile.Games.Count} " +
                                         $"any_populated={tile.AnyPopulated}");
@@ -1416,7 +1416,7 @@ namespace MozaPlugin.Telemetry
                 {
                     _displayModelName = System.Text.Encoding.ASCII.GetString(data, 4, nameLen);
                     _displayDetected = true;
-                    SimHub.Logging.Current.Info($"[Moza] Display sub-device detected: \"{_displayModelName}\"");
+                    MozaLog.Info($"[Moza] Display sub-device detected: \"{_displayModelName}\"");
                 }
             }
         }
@@ -1477,7 +1477,7 @@ namespace MozaPlugin.Telemetry
             if (channels.Count > 0)
             {
                 _wheelChannelCatalog = channels;
-                SimHub.Logging.Current.Info(
+                MozaLog.Info(
                     $"[Moza] Wheel channel catalog ({channels.Count}): {string.Join(", ", channels)}");
             }
         }
@@ -1609,7 +1609,7 @@ namespace MozaPlugin.Telemetry
             }
             catch (Exception ex)
             {
-                SimHub.Logging.Current.Warn($"[Moza] Telemetry send error: {ex.Message}");
+                MozaLog.Warn($"[Moza] Telemetry send error: {ex.Message}");
             }
         }
 

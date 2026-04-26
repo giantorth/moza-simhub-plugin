@@ -133,7 +133,7 @@ namespace MozaPlugin
             // paired with a stale id.)
             _wheelDeviceId = deviceId;
             _wheelDetected = true;
-            SimHub.Logging.Current.Info($"[Moza] Wheel locked on device ID {_wheelDeviceId}");
+            MozaLog.Info($"[Moza] Wheel locked on device ID {_wheelDeviceId}");
         }
 
         public bool ReadSettingForDevice(string commandName, byte deviceId)

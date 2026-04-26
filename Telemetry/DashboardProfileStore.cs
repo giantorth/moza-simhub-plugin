@@ -117,7 +117,7 @@ namespace MozaPlugin.Telemetry
                 }
                 catch (Exception ex)
                 {
-                    SimHub.Logging.Current.Warn($"[Moza] Failed to load builtin profile {resourceName}: {ex.Message}");
+                    MozaLog.Warn($"[Moza] Failed to load builtin profile {resourceName}: {ex.Message}");
                 }
             }
         }
@@ -135,7 +135,7 @@ namespace MozaPlugin.Telemetry
             }
             catch (Exception ex)
             {
-                SimHub.Logging.Current.Warn($"[Moza] Failed to parse .mzdash {path}: {ex.Message}");
+                MozaLog.Warn($"[Moza] Failed to parse .mzdash {path}: {ex.Message}");
                 return null;
             }
         }
@@ -164,7 +164,7 @@ namespace MozaPlugin.Telemetry
             }
             catch (Exception ex)
             {
-                SimHub.Logging.Current.Info($"[Moza] mzdash page-count parse failed for '{name}': {ex.Message}");
+                MozaLog.Info($"[Moza] mzdash page-count parse failed for '{name}': {ex.Message}");
             }
 
             return profile;
@@ -315,7 +315,7 @@ namespace MozaPlugin.Telemetry
                 using var stream = assembly.GetManifestResourceStream("MozaPlugin.Data.Telemetry.json");
                 if (stream == null)
                 {
-                    SimHub.Logging.Current.Warn("[Moza] Telemetry.json embedded resource not found");
+                    MozaLog.Warn("[Moza] Telemetry.json embedded resource not found");
                     return result;
                 }
 
@@ -340,7 +340,7 @@ namespace MozaPlugin.Telemetry
             }
             catch (Exception ex)
             {
-                SimHub.Logging.Current.Warn($"[Moza] Failed to load Telemetry.json: {ex.Message}");
+                MozaLog.Warn($"[Moza] Failed to load Telemetry.json: {ex.Message}");
             }
 
             return result;

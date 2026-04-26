@@ -75,7 +75,7 @@ namespace MozaPlugin.Telemetry
             {
                 try
                 {
-                    SimHub.Logging.Current.Warn($"[Moza] Property '{path}' {detail}; channel will send 0 until mapping is fixed.");
+                    MozaLog.Warn($"[Moza] Property '{path}' {detail}; channel will send 0 until mapping is fixed.");
                 }
                 catch { /* logging may not be initialised in tests */ }
             }

@@ -128,6 +128,21 @@ All settings are stored per-game via SimHub's profile system and switch automati
 
 The plugin panel (Settings > Plugins > MOZA Control) exposes read/write control of wheelbase, wheel, handbrake, and pedal settings — rotation angle, FFB strength, damping, wheelbase/game effects, FFB equalizer, output curves, paddle modes, handbrake modes, pedal calibration — mirroring what Pithouse offers. Tabs auto-show/hide based on what's connected. The Diagnostics tab dumps live wheel identity, dashboard state, and session info for bug reports.
 
+#### Serial traffic capture & diagnostics export
+
+The Diagnostics tab includes a **Serial traffic capture** section for bug reports:
+
+- **Start capture** records every TX/RX serial frame (wheelbase + AB9 pipes) with millisecond timestamps in memory. Nothing is written to disk while capturing, and the buffer is wiped each time SimHub restarts.
+- **Stop capture** reveals the captured frames inline (hex dump, one frame per line) and unlocks the export buttons. Per-direction labels (`T`/`R`) and pipe labels (`wheelbase` / `ab9`) make it easy to correlate with protocol docs.
+- **Export bundle (ZIP)** writes a timestamped archive containing:
+  - `manifest.txt` — bundle header (plugin version, OS, capture summary)
+  - `serial-capture.txt` — TX/RX frame log
+  - `diagnostics.txt` — snapshot of the Diagnostics tab text (identity, dashboard state, session info)
+  - `moza-log.txt` — every `[Moza]` log line emitted by the plugin since launch (pulled from the in-process `MozaLog` ring buffer, so flush cadence and SimHub log-file location don't matter)
+- **Copy capture to clipboard** copies the frame log without exporting a file.
+
+Use this when reporting protocol bugs or unexpected device behavior — attach the ZIP to the issue and the maintainers have everything needed to reproduce.
+
 ### SimHub Properties
 
 The plugin exposes these properties for use in SimHub dashboards and overlays:
@@ -153,6 +168,9 @@ Protocol reference: [docs/moza-protocol.md](docs/moza-protocol.md). USB capture 
 ```
 MozaPlugin.cs                      Main plugin class (IPlugin, IDataPlugin, IWPFSettingsV2)
 MozaDeviceManager.cs               Read/write API for device settings
+Diagnostics/
+  MozaLog.cs                       Thin wrapper over SimHub.Logging.Current; mirrors every [Moza] line into an in-process ring buffer for the Diagnostics tab export
+  SerialTrafficCapture.cs          Toggleable in-memory ring buffer of timestamped TX/RX serial frames (wheelbase + AB9)
 Protocol/
   MozaProtocol.cs                  Protocol constants (start byte, device IDs, checksums)
   MozaCommand.cs                   Message builder (read/write/int/array)
