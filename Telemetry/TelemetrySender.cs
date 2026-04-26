@@ -793,20 +793,14 @@ namespace MozaPlugin.Telemetry
             if (content == null || content.Length == 0) return;
             if (!_connection.IsConnected) return;
 
-            // Resolve the upload session before any logging / state reset, so
-            // log lines reference the right port even if it changes mid-upload
-            // (it shouldn't — once chosen it stays for this transfer).
-            byte uploadSess = ChooseUploadSession();
-            _uploadSession = uploadSess;
-
-            // Wait for the device to open the chosen session. Direct-wheelbase
-            // wheel opens it ~40–400 ms after we open 0x01/0x02; behind a
-            // Universal Hub the burst can take ~2.1 s (usb-capture/ksp/
-            // mozahubstartup.pcapng: 0x05/0x07/0x09/0x0a opens at ~28.0–28.1 s,
-            // host opens 0x01/0x02 at 25.921 s).
+            // Wait for the wheel to device-init at least one file-transfer
+            // session (0x04..0x0a). Direct-wheelbase opens within ~40–400 ms
+            // after host opens 0x01/0x02; Universal Hub burst can take ~2.1 s.
+            // KS Pro on Universal Hub opens 0x05/0x07/0x09/0x0a (NOT 0x04),
+            // so we cannot pre-pick a target — we let the wheel's burst
+            // populate _ftCandidateSessions, then ChooseUploadSession() picks.
             //
-            // If after 3 s the wheel has not device-init any session in
-            // 0x04..0x0a, behaviour diverges by transport:
+            // If after 3 s nothing has opened, behaviour diverges by transport:
             //   - Hub-attached: skip upload entirely. Host-opening 0x04 + push
             //     racing the wheel's burst confuses the state machine and
             //     causes the wheel to abort 0x09/0x0a opens, killing dash.
@@ -819,22 +813,29 @@ namespace MozaPlugin.Telemetry
                 if (HubPresent)
                 {
                     SimHub.Logging.Current.Warn(
-                        $"[Moza] Upload session 0x{uploadSess:X2} not device-opened within " +
+                        $"[Moza] No file-transfer session device-opened within " +
                         $"{FtBurstWaitMs}ms (Universal Hub present) — skipping dashboard upload " +
                         "to avoid racing wheel state machine. Tier def + telemetry will still send.");
                     return;
                 }
+                _uploadSession = 0x04;
                 SimHub.Logging.Current.Info(
-                    $"[Moza] Upload session 0x{uploadSess:X2} not opened by device within " +
-                    $"{FtBurstWaitMs}ms — host-opening for upload");
-                SendSessionOpen(uploadSess, uploadSess);
+                    $"[Moza] No upload session device-opened within " +
+                    $"{FtBurstWaitMs}ms — host-opening 0x04 for upload");
+                SendSessionOpen(_uploadSession, _uploadSession);
                 if (!_uploadSessionOpened.Wait(500))
                 {
                     SimHub.Logging.Current.Info(
-                        $"[Moza] Upload session 0x{uploadSess:X2} host-open had no confirmation; proceeding with upload");
+                        $"[Moza] Upload session 0x{_uploadSession:X2} host-open had no confirmation; proceeding with upload");
                     _uploadSessionOpened.Set();
                 }
             }
+
+            // Now that the wheel has announced its FT-session burst (or we
+            // host-opened 0x04 as fallback), pick the upload session. Picker
+            // prefers 0x04 if device-initiated; otherwise first of 0x05..0x0a.
+            byte uploadSess = ChooseUploadSession();
+            _uploadSession = uploadSess;
 
             // Skip-if-unchanged: if the wheel already reported this dashboard
             // as loaded (via session 0x09 state) and the MD5 matches, don't
@@ -1228,14 +1229,15 @@ namespace MozaPlugin.Telemetry
                     info.Port = (byte)(openSeq & 0xFF);
                     SendSessionAck(session, (ushort)openSeq);
                     // Track every device-init session in the file-transfer-
-                    // eligible range so ChooseUploadSession() can pick. Once
-                    // a candidate matches our chosen upload session, signal
-                    // the upload-pump waiter.
+                    // eligible range so ChooseUploadSession() can pick. Signal
+                    // the upload-pump waiter on any FT-eligible open — the
+                    // upload pump re-runs ChooseUploadSession() after the wait
+                    // so bursts that don't include 0x04 (KS Pro on Universal
+                    // Hub opens 0x05/0x07/0x09/0x0a) still resolve correctly.
                     if (session >= 0x04 && session <= 0x0a)
                     {
                         lock (_ftCandidateSessions) _ftCandidateSessions.Add(session);
-                        if (session == _uploadSession || (UploadSessionOverride == 0 && session == 0x04))
-                            _uploadSessionOpened.Set();
+                        _uploadSessionOpened.Set();
                     }
                     return;
                 }

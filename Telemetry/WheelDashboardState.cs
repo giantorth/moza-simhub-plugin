@@ -104,6 +104,18 @@ namespace MozaPlugin.Telemetry
                 string text = Encoding.UTF8.GetString(jsonBytes);
                 var root = JObject.Parse(text);
 
+                // Reject RPC replies. Session 0x09 carries both device→host
+                // state pushes AND device→host RPC replies (e.g. the wheel's
+                // ack of our configJson() reply: `{"configJson()":"","id":11}`).
+                // RPC replies parse as a "valid" empty WheelDashboardState
+                // and overwrite the real state. Heuristic: any top-level key
+                // matching `<name>()` is an RPC reply, not a state blob.
+                foreach (var prop in root.Properties())
+                {
+                    if (prop.Name.EndsWith("()", StringComparison.Ordinal))
+                        return null;
+                }
+
                 // Collect missing expected fields for drift diagnostics. 2026-04
                 // firmware uses different keys (enabledManager vs enableManager
                 // etc.); don't report those as missing if a legacy name exists.
