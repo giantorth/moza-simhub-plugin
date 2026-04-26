@@ -90,7 +90,7 @@ namespace MozaPlugin.Telemetry
         /// when targeting 2026-04+ firmware.
         /// </summary>
         public FileTransferWireFormat UploadWireFormat { get; set; }
-            = FileTransferWireFormat.Legacy2025_11;
+            = FileTransferWireFormat.New2026_04;
 
         // Session 0x09 configJson RPC state. Device proactively pushes its
         // dashboard state blob; we reply with the canonical dashboard library
@@ -888,7 +888,18 @@ namespace MozaPlugin.Telemetry
             string dashboardName = !string.IsNullOrEmpty(MzdashName) ? MzdashName : "dashboard";
             uint token = DashboardUploader.PickToken();
             long tsMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            var upload = DashboardUploader.BuildUpload(content, dashboardName, token, tsMs, UploadWireFormat);
+
+            // Probe-based wire-format selection. Older wheels (VGS, GS V2P,
+            // CS V2.1, etc.) accept Legacy2025_11; newer wheels (W17 CS Pro /
+            // W18 KS Pro / W13 FSR V2 on 2026-04+ firmware) silently drop
+            // Legacy and only ack New2026_04. Identity probes (`wheel-sw-version`
+            // = `RS21-W18-MC SW`) carry no build/version field, so we can't
+            // pick from a string match. Try the user-configured format first
+            // (default New2026_04 — most wheels in the wild now), and on
+            // sub-msg 1 ack timeout, fall back to the other format.
+            bool fellBack = false;
+            DashboardUploader.UploadPayload upload =
+                DashboardUploader.BuildUpload(content, dashboardName, token, tsMs, UploadWireFormat);
 
             MozaLog.Info(
                 $"[Moza] Uploading dashboard \"{dashboardName}\" via session 0x{uploadSess:X2} " +
@@ -913,7 +924,48 @@ namespace MozaPlugin.Telemetry
 
             // Wait for device's path echo (capture shows ~6 chunks, arrives within ~200ms).
             if (!_uploadSubMsg1Response.Wait(2000))
-                MozaLog.Warn($"[Moza] Session 0x{uploadSess:X2} sub-msg 1 response timeout");
+            {
+                // Probe fallback: flip wire format and retry sub-msg 1 once.
+                // If the second format also times out, the wheel/session is
+                // wedged for some other reason — log and continue (sub-msg 2
+                // will likely time out too, but the rest of the preamble
+                // tier-def + display config still proceeds).
+                var fallback = UploadWireFormat == FileTransferWireFormat.New2026_04
+                    ? FileTransferWireFormat.Legacy2025_11
+                    : FileTransferWireFormat.New2026_04;
+                MozaLog.Warn(
+                    $"[Moza] Session 0x{uploadSess:X2} sub-msg 1 ack timeout with " +
+                    $"wire={UploadWireFormat} — retrying with wire={fallback}");
+
+                UploadWireFormat = fallback;
+                fellBack = true;
+                upload = DashboardUploader.BuildUpload(content, dashboardName, token, tsMs, UploadWireFormat);
+
+                _uploadSubMsg1Response.Reset();
+                _uploadSubMsg2Response.Reset();
+                _uploadInboundMsgCount = 0;
+
+                seq1 = _uploadOutboundSeq + 1;
+                subMsg1Frames = TierDefinitionBuilder.ChunkMessage(
+                    upload.SubMsg1PathRegistration, uploadSess, ref seq1);
+                foreach (var frame in subMsg1Frames)
+                {
+                    if (!_enabled || !_connection.IsConnected) return;
+                    _connection.Send(frame);
+                }
+                _uploadOutboundSeq = seq1;
+
+                if (!_uploadSubMsg1Response.Wait(2000))
+                    MozaLog.Warn(
+                        $"[Moza] Session 0x{uploadSess:X2} sub-msg 1 ack timeout on fallback " +
+                        $"wire={UploadWireFormat} — wheel may not be in upload-ready state");
+                else
+                    MozaLog.Info(
+                        $"[Moza] Wire format auto-detected: wheel accepts {UploadWireFormat} " +
+                        "(cached for this session)");
+            }
+            // Suppress unused warning when fallback didn't fire.
+            _ = fellBack;
 
             // Sub-msg 2: file content push. May be split across multiple sub-msgs
             // for new-firmware uploads when the body exceeds 0xFFFF bytes (TODO:
