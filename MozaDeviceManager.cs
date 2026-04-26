@@ -74,13 +74,15 @@ namespace MozaPlugin
         }
 
         /// <summary>
-        /// Probe the Display sub-device inside the wheel via group 0x43 wrapper.
-        /// Mirrors PitHouse's display identity cascade (model/HW/FW/serial/MCU UID).
-        /// Responses arrive as 0xC3 / 0x71 frames and are routed by
-        /// <see cref="Protocol.MozaResponseParser"/> → <see cref="Telemetry.MozaData"/>
-        /// (display-* command names). Fires during wheel detection — independent of
-        /// telemetry start — so <see cref="MozaPlugin.IsDisplayDetected"/> can flip
-        /// before the dashboard-telemetry UI section is gated open.
+        /// Probe the wheel's Display sub-device via the group 0x43 wrapper (same
+        /// frames PitHouse sends, mirrored from <see cref="Telemetry.TelemetrySender.SendDisplayProbe"/>).
+        /// Responses arrive as 0xC3 / 0x71 frames and are decoded by
+        /// <see cref="Protocol.MozaResponseParser.ParseDisplayIdentity"/> →
+        /// <see cref="Telemetry.MozaData"/> (display-* command names). Runs at wheel
+        /// detect so <see cref="MozaPlugin.IsDisplayDetected"/> flips independent
+        /// of telemetry start — required because the UI gates the dashboard-telemetry
+        /// section on detection, and the user can't pick a profile until that
+        /// section is visible.
         /// </summary>
         public void SendDisplayProbe()
         {

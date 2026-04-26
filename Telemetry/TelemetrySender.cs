@@ -308,11 +308,24 @@ namespace MozaPlugin.Telemetry
             // Bail out if Stop() was called while we were probing
             if (!_enabled) return;
 
-            // Upload the dashboard file to the wheel on session 0x01 (mgmt port).
-            // PitHouse does this on every connection — the wheel may require a fresh
-            // upload before accepting tier definitions or telemetry frames.
+            // Dashboard upload runs as a background task, NOT inline. Reasons:
+            //   1. Different wheel firmwares device-init the upload session
+            //      (0x04..0x0a) at very different times — observed 40 ms (older
+            //      direct-base firmware) up to ~11 s (KS Pro on RS21-W18-MC SW,
+            //      direct base; diagnostics bundle 20260426-115430o). A
+            //      foreground wait long enough to cover the slow case stalls
+            //      tier def + telemetry timer for the same duration.
+            //   2. Host-opening the upload session as a fallback races the
+            //      wheel's eventual late device-init burst — wheel responds by
+            //      closing session 0x02 mid-tier-def, killing telemetry.
+            //
+            // Decoupled flow: tier def + display config + telemetry timer fire
+            // immediately. Upload waits in the background for the wheel to
+            // device-init an FT session, then sends. If the wheel never opens
+            // one (very old firmware or wheels without dash) the background
+            // task times out at 60 s and exits silently.
             if (UploadDashboard && MzdashContent != null && _mgmtPort != 0)
-                SendDashboardUpload();
+                ThreadPool.QueueUserWorkItem(_ => RunBackgroundDashboardUpload());
 
             if (!_enabled) return;
 
@@ -787,53 +800,56 @@ namespace MozaPlugin.Telemetry
         /// what the host requests via 7c:23 46. Plugin selects via
         /// <see cref="ChooseUploadSession"/>.
         /// </summary>
+        /// <summary>
+        /// Background upload entry point. Runs on a worker thread so a slow-to-
+        /// open file-transfer session (KS Pro on RS21-W18-MC SW: ~11 s) doesn't
+        /// stall tier def + telemetry start. Waits up to 60 s for the wheel to
+        /// device-init any session in 0x04..0x0a, then runs the legacy upload
+        /// path. If the wait expires, logs and bails — the wheel will render a
+        /// previously-cached dashboard, or nothing if it has none.
+        ///
+        /// Stop() flips _enabled to false and the next checkpoint exits cleanly.
+        /// </summary>
+        private void RunBackgroundDashboardUpload()
+        {
+            try
+            {
+                if (!_enabled || !_connection.IsConnected) return;
+
+                // 60 s ceiling: covers the slowest firmware observed (~11 s) with
+                // headroom. If the wheel hasn't opened an FT session by then it
+                // either doesn't support uploads on this firmware or is wedged —
+                // either way, retrying won't help and host-opening 0x04 races the
+                // wheel's eventual late burst (closes session 0x02, kills telemetry).
+                const int FtBurstWaitMs = 60000;
+                if (!_uploadSessionOpened.Wait(FtBurstWaitMs))
+                {
+                    MozaLog.Warn(
+                        $"[Moza] No file-transfer session device-opened within " +
+                        $"{FtBurstWaitMs}ms — skipping dashboard upload. " +
+                        "Wheel may render previously-cached dashboard.");
+                    return;
+                }
+
+                if (!_enabled || !_connection.IsConnected) return;
+                SendDashboardUpload();
+            }
+            catch (Exception ex)
+            {
+                MozaLog.Warn($"[Moza] Background dashboard upload failed: {ex.Message}");
+            }
+        }
+
         private void SendDashboardUpload()
         {
             var content = MzdashContent;
             if (content == null || content.Length == 0) return;
             if (!_connection.IsConnected) return;
 
-            // Wait for the wheel to device-init at least one file-transfer
-            // session (0x04..0x0a). Direct-wheelbase opens within ~40–400 ms
-            // after host opens 0x01/0x02; Universal Hub burst can take ~2.1 s.
-            // KS Pro on Universal Hub opens 0x05/0x07/0x09/0x0a (NOT 0x04),
-            // so we cannot pre-pick a target — we let the wheel's burst
-            // populate _ftCandidateSessions, then ChooseUploadSession() picks.
-            //
-            // If after 3 s nothing has opened, behaviour diverges by transport:
-            //   - Hub-attached: skip upload entirely. Host-opening 0x04 + push
-            //     racing the wheel's burst confuses the state machine and
-            //     causes the wheel to abort 0x09/0x0a opens, killing dash.
-            //   - Direct-wheelbase: fall back to host-initiated 0x04 open
-            //     (legacy behaviour, kept so dashboard re-uploads still work
-            //     on mid-connection restarts where the wheel doesn't re-init).
-            const int FtBurstWaitMs = 3000;
-            if (!_uploadSessionOpened.Wait(FtBurstWaitMs))
-            {
-                if (HubPresent)
-                {
-                    MozaLog.Warn(
-                        $"[Moza] No file-transfer session device-opened within " +
-                        $"{FtBurstWaitMs}ms (Universal Hub present) — skipping dashboard upload " +
-                        "to avoid racing wheel state machine. Tier def + telemetry will still send.");
-                    return;
-                }
-                _uploadSession = 0x04;
-                MozaLog.Info(
-                    $"[Moza] No upload session device-opened within " +
-                    $"{FtBurstWaitMs}ms — host-opening 0x04 for upload");
-                SendSessionOpen(_uploadSession, _uploadSession);
-                if (!_uploadSessionOpened.Wait(500))
-                {
-                    MozaLog.Info(
-                        $"[Moza] Upload session 0x{_uploadSession:X2} host-open had no confirmation; proceeding with upload");
-                    _uploadSessionOpened.Set();
-                }
-            }
-
-            // Now that the wheel has announced its FT-session burst (or we
-            // host-opened 0x04 as fallback), pick the upload session. Picker
-            // prefers 0x04 if device-initiated; otherwise first of 0x05..0x0a.
+            // Pick the upload session from the wheel's device-init burst.
+            // Picker prefers 0x04 if device-initiated; otherwise first of
+            // 0x05..0x0a. Caller (RunBackgroundDashboardUpload) already
+            // waited for at least one to open.
             byte uploadSess = ChooseUploadSession();
             _uploadSession = uploadSess;
 
