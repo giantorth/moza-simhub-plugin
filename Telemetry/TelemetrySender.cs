@@ -1040,13 +1040,16 @@ namespace MozaPlugin.Telemetry
         }
 
         /// <summary>
-        /// Fire once per session: reply to the device's session 0x09 state blob
-        /// with a <c>configJson()</c> canonical library list. Wheel uses this to
-        /// refresh its <c>configJsonList</c> field, which PitHouse reads back
-        /// from <see cref="WheelDashboardState.ConfigJsonList"/>. Sent as
-        /// chunked 7c:00 data on session 0x09 with per-chunk CRC32.
+        /// Fire once per session: reply to the wheel's configJson state blob
+        /// with a <c>configJson()</c> canonical library list. Wheel uses this
+        /// to refresh its <c>configJsonList</c> field, which PitHouse reads
+        /// back from <see cref="WheelDashboardState.ConfigJsonList"/>. Sent
+        /// on the SAME session the wheel pushed state on (older firmware =
+        /// 0x09; KS Pro / 2026-04+ firmware = 0x0a per
+        /// usb-capture/ksp/mozahubstartup.pcapng OUT seq=0x0010..0x0017,
+        /// decompressed: <c>{"configJson()":{"dashboards":[...]},"id":11}</c>).
         /// </summary>
-        private void MaybeSendConfigJsonReply(WheelDashboardState state)
+        private void MaybeSendConfigJsonReply(WheelDashboardState state, byte session)
         {
             if (_session09ReplySent) return;
             if (CanonicalDashboardList == null || CanonicalDashboardList.Count == 0)
@@ -1060,7 +1063,7 @@ namespace MozaPlugin.Telemetry
 
             byte[] reply = ConfigJsonClient.BuildConfigJsonReply(CanonicalDashboardList);
             int seq = _session09OutboundSeq + 1;
-            var frames = TierDefinitionBuilder.ChunkMessage(reply, 0x09, ref seq);
+            var frames = TierDefinitionBuilder.ChunkMessage(reply, session, ref seq);
             foreach (var frame in frames)
             {
                 if (!_enabled || !_connection.IsConnected) return;
@@ -1069,7 +1072,7 @@ namespace MozaPlugin.Telemetry
             _session09OutboundSeq = seq;
             _session09ReplySent = true;
             MozaLog.Info(
-                $"[Moza] Sent configJson() reply on session 0x09: " +
+                $"[Moza] Sent configJson() reply on session 0x{session:X2}: " +
                 $"{CanonicalDashboardList.Count} dashboards, {frames.Count} chunks");
         }
 
@@ -1402,31 +1405,38 @@ namespace MozaPlugin.Telemetry
                         }
                     }
 
-                    // Session 0x09 configJson state blob. Parsing may return the
-                    // freshly-decoded state when the reassembler completes a
-                    // full blob; that's our trigger to send the host→device
-                    // configJson() reply advertising our dashboard library.
-                    if (session == 0x09)
+                    // configJson state push from wheel. Older firmware uses
+                    // session 0x09; KS Pro / 2026-04+ firmware moved it to
+                    // session 0x0a (verified in usb-capture/ksp/mozahubstartup.pcapng:
+                    // sess=0x09 carries only empty heartbeats, sess=0x0a carries
+                    // 9.5 KB compressed configJson state with `00 [size:4 LE]
+                    // [count:4] 78 9c [zlib]` envelope; Pithouse host replies on
+                    // sess=0x0a with `{"configJson()": {...dashboards...}, "id": N}`).
+                    // Listen on both — the wheel only pushes on whichever its
+                    // firmware uses, and the parser drops malformed blobs.
+                    if (session == 0x09 || session == 0x0a)
                     {
-                        SendSessionAck(0x09, (ushort)seq);
-                        _session09InboundSeq = seq;
+                        SendSessionAck(session, (ushort)seq);
+                        if (session == 0x09) _session09InboundSeq = seq;
                         try
                         {
                             MozaLog.Info(
-                                $"[Moza] session 0x09 inbound chunk: seq={seq} payload={chunkPayload.Length}B " +
+                                $"[Moza] session 0x{session:X2} inbound chunk: seq={seq} payload={chunkPayload.Length}B " +
                                 $"first8={BitConverter.ToString(chunkPayload, 0, Math.Min(8, chunkPayload.Length))}");
                         }
                         catch { }
                         var state = _configJson.OnChunk(chunkPayload);
-                        if (state != null) MaybeSendConfigJsonReply(state);
+                        if (state != null) MaybeSendConfigJsonReply(state, session);
                     }
 
                     // Session 0x0a: RPC reply channel. Host sends `{method(): arg, id}`
                     // calls, wheel replies with `{id, result}` in the same zlib
                     // envelope. Reassemble and hand off to RPC waiters.
+                    // Ack already sent by the configJson handler above (sess 0x09/0x0a
+                    // share the same handler) — DON'T double-ack here, the wheel sees
+                    // the duplicate as a sequence-number violation and retransmits.
                     if (session == 0x0a)
                     {
-                        SendSessionAck(0x0a, (ushort)seq);
                         _session0aInbox.AddChunk(chunkPayload);
                         byte[]? replyBlob = _session0aInbox.TryDecompress();
                         if (replyBlob != null)
@@ -1442,9 +1452,17 @@ namespace MozaPlugin.Telemetry
                     //   FF 01 00 [comp_size+4 u32 LE] FF 00 [uncomp_size u24 BE]
                     // Feed through TileServerStateParser; ack to keep the
                     // session alive regardless.
-                    if (session == 0x03)
+                    // Tile-server state push from wheel. Older firmware uses
+                    // session 0x03 (host-opened); KS Pro / 2026-04+ firmware
+                    // moved the wheel-side push to session 0x0b (verified in
+                    // usb-capture/ksp/mozahubstartup.pcapng: sess=0x0b carries
+                    // 750 B with `ff 01 00 d1 00 00 00 ff 00 00 01 8e 78 9c`
+                    // 12-byte envelope decompressing to
+                    // `{"map":{...},"root":"/home/moza/resource/tile_map/",...}`).
+                    // Listen on both — only one applies per firmware.
+                    if (session == 0x03 || session == 0x0b)
                     {
-                        SendSessionAck(0x03, (ushort)seq);
+                        SendSessionAck(session, (ushort)seq);
                         // Strip CRC from tail (last 4 bytes) before handing to parser
                         if (chunkPayload.Length >= 4)
                         {
@@ -1456,8 +1474,8 @@ namespace MozaPlugin.Telemetry
                                 try
                                 {
                                     MozaLog.Info(
-                                        $"[Moza] Tile-server state received: root='{tile.Root}' " +
-                                        $"version={tile.Version} games={tile.Games.Count} " +
+                                        $"[Moza] Tile-server state received on session 0x{session:X2}: " +
+                                        $"root='{tile.Root}' version={tile.Version} games={tile.Games.Count} " +
                                         $"any_populated={tile.AnyPopulated}");
                                 }
                                 catch { /* logging optional */ }
