@@ -308,6 +308,16 @@ namespace MozaPlugin.Telemetry
             // Bail out if Stop() was called while we were probing
             if (!_enabled) return;
 
+            // Prime session 0x09 (configJson state push channel). Wheels we've
+            // observed (KS Pro on Universal Hub, plugin v0.8.3) only open
+            // 0x05/0x07 in their device-init burst, NOT 0x09 — leaving the
+            // configJson handshake stuck and the wheel display unable to
+            // resolve which dashboard is active. Pithouse encourages 0x09 by
+            // sending an empty data frame on it before any clean session
+            // opens (mozahubstartup.pcapng frame 639 t=2.345). Mirror that
+            // here so wheels include 0x09 in their burst.
+            SendSessionPrime(0x09, 0x0001);
+
             // Dashboard upload runs as a background task, NOT inline. Reasons:
             //   1. Different wheel firmwares device-init the upload session
             //      (0x04..0x0a) at very different times — observed 40 ms (older
@@ -1697,6 +1707,35 @@ namespace MozaPlugin.Telemetry
                 0x00
             };
             frame[9] = MozaProtocol.CalculateWireChecksum(frame);
+            _connection.Send(frame);
+        }
+
+        /// <summary>
+        /// Prime a wheel-managed session with a zero-length data frame to
+        /// encourage the wheel to device-init its end. Pithouse does this on
+        /// session 0x09 (configJson state push) at startup — verified in
+        /// usb-capture/ksp/mozahubstartup.pcapng frames 639/1211 (host sends
+        /// `7c 00 09 01 [seq] [ack] 00 00` at t=2.345/6.346, wheel device-inits
+        /// 0x09 type=0x81 at t=28.123 as part of its 0x05/0x07/0x09/0x0a burst).
+        /// Wheels that have never had the host prime 0x09 only open 0x05/0x07
+        /// in the burst, leaving configJson handshake stuck and dashboard
+        /// rendering blocked.
+        /// </summary>
+        private void SendSessionPrime(byte session, ushort seq)
+        {
+            var frame = new byte[]
+            {
+                MozaProtocol.MessageStart, 0x0A,
+                MozaProtocol.TelemetrySendGroup, MozaProtocol.DeviceWheel,
+                0x7C, 0x00,
+                session, 0x01,                  // type=0x01 (data chunk)
+                (byte)(seq & 0xFF),
+                (byte)(seq >> 8),
+                0x00, 0x00,                     // ack_seq = 0
+                0x00, 0x00,                     // 2 bytes of empty data (matches Pithouse)
+                0x00                            // checksum placeholder
+            };
+            frame[frame.Length - 1] = MozaProtocol.CalculateWireChecksum(frame);
             _connection.Send(frame);
         }
 
