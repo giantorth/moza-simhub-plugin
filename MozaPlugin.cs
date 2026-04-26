@@ -273,11 +273,19 @@ namespace MozaPlugin
         internal bool IsAb9Detected => _ab9Detected;
         internal MozaAb9DeviceManager Ab9Manager => _ab9Manager;
 
-        /// <summary>True if the wheel's internal Display sub-device responded to probe.</summary>
-        internal bool IsDisplayDetected => _telemetrySender?.DisplayDetected ?? false;
+        /// <summary>True if the wheel's internal Display sub-device responded to probe.
+        /// Reads `_data.DisplayModelName` so detection works even before TelemetrySender
+        /// has started — display probe is now fired during wheel detection so the UI
+        /// can unhide the dashboard-telemetry section before user picks a profile.</summary>
+        internal bool IsDisplayDetected =>
+            !string.IsNullOrEmpty(_data?.DisplayModelName)
+            || (_telemetrySender?.DisplayDetected ?? false);
 
-        /// <summary>Display sub-device model name (e.g. "Display"), or empty.</summary>
-        internal string DisplayModelName => _telemetrySender?.DisplayModelName ?? "";
+        /// <summary>Display sub-device model name (e.g. "W18 Display"), or empty.</summary>
+        internal string DisplayModelName =>
+            !string.IsNullOrEmpty(_data?.DisplayModelName)
+                ? _data!.DisplayModelName
+                : (_telemetrySender?.DisplayModelName ?? "");
         internal MozaProfileStore ProfileStore => _settings?.ProfileStore!;
 
         public void Init(PluginManager pluginManager)
@@ -1230,6 +1238,12 @@ namespace MozaPlugin
                         // Match PitHouse's full 12-frame identity handshake (adds the 7 probes
                         // ReadSetting doesn't cover: 0x09/0x02/0x04/0x05/0x06/0x08-sub2/0x11).
                         _deviceManager.SendPithouseIdentityProbe(deviceId);
+                        // Probe the wheel's Display sub-device. Runs independently of
+                        // TelemetrySender — UI gates the dashboard-telemetry section
+                        // on IsDisplayDetected, so users with no profile selected need
+                        // detection BEFORE telemetry starts, otherwise the section
+                        // (and the profile picker inside it) stay hidden.
+                        _deviceManager.SendDisplayProbe();
                         _deviceManager.ReadSettingsPaced(NewWheelSettingsReadCommands);
                         MozaLog.Info($"[Moza] New-protocol wheel detected on ID {deviceId}");
                         StartTelemetryIfReady();

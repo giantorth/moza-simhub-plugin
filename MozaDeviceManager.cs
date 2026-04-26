@@ -73,6 +73,36 @@ namespace MozaPlugin
             SendRawProbe(0x11, deviceId, new byte[] { 0x04 });                   // identity-11
         }
 
+        /// <summary>
+        /// Probe the Display sub-device inside the wheel via group 0x43 wrapper.
+        /// Mirrors PitHouse's display identity cascade (model/HW/FW/serial/MCU UID).
+        /// Responses arrive as 0xC3 / 0x71 frames and are routed by
+        /// <see cref="Protocol.MozaResponseParser"/> → <see cref="Telemetry.MozaData"/>
+        /// (display-* command names). Fires during wheel detection — independent of
+        /// telemetry start — so <see cref="MozaPlugin.IsDisplayDetected"/> can flip
+        /// before the dashboard-telemetry UI section is gated open.
+        /// </summary>
+        public void SendDisplayProbe()
+        {
+            if (!_connection.IsConnected) return;
+            byte dev = MozaProtocol.DeviceWheel;
+            byte g = MozaProtocol.TelemetrySendGroup; // 0x43
+            // Heartbeat
+            SendRawProbe(g, dev, new byte[] { 0x00 });
+            // Identity cascade
+            SendRawProbe(g, dev, new byte[] { 0x09 });
+            SendRawProbe(g, dev, new byte[] { 0x04, 0x00, 0x00, 0x00, 0x00 });
+            SendRawProbe(g, dev, new byte[] { 0x06 });
+            SendRawProbe(g, dev, new byte[] { 0x02, 0x00 });
+            SendRawProbe(g, dev, new byte[] { 0x05, 0x00, 0x00, 0x00, 0x00 });
+            // Version queries
+            SendRawProbe(g, dev, new byte[] { 0x07, 0x01 });
+            SendRawProbe(g, dev, new byte[] { 0x0F, 0x01 });
+            SendRawProbe(g, dev, new byte[] { 0x11, 0x04 });
+            SendRawProbe(g, dev, new byte[] { 0x08, 0x01 });
+            SendRawProbe(g, dev, new byte[] { 0x10, 0x00 });
+        }
+
         private void SendRawProbe(byte group, byte deviceId, byte[]? payload)
         {
             int payloadLen = payload?.Length ?? 0;
