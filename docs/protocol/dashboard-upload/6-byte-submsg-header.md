@@ -1,0 +1,7 @@
+### 6-byte sub-msg header (new firmware, 2026-04+)
+
+> **2026-04+ firmware.** Older firmware uses an 8-byte header (legacy parser fallback). Capture: `latestcaps/pithouse-switch-list-delete-upload-reupload.pcapng`. See [`../FIRMWARE.md`](../FIRMWARE.md) for the firmware-era matrix.
+
+The sub-msg layout described in [`upload-handshake-2026-04.md`](upload-handshake-2026-04.md) (Multi-round upload content) used to be read with an **8-byte header** (`[type:1][size:4][pad:3]`) — the 5 trailing zeros after the size matched 5 bytes of pad. That interpretation **decoded successfully on session 0x07 captures** but only because the deflate continuation happened to start at a byte offset where 2 stray "extra" bytes (a misaligned chunk-stride) landed on valid LZ77 token boundaries. On other captures (session 0x09, larger dashboards) those same 2 extra bytes fell on invalid block-type bits and the stream errored mid-decode.
+
+The real header is **6 bytes**: `[type:1][size_LE:2][pad:3]`. Stride between consecutive sub-msgs is `6 + size`, NOT `8 + size`. The "5-zero" pattern earlier docs anchored on is actually `pad(3) + body[0:2]` where body[0..1] happens to be `00 00` for the type=0x02 metadata sub-msg (because the LOCAL path TLV starts `8c 00 ...` — body[0]=`8c`, but on closer inspection of where the type=0x03 chunk begins, the leading body bytes vary, so the regex is fragile either way). Use the 6B header and validate via stride.

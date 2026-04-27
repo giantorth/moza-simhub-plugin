@@ -105,7 +105,7 @@ namespace MozaPlugin.Telemetry
                 }
             }
             // Fallback: mzdash bodies embed raw 0x7E bytes that interact with
-            // the wire-level escape rules (see docs/moza-protocol.md:31-54).
+            // the wire-level escape rules (see docs/protocol/wire/checksum.md).
             // If envelope-offset decode failed, scan for zlib magic (78 9c / 78 da)
             // and try each candidate — mirrors sim/wheel_sim.py:1742-1770.
             return TryDecompressByMagic(buf);

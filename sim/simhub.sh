@@ -7,7 +7,7 @@
 set -euo pipefail
 
 APPID=2825720939
-SIMHUB_EXE='~/.local/share/Steam/steamapps/compatdata/2825720939/pfx/drive_c/Program Files (x86)/SimHub/SimHubWPF.exe'
+SIMHUB_EXE="$HOME/.local/share/Steam/steamapps/compatdata/2825720939/pfx/drive_c/Program Files (x86)/SimHub/SimHubWPF.exe"
 PROC_NAME=SimHubWPF.exe
 PT_LAUNCHER=$(command -v protontricks-launch || true)
 

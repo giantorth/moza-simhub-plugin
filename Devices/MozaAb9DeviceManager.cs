@@ -8,7 +8,7 @@ namespace MozaPlugin.Devices
     /// <summary>
     /// Mechanical layout the AB9 advertises to the host. Numeric value matches the
     /// single-byte payload of the <c>0x1F / 0xD3 00</c> mode-set command captured
-    /// from PitHouse (see docs/moza-protocol.md § "AB9 active shifter").
+    /// from PitHouse (see docs/protocol/devices/ab9-shifter.md).
     /// </summary>
     public enum Ab9Mode : byte
     {

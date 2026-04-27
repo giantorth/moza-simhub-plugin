@@ -339,7 +339,7 @@ namespace MozaPlugin.Telemetry
 
             if (!_enabled) return;
 
-            // Open session 0x03 (doc [moza-protocol.md:620-625]: host opens 0x03
+            // Open session 0x03 (doc [docs/protocol/sessions/lifecycle.md]: host opens 0x03
             // 150-450ms after 0x01/0x02 on new firmware). Sim stubs this but real
             // hardware expects it. Fire-and-forget: we don't rely on its ack.
             // Tile-server data push deferred until after tier def — pushing

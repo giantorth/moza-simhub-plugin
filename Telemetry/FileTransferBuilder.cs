@@ -65,8 +65,8 @@ namespace MozaPlugin.Telemetry
     ///
     /// Legacy wire format confirmed by decoding usb-capture/09-04-26/dash-upload.pcapng
     /// session 0x04 host→device reassembly. New format documented in
-    /// <c>docs/moza-protocol.md</c> §§ "6-byte sub-msg header", "Per-chunk
-    /// metadata trailer".
+    /// <c>docs/protocol/dashboard-upload/6-byte-submsg-header.md</c> and
+    /// <c>docs/protocol/dashboard-upload/per-chunk-trailer.md</c>.
     /// </summary>
     public static class FileTransferBuilder
     {
@@ -151,8 +151,8 @@ namespace MozaPlugin.Telemetry
         /// MVP scope: returns a single-element list for both wire formats when the
         /// total body fits in <c>0xFFFF</c> bytes, which covers typical mzdash files
         /// (≤ ~50 KB compressed). Larger uploads need true multi-sub-msg splitting
-        /// per <c>docs/moza-protocol.md § "Per-chunk metadata trailer (continuation
-        /// chunks)"</c> — the per-chunk counter semantics at body[281..283] and the
+        /// per <c>docs/protocol/dashboard-upload/per-chunk-trailer.md</c>
+        /// (continuation chunks) — the per-chunk counter semantics at body[281..283] and the
         /// 7B constant at body[284..290] still need a clean PitHouse capture to
         /// reverse-engineer. Until then, oversized uploads will throw at
         /// <see cref="BuildSubMsgHeader"/>.
@@ -236,7 +236,7 @@ namespace MozaPlugin.Telemetry
         /// New: <c>[type][size_LE_2B][pad×3]</c> = 6 bytes, where size_LE is the
         /// body byte count. Body size capped at 65535 (firmware splits larger
         /// uploads across multiple sub-msgs each &lt;= 4384 bytes; see
-        /// docs/moza-protocol.md § "Per-chunk metadata trailer").
+        /// docs/protocol/dashboard-upload/per-chunk-trailer.md).
         /// </remarks>
         public static byte[] BuildSubMsgHeader(byte transferType, int bodyLength,
             FileTransferWireFormat format)

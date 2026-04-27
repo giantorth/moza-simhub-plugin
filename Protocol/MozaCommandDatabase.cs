@@ -3,7 +3,7 @@ using System.Collections.Generic;
 namespace MozaPlugin.Protocol
 {
     /// <summary>
-    /// Pre-built command definitions from docs/serial.md.
+    /// Pre-built command definitions from docs/protocol/devices/.
     /// </summary>
     public static class MozaCommandDatabase
     {
@@ -300,7 +300,7 @@ namespace MozaPlugin.Protocol
             AddCommand("handbrake-cal-stop",  "handbrake", 0xFF, 94, new byte[] { 4 }, 2, "int");
 
             // ===== AB9 ACTIVE SHIFTER (device: ab9, dev id 0x12, group 0x1F write / 0x1F read) =====
-            // Per docs/AB9-poc-plan.md and docs/moza-protocol.md § "AB9 active shifter".
+            // Per docs/AB9-poc-plan.md and docs/protocol/devices/ab9-shifter.md.
             // Wire format: 7E 03 1F 12 <cmdHi> <cmdLo> <value> <checksum>. Single-byte
             // payload for sliders/mode. Response group on the wire is 0x9F; the parser
             // toggles bit7 back to 0x1F before matching, so both Read- and WriteGroup

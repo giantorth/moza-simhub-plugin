@@ -7,7 +7,7 @@ namespace MozaPlugin.Telemetry
     /// <summary>
     /// Assembles a complete Moza telemetry serial frame from game data.
     ///
-    /// Frame format (moza-protocol.md § Main real-time telemetry):
+    /// Frame format (docs/protocol/telemetry/live-stream.md):
     ///   7E [N] 43 17 7D 23 32 00 23 32 [flag] 20 [data...] [checksum]
     ///
     /// Header is 12 bytes fixed, followed by variable data, followed by 1 checksum byte.

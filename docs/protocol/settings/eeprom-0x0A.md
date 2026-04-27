@@ -1,0 +1,24 @@
+## EEPROM direct access (group `0x0A` / 10 — any device)
+
+Low-level EEPROM read/write protocol, applicable to any device. Bypasses the named command interface. Found in `rs21_parameter.db` but not observed in USB captures.
+
+| Command | ID | Dir | Bytes | Type | Notes |
+|---------|----|-----|-------|------|-------|
+| select-table | `00 05` | W | 4 | int | Select EEPROM table ID |
+| read-table | `00 06` | R | 4 | int | Read selected table ID |
+| select-address | `00 07` | W | 4 | int | Select address within table |
+| read-address | `00 08` | R | 4 | int | Read selected address |
+| write-int | `00 09` | W | 4 | int | Write int at selected table+address |
+| read-int | `00 0A` | R | 4 | int | Read int at selected table+address |
+| write-float | `00 0B` | W | 4 | float | Write float at selected table+address |
+| read-float | `00 0C` | R | 4 | float | Read float at selected table+address |
+
+Known EEPROM tables:
+
+| Table | ID | Params | Notes |
+|-------|----|--------|-------|
+| Base | 2 | 38 | |
+| Motor | 3 | 76 | PID/encoder/field-weakening |
+| Wheel | 4 | 123 | |
+| Pedals | 5 | 45 | |
+| Unknown | 11 | 8 | |

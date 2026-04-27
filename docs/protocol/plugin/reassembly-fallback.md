@@ -1,0 +1,3 @@
+### Reassembly fallback
+
+`SessionDataReassembler.TryDecompress` first tries offset-based 9-byte envelope (correct for sessions 0x09 and 0x0a). If that fails (because session 0x04 uses a 53-byte prefix, session 0x03 a 12-byte wrapper, or because embedded 0x7E bytes in mzdash JSON payload shifted an otherwise-valid header), falls back to `TryDecompressByMagic` which scans for `78 9c` / `78 da` zlib magic bytes and trial-decompresses each hit. Mirrors `sim/wheel_sim.py`'s `_scan`. The magic-scan fallback is what kept the plugin parsing session 0x04 dir listings correctly even before sim's envelope was matched to the real-wheel format (2026-04-22).

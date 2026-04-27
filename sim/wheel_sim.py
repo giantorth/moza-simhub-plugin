@@ -61,7 +61,7 @@ SESSION_TYPE_END = 0x00    # 7C:00 session end / close marker
 # 0x01/0x02; PitHouse then uses them for file transfer (0x04), keepalives
 # (0x06/0x08/0x0a), and the configJson RPC that populates the Dashboard Manager
 # UI (0x09). Without these opens the wheel's dashboard list never reaches
-# PitHouse. See docs/moza-protocol.md § Session lifecycle for the full mapping.
+# PitHouse. See docs/protocol/sessions/lifecycle.md for the full mapping.
 #
 # `port` equals the session byte for every device-opened session observed
 # (0x04→4, 0x06→6, 0x08→8, 0x09→9, 0x0a→10). Host-opened 0x03 uses port 0x0a,
@@ -478,7 +478,7 @@ WHEEL_MODELS: Dict[str, dict] = {
         # MOZA ES (old-protocol) wheel on R5 base. ES wheels share device ID
         # 0x13 with the wheelbase — identity probes to wheel device 0x17
         # return nothing, queries to 0x13 return base identity (see
-        # docs/moza-protocol.md § ES wheel identity caveat). Identity bytes
+        # docs/protocol/identity/known-wheel-models.md § ES wheel identity caveat). Identity bytes
         # captured 2026-04-23 from real R5+ES via probes to 0x13.
         #
         # `wheel_device: 0x13` reroutes all wheel-keyed dispatch through
@@ -877,7 +877,7 @@ _DISPLAY_MODEL_NAME: str = 'Display'
 # the wheelbase address). Populated by main() from the chosen model profile.
 _WHEEL_DEVICE: int = DEV_WHEEL
 
-# Semantic labels for unhandled-frame logging. Drawn from docs/moza-protocol.md
+# Semantic labels for unhandled-frame logging. Drawn from docs/protocol/
 # and Protocol/MozaProtocol.cs group constants.
 _GROUP_LABELS: Dict[int, str] = {
     0x00: 'heartbeat',
@@ -1105,7 +1105,7 @@ _DASH_UPLOAD_REPLY_IDLE_MS = 300
 
 # Real wheel session 0x04 type=0x0a dir-listing reply layout (verified
 # against latestcaps + connect-wheel-start-game captures, see
-# docs/moza-protocol.md § Session 0x04 device → host root directory listing):
+# docs/protocol/dashboard-upload/session-04-root-dir.md):
 #
 #   offset  bytes                              meaning
 #   0x00    0a                                 subtype
@@ -1221,7 +1221,7 @@ def build_dir_listing_reply(echo_id: bytes = b'',
 
 # Delay after last session 0x04 chunk before emitting the sub-msg ack response.
 # Short enough that both sub-msg 1 and sub-msg 2 responses fit inside the plugin's
-# per-submsg wait windows (2 s and 3 s). See docs/moza-protocol.md §
+# per-submsg wait windows (2 s and 3 s). See docs/protocol/dashboard-upload/path-b-session-04.md §
 # "Sub-msg 1 / sub-msg 2 response format".
 _FILE_TRANSFER_ECHO_IDLE_MS = 100
 
@@ -1299,7 +1299,7 @@ def build_file_transfer_response(
     # body, so PitHouse's 6B-header parser reads the last 2 pad bytes of the
     # 8B header as the body's `00 00` preamble. Reverted from 6B-header
     # 2026-04-26 — direct 6B emission stalled PitHouse uploads at chunk 1.
-    # See moza-protocol.md § Findings 2026-04-24 for the trick rationale.
+    # See docs/protocol/findings/2026-04-24-csp-deep-dive.md for the trick rationale.
     size = len(body_after_header) + 2
     header = bytes([role]) + size.to_bytes(4, 'little') + bytes([0x00, 0x00, 0x00])
     return header + bytes(body_after_header)
@@ -4513,7 +4513,7 @@ class WheelSimulator:
         # is the explicit "I've finished sending" signal — distinct from the
         # metadata sub-msg's declarative `bytes_written == total_size` which is
         # set from the very first send and means nothing about progress.
-        # Verified spec via captures + RE notes (docs/moza-protocol.md §
+        # Verified spec via captures + RE notes (docs/protocol/dashboard-upload/per-chunk-trailer.md §
         # "Per-chunk metadata trailer").
         import re as _re_term
         host_done = False

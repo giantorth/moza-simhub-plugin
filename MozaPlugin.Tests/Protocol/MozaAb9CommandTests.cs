@@ -13,7 +13,7 @@ namespace MozaPlugin.Tests.Protocol
         [InlineData("ab9-max-torque-limit", 0xA9)]
         public void Slider_BuildWriteMessage_MatchesCapturedFrame(string commandName, byte cmdHi)
         {
-            // Captured AB9 slider write (from docs/moza-protocol.md § "AB9 active shifter"):
+            // Captured AB9 slider write (from docs/protocol/devices/ab9-shifter.md):
             //   7E 03 1F 12 <cmdHi> 00 64 <checksum>     for value=100 on each slider
             // payloadLength = cmdId(2) + payload(1) = 3.
             var cmd = MozaCommandDatabase.Get(commandName);

@@ -8,7 +8,7 @@
 
 A SimHub plugin that communicates directly with MOZA Racing hardware over serial, providing full hardware configuration and LED control through SimHub's native device and effects system.
 
-Built using the amazing work of [Boxflat](https://github.com/Lawstorant/boxflat) that reverse-engineered the [MOZA serial protocol](docs/moza-protocol.md).
+Built using the amazing work of [Boxflat](https://github.com/Lawstorant/boxflat) that reverse-engineered the [MOZA serial protocol](docs/protocol/README.md).
 
 ## Why This Exists
 
@@ -161,7 +161,7 @@ The plugin exposes these properties for use in SimHub dashboards and overlays:
 
 See [DEVELOPMENT.md](docs/DEVELOPMENT.md) for build instructions (Windows & Linux cross-compilation), CI/CD pipeline details, and full architecture reference.
 
-Protocol reference: [docs/moza-protocol.md](docs/moza-protocol.md). USB capture guide: [docs/usb-capture.md](docs/usb-capture.md). SimHub plugin API notes: [docs/simhub.md](docs/simhub.md).
+Protocol reference: [docs/protocol/](docs/protocol/README.md). USB capture guide: [docs/usb-capture.md](docs/usb-capture.md). SimHub plugin API notes: [docs/simhub.md](docs/simhub.md).
 
 ## Project Structure
 
@@ -174,7 +174,7 @@ Diagnostics/
 Protocol/
   MozaProtocol.cs                  Protocol constants (start byte, device IDs, checksums)
   MozaCommand.cs                   Message builder (read/write/int/array)
-  MozaCommandDatabase.cs           150+ command definitions from serial.md
+  MozaCommandDatabase.cs           150+ command definitions from docs/protocol/devices/
   MozaResponseParser.cs            Response decoder (bit 7 toggle, nibble swap, wildcard matching)
   MozaSerialConnection.cs          Serial port I/O with auto-discovery and background threads
   MozaHidReader.cs                 HID input reader — steering, pedals, paddles, handbrake via HidSharp

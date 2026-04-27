@@ -1,0 +1,65 @@
+# Firmware era reference
+
+Moza wheel/base firmware has shipped multiple incompatible protocol changes. This page maps each era to the captures it appears in, the wheels it's been verified on, and the topical pages that document its specifics.
+
+> **Status (2026-04-27):** Eras inferred from capture metadata and observed wire behaviour. Exact firmware version strings are not extracted (firmware byte from session 0x01 desc not yet decoded into a version string).
+
+## Known eras
+
+| Era | Capture(s) | Wheels seen | Notable wire behaviour |
+|-----|-----------|-------------|------------------------|
+| **Pre-2025** (legacy) | `12-04-26-2/simhub-startup-*.pcapng` | VGS (via SimHub old build) | Session-port-based flag byte assignment; tier config CRC sometimes missing on final chunk |
+| **2025-11** | `usb-capture/latestcaps/automobilista2-*.pcapng`, `12-04-26/moza-startup.pcapng`, `12-04-26-2/moza-startup-*.pcapng`, `connect-wheel-start-game.pcapng` | VGS, CS | Session 0x04 dashboard upload via `0x8A` LOCAL marker; sub-msg 1/2 path/content split; configJson schema = 11 top-level fields |
+| **2026-04 legacy** | `09-04-26/dash-upload.pcapng` | VGS | Session 0x01 management RPC carries dashboard upload as FF-prefix envelope (3 fields). Path A in `dashboard-upload/` |
+| **2026-04+** (current PitHouse) | `usb-capture/latestcaps/pithouse-switch-list-delete-upload-reupload.pcapng` (CSP on R9), `usb-capture/ksp/putOnWheelAndOpenPitHouse.pcapng` (KS Pro on R12) | CSP, KS Pro | Dashboard upload session is **dynamic** (0x05 or 0x06) opened via `7c:23` trigger; `0x8C` LOCAL marker; 6-byte sub-msg header; per-chunk metadata trailer; `ff*4` sentinel + 1-byte XOR status; pedal device `0x19` appears on KS Pro |
+
+## Wheels and bases tested
+
+| Hardware | First seen in | Notes |
+|----------|---------------|-------|
+| VGS Formula | All `moza-startup-*` captures | Integrated display, version 2 compact tier defs |
+| CS / CS V2.1 | `cs-to-vgs.pcapng`, `vgs-to-cs.pcapng` | Same protocol family as VGS |
+| CSP | `latestcaps/pithouse-switch-list-delete-upload-reupload.pcapng` | **Version 0 URL-subscription tier defs** (different from VGS/CS); 2026-04 firmware |
+| KS Pro | `ksp/putOnWheelAndOpenPitHouse.pcapng` | 2026-04+ firmware era; introduces dev `0x19` pedal |
+| ES | (see [`identity/known-wheel-models.md`](identity/known-wheel-models.md)) | Identity caveat — responses don't follow standard pattern |
+| R9 base | CSP capture | Identity bytes byte-identical between dev `0x12` and dev `0x13` |
+| R12 base | KS Pro capture | Same identity-cascade behaviour as R9 |
+
+## Topical pages by firmware sensitivity
+
+### Era-critical (read with firmware in mind)
+
+| Page | Era specifics |
+|------|---------------|
+| [`dashboard-upload/README.md`](dashboard-upload/README.md) | 3-row matrix of upload variants per era |
+| [`dashboard-upload/path-a-session-01-ff.md`](dashboard-upload/path-a-session-01-ff.md) | 2026-04 legacy only |
+| [`dashboard-upload/path-b-session-04.md`](dashboard-upload/path-b-session-04.md) | 2025-11 firmware |
+| [`dashboard-upload/upload-handshake-2026-04.md`](dashboard-upload/upload-handshake-2026-04.md) | 2026-04+ firmware |
+| [`dashboard-upload/6-byte-submsg-header.md`](dashboard-upload/6-byte-submsg-header.md) | 2026-04+ firmware (6B; legacy 8B fallback) |
+| [`dashboard-upload/per-chunk-trailer.md`](dashboard-upload/per-chunk-trailer.md) | 2026-04+ firmware (continuation chunks) |
+| [`dashboard-upload/config-rpc-session-09.md`](dashboard-upload/config-rpc-session-09.md) | configJson schema differs across eras (`rootDirPath` field added in 2025-11) |
+| [`dashboard-upload/session-04-root-dir.md`](dashboard-upload/session-04-root-dir.md) | 2025-11 firmware (53-byte prefix, 176B trailing tail not zlib) |
+| [`sessions/lifecycle.md`](sessions/lifecycle.md) | Concurrent session map differs: 2025-11 (VGS/CSP/older displays) vs 2026-04+ (KS Pro) |
+| [`sessions/compressed-0x09-0x0a.md`](sessions/compressed-0x09-0x0a.md) | Session 0x09 compressed format predates 2026-04+ session 0x0a equivalent |
+| [`identity/wheel-probe-sequence.md`](identity/wheel-probe-sequence.md) | 2026-04 firmware uses **short-form probes** only; older firmware uses sub-byte variants |
+| [`identity/pedal-0x19.md`](identity/pedal-0x19.md) | KS Pro / 2026-04+ only |
+| [`identity/hub-base-cascade.md`](identity/hub-base-cascade.md) | Verified on CSP R9 + KSP R12 |
+| [`identity/dev-type-table.md`](identity/dev-type-table.md) | Per-wheel — table grows as more wheels are captured |
+| [`devices/wheel-0x17.md`](devices/wheel-0x17.md) (Extended LED Group Architecture) | Newer firmware only; rotary/ambient groups present in DB but not always physical |
+| [`tier-definition/version-0-url-csp.md`](tier-definition/version-0-url-csp.md) | CSP-only host response shape |
+| [`tier-definition/version-2-compact-vgs.md`](tier-definition/version-2-compact-vgs.md) | VGS/CS response shape |
+
+### Firmware-agnostic (stable across eras)
+
+These pages document foundational behaviour that hasn't changed across observed eras:
+
+- [`wire/`](wire/) — frame format, checksum, byte stuffing, response transforms
+- [`transport/`](transport/) — USB topology, internal bus mapping
+- [`telemetry/channels.md`](telemetry/channels.md) — channel encoding types and namespaces
+- [`telemetry/live-stream.md`](telemetry/live-stream.md) — `7D 23` frame structure (multi-stream architecture stable across captures)
+- [`leds/color-commands.md`](leds/color-commands.md) — LED RGB encoding
+- [`heartbeat.md`](heartbeat.md) — group `0x00` keepalive
+
+## Per-capture inventory
+
+See [`../../usb-capture/CAPTURES.md`](../../usb-capture/CAPTURES.md) for the full per-file breakdown (wheel, software, scenario, observed traffic counts).

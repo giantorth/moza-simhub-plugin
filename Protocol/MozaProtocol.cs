@@ -1,7 +1,7 @@
 namespace MozaPlugin.Protocol
 {
     /// <summary>
-    /// Constants from the MOZA Racing serial protocol (docs/serial.md).
+    /// Constants from the MOZA Racing serial protocol (docs/protocol/, device tables in docs/protocol/devices/).
     /// </summary>
     public static class MozaProtocol
     {

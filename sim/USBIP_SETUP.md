@@ -116,5 +116,5 @@ unload ensures re-setup starts from clean state.
 ## Reference
 
 - `docs/SIMULATOR.md` — simulator architecture, replay table behaviour
-- `docs/moza-protocol.md §Wheel connection probe sequence` — identity probe values
+- `docs/protocol/identity/wheel-probe-sequence.md` — identity probe values
 - `sim/wheel_sim.py` — `_PROBE_SYNTH`, `_VGS_ID_RSP` dicts for hardcoded responses
