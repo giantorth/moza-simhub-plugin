@@ -679,18 +679,44 @@ Observed session opens in `moza-startup.json` (2026-04-12):
 
 ### Concurrent session map
 
-Up to 9 concurrent sessions during dashboard management. Confirmed across 4 captures (moza-startup, connect-wheel-start-game, moza-unplug-plug-wheel-to-base, automobilista2-wheel-connect-dash-change):
+Up to 11 concurrent sessions. Session role depends on firmware generation —
+KS Pro (2026-04+) reshuffled the map. Confirmed across captures
+(moza-startup, connect-wheel-start-game, moza-unplug-plug-wheel-to-base,
+automobilista2-wheel-connect-dash-change, ksp/mozahubstartup,
+ksp/putOnWheelAndOpenPitHouse):
+
+#### 2025-11 firmware (VGS, CSP, older displays)
 
 | Session | Opened by | Role | Description |
 |---------|-----------|------|-------------|
 | 0x01 | **host** | Management | Wheel identity / log push; `0xFF`-prefixed messages |
 | 0x02 | **host** | Telemetry | Tier definition, FF-prefixed settings push |
-| 0x03 | **host** | Aux config | Tile-server / settings push (zlib-compressed) |
+| 0x03 | **host** | Aux config | Tile-server state push host → dev (12-byte envelope, zlib) |
 | 0x04 | **device** | **File transfer** | Bidirectional: host uploads `.mzdash`; device sends root directory listing |
 | 0x06 | device | Keepalive | Alternating directions, ~3.4s |
 | 0x08 | device | Keepalive | Alternating directions, ~3.4s |
-| 0x09 | device | **configJson RPC** | Device pushes dashboard state; host responds with canonical list |
-| 0x0A | device | Keepalive / RPC | Dev→host, ~3.4s; also host-initiated RPC calls |
+| 0x09 | device | **configJson Schema A** | Device pushes Schema A snapshot; host responds with canonical list |
+| 0x0A | device | Keepalive + RPC + Schema B deltas + tile-server mirror | Multi-purpose; same envelope (9-byte) for state push delta + RPC; also dev→host tile-server mirror with 12-byte envelope |
+
+#### 2026-04+ firmware (KS Pro)
+
+| Session | Opened by | Role | Description |
+|---------|-----------|------|-------------|
+| 0x01 | host | Management | Identity / log push (zlib-wrapped UTF-16 wheel debug log dev→host; channel catalog binary host→dev) |
+| 0x02 | host | Telemetry | Tier definition, FF-prefixed settings push |
+| 0x03 | host | **UNUSED** | Open frames + 4-byte zero keepalives only — reserved but no payload (older firmware's tile-server channel) |
+| 0x04 | host (also device on dir-listing) | **Tile-server push host→dev** + dir-listing reply dev→host | Multi-purpose by direction. Host→dev sends 12-byte envelope tile-server JSON (relocated from 0x03) — but KS Pro display does NOT render a map UI in PitHouse, so this push is a mozahub-side no-op. Dev→host serves 8-byte-header dir-listing replies for `/home/root` queries. |
+| 0x05 | device (host on uploads) | **File transfer** | Host uploads `.mzdash` content via type=0x02/0x03 sub-msgs. Replaces 0x04 in the upload role on KS Pro. |
+| 0x06, 0x07, 0x08 | both | Reserved keepalive | Open + 4-byte zero only — channels held but unused |
+| 0x09 | device | **UNUSED** | Open frames + 4-byte zero keepalives only — used for state push in older firmware, now empty |
+| 0x0A | device | **configJson Schema A snapshot + Schema B deltas + RPC** | All wheel-state traffic consolidated here. Same 9-byte envelope. Snapshot once at connect; deltas after FS mutations. Host RPC calls (`configJson()`, `completelyRemove()`, reset) on this session too. |
+| 0x0B | device | **Tile-server mirror dev→host** | Wheel echoes its own tile-server state via 12-byte envelope (relocated from 0x0a in older firmware). `root: "/home/moza/resource/tile_map/"`. KS Pro emits the mirror even though the display lacks a map UI — sim/plugin can ignore. |
+
+Verified 2026-04-26 in
+[usb-capture/ksp-deep-investigation-plan.md § Findings](../usb-capture/ksp-deep-investigation-plan.md).
+Plugin / sim must select session per detected firmware — sending state push
+on 0x09 to a KS Pro wheel reaches a session that is reserved-but-unused, and
+PitHouse never sees the push.
 
 **Opening order** (cold-start captures):
 1. Host opens 0x01, 0x02 (mgmt + telemetry) within ~1 ms of each other (t=0).
@@ -1455,6 +1481,34 @@ Frame length field N is a single byte (0–255), but the plugin's framer enforce
 
 Earlier `chunk_session_payload(chunk_size=58)` default in `sim/wheel_sim.py` produced N=68 (58 net + 4 CRC + 6 header = 68). Under that setting session 0x09 bursts reliably lost 6 of 7 chunks on both Linux (tty0tty) and Windows (USB CDC gadget → SimHub / PitHouse). Identical DROP byte pattern `3E-62-A5-A3-E1-79-03-99` appeared on both systems, proving the bytes arrived but the framer rejected each N=68 frame silently. Fix (2026-04-22): default `chunk_size=54` so chunk body + CRC + header totals N=64, matching real wheel. After the fix, all 8 session-0x09 chunks and all 4 session-0x04 dir-listing chunks parse cleanly in the SimHub plugin, and PitHouse Windows ingests the configJson state without issue.
 
+#### KS Pro / 2026-04+ firmware — configJson migrated to session 0x0a (no CRC)
+
+KS Pro firmware moved the configJson state push from session **0x09** to **0x0a**:
+
+| Aspect | VGS/CSP (0x09) | KS Pro (0x0a) |
+|--------|----------------|---------------|
+| Session role 0x09 | configJson state push | empty heartbeats only |
+| Session role 0x0a | rare RPC channel | **configJson state push + host configJson() reply** |
+| Session role 0x03 | tile-server state | (host pushes on 0x0b instead) |
+| Net data per chunk | 54 B + 4 B CRC32-LE trailer | 54 B, **no CRC trailer** |
+| Wire N per chunk | 64 (54 + 4 + 6 header) | 60 (54 + 6 header) |
+| First device-side seq | `0x000a` (port + 1) | `0x000b` (port + 2) |
+| Factory dashboards | 11 (Rally V1..V6 + Core/Mono/Pulse/Nebula/Grids) | **10** (NO Nebula) |
+
+Decoded byte-exact 2026-04-26 from `usb-capture/ksp/mozahubstartup.pcapng` seq 11..69 (envelope `00 [comp:4 LE] [uncomp:4 LE]` + zlib stream, comp=3171 uncomp=14671). Reassembling with `crc_bytes=4` truncated each chunk's last 4 zlib bytes and `zlib.decompress` returned `Error -3 invalid bit length repeat`; switching to `crc_bytes=0` yields a clean zlib stream that decompresses to a valid configJson JSON.
+
+Sim drives the variant via `WHEEL_MODELS[<model>]['configjson_session']` (default `0x09`, KS Pro overrides to `0x0a`). `chunk_session_payload(..., crc_bytes=0)` selects the no-CRC variant. KS Pro factory dashboard set captured into `sim/factory_state_kspro.json`; substituting `factory_state_w17_rgb.json` (CSP's 11-dashboard set) leaves PitHouse refusing the state on KS Pro despite the chunks decoding correctly — the firmware-baked dashboard list itself is part of the cache key.
+
+Symptom of pushing on the wrong session / format: PitHouse responds with a 6-byte payload `7c 00 0a 00 [seq_lo] [seq_hi]` (type=0x00 with 6-byte body, NOT seen in any working real-wheel pcap) and treats the wheel as cache-stale, displaying whatever dashboards it last recorded. Verified 2026-04-26 against KS Pro on R12 base.
+
+#### Session 0x0a fc:00 cumulative-ack heartbeat is mandatory
+
+For KS Pro firmware (configjson_session=0x0a) the wheel must emit a 3-byte `fc 00 0a` cumulative-ack frame as a periodic heartbeat. Real-wheel cadence is ~4 s (verified `mozahubstartup.pcapng` t=3.205 / 7.209 / 11.211 — three frames before any host activity on 0x0a). Sim emits one alongside each session 0x09 keepalive (~2 s).
+
+Without it PitHouse never sends its own `fc 00 0a [ack_seq:u16]` reply, treats session 0x0a as not-yet-ready, and discards any state push that arrives — verified 2026-04-26: sim chunked + pushed state cleanly but PitHouse showed an empty wheel and would not switch the active dashboard. Adding the heartbeat alone (no other changes to push timing or wire format) made PitHouse parse the state, populate the dashboard list, and accept active-dash switches via `28:00`.
+
+Frame: `7e 03 c3 71 fc 00 0a [csum]` — note 3-byte payload, distinct from the 5-byte session-open ack `fc 00 [sess] [ack_lo] [ack_hi]`. The 5-byte form is what PitHouse sends back to acknowledge specific seqs once it considers the session alive.
+
 ---
 
 ## PitHouse-observed deviations (2026-04-21 sim captures)
@@ -1552,6 +1606,8 @@ Fix (sim, 2026-04-24): `_fire_device_init` now re-emits the channel catalog fram
 
 The user's prior workaround was `sim_reload` + `sim_start` after every PitHouse restart — Windows sees the underlying USB gadget drop and reattach, which forces PitHouse to re-enumerate and clear its cache. With the catalog-re-emit fix, that workaround is no longer required.
 
+**Sim-restart resume: plugin recent commit (2026-04-26 `567ed25`) only closes host-managed sessions (0x01..0x03) on connect; device-managed sessions (0x04..0x10) stay alive across SimHub restart.** Combined with sim_restart, this means plugin can resume existing 0x01/0x02/0x03 sessions WITHOUT sending fresh `7c:00 [sess] 81` OPEN frames — just data chunks. Original `_fire_device_init` was gated on `sessions_opened >= 2` from session_open events only, so it never fired on resume. The `session_data` branch with `sessions_opened == 0 and not _reconnect_detected` now schedules the same 150 ms device-init timer, so VGS/CSP/KSP all re-emit catalog + 0x09 state push on resume.
+
 ### configJson state push includes top-level fields many docs omit
 
 Doc § 857 captures the full 11-key schema (`TitleId, configJsonList, disableManager, displayVersion, enableManager, fontRefMap, imagePath, imageRefMap, resetVersion, rootDirPath, sortTag`). Earlier sim builds only emitted 5 (TitleId, configJsonList, disableManager, displayVersion, enableManager) and PitHouse rejected the state / failed to progress tier def. All 11 fields must be present; factory-fresh values for the missing 6 are `fontRefMap={}, imagePath=[], imageRefMap={}, resetVersion=10, rootDirPath="/home/moza/resource", sortTag=0`.
@@ -1629,23 +1685,24 @@ Last byte of chunk 1 is `0a`, not `05`. The `05` seen in some older notes is a m
 
 Sim's `_build_identity_tables` keys pithouse_rsp by `(grp, payload_suffix)` where wheel probes use suffix `b'\x01'` (sub 01). Hub/base probes on grp `02/04/05/06/07/08/0f/10/11` to dev `0x12` / `0x13` use suffix `b''` (empty) with LEN=1 frames. Response payload IS still 16-byte identity string. Sim's wheel-only pithouse_rsp doesn't match dev 0x12/0x13 probes — they fall through to replay table, which works when populated from a matching-wheel capture.
 
-### dev_type sub-byte table (CSP verified)
+### dev_type table (per-wheel, all 4 bytes)
 
-`0x04 response` payload `01 02 [DT] [06]` where `DT` varies:
+`0x04 response` payload `01 02 [DT_2] [DT_3]`. Earlier docs assumed only DT_2 varies and DT_3 was always `0x06`; KS Pro re-extraction 2026-04-26 showed DT_3 also varies, so the table now lists both:
 
-| Wheel | DT byte | Source |
-|-------|---------|--------|
-| VGS | 0x04 | capture, old |
-| CSP | **0x06** (not 0x04!) | 2026-04 capture — sim default `0x04` is wrong for CSP |
-| KS | 0x05 | live probe |
-| KSP | 0x05 | KSP capture |
-| ES | 0x12 (base-proxied) | live probe |
+| Wheel | DT_2 DT_3 | Source |
+|-------|-----------|--------|
+| VGS | `04 06` | capture, old |
+| CSP | `06 06` (DT_2 not `0x04`!) | 2026-04 capture — sim default `01:02:04:06` was wrong for CSP |
+| KS | `05 06` | live probe |
+| KSP | `07 07` | 2026-04-26 re-extract from `usb-capture/ksp/putOnWheelAndOpenPitHouse.pcapng` grp=0x84 reply. Earlier sim default `01:02:05:06` (copied from KS) made PitHouse name-match W18 → KS Pro briefly, then demote on dev_type read because `05 06` matches the non-Pro KS profile |
+| ES | `12 08` (base-proxied) | live probe |
 
 Display sub-device `0x04 response` payload `01 02 [DDT] [06]`:
 
-| Wheel | DDT byte |
-|-------|----------|
+| Wheel | DDT byte | Source |
+|-------|----------|--------|
 | CSP | 0x11 (not 0x0d!) — fixed in profile 2026-04-24 |
+| KSP | 0x11 — same as CSP (shares W17-HW RGB display module). Earlier sim profile had `0x0d` which the plugin_probe table won via longest-prefix match over the correct `0x11` from `kspro_wheel_17.json` replay |
 | VGS | 0x08 |
 
 ### hw_id must match between session1_desc and cmd 0x06
@@ -1700,6 +1757,19 @@ Earlier docs + sim code hardcoded session `0x06` as the file-transfer session (f
 | 2025-11 (latestcaps captures) | `0x06` | `pithouse-switch-list-delete-upload-reupload.pcapng` |
 | 2026-04 (early observations) | `0x05` | Live sim capture 2026-04-24 |
 | 2026-04 (later live runs) | `0x07`, `0x09` | Live sim runs 2026-04-24 — both observed in same firmware build, port chosen at runtime by host's `7c:23` request. Sim now accepts any session in 0x04..0x0a as a candidate file-transfer session. |
+
+### Device-side `7c:23` page-activate frames vary per wheel
+
+Wheel→host `7c:23` advertises the wheel's available dashboard pages and is emitted continuously at ~1 Hz before and after session open. PitHouse appears to gate dashboard detection on the wheel-specific frame layout — sending the wrong set leaves Dashboard Manager partially populated even when wheel + display identity match.
+
+| Wheel | Variant payload (after `7c 23`) | Trailer | Pages | Source |
+|-------|---------------------------------|---------|-------|--------|
+| VGS | `32 80 03 00 01 00`, `3c 80 04 00 02 00`, `50 80 05 00 03 00` | `fe 01` | 3 | `connect-wheel-start-game.pcapng` |
+| CSP | `3c 80 03 00 01 00`, `32 80 04 00 02 00` | `fe 01` | 2 | `pithouse-complete.txt` |
+| KSP | `32 80 04 00 01 00`, `3c 80 05 00 02 00`, `50 80 06 00 03 00` | **`fc 03`** | 3 | `usb-capture/ksp/putOnWheelAndOpenPitHouse.pcapng` t=26.86–28.00 |
+| KS | (none — wheel has no dashboard) | — | — | passive probe of real KS |
+
+KSP differs from VGS+CSP in **both** the trailer (`fc 03` vs `fe 01`) AND the page-byte starting offset (port begins at `0x04` vs `0x03`). Earlier sim builds reused the CSP frame set for KSP; PitHouse showed the wheel as KS Pro but never populated its dashboard manager. Fixed 2026-04-26: model dict's `_7c23_frames_name` now resolves to `_7C_23_FRAMES_KSPRO`.
 
 ### `7c:23` is a device-initiated session-open request, not just a page notification
 

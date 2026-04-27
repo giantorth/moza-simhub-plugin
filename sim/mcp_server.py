@@ -152,6 +152,19 @@ class _SimSession:
             sim.catalog_sent = True
             if sim.emitter:
                 sim.emitter.emit_event('catalog_sent', frames=sim.proactive_sent)
+            # If PitHouse resumed an existing session (no fresh OPEN frames),
+            # the session_open path never fires _fire_device_init. Trigger
+            # the burst here so device-side opens (0x04/0x06/0x08/0x09/0x0a)
+            # and the configJson state push (proactive_session09 models) go
+            # out. Without this VGS/CSP dashboard manager UI never sees the
+            # wheel after a sim-restart.
+            if not sim._device_init_started:
+                sim._device_init_started = True
+                try:
+                    sim._fire_device_init()
+                except Exception as e:
+                    with write_lock:
+                        log_fh.write(f'{_ts()} -- [proactive   ] _fire_device_init FAILED: {type(e).__name__}: {e}\n')
             with write_lock:
                 log_fh.write(f'{_ts()} -- [proactive   ] catalog complete, {sim.proactive_sent} frames sent\n')
 
@@ -377,8 +390,11 @@ def _apply_model(ws_mod, model_name: str) -> dict:
         device_catalog = ws_mod.build_device_catalog(model, channel_urls)
 
     frames_name = model.get('_7c23_frames_name', 'CSP')
-    c7_23_frames = {'CSP': ws_mod._7C_23_FRAMES_CSP, 'VGS': ws_mod._7C_23_FRAMES_VGS}.get(
-        frames_name, ws_mod._7C_23_FRAMES_CSP)
+    c7_23_frames = {
+        'CSP': ws_mod._7C_23_FRAMES_CSP,
+        'VGS': ws_mod._7C_23_FRAMES_VGS,
+        'KSPRO': ws_mod._7C_23_FRAMES_KSPRO,
+    }.get(frames_name, ws_mod._7C_23_FRAMES_CSP)
 
     # Per-model replay table: layer JSON tables over any startup-loaded pcap
     # replay. The fallback to `_config['replay']` (loaded once from default
@@ -499,6 +515,9 @@ def sim_start(port: Optional[str] = None, model: Optional[str] = None) -> dict:
         display_model_name=overrides.get('display_model_name', ''),
         rpm_led_count=int(use_model.get('rpm_led_count', 10)),
         button_led_count=int(use_model.get('button_led_count', 14)),
+        factory_state_file=use_model.get('factory_state_file'),
+        proactive_session09=use_model.get('proactive_session09', True),
+        configjson_session=int(use_model.get('configjson_session', 0x09)),
     )
     _sim = sim
 
@@ -948,9 +967,16 @@ def sim_reported_state() -> dict:
         import json as _json
         dashboards = fs.dashboards()
         # Build the actual state bytes the sim would send to PitHouse, then
-        # decode + expose the full structure. This reflects the factory-state
-        # merge (11 canonical + FS uploads) rather than just FS contents.
-        payload = _ws.build_configjson_state(dashboards)
+        # decode + expose the full structure. Pure FS view — empty FS yields
+        # empty configJsonList / enableManager.dashboards.
+        _img_ref, _img_path = fs.image_manifest()
+        payload = _ws.build_configjson_state(
+            dashboards,
+            display_version=getattr(_sim, '_display_version', 11),
+            reset_version=getattr(_sim, '_reset_version', 10),
+            factory_file=getattr(_sim, '_factory_state_file', None),
+            image_ref_map=_img_ref,
+            image_path=_img_path)
         state_json = _json.loads(zlib.decompress(payload[9:]))
         em = state_json.get('enableManager', {}).get('dashboards', [])
         em_names = [d.get('dirName') or d.get('title') or d.get('name', '') for d in em]
@@ -965,9 +991,39 @@ def sim_reported_state() -> dict:
             "top_level_keys": list(state_json.keys()),
             "fs_count": len(fs.tree()),
             "fs_dashboards_count": len(dashboards),
+            "active_dash_index": getattr(_sim, 'active_dash_index', 1),
+            "active_dash_pages": getattr(_sim, 'active_dash_pages', 1),
         }
     except Exception as e:
         return {"error": str(e)}
+
+
+@_server.tool()
+def sim_set_active_dashboard(target, pages: int = 1) -> dict:
+    """Track which dashboard slot the sim's wheel "displays" — drives the
+    28:00 (`WheelGetCfg_GetMultiFunctionSwitch`) and 28:01
+    (`WheelGetCfg_GetMultiFunctionNum`) reply bytes that PitHouse polls.
+
+    `target` is a slot index (1-N), dirName, or dashboard id matching one
+    of the factory or FS-tracked dashboards. `pages` defaults to 1.
+
+    PitHouse's set-side wire signal isn't fully RE'd yet, so this MCP
+    tool is the only way to drive active-dash state into the sim. See
+    usb-capture/payload-09-state-re.md § "Active dashboard" for the
+    open RE work.
+    """
+    if _sim is None:
+        return _no_sim()
+    try:
+        # Allow string-encoded ints from MCP clients that always JSON-string args.
+        if isinstance(target, str) and target.isdigit():
+            target = int(target)
+        result = _sim.set_active_dashboard(target, pages=pages)
+    except ValueError as e:
+        return {"error": str(e)}
+    except Exception as e:
+        return {"error": f"set_active_dashboard failed: {e}"}
+    return {"status": "ok", **result}
 
 
 def run_stdio():
