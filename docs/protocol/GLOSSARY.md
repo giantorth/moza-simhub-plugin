@@ -62,8 +62,9 @@ One-line definitions for jargon used throughout `docs/protocol/`. Hardware names
 | **port** | Synonym for session-byte allocation slot during session open |
 | **sub-msg** / **sub-message** | Application-layer message inside a session-data chunk stream |
 | **TLV** | Tag-length-value encoding (used by tier defs, channel catalog) |
-| **tier** | A telemetry update-rate bucket. PitHouse tier IDs `30`, `500`, `2000` correspond to 30Hz, 2Hz, 0.5Hz update rates |
+| **tier** | A telemetry update-rate bucket. `package_level` IDs `30`, `500`, `2000` correspond to ~30 Hz, 2 Hz, 0.5 Hz update rates. See [`telemetry/tiers.md`](telemetry/tiers.md) for the concept reference |
 | **tier def** / **tier definition** | Host's response to wheel's channel catalog declaring which channels go in which tier |
+| **package_level** | Per-channel cadence selector (ms interval) in `Telemetry.json` — the field that assigns a channel to a tier |
 | **channel catalog** | Wheel's session-0x02 declaration of every telemetry channel it can decode |
 | **flag byte** | Byte 4 of `7D 23` live telemetry header — selects which tier this frame carries |
 | **keepalive** / **heartbeat** | Periodic group `0x00` to known device IDs (~1 Hz) |

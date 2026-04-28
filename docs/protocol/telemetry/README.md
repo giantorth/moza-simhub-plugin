@@ -4,6 +4,7 @@ Live game telemetry: channel catalog, value encoding, the `0x43/0x17 7D 23` live
 
 | File | Topic |
 |------|-------|
+| [`tiers.md`](tiers.md) | **Tier concept reference** — `package_level` semantics, channel-to-tier assignment, flag bytes, end-to-end channel example |
 | [`channels.md`](channels.md) | Channel encoding types (compression codes), ordering, namespace distribution across `Telemetry.json` (410 channels) |
 | [`service-parameter-transforms.md`](service-parameter-transforms.md) | `rs21_parameter.db` `ServiceParameter` value transforms (multiply/division/custom) for setting display |
 | [`live-stream.md`](live-stream.md) | Frame structure, flag-byte multi-stream architecture, F1 dashboard tier examples, capture-vs-spec verification |

@@ -31,6 +31,7 @@ Full serial number = serial-a + serial-b (32 ASCII chars total).
 | clutch-point | `09` | 1 | int | |
 | knob-mode | `0A` | 1 | int | |
 | paddle-adaptive-mode | `0B` | 1 | int | |
+| device-info | `0C` | 12 | array | Read-only. 1-byte request `0C` returns 12-byte block (e.g. `03 19 03 ab 04 04 02 df 00 00 00 00`). PitHouse polls ~6×/session. Structure undecoded — possibly version/capability flags. Observed in `usb-capture/ksp/gfdsgfd.pcapng` |
 | paddle-button-mode | `0D` | 1 | int | |
 | flag-colors1 | `0E 00` | 21 | array | Write-only |
 | flag-colors2 | `0E 01` | 9 | array | Write-only |
@@ -44,7 +45,7 @@ Full serial number = serial-a + serial-b (32 ASCII chars total).
 | rpm-blink-color8 | `0F 07` | 3 | array | |
 | rpm-blink-color9 | `0F 08` | 3 | array | |
 | rpm-blink-color10 | `0F 09` | 3 | array | |
-| key-combination | `13` | 4 | array | |
+| key-combination | `13` | 4 | array | RW. Read form: 1-byte request `13` returns 4-byte current value (`FF FF FF FF` = unset) |
 | telemetry-mode | `1C 00` | 1 | int | |
 | telemetry-idle-effect | `1D 00` | 1 | int | |
 | buttons-idle-effect | `1D 01` | 1 | int | |

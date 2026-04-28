@@ -6,6 +6,10 @@ definition that explicitly declares **flag byte**, **channel index**,
 firmware doesn't need URL metadata — it decodes the bit stream using the
 host-provided schema.
 
+> See [`../telemetry/tiers.md`](../telemetry/tiers.md) for the
+> tier-concept reference: how `package_level` becomes a tier, how flag
+> offsets map to tiers, and an end-to-end channel example.
+
 > **Used by:** VGS, KS Pro (W17/W18). CSP uses v0 URL subscription (see
 > [`version-0-url-csp.md`](version-0-url-csp.md)).
 

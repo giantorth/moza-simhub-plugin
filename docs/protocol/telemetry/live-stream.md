@@ -18,7 +18,7 @@ Primary live data stream from Pithouse to wheel/dash. Sent ~17–20×/s.
 
 ### Flag byte and multi-stream architecture
 
-Pit House sends telemetry as **three concurrent streams** using different flag bytes, one per `package_level` tier defined in `GameConfigs/Telemetry.json`. Each stream carries channels assigned to its tier, bit-packed alphabetically by URL suffix.
+Pit House sends telemetry as **three concurrent streams** using different flag bytes, one per `package_level` tier defined in `GameConfigs/Telemetry.json`. Each stream carries channels assigned to its tier, bit-packed alphabetically by URL suffix. See [`tiers.md`](tiers.md) for the canonical tier-concept reference (assignment, cadence, end-to-end channel example).
 
 | Flag offset | `package_level` | Update rate | Content |
 |-------------|----------------|-------------|---------|

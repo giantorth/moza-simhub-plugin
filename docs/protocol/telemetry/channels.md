@@ -53,7 +53,7 @@ Master reference for all compression types.
 
 ### Channel ordering
 
-Channels first grouped by `package_level` (30 → base frame, 500 → base+1, 2000 → base+2). Within each frame packed **alphabetically by URL suffix** (part after `v1/gameData/`). Iterated sorted by URL, packed sequentially into bit stream starting at bit 0.
+Channels first grouped by `package_level` (30 → base frame, 500 → base+1, 2000 → base+2). See [`tiers.md`](tiers.md) for the full tier-concept reference (cadence, flag-byte mapping, profile build flow). Within each frame packed **alphabetically by URL suffix** (part after `v1/gameData/`). Iterated sorted by URL, packed sequentially into bit stream starting at bit 0.
 
 Bits packed **LSB-first within each byte** (bit 0 = LSB of byte 0, bit 8 = LSB of byte 1). Multi-bit fields span byte boundaries when needed.
 

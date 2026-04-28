@@ -1,5 +1,9 @@
 ### Tier definition implementation
 
+> Tier-concept reference: [`../telemetry/tiers.md`](../telemetry/tiers.md)
+> (`package_level` semantics, flag-byte mapping, end-to-end channel
+> example). This page covers how the plugin builds and sends tier defs.
+
 Plugin supports both versions, selectable via `TelemetryProtocolVersion` setting (UI: Telemetry > Advanced > Protocol version):
 
 - **Version 2** (default): compact numeric tier definitions via `TierDefinitionBuilder.BuildTierDefinitionMessage()`. Flag byte assignment controlled by `FlagByteMode` (0=zero-based, 1=session-port, 2=two-batch).

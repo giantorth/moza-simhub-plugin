@@ -56,6 +56,10 @@ Controls 2 LED strips (9 LEDs each) on the wheelbase body. Group 32 = write, gro
 
 ### Group `0x64` (100) — Connected Device Status (read-only)
 
+Two probe forms observed:
+
+**Form A — single-byte cmd ID** (SimHub plugin, also `sim/wheel_sim.py` `(0x64, 0x12, 03)` "hub-port1-power probe"):
+
 | Command | ID | Bytes | Type | Notes |
 |---------|----|-------|------|-------|
 | base | `02` | 2 | int | |
@@ -65,3 +69,15 @@ Controls 2 LED strips (9 LEDs each) on the wheelbase body. Group 32 = write, gro
 | pedals1 | `06` | 2 | int | |
 | pedals2 | `07` | 2 | int | |
 | pedals3 | `08` | 2 | int | |
+
+**Form B — `01 NN 00` PitHouse probe** (observed in `usb-capture/ksp/gfdsgfd.pcapng` @ f54501, 5-frame burst):
+
+| Request | Response (`0xE4/0x21`) | Notes |
+|---------|------------------------|-------|
+| `7E 03 64 12 01 01 00` | `7E 03 E4 21 01 01 00` | Slot 1 — value `00` = empty/none |
+| `7E 03 64 12 01 02 00` | `7E 03 E4 21 01 02 07` | Slot 2 — `07` |
+| `7E 03 64 12 01 03 00` | `7E 03 E4 21 01 03 00` | Slot 3 |
+| `7E 03 64 12 01 04 00` | `7E 03 E4 21 01 04 00` | Slot 4 |
+| `7E 03 64 12 01 05 00` | `7E 03 E4 21 01 05 02` | Slot 5 — `02` |
+
+Sub-cmd `01 NN` enumerates 5 slots; response last byte = device-type/status code. Distinct from Form A — PitHouse uses Form B in startup probe. Per-slot semantics (which physical port maps to which NN) undecoded.

@@ -32,7 +32,7 @@ PitHouse is dashboard/config manager. SimHub plugin is telemetry feeder. Each ow
 | Probe | PitHouse | SimHub plugin | Documented? |
 |-------|----------|---------------|-------------|
 | Base probe (group 0x2B dev 0x13) | `7E 03 2B 13 02 00 00 CE` | `7E 03 2B 13 01 00 01 CE` (pre-fix) → now `02 00 00 CE` | FIXED 2026-04-21: `BaseProbeFrame` in `MozaSerialConnection.cs:469` now matches PitHouse pattern |
-| Hub probe (group 0x64 dev 0x12) | not sent | `7E 03 64 12 03 00 00 07` | `(0x64, 0x12, 03)` documented in `sim/wheel_sim.py` as "hub-port1-power probe". PitHouse does not use — SimHub plugin-specific |
+| Hub probe (group 0x64 dev 0x12) | Form B `01 NN 00` (5-slot enum) — see [`../devices/main-hub-0x12.md`](../devices/main-hub-0x12.md) | Form A `7E 03 64 12 03 00 00 07` | Both forms documented. PitHouse and plugin probe via different sub-cmds — superseded 2026-04-28 from `usb-capture/ksp/gfdsgfd.pcapng` |
 
 ### Periodic polling not done by PitHouse
 
