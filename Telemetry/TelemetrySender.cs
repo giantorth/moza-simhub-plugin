@@ -157,6 +157,18 @@ namespace MozaPlugin.Telemetry
         private byte[] _cachedSequenceFrame = null!;
         private byte[][] _cachedHeartbeatFrames = null!;
 
+        // Group 0x43 N=1 device-ping frames sent ~1 Hz. Static — device IDs and
+        // checksums never vary, so the byte[]s outlive any sender instance.
+        private static readonly byte[] _dashKeepaliveFrameDash = BuildKeepaliveFrame(MozaProtocol.DeviceDash);
+        private static readonly byte[] _dashKeepaliveFrame15 = BuildKeepaliveFrame(0x15);
+        private static readonly byte[] _dashKeepaliveFrameWheel = BuildKeepaliveFrame(MozaProtocol.DeviceWheel);
+
+        // Lazy per-page cache for the 7C:27/7C:23 display-config frames sent
+        // ~1 Hz. Invalidated when the profile's page count changes; rebuilt on
+        // first SendDisplayConfig() after that.
+        private byte[][]? _cachedDisplayConfigFrames;
+        private int _cachedDisplayConfigPageCount;
+
         // Session ports determined during port probing.
         // MgmtPort = first acked port (session 0x01, used for dashboard upload).
         // FlagByte = second acked port (session 0x02, used for tier definitions and fc:00 acks).
@@ -1945,42 +1957,69 @@ namespace MozaPlugin.Telemetry
             // Distinct from group 0x00 heartbeats and SerialStream fc:00 acks.
             // Unclear whether the wheel requires this for telemetry to flow, but
             // Pithouse sends it consistently (~15× per session).
-            foreach (byte dev in new byte[] { MozaProtocol.DeviceDash, 0x15, MozaProtocol.DeviceWheel })
-            {
-                var frame = new byte[] { MozaProtocol.MessageStart, 0x01, MozaProtocol.TelemetrySendGroup, dev, 0x00, 0x00 };
-                frame[5] = MozaProtocol.CalculateWireChecksum(frame);
-                _connection.Send(frame);
-            }
+            _connection.Send(_dashKeepaliveFrameDash);
+            _connection.Send(_dashKeepaliveFrame15);
+            _connection.Send(_dashKeepaliveFrameWheel);
+        }
+
+        private static byte[] BuildKeepaliveFrame(byte dev)
+        {
+            var frame = new byte[] { MozaProtocol.MessageStart, 0x01, MozaProtocol.TelemetrySendGroup, dev, 0x00, 0x00 };
+            frame[5] = MozaProtocol.CalculateWireChecksum(frame);
+            return frame;
         }
 
         private void SendDisplayConfig()
         {
             int pageCount = _profile?.PageCount ?? 1;
+            if (pageCount < 1) pageCount = 1;
+            EnsureDisplayConfigCache(pageCount);
+
             int page = _displayConfigPage % pageCount;
             _displayConfigPage++;
 
-            byte b2 = (byte)(0x05 + 2 * page);
-            byte b4 = (byte)(0x03 + 2 * page);
-            byte z  = (byte)(0x06 + 2 * page);
-
-            var configFrame = new byte[] { MozaProtocol.MessageStart, 0x0A, MozaProtocol.TelemetrySendGroup,
-                MozaProtocol.DeviceWheel, 0x7C, 0x27, 0x0F, 0x80, b2, 0x00, b4, 0x00, 0xFE, 0x01, 0x00 };
-            configFrame[14] = MozaProtocol.CalculateWireChecksum(configFrame);
-            _connection.Send(configFrame);
-
+            var frames = _cachedDisplayConfigFrames!;
+            int baseIdx = page * 3;
+            _connection.Send(frames[baseIdx + 0]);
             // 7C:23 dashboard-activate: tells the wheel which dashboard pages are
             // active. PitHouse sends one per page interleaved with 7C:27 at ~1 Hz.
-            byte ab2 = (byte)(0x07 + 2 * page);
-            byte ab4 = (byte)(0x05 + 2 * page);
-            var activateFrame = new byte[] { MozaProtocol.MessageStart, 0x0A, MozaProtocol.TelemetrySendGroup,
-                MozaProtocol.DeviceWheel, 0x7C, 0x23, 0x46, 0x80, ab2, 0x00, ab4, 0x00, 0xFE, 0x01, 0x00 };
-            activateFrame[14] = MozaProtocol.CalculateWireChecksum(activateFrame);
-            _connection.Send(activateFrame);
+            _connection.Send(frames[baseIdx + 1]);
+            _connection.Send(frames[baseIdx + 2]);
+        }
 
-            var configFrame2 = new byte[] { MozaProtocol.MessageStart, 0x06, MozaProtocol.TelemetrySendGroup,
-                MozaProtocol.DeviceWheel, 0x7C, 0x27, 0x0F, 0x00, z, 0x00, 0x00 };
-            configFrame2[10] = MozaProtocol.CalculateWireChecksum(configFrame2);
-            _connection.Send(configFrame2);
+        private void EnsureDisplayConfigCache(int pageCount)
+        {
+            if (_cachedDisplayConfigFrames != null && _cachedDisplayConfigPageCount == pageCount)
+                return;
+
+            var frames = new byte[pageCount * 3][];
+            for (int page = 0; page < pageCount; page++)
+            {
+                byte b2 = (byte)(0x05 + 2 * page);
+                byte b4 = (byte)(0x03 + 2 * page);
+                byte z  = (byte)(0x06 + 2 * page);
+                byte ab2 = (byte)(0x07 + 2 * page);
+                byte ab4 = (byte)(0x05 + 2 * page);
+
+                var configFrame = new byte[] { MozaProtocol.MessageStart, 0x0A, MozaProtocol.TelemetrySendGroup,
+                    MozaProtocol.DeviceWheel, 0x7C, 0x27, 0x0F, 0x80, b2, 0x00, b4, 0x00, 0xFE, 0x01, 0x00 };
+                configFrame[14] = MozaProtocol.CalculateWireChecksum(configFrame);
+
+                var activateFrame = new byte[] { MozaProtocol.MessageStart, 0x0A, MozaProtocol.TelemetrySendGroup,
+                    MozaProtocol.DeviceWheel, 0x7C, 0x23, 0x46, 0x80, ab2, 0x00, ab4, 0x00, 0xFE, 0x01, 0x00 };
+                activateFrame[14] = MozaProtocol.CalculateWireChecksum(activateFrame);
+
+                var configFrame2 = new byte[] { MozaProtocol.MessageStart, 0x06, MozaProtocol.TelemetrySendGroup,
+                    MozaProtocol.DeviceWheel, 0x7C, 0x27, 0x0F, 0x00, z, 0x00, 0x00 };
+                configFrame2[10] = MozaProtocol.CalculateWireChecksum(configFrame2);
+
+                frames[page * 3 + 0] = configFrame;
+                frames[page * 3 + 1] = activateFrame;
+                frames[page * 3 + 2] = configFrame2;
+            }
+
+            _cachedDisplayConfigFrames = frames;
+            _cachedDisplayConfigPageCount = pageCount;
         }
 
         private void SendStatusPush()

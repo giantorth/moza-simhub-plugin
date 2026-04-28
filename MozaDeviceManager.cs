@@ -1,3 +1,4 @@
+using System;
 using System.Threading;
 using System.Threading.Tasks;
 using MozaPlugin.Protocol;
@@ -9,9 +10,10 @@ namespace MozaPlugin
     /// Handles reading and writing settings to Moza devices.
     /// Includes wheel ID cycling to support different wheel models (23, 21, 19).
     /// </summary>
-    public class MozaDeviceManager
+    public class MozaDeviceManager : IDisposable
     {
         private readonly MozaSerialConnection _connection;
+        private readonly CancellationTokenSource _shutdownCts = new CancellationTokenSource();
 
         // Wheel device ID detection
         // ES wheels may be on ID 21 instead of 23; R5 ES wheels share base ID 19
@@ -243,14 +245,32 @@ namespace MozaPlugin
         /// </summary>
         public void ReadSettingsPaced(string[] commandNames, int gapMs = 10)
         {
+            var token = _shutdownCts.Token;
             Task.Run(() =>
             {
-                foreach (var name in commandNames)
+                try
                 {
-                    ReadSetting(name);
-                    Thread.Sleep(gapMs);
+                    foreach (var name in commandNames)
+                    {
+                        if (token.IsCancellationRequested) return;
+                        ReadSetting(name);
+                        // Cancellable sleep — Dispose() cancels the token so a
+                        // mid-batch teardown unblocks immediately instead of
+                        // running the remaining (commandNames * gapMs) ms.
+                        if (token.WaitHandle.WaitOne(gapMs)) return;
+                    }
                 }
-            });
+                catch (ObjectDisposedException)
+                {
+                    // CTS disposed while we were running — accept and exit.
+                }
+            }, token);
+        }
+
+        public void Dispose()
+        {
+            try { _shutdownCts.Cancel(); } catch { }
+            try { _shutdownCts.Dispose(); } catch { }
         }
 
         private byte GetDeviceId(string deviceType)

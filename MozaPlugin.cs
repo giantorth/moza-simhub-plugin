@@ -359,6 +359,7 @@ namespace MozaPlugin
                 _reconnectTimer = new Timer(5000);
                 _reconnectTimer.Elapsed += (s, e) =>
                 {
+                    if (IsShuttingDown) return;
                     if (!_connection.IsConnected)
                         TryConnect();
                     if (!_ab9Manager.IsConnected)
@@ -415,6 +416,7 @@ namespace MozaPlugin
                 }
             }
             catch { }
+            try { _deviceManager?.Dispose(); } catch { }
             try { _hidReader?.Dispose(); } catch { }
             try { _telemetrySender?.Dispose(); } catch { }
             try { _connection?.Dispose(); } catch { }
@@ -470,7 +472,11 @@ namespace MozaPlugin
             // 4. Stop telemetry send loop before tearing down connection.
             _telemetrySender?.Stop();
 
-            // 5. Dispose I/O sources before dropping Instance so late callbacks
+            // 5. Cancel paced setting-read tasks so they bail out of their
+            //    inter-read sleeps instead of running ~300 ms past teardown.
+            try { _deviceManager?.Dispose(); } catch { }
+
+            // 6. Dispose I/O sources before dropping Instance so late callbacks
             //    see a live (but shutting-down) instance, not null.
             _hidReader?.Dispose();
             _telemetrySender?.Dispose();
@@ -572,9 +578,12 @@ namespace MozaPlugin
                 _ab9Detected = false;
                 _ab9SettingsApplied = false;
                 _ab9Manager?.Disconnect();
-                if (_telemetrySender != null) _telemetrySender.HubPresent = false;
+                if (_telemetrySender != null)
+                {
+                    _telemetrySender.HubPresent = false;
+                    _telemetrySender.DetectedDeviceMask = 0;
+                }
                 _deviceManager.ResetWheelDetection();
-                _telemetrySender.DetectedDeviceMask = 0;
                 Interlocked.Exchange(ref _telemetryStartRequested, 0);
                 _wheelPollMisses = 0;
                 _lastKnownWheelModel = "";
