@@ -650,24 +650,27 @@ namespace MozaPlugin
             var s = _settings;
 
             // One-shot migration from legacy TelemetryProtocolVersion to FirmwareEra.
-            // Old saved values: 0 = URL/CSP; 2 = compact/VGS; anything else = treated as 2.
-            // Fresh installs save -1 → no migration. Already-migrated saves also stamp -1.
+            // Old saved values: 0 = URL tier-def; 2 = compact tier-def. Map to the
+            // 6-byte upload header variant (modern firmware default) since pre-
+            // migration installs had no wire-format setting and the auto-fallback
+            // covers a wrong guess. Fresh installs save -1 → no migration.
             if (s.TelemetryProtocolVersion != -1
                 && s.TelemetryFirmwareEra == MozaFirmwareEra.Auto)
             {
                 s.TelemetryFirmwareEra = s.TelemetryProtocolVersion == 0
-                    ? MozaFirmwareEra.CspUrlSubscription
-                    : MozaFirmwareEra.Modern2026_04;
+                    ? MozaFirmwareEra.TierDefV0_Upload6B
+                    : MozaFirmwareEra.TierDefV2_Upload6B;
                 s.TelemetryProtocolVersion = -1;
             }
 
             // Map era → tier-def ProtocolVersion + file-transfer UploadWireFormat.
             (int protocolVersion, FileTransferWireFormat wireFormat) = s.TelemetryFirmwareEra switch
             {
-                MozaFirmwareEra.Legacy2025_11        => (2, FileTransferWireFormat.Legacy2025_11),
-                MozaFirmwareEra.Modern2026_04        => (2, FileTransferWireFormat.New2026_04),
-                MozaFirmwareEra.CspUrlSubscription   => (0, FileTransferWireFormat.Legacy2025_11),
-                _ /* Auto */                         => (2, FileTransferWireFormat.New2026_04),
+                MozaFirmwareEra.TierDefV2_Upload8B => (2, FileTransferWireFormat.Legacy2025_11),
+                MozaFirmwareEra.TierDefV2_Upload6B => (2, FileTransferWireFormat.New2026_04),
+                MozaFirmwareEra.TierDefV0_Upload8B => (0, FileTransferWireFormat.Legacy2025_11),
+                MozaFirmwareEra.TierDefV0_Upload6B => (0, FileTransferWireFormat.New2026_04),
+                _ /* Auto */                       => (2, FileTransferWireFormat.New2026_04),
             };
             _telemetrySender.ProtocolVersion = protocolVersion;
             _telemetrySender.UploadWireFormat = wireFormat;

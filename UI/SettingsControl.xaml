@@ -838,17 +838,18 @@
                         <TextBlock TextWrapping="Wrap" Foreground="Gray" FontSize="11" Margin="0,0,0,8"
                                    Text="Attempt to upload selected mzdash file.  Experimental."/>
                         <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
-                            <TextBlock Text="Firmware era:" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                            <ComboBox x:Name="FirmwareEraCombo" Width="380"
+                            <TextBlock Text="Wire protocol:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                            <ComboBox x:Name="FirmwareEraCombo" Width="420"
                                       SelectionChanged="FirmwareEra_Changed">
-                                <ComboBoxItem Content="Auto (recommended) — modern defaults + fallback"/>
-                                <ComboBoxItem Content="2025-11"/>
-                                <ComboBoxItem Content="2026-04+ — KS Pro"/>
-                                <ComboBoxItem Content="Legacy URL subscription + legacy upload wire"/>
+                                <ComboBoxItem Content="Auto — pick safe defaults with fallback"/>
+                                <ComboBoxItem Content="Compact tier-def + 8-byte upload header"/>
+                                <ComboBoxItem Content="Compact tier-def + 6-byte upload header"/>
+                                <ComboBoxItem Content="URL tier-def + 8-byte upload header"/>
+                                <ComboBoxItem Content="URL tier-def + 6-byte upload header"/>
                             </ComboBox>
                         </StackPanel>
                         <TextBlock TextWrapping="Wrap" Foreground="Gray" FontSize="11" Margin="0,2,0,8"
-                                   Text="Selects tier-definition variant and dashboard-upload wire format together. Auto picks modern defaults and falls back automatically. Pick your firmware era only if uploads or telemetry fail with Auto. Telemetry restarts automatically on change."/>
+                                   Text="Two axes: tier-def format (compact numeric vs URL subscription) and dashboard-upload sub-msg header size (8-byte vs 6-byte). Auto picks safe defaults with one-time auto-fallback on upload timeout. Override only if uploads or telemetry stay broken. Telemetry restarts automatically on change."/>
 
                         <TextBlock Text="Reset" Style="{StaticResource SectionHeader}"/>
                         <StackPanel Orientation="Horizontal" Margin="0,8">

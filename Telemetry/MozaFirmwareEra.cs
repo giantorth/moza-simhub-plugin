@@ -1,41 +1,42 @@
 namespace MozaPlugin.Telemetry
 {
     /// <summary>
-    /// Firmware era of the connected Moza wheel/base. Drives both tier-definition
-    /// variant and dashboard-upload wire format. Replaces the legacy
-    /// <c>TelemetryProtocolVersion</c> integer setting which only controlled the
-    /// tier-def variant in isolation.
+    /// Wire-protocol combination for telemetry handshake. Each entry is a
+    /// pairing of two orthogonal axes:
     ///
-    /// Era inference is documented in <c>docs/protocol/FIRMWARE.md</c>. Mapping
-    /// to internal toggles lives in <c>MozaPlugin.ApplyTelemetrySettings</c>.
+    ///   Tier-def axis:
+    ///     V2 — compact numeric (single batch of flag bytes, channel indices,
+    ///          compression codes, bit widths per tier).
+    ///     V0 — URL subscription (host sends channel URLs; wheel resolves
+    ///          compression internally).
+    ///
+    ///   Upload-header axis:
+    ///     8B — 8-byte sub-msg header (`role/max_chunk/type/5×reserved`).
+    ///     6B — 6-byte sub-msg header (`type/size_LE/3×reserved`).
+    ///
+    /// Naming reflects observable wire bytes only. Wheel/firmware mapping is
+    /// captured in <c>docs/protocol/FIRMWARE.md</c> for reference. configJson
+    /// and tile-server session locations are auto-detected by the plugin and
+    /// don't need a setting.
     /// </summary>
     public enum MozaFirmwareEra
     {
         /// <summary>
-        /// Use plugin defaults: tier-def v2 compact + 2026-04 upload wire format
-        /// with auto-fallback to legacy on sub-msg 1 timeout. Recommended for
-        /// users who don't know their firmware era.
+        /// Plugin defaults: V2 compact tier-def + 6-byte upload header. Plugin
+        /// auto-fallbacks the upload header to 8-byte on first sub-msg-1 timeout.
         /// </summary>
         Auto = 0,
 
-        /// <summary>
-        /// 2025-11 firmware (VGS, CS V2.1). Tier-def v2 compact numeric +
-        /// legacy 8-byte file-transfer header.
-        /// </summary>
-        Legacy2025_11 = 1,
+        /// <summary>Compact tier-def (V2) + 8-byte upload header.</summary>
+        TierDefV2_Upload8B = 1,
 
-        /// <summary>
-        /// 2026-04+ firmware (KS Pro, current PitHouse). Tier-def v2 compact +
-        /// new 6-byte file-transfer header.
-        /// </summary>
-        Modern2026_04 = 2,
+        /// <summary>Compact tier-def (V2) + 6-byte upload header.</summary>
+        TierDefV2_Upload6B = 2,
 
-        /// <summary>
-        /// CSP on older firmware — tier-def v0 URL-subscription form +
-        /// legacy 2025-11 upload wire. CSPs running modern firmware should
-        /// pick <see cref="Modern2026_04"/> instead (URL-subscription is a
-        /// firmware-version marker, not a hardware property).
-        /// </summary>
-        CspUrlSubscription = 3,
+        /// <summary>URL-subscription tier-def (V0) + 8-byte upload header.</summary>
+        TierDefV0_Upload8B = 3,
+
+        /// <summary>URL-subscription tier-def (V0) + 6-byte upload header.</summary>
+        TierDefV0_Upload6B = 4,
     }
 }

@@ -1159,10 +1159,11 @@ namespace MozaPlugin
         {
             switch (era)
             {
-                case MozaFirmwareEra.Auto: return 0;
-                case MozaFirmwareEra.Legacy2025_11: return 1;
-                case MozaFirmwareEra.Modern2026_04: return 2;
-                case MozaFirmwareEra.CspUrlSubscription: return 3;
+                case MozaFirmwareEra.Auto:               return 0;
+                case MozaFirmwareEra.TierDefV2_Upload8B: return 1;
+                case MozaFirmwareEra.TierDefV2_Upload6B: return 2;
+                case MozaFirmwareEra.TierDefV0_Upload8B: return 3;
+                case MozaFirmwareEra.TierDefV0_Upload6B: return 4;
                 default: return 0;
             }
         }
@@ -1172,9 +1173,10 @@ namespace MozaPlugin
             switch (index)
             {
                 case 0: return MozaFirmwareEra.Auto;
-                case 1: return MozaFirmwareEra.Legacy2025_11;
-                case 2: return MozaFirmwareEra.Modern2026_04;
-                case 3: return MozaFirmwareEra.CspUrlSubscription;
+                case 1: return MozaFirmwareEra.TierDefV2_Upload8B;
+                case 2: return MozaFirmwareEra.TierDefV2_Upload6B;
+                case 3: return MozaFirmwareEra.TierDefV0_Upload8B;
+                case 4: return MozaFirmwareEra.TierDefV0_Upload6B;
                 default: return MozaFirmwareEra.Auto;
             }
         }
