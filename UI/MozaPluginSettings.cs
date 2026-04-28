@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using MozaPlugin.Telemetry;
 
 namespace MozaPlugin
 {
@@ -92,12 +93,20 @@ namespace MozaPlugin
         // PitHouse does this on every connection — the wheel may require it.
         public bool TelemetryUploadDashboard { get; set; } = false;
 
-        // Tier definition protocol variant.
-        //   0 = URL-based subscription (CSP-style — host sends channel URLs,
-        //       wheel firmware resolves compression internally)
-        //   2 = Compact numeric, single batch (host sends flag bytes, channel
-        //       indices, compression codes, bit widths per tier)
-        public int TelemetryProtocolVersion { get; set; } = 2;
+        // Legacy tier-def variant setting. Migrated into TelemetryFirmwareEra
+        // on first load (see MozaPlugin.ApplyTelemetrySettings). Kept around so
+        // older saved settings continue to round-trip during migration.
+        //   0 = URL-based subscription (CSP-style)
+        //   2 = Compact numeric (VGS-style)
+        // -1 = sentinel meaning "migrated, ignore".
+        public int TelemetryProtocolVersion { get; set; } = -1;
+
+        // Firmware era of the connected wheel. Drives both the tier-def variant
+        // and the file-transfer wire format. See Telemetry/MozaFirmwareEra.cs.
+        // Default Auto = let the plugin pick (current 2026-04+ defaults with
+        // legacy fallback on upload timeout).
+        public MozaFirmwareEra TelemetryFirmwareEra { get; set; }
+            = MozaFirmwareEra.Auto;
 
         // Telemetry send rate in Hz
         public int TelemetrySendRateHz { get; set; } = 20;

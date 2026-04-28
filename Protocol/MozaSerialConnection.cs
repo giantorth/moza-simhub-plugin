@@ -81,6 +81,15 @@ namespace MozaPlugin.Protocol
         /// </summary>
         public string? DiscoveredPid { get; private set; }
 
+        /// <summary>
+        /// True when the last successful port-detect probe succeeded via the
+        /// hub probe (group 0x64, dev 0x12, cmd 0x03). Indicates a Universal Hub
+        /// is on the bus. Used by TelemetrySender to gate the post-session-open
+        /// 5-slot enumeration burst (`0x64/0x12 cmd 01 NN 00`) that PitHouse
+        /// fires only when a hub is attached.
+        /// </summary>
+        public bool HubProbeSucceeded { get; private set; }
+
         public MozaSerialConnection() : this(null) { }
 
         /// <summary>
@@ -108,12 +117,13 @@ namespace MozaPlugin.Protocol
             if (_lastPortName != null && TryOpen(_lastPortName))
                 return true;
 
-            var (portName, pid) = FindMozaPort(_pidFilter, () => _shutdownRequested);
+            var (portName, pid, viaHubProbe) = FindMozaPort(_pidFilter, () => _shutdownRequested);
             if (portName == null)
                 return false;
 
             if (pid != null)
                 DiscoveredPid = pid;
+            HubProbeSucceeded = viaHubProbe;
 
             return TryOpen(portName);
         }
@@ -611,7 +621,7 @@ namespace MozaPlugin.Protocol
             return results;
         }
 
-        private static (string? PortName, string? Pid) FindMozaPort(
+        private static (string? PortName, string? Pid, bool ViaHubProbe) FindMozaPort(
             Func<string?, bool>? pidFilter = null,
             Func<bool>? cancel = null)
         {
@@ -632,12 +642,12 @@ namespace MozaPlugin.Protocol
                     }
                     MozaLog.Info(
                         $"[Moza] Found Moza device on {portName} PID={pid ?? "unknown"} (WMI)");
-                    return (portName, pid);
+                    return (portName, pid, false);
                 }
                 // No match for this filter — silent at Debug level. Reconnect
                 // timer ticks every 5s, so Info would spam the log.
                 MozaLog.Debug("[Moza] No matching MOZA device found via WMI");
-                return (null, null);
+                return (null, null, false);
             }
 
             // WMI unavailable — drop to probe. Probe path can't read PID, so a
@@ -647,7 +657,7 @@ namespace MozaPlugin.Protocol
             {
                 MozaLog.Debug(
                     "[Moza] WMI unavailable and probe path is filtered out; giving up");
-                return (null, null);
+                return (null, null, false);
             }
 
             MozaLog.Debug("[Moza] WMI discovery returned no devices, trying probe");
@@ -674,34 +684,34 @@ namespace MozaPlugin.Protocol
             var unreachable = new HashSet<string>();
             foreach (var port in ports)
             {
-                if (cancel?.Invoke() == true) return (null, null);
+                if (cancel?.Invoke() == true) return (null, null, false);
 
                 var (responded, reachable) = ProbeWithTimeout(port, 600, baseProbe: true);
                 if (responded)
                 {
                     MozaLog.Info($"[Moza] Found Moza base on {port} (probe)");
-                    return (port, null);
+                    return (port, null, false);
                 }
                 if (!reachable) unreachable.Add(port);
             }
 
             foreach (var port in ports)
             {
-                if (cancel?.Invoke() == true) return (null, null);
+                if (cancel?.Invoke() == true) return (null, null, false);
                 if (unreachable.Contains(port)) continue;
 
                 var (responded, _) = ProbeWithTimeout(port, 600, baseProbe: false);
                 if (responded)
                 {
                     MozaLog.Info($"[Moza] Found Moza hub on {port} (probe)");
-                    return (port, null);
+                    return (port, null, true);
                 }
             }
 
             // Drop to Debug — reconnect timer fires every 5s, so Info-level
             // would flood the log when no device is plugged in.
             MozaLog.Debug("[Moza] No MOZA device found on any COM port");
-            return (null, null);
+            return (null, null, false);
         }
 
         /// <summary>

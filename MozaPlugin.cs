@@ -580,7 +580,6 @@ namespace MozaPlugin
                 _ab9Manager?.Disconnect();
                 if (_telemetrySender != null)
                 {
-                    _telemetrySender.HubPresent = false;
                     _telemetrySender.DetectedDeviceMask = 0;
                 }
                 _deviceManager.ResetWheelDetection();
@@ -650,10 +649,28 @@ namespace MozaPlugin
             if (_telemetrySender == null) return;
             var s = _settings;
 
-            // Legacy v3 (dropped — crashed some wheels) migrates to v2.
-            if (s.TelemetryProtocolVersion != 0 && s.TelemetryProtocolVersion != 2)
-                s.TelemetryProtocolVersion = 2;
-            _telemetrySender.ProtocolVersion = s.TelemetryProtocolVersion;
+            // One-shot migration from legacy TelemetryProtocolVersion to FirmwareEra.
+            // Old saved values: 0 = URL/CSP; 2 = compact/VGS; anything else = treated as 2.
+            // Fresh installs save -1 → no migration. Already-migrated saves also stamp -1.
+            if (s.TelemetryProtocolVersion != -1
+                && s.TelemetryFirmwareEra == MozaFirmwareEra.Auto)
+            {
+                s.TelemetryFirmwareEra = s.TelemetryProtocolVersion == 0
+                    ? MozaFirmwareEra.CspUrlSubscription
+                    : MozaFirmwareEra.Modern2026_04;
+                s.TelemetryProtocolVersion = -1;
+            }
+
+            // Map era → tier-def ProtocolVersion + file-transfer UploadWireFormat.
+            (int protocolVersion, FileTransferWireFormat wireFormat) = s.TelemetryFirmwareEra switch
+            {
+                MozaFirmwareEra.Legacy2025_11        => (2, FileTransferWireFormat.Legacy2025_11),
+                MozaFirmwareEra.Modern2026_04        => (2, FileTransferWireFormat.New2026_04),
+                MozaFirmwareEra.CspUrlSubscription   => (0, FileTransferWireFormat.Legacy2025_11),
+                _ /* Auto */                         => (2, FileTransferWireFormat.New2026_04),
+            };
+            _telemetrySender.ProtocolVersion = protocolVersion;
+            _telemetrySender.UploadWireFormat = wireFormat;
             _telemetrySender.UploadDashboard = s.TelemetryUploadDashboard;
 
             // Resolve the active multi-stream profile and raw mzdash content
@@ -1465,7 +1482,6 @@ namespace MozaPlugin
                     if (!_hubDetected)
                     {
                         _hubDetected = true;
-                        if (_telemetrySender != null) _telemetrySender.HubPresent = true;
                         _deviceManager.ReadSettings(HubReadCommands);
                         MozaLog.Info("[Moza] Universal Hub detected");
                     }

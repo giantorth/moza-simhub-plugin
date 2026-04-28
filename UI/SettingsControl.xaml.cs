@@ -7,6 +7,7 @@ using System.Windows.Media;
 using System.Windows.Shapes;
 using System.Windows.Threading;
 using MozaPlugin.Devices;
+using MozaPlugin.Telemetry;
 using SerialTrafficCapture = MozaPlugin.Diagnostics.SerialTrafficCapture;
 
 namespace MozaPlugin
@@ -1130,7 +1131,7 @@ namespace MozaPlugin
             {
                 var s = _plugin.Settings;
                 UploadDashboardCheck.IsChecked = s.TelemetryUploadDashboard;
-                ProtocolVersionCombo.SelectedIndex = ProtocolVersionToIndex(s.TelemetryProtocolVersion);
+                FirmwareEraCombo.SelectedIndex = FirmwareEraToIndex(s.TelemetryFirmwareEra);
             }
             finally
             {
@@ -1146,31 +1147,35 @@ namespace MozaPlugin
             _plugin.RestartTelemetry();
         }
 
-        private void ProtocolVersion_Changed(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+        private void FirmwareEra_Changed(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
         {
             if (_suppressEvents) return;
-            _plugin.Settings.TelemetryProtocolVersion = ProtocolVersionFromIndex(ProtocolVersionCombo.SelectedIndex);
+            _plugin.Settings.TelemetryFirmwareEra = FirmwareEraFromIndex(FirmwareEraCombo.SelectedIndex);
             _plugin.SaveSettings();
             _plugin.RestartTelemetry();
         }
 
-        private static int ProtocolVersionToIndex(int version)
+        private static int FirmwareEraToIndex(MozaFirmwareEra era)
         {
-            switch (version)
+            switch (era)
             {
-                case 0: return 0;
-                case 2: return 1;
-                default: return 1;
+                case MozaFirmwareEra.Auto: return 0;
+                case MozaFirmwareEra.Legacy2025_11: return 1;
+                case MozaFirmwareEra.Modern2026_04: return 2;
+                case MozaFirmwareEra.CspUrlSubscription: return 3;
+                default: return 0;
             }
         }
 
-        private static int ProtocolVersionFromIndex(int index)
+        private static MozaFirmwareEra FirmwareEraFromIndex(int index)
         {
             switch (index)
             {
-                case 0: return 0;
-                case 1: return 2;
-                default: return 2;
+                case 0: return MozaFirmwareEra.Auto;
+                case 1: return MozaFirmwareEra.Legacy2025_11;
+                case 2: return MozaFirmwareEra.Modern2026_04;
+                case 3: return MozaFirmwareEra.CspUrlSubscription;
+                default: return MozaFirmwareEra.Auto;
             }
         }
 
@@ -1294,7 +1299,9 @@ namespace MozaPlugin
             sb.AppendLine($"FramesSent:         {ts.FramesSent}");
             sb.AppendLine($"DisplayDetected:    {ts.DisplayDetected}");
             sb.AppendLine($"DisplayModelName:   {Blank(ts.DisplayModelName)}");
+            sb.AppendLine($"FirmwareEra:        {_plugin.Settings.TelemetryFirmwareEra}");
             sb.AppendLine($"ProtocolVersion:    {ts.ProtocolVersion}");
+            sb.AppendLine($"UploadWireFormat:   {ts.UploadWireFormat}");
             sb.AppendLine($"FlagByte:           0x{ts.FlagByte:X2}");
             sb.AppendLine($"UploadDashboard:    {ts.UploadDashboard}");
             sb.Append    ($"Profile:            {ts.Profile?.Name ?? "(none)"}");

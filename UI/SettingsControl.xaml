@@ -838,15 +838,17 @@
                         <TextBlock TextWrapping="Wrap" Foreground="Gray" FontSize="11" Margin="0,0,0,8"
                                    Text="Attempt to upload selected mzdash file.  Experimental."/>
                         <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
-                            <TextBlock Text="Protocol version:" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                            <ComboBox x:Name="ProtocolVersionCombo" Width="320"
-                                      SelectionChanged="ProtocolVersion_Changed">
-                                <ComboBoxItem Content="0 — URL subscription (CSP-style)"/>
-                                <ComboBoxItem Content="2 — Compact numeric (VGS-style)"/>
+                            <TextBlock Text="Firmware era:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                            <ComboBox x:Name="FirmwareEraCombo" Width="380"
+                                      SelectionChanged="FirmwareEra_Changed">
+                                <ComboBoxItem Content="Auto (recommended) — modern defaults + fallback"/>
+                                <ComboBoxItem Content="2025-11"/>
+                                <ComboBoxItem Content="2026-04+ — KS Pro"/>
+                                <ComboBoxItem Content="Legacy URL subscription + legacy upload wire"/>
                             </ComboBox>
                         </StackPanel>
                         <TextBlock TextWrapping="Wrap" Foreground="Gray" FontSize="11" Margin="0,2,0,8"
-                                   Text="Tier definition format. Version 2 (default) is single-batch compact numeric; 0 sends URLs for the wheel to resolve. Telemetry restarts automatically on change."/>
+                                   Text="Selects tier-definition variant and dashboard-upload wire format together. Auto picks modern defaults and falls back automatically. Pick your firmware era only if uploads or telemetry fail with Auto. Telemetry restarts automatically on change."/>
 
                         <TextBlock Text="Reset" Style="{StaticResource SectionHeader}"/>
                         <StackPanel Orientation="Horizontal" Margin="0,8">

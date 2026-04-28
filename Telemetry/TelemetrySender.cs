@@ -197,15 +197,6 @@ namespace MozaPlugin.Telemetry
         /// <summary>Whether to upload the dashboard to the wheel on startup.</summary>
         public bool UploadDashboard { get; set; } = true;
 
-        /// <summary>
-        /// True when MozaPlugin has detected a Universal Hub on the bus. Switches
-        /// the handshake to PitHouse's hub-attached ordering: open 0x03 before
-        /// 0x01/0x02, wait longer for the wheel's device-init session burst on
-        /// 0x05/0x07/0x09/0x0a, and skip the host-open fallback for the upload
-        /// session (racing it confuses the wheel state machine — see
-        /// usb-capture/ksp/mozahubstartup.pcapng).
-        /// </summary>
-        public bool HubPresent { get; set; }
 
         /// <summary>
         /// Resolver invoked per frame for channels with a non-empty
@@ -319,6 +310,15 @@ namespace MozaPlugin.Telemetry
 
             // Bail out if Stop() was called while we were probing
             if (!_enabled) return;
+
+            // Universal Hub: PitHouse fires a 5-frame burst enumerating hub
+            // slots ~300ms after sessions open (gfdsgfd.pcapng f54501 t=17.08s,
+            // sessions opened at t=16.77s). Each frame asks for the device-type
+            // code on a slot; hub responds with `e4/0x21 cmd 01 NN VV`. Plugin
+            // mirrors this so wheel firmware sees the same handshake and
+            // populates per-port device metadata. Skipped when no hub detected.
+            if (_connection.HubProbeSucceeded)
+                SendHubSlotEnumeration();
 
             // Prime session 0x09 (configJson state push channel). Wheels we've
             // observed (KS Pro on Universal Hub, plugin v0.8.3) only open
@@ -1819,6 +1819,35 @@ namespace MozaPlugin.Telemetry
             };
             frame[frame.Length - 1] = MozaProtocol.CalculateWireChecksum(frame);
             _connection.Send(frame);
+        }
+
+        /// <summary>
+        /// Universal-Hub 5-slot enumeration burst. Sends `7E 03 64 12 01 NN 00 [chk]`
+        /// for slots 1..5 in a tight burst (PitHouse fires all 5 in a single USB
+        /// packet). Hub answers with `7E 03 E4 21 01 NN VV [chk]` per slot, where
+        /// VV = device-type code on that port (0x00 = empty). Mirrors PitHouse's
+        /// wire pattern observed in `usb-capture/ksp/gfdsgfd.pcapng` at f54501.
+        ///
+        /// Distinct from the legacy <c>hub-port[1..3]-power</c> reads (group
+        /// 0x64, cmds 0x03/0x04/0x05) — those poll power level on individual
+        /// ports; this enumerates device-types across all 5 slots.
+        /// </summary>
+        private void SendHubSlotEnumeration()
+        {
+            if (!_connection.IsConnected) return;
+
+            for (byte slot = 0x01; slot <= 0x05; slot++)
+            {
+                var frame = new byte[]
+                {
+                    MozaProtocol.MessageStart, 0x03,
+                    0x64, MozaProtocol.DeviceMain,
+                    0x01, slot, 0x00,
+                    0x00, // checksum placeholder
+                };
+                frame[frame.Length - 1] = MozaProtocol.CalculateWireChecksum(frame);
+                _connection.Send(frame);
+            }
         }
 
         // ── Channel configuration ───────────────────────────────────────────
