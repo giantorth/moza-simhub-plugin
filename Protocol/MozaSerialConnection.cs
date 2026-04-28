@@ -33,14 +33,37 @@ namespace MozaPlugin.Protocol
         Mode = 10,
     }
 
+    /// <summary>
+    /// Which device family the probe path should target when WMI enumeration
+    /// fails. Each target uses a frame the device responds to with its own
+    /// distinct response group, so a single probe pass can confirm identity
+    /// without grabbing the wrong device's port.
+    /// </summary>
+    public enum MozaProbeTarget
+    {
+        BaseAndHub,
+        Ab9,
+    }
+
     public class MozaSerialConnection : IDisposable
     {
         private const int StreamSlotCount = 11;
+
+        // Ports currently held by a live MozaSerialConnection. Probe path skips
+        // these so the AB9 manager (or any future second connection) can't open
+        // the wheelbase's tty under Wine — Linux pty serial drivers don't enforce
+        // O_EXCL, so a second SerialPort.Open succeeds and any probe written
+        // there reaches the device that's already conversing with the first
+        // connection. The unsolicited 0x89 reply then lands on the wrong read
+        // thread and the parser logs it as a spurious wheel-presence response.
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _activePorts =
+            new System.Collections.Concurrent.ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
 
         // Filter applied during port discovery. Receives the WMI-reported PID
         // ("0x1000") or null for probe-based discovery where PID is unknown.
         // Returns true to accept, false to skip. Default = accept all.
         private readonly Func<string?, bool>? _pidFilter;
+        private readonly MozaProbeTarget _probeTarget;
 
         private volatile SerialPort? _port;
         private Thread? _readThread;
@@ -90,16 +113,23 @@ namespace MozaPlugin.Protocol
         /// </summary>
         public bool HubProbeSucceeded { get; private set; }
 
-        public MozaSerialConnection() : this(null) { }
+        public MozaSerialConnection() : this(null, MozaProbeTarget.BaseAndHub) { }
 
         /// <summary>
         /// Construct a serial connection scoped to a subset of MOZA composite
         /// devices. <paramref name="pidFilter"/> receives each candidate port's
         /// PID (null under Wine probe discovery) and returns true to accept.
+        /// <paramref name="probeTarget"/> selects which probe frames are issued
+        /// when WMI is unavailable; AB9 callers must pass <see cref="MozaProbeTarget.Ab9"/>
+        /// so the AB9-specific identity probe is used (and so the wheelbase
+        /// hub probe never claims an AB9 port).
         /// </summary>
-        public MozaSerialConnection(Func<string?, bool>? pidFilter)
+        public MozaSerialConnection(
+            Func<string?, bool>? pidFilter,
+            MozaProbeTarget probeTarget = MozaProbeTarget.BaseAndHub)
         {
             _pidFilter = pidFilter;
+            _probeTarget = probeTarget;
         }
 
         public bool Connect()
@@ -117,7 +147,7 @@ namespace MozaPlugin.Protocol
             if (_lastPortName != null && TryOpen(_lastPortName))
                 return true;
 
-            var (portName, pid, viaHubProbe) = FindMozaPort(_pidFilter, () => _shutdownRequested);
+            var (portName, pid, viaHubProbe) = FindMozaPort(_pidFilter, _probeTarget, () => _shutdownRequested);
             if (portName == null)
                 return false;
 
@@ -174,6 +204,7 @@ namespace MozaPlugin.Protocol
                 }
 
                 _lastPortName = portName;
+                _activePorts[portName] = 1;
                 Interlocked.Exchange(ref _consecutiveIoErrors, 0);
                 _portFailureLogged = false;
                 MozaLog.Info($"[Moza] Connected to {portName}");
@@ -208,6 +239,9 @@ namespace MozaPlugin.Protocol
                 try { p.Close(); }
                 catch (Exception ex) { MozaLog.Debug($"[Moza] Port close: {ex.Message}"); }
             }
+
+            if (_lastPortName != null)
+                _activePorts.TryRemove(_lastPortName, out _);
 
             _readThread?.Join(1000);
             _writeThread?.Join(1000);
@@ -614,15 +648,22 @@ namespace MozaPlugin.Protocol
                     }
                 }
             }
-            catch
+            catch (Exception ex)
             {
-                // WMI unavailable (Wine/Proton). Caller falls back to probe path.
+                // WMI unavailable (Wine/Proton) or query failed. Caller falls back
+                // to probe path. Log at Debug — reconnect timer fires every 5 s,
+                // and Info-level here would flood the log on systems where
+                // System.Management can't load (e.g. SimHub plugin AppDomain
+                // without the assembly resolvable).
+                MozaLog.Debug(
+                    $"[Moza] WMI enumeration failed: {ex.GetType().Name}: {ex.Message}");
             }
             return results;
         }
 
         private static (string? PortName, string? Pid, bool ViaHubProbe) FindMozaPort(
-            Func<string?, bool>? pidFilter = null,
+            Func<string?, bool>? pidFilter,
+            MozaProbeTarget probeTarget,
             Func<bool>? cancel = null)
         {
             // Try WMI-based discovery first (native Windows). Iterate every Moza
@@ -650,16 +691,10 @@ namespace MozaPlugin.Protocol
                 return (null, null, false);
             }
 
-            // WMI unavailable — drop to probe. Probe path can't read PID, so a
-            // caller that requires a specific PID (e.g. AB9) must reject null
-            // in its filter; the wheelbase default filter accepts null.
-            if (pidFilter != null && !pidFilter(null))
-            {
-                MozaLog.Debug(
-                    "[Moza] WMI unavailable and probe path is filtered out; giving up");
-                return (null, null, false);
-            }
-
+            // WMI unavailable — drop to probe. Probe-target specific frames
+            // positively confirm device identity by response group, so AB9
+            // callers can use the probe path safely (no null-PID rejection
+            // needed any more — the AB9 probe only matches AB9 responses).
             MozaLog.Debug("[Moza] WMI discovery returned no devices, trying probe");
 
             // Probe-based discovery: try opening each COM port and sending a Moza read command.
@@ -673,20 +708,66 @@ namespace MozaPlugin.Protocol
                 return nb.CompareTo(na); // Descending - check high ports first
             });
 
-            // Two-pass probe: bases first, then hubs. v0.7.0 sent both probes per port
-            // and returned the first port with any 0x7E reply, which mis-selected the
-            // hub when both base + hub were present, or when probe-cycle timing left
-            // the base unresponsive after the wrong message hit it.
-            //
             // 600ms budget per port — SerialPort.Open can hang indefinitely under Wine
             // if another process holds the tty. Background-thread the probe so one bad
             // port can't block all detection.
             var unreachable = new HashSet<string>();
+
+            // Skip ports already held by a sibling MozaSerialConnection. Linux
+            // pty drivers don't enforce O_EXCL so a probe Open() on the live
+            // wheelbase tty would succeed and the probe write would reach the
+            // device that connection is already conversing with — the resulting
+            // 0x89 reply lands on the original read thread and the parser logs
+            // a spurious wheel-presence response every probe cycle.
+            bool IsHeldByPeer(string port) => _activePorts.ContainsKey(port);
+
+            if (probeTarget == MozaProbeTarget.Ab9)
+            {
+                // AB9 main device id (0x12) is shared with the wheelbase Main
+                // controller, and the wheelbase happily answers AB9 identity
+                // probes — so claiming a port purely on a 0x89 reply mis-claims
+                // a wheelbase tty whenever the wheelbase manager hasn't locked
+                // its port yet (e.g. first reconnect tick after plugin start).
+                // Disambiguate by running a base probe (group 0x2B dev 0x13)
+                // first: AB9 has no dev 0x13 and never replies to it, while
+                // the wheelbase always does. A 0xAB reply means "this is a
+                // wheelbase" → skip. Only ports that don't respond to the base
+                // probe get the AB9 probe.
+                foreach (var port in ports)
+                {
+                    if (cancel?.Invoke() == true) return (null, null, false);
+                    if (IsHeldByPeer(port)) continue;
+
+                    var (baseResp, baseReach) = ProbeWithTimeout(port, 600, ProbeKind.Base);
+                    if (!baseReach) { unreachable.Add(port); continue; }
+                    if (baseResp)
+                    {
+                        MozaLog.Debug($"[Moza] Probe {port} Ab9: base probe matched — wheelbase territory, skipping");
+                        continue;
+                    }
+
+                    var (ab9Resp, _) = ProbeWithTimeout(port, 600, ProbeKind.Ab9);
+                    if (ab9Resp)
+                    {
+                        MozaLog.Info($"[Moza] Found Moza AB9 shifter on {port} (probe)");
+                        return (port, null, false);
+                    }
+                }
+
+                MozaLog.Debug("[Moza] No AB9 device found on any COM port");
+                return (null, null, false);
+            }
+
+            // BaseAndHub: two-pass probe — bases first, then hubs. v0.7.0 sent both
+            // probes per port and returned the first port with any 0x7E reply, which
+            // mis-selected the hub when both base + hub were present, or when probe-
+            // cycle timing left the base unresponsive after the wrong message hit it.
             foreach (var port in ports)
             {
                 if (cancel?.Invoke() == true) return (null, null, false);
+                if (IsHeldByPeer(port)) continue;
 
-                var (responded, reachable) = ProbeWithTimeout(port, 600, baseProbe: true);
+                var (responded, reachable) = ProbeWithTimeout(port, 600, ProbeKind.Base);
                 if (responded)
                 {
                     MozaLog.Info($"[Moza] Found Moza base on {port} (probe)");
@@ -699,8 +780,9 @@ namespace MozaPlugin.Protocol
             {
                 if (cancel?.Invoke() == true) return (null, null, false);
                 if (unreachable.Contains(port)) continue;
+                if (IsHeldByPeer(port)) continue;
 
-                var (responded, _) = ProbeWithTimeout(port, 600, baseProbe: false);
+                var (responded, _) = ProbeWithTimeout(port, 600, ProbeKind.Hub);
                 if (responded)
                 {
                     MozaLog.Info($"[Moza] Found Moza hub on {port} (probe)");
@@ -737,12 +819,23 @@ namespace MozaPlugin.Protocol
             return "0x" + pidHex.ToUpperInvariant();
         }
 
+        private enum ProbeKind { Base, Hub, Ab9 }
+
         // Pre-built probe frames. Base targets group 43, device 19, cmd id 2 (state-change probe).
         // Hub targets group 100, device 18, cmd id 3 (port1 power).
+        // AB9 targets group 9, device 18 — PitHouse identity probe; the AB9 main
+        // device shares dev id 0x12 with Hub but does not respond to the hub-read
+        // group 0x64, so its response group (0x89) cleanly disambiguates the two.
         // Base probe arg matches PitHouse wire pattern (documented § Group 0x2B) so device
         // responses stay consistent across clients.
         private static readonly byte[] BaseProbeFrame = BuildProbe(new byte[] { 0x7E, 0x03, 0x2B, 0x13, 0x02, 0x00, 0x00, 0x00 });
         private static readonly byte[] HubProbeFrame  = BuildProbe(new byte[] { 0x7E, 0x03, 0x64, 0x12, 0x03, 0x00, 0x00, 0x00 });
+        private static readonly byte[] Ab9ProbeFrame  = BuildProbe(new byte[] { 0x7E, 0x00, 0x09, 0x12, 0x00 });
+
+        // Expected response groups (request group with bit 7 toggled, per MozaResponseParser).
+        private const byte BaseRespGroup = 0xAB;
+        private const byte HubRespGroup  = 0xE4;
+        private const byte Ab9RespGroup  = 0x89;
 
         private static byte[] BuildProbe(byte[] frame)
         {
@@ -762,13 +855,13 @@ namespace MozaPlugin.Protocol
         /// Returns (responded, reachable). reachable=false means open/timeout failed
         /// — caller can skip this port in subsequent passes.
         /// </summary>
-        private static (bool responded, bool reachable) ProbeWithTimeout(string portName, int timeoutMs, bool baseProbe)
+        private static (bool responded, bool reachable) ProbeWithTimeout(string portName, int timeoutMs, ProbeKind kind)
         {
             bool responded = false;
             bool reachable = false;
             var t = new Thread(() =>
             {
-                try { (responded, reachable) = ProbeMozaDevice(portName, baseProbe); }
+                try { (responded, reachable) = ProbeMozaDevice(portName, kind); }
                 catch { responded = false; reachable = false; }
             })
             { IsBackground = true, Name = $"MozaProbe-{portName}" };
@@ -782,12 +875,26 @@ namespace MozaPlugin.Protocol
         }
 
         /// <summary>
-        /// Open port, send a single base-or-hub probe, wait for any 0x7E reply.
+        /// Open port, send the requested probe, and confirm the reply by checking
+        /// the response group at wire offset 2 against the expected toggled-bit-7
+        /// group for the kind being probed. Disambiguating by response group stops
+        /// AB9 (dev id 0x12, same as Hub) from being misidentified as a hub when
+        /// both share the bus.
         /// Single-message probe avoids the v0.7.0 issue where back-to-back base+hub
         /// writes left the device in a state where it stopped answering after reopen.
         /// </summary>
-        private static (bool responded, bool reachable) ProbeMozaDevice(string portName, bool baseProbe)
+        private static (bool responded, bool reachable) ProbeMozaDevice(string portName, ProbeKind kind)
         {
+            byte[] msg;
+            byte expectedRespGroup;
+            switch (kind)
+            {
+                case ProbeKind.Base: msg = BaseProbeFrame; expectedRespGroup = BaseRespGroup; break;
+                case ProbeKind.Hub:  msg = HubProbeFrame;  expectedRespGroup = HubRespGroup;  break;
+                case ProbeKind.Ab9:  msg = Ab9ProbeFrame;  expectedRespGroup = Ab9RespGroup;  break;
+                default: return (false, false);
+            }
+
             try
             {
                 using (var probe = new SerialPort(portName, MozaProtocol.BaudRate)
@@ -799,16 +906,45 @@ namespace MozaPlugin.Protocol
                     probe.Open();
                     probe.DiscardInBuffer();
 
-                    var msg = baseProbe ? BaseProbeFrame : HubProbeFrame;
                     probe.Write(msg, 0, msg.Length);
 
                     System.Threading.Thread.Sleep(100);
 
                     bool responded = false;
-                    if (probe.BytesToRead > 0)
+                    int avail = probe.BytesToRead;
+                    if (avail >= 3)
                     {
-                        int first = probe.ReadByte();
-                        responded = first == MozaProtocol.MessageStart;
+                        // Read up to 128 wire bytes so a leading AB9 debug
+                        // frame (`len=59 group=0x0E dev=0x21`, 61 bytes wire)
+                        // doesn't crowd out the actual probe reply behind it.
+                        // Scan for the first start byte whose group byte at
+                        // offset +2 matches the expected response — survives
+                        // leading firmware-debug spam without false-positive
+                        // on a 0x0E frame that happens to land in the wait
+                        // window.
+                        var buf = new byte[Math.Min(avail, 128)];
+                        int n = probe.Read(buf, 0, buf.Length);
+                        byte firstSeenGroup = 0xFF;
+                        for (int i = 0; i + 2 < n; i++)
+                        {
+                            if (buf[i] != MozaProtocol.MessageStart) continue;
+                            byte respGroup = buf[i + 2];
+                            if (firstSeenGroup == 0xFF) firstSeenGroup = respGroup;
+                            if (respGroup == expectedRespGroup)
+                            {
+                                responded = true;
+                                break;
+                            }
+                        }
+                        if (!responded && firstSeenGroup != 0xFF)
+                        {
+                            // Saw at least one frame but none from the device
+                            // family we asked for — log so a wrong-target hit
+                            // (or pure debug spam) is visible without
+                            // confusing the operator with "found".
+                            MozaLog.Debug(
+                                $"[Moza] Probe {portName} {kind}: first reply group 0x{firstSeenGroup:X2} != expected 0x{expectedRespGroup:X2}");
+                        }
                     }
                     probe.Close();
                     return (responded, true);

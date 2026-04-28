@@ -1,6 +1,6 @@
 # Moza protocol reference
 
-Hierarchical split of the original `docs/moza-protocol.md`. Layout is **function-first, device-second** — most protocol detail is cross-cutting (telemetry frame format applies to all wheels), so functional folders are the primary axis. Per-device files exist only for fully self-contained devices (currently AB9 shifter).
+Hierarchical split of the original `docs/moza-protocol.md`. Layout is **function-first, device-second** — most protocol detail is cross-cutting (telemetry frame format applies to all wheels), so functional folders are the primary axis. Per-device files in [`devices/`](devices/) hold device-scoped command tables (groups, sub-cmds, byte widths) that don't fit cleanly into the cross-cutting topic folders.
 
 > **Status (2026-04-28):** Hierarchical split complete; leaf pages expanded with frame layouts, field tables, byte offsets, and worked examples (2026-04-28 pass). Some sections that were originally dated "findings" entries have been split out into their topical homes (e.g. `dev_type` table → [`identity/dev-type-table.md`](identity/dev-type-table.md)); see `docs/moza-protocol.md` for the full redirect map.
 
@@ -19,7 +19,7 @@ Hierarchical split of the original `docs/moza-protocol.md`. Layout is **function
 | [`leds/`](leds/) | LED color commands, base ambient strips (`0x20/0x22`), wheel LED group architecture (`0x3F/0x40` extended) |
 | [`settings/`](settings/) | Wheel settings (`0x3F/0x40`, dev `0x17`), dashboard settings (`0x32/0x33`, dev `0x14`), EEPROM direct access (`0x0A`) |
 | [`periodic/`](periodic/) | Group `0x0E` parameter reader, `0x1F`, `0x28`, `0x29`, `0x2B` periodic / occasional commands |
-| [`devices/`](devices/) | Per-device pages — currently AB9 active shifter. Device ID table cross-links into functional pages |
+| [`devices/`](devices/) | Per-device pages — main hub (`0x12`), wheelbase (`0x13`), dash (`0x14`), wheel (`0x17`), pedals (`0x19`), shifter / handbrake / e-stop, AB9 active shifter. Device ID table cross-links into functional pages |
 | [`plugin/`](plugin/) | SimHub plugin implementation notes: startup phases, session management, tier impl, reassembly fallback |
 | [`findings/`](findings/) | Dated journal entries from deep-dive sessions. Kept verbatim for traceability; canonical info is reflected in the topical pages |
 

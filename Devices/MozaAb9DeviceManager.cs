@@ -78,12 +78,14 @@ namespace MozaPlugin.Devices
 
         public MozaAb9DeviceManager()
         {
-            // PID filter rejects everything that isn't the AB9 — the wheelbase's
-            // own port enumeration must not be hijacked by this connection, and
-            // probe-based discovery (PID = null) is unsafe for the AB9 because
-            // none of the existing probes target it. Caller can still flip the
-            // module to "found" via TryConnect when WMI lists it.
-            _connection = new MozaSerialConnection(MozaUsbIds.IsAb9Pid);
+            // PID filter rejects everything that isn't the AB9 during WMI
+            // enumeration — the wheelbase's own port discovery must not be
+            // hijacked by this connection. When WMI is unavailable (Wine/Proton,
+            // or a Windows install where System.Management can't be loaded into
+            // SimHub's AppDomain) the probe path now sends an AB9-specific
+            // identity probe (group 0x09 dev 0x12) and only accepts a response
+            // whose group is 0x89, so it cannot match a wheelbase or hub.
+            _connection = new MozaSerialConnection(MozaUsbIds.IsAb9Pid, MozaProbeTarget.Ab9);
             _connection.CaptureLabel = "ab9";
         }
 
