@@ -2,7 +2,7 @@
 
 Hierarchical split of the original `docs/moza-protocol.md`. Layout is **function-first, device-second** — most protocol detail is cross-cutting (telemetry frame format applies to all wheels), so functional folders are the primary axis. Per-device files exist only for fully self-contained devices (currently AB9 shifter).
 
-> **Status (2026-04-27):** Initial split complete. All sections moved verbatim from `docs/moza-protocol.md` (now a redirect stub). Content has not been rewritten — only restructured. Some sections that were originally dated "findings" entries have been split out into their topical homes (e.g. `dev_type` table → [`identity/dev-type-table.md`](identity/dev-type-table.md)); see the redirect stub for the full map. See `docs/moza-protocol.md` for the redirect map.
+> **Status (2026-04-28):** Hierarchical split complete; leaf pages expanded with frame layouts, field tables, byte offsets, and worked examples (2026-04-28 pass). Some sections that were originally dated "findings" entries have been split out into their topical homes (e.g. `dev_type` table → [`identity/dev-type-table.md`](identity/dev-type-table.md)); see `docs/moza-protocol.md` for the full redirect map.
 
 ## Layout
 
