@@ -31,13 +31,12 @@ namespace MozaPlugin.Devices
         public int WheelRpmDisplayMode { get; set; } = -1;
 
         // Dashboard telemetry (per-wheel-profile).
-        // NOTE: TelemetryEnabled intentionally NOT persisted here — the enable
-        // toggle is a global plugin setting on MozaPluginSettings. Persisting it
-        // per-wheel-profile caused the checkbox to always restore to the last
-        // captured value on startup, ignoring the user's runtime unchecks.
+        // NOTE: TelemetryEnabled / TelemetryProfileName / TelemetryMzdashPath
+        // intentionally NOT persisted here — they are global plugin settings on
+        // MozaPluginSettings. Persisting them per-wheel-profile caused stale
+        // extension JSON to clobber the freshly-loaded global value on startup
+        // (e.g. user picks a .mzdash file, restart, path resets to empty).
         public bool TelemetrySettingsPresent { get; set; } = false;
-        public string TelemetryProfileName { get; set; } = "";
-        public string TelemetryMzdashPath { get; set; } = "";
 
         // Color arrays (packed as R<<16 | G<<8 | B)
         public int[]? WheelRpmColors { get; set; }
@@ -69,8 +68,6 @@ namespace MozaPlugin.Devices
             WheelRpmDisplayMode = settings.WheelRpmDisplayMode;
 
             TelemetrySettingsPresent = true;
-            TelemetryProfileName = settings.TelemetryProfileName;
-            TelemetryMzdashPath = settings.TelemetryMzdashPath;
 
             WheelRpmColors = MozaProfile.PackColors(data.WheelRpmColors);
             WheelRpmBlinkColors = MozaProfile.PackColors(data.WheelRpmBlinkColors);
@@ -127,14 +124,6 @@ namespace MozaPlugin.Devices
                 if (WheelESRpmBrightness   >= 0) settings.WheelESRpmBrightness   = WheelESRpmBrightness;
                 if (WheelRpmIndicatorMode  >= 0) settings.WheelRpmIndicatorMode  = WheelRpmIndicatorMode;
                 if (WheelRpmDisplayMode    >= 0) settings.WheelRpmDisplayMode    = WheelRpmDisplayMode;
-            }
-
-            // Telemetry profile name/path stay global (user picks one dashboard
-            // per game regardless of which wheel instance is saving).
-            if (TelemetrySettingsPresent)
-            {
-                settings.TelemetryProfileName = TelemetryProfileName;
-                settings.TelemetryMzdashPath = TelemetryMzdashPath;
             }
 
             MozaProfile.UnpackColorsInto(WheelRpmColors, data.WheelRpmColors);

@@ -92,6 +92,15 @@ namespace MozaPlugin.Telemetry
         public FileTransferWireFormat UploadWireFormat { get; set; }
             = FileTransferWireFormat.New2026_04;
 
+        /// <summary>
+        /// When true, on sub-msg 1 ack timeout the upload retries with the
+        /// other wire format. Set true only when the era setting is Auto;
+        /// when the user picked a specific era, fallback is suppressed so
+        /// their choice is honoured (and the log reflects the picked format
+        /// instead of always converging on the fallback).
+        /// </summary>
+        public bool AutoFallbackWireFormat { get; set; } = true;
+
         // Session 0x09 configJson RPC state. Device proactively pushes its
         // dashboard state blob; we reply with the canonical dashboard library
         // list so the wheel updates its configJsonList (PitHouse's UI uses this
@@ -938,43 +947,52 @@ namespace MozaPlugin.Telemetry
             if (!_uploadSubMsg1Response.Wait(2000))
             {
                 // Probe fallback: flip wire format and retry sub-msg 1 once.
-                // If the second format also times out, the wheel/session is
-                // wedged for some other reason — log and continue (sub-msg 2
-                // will likely time out too, but the rest of the preamble
-                // tier-def + display config still proceeds).
-                var fallback = UploadWireFormat == FileTransferWireFormat.New2026_04
-                    ? FileTransferWireFormat.Legacy2025_11
-                    : FileTransferWireFormat.New2026_04;
-                MozaLog.Warn(
-                    $"[Moza] Session 0x{uploadSess:X2} sub-msg 1 ack timeout with " +
-                    $"wire={UploadWireFormat} — retrying with wire={fallback}");
-
-                UploadWireFormat = fallback;
-                fellBack = true;
-                upload = DashboardUploader.BuildUpload(content, dashboardName, token, tsMs, UploadWireFormat);
-
-                _uploadSubMsg1Response.Reset();
-                _uploadSubMsg2Response.Reset();
-                _uploadInboundMsgCount = 0;
-
-                seq1 = _uploadOutboundSeq + 1;
-                subMsg1Frames = TierDefinitionBuilder.ChunkMessage(
-                    upload.SubMsg1PathRegistration, uploadSess, ref seq1);
-                foreach (var frame in subMsg1Frames)
+                // Only runs when AutoFallbackWireFormat is true (era=Auto). When
+                // the user picked a specific era we honour it strictly so the
+                // logged wire format reflects their choice and a wedged upload
+                // is diagnosable instead of always converging on the fallback.
+                if (!AutoFallbackWireFormat)
                 {
-                    if (!_enabled || !_connection.IsConnected) return;
-                    _connection.Send(frame);
-                }
-                _uploadOutboundSeq = seq1;
-
-                if (!_uploadSubMsg1Response.Wait(2000))
                     MozaLog.Warn(
-                        $"[Moza] Session 0x{uploadSess:X2} sub-msg 1 ack timeout on fallback " +
-                        $"wire={UploadWireFormat} — wheel may not be in upload-ready state");
+                        $"[Moza] Session 0x{uploadSess:X2} sub-msg 1 ack timeout with " +
+                        $"wire={UploadWireFormat} — fallback disabled (era pinned by user)");
+                }
                 else
-                    MozaLog.Info(
-                        $"[Moza] Wire format auto-detected: wheel accepts {UploadWireFormat} " +
-                        "(cached for this session)");
+                {
+                    var fallback = UploadWireFormat == FileTransferWireFormat.New2026_04
+                        ? FileTransferWireFormat.Legacy2025_11
+                        : FileTransferWireFormat.New2026_04;
+                    MozaLog.Warn(
+                        $"[Moza] Session 0x{uploadSess:X2} sub-msg 1 ack timeout with " +
+                        $"wire={UploadWireFormat} — retrying with wire={fallback}");
+
+                    UploadWireFormat = fallback;
+                    fellBack = true;
+                    upload = DashboardUploader.BuildUpload(content, dashboardName, token, tsMs, UploadWireFormat);
+
+                    _uploadSubMsg1Response.Reset();
+                    _uploadSubMsg2Response.Reset();
+                    _uploadInboundMsgCount = 0;
+
+                    seq1 = _uploadOutboundSeq + 1;
+                    subMsg1Frames = TierDefinitionBuilder.ChunkMessage(
+                        upload.SubMsg1PathRegistration, uploadSess, ref seq1);
+                    foreach (var frame in subMsg1Frames)
+                    {
+                        if (!_enabled || !_connection.IsConnected) return;
+                        _connection.Send(frame);
+                    }
+                    _uploadOutboundSeq = seq1;
+
+                    if (!_uploadSubMsg1Response.Wait(2000))
+                        MozaLog.Warn(
+                            $"[Moza] Session 0x{uploadSess:X2} sub-msg 1 ack timeout on fallback " +
+                            $"wire={UploadWireFormat} — wheel may not be in upload-ready state");
+                    else
+                        MozaLog.Info(
+                            $"[Moza] Wire format auto-detected: wheel accepts {UploadWireFormat} " +
+                            "(cached for this session)");
+                }
             }
             // Suppress unused warning when fallback didn't fire.
             _ = fellBack;

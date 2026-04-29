@@ -50,7 +50,7 @@ namespace MozaPlugin.Devices
             // CS Pro / KS Pro expose rotary encoders with configurable background +
             // primary colors (protocol groups 1..KnobCount; group 0 is the RPM strip).
             // CS Pro = 4 knobs, KS Pro = 5 knobs.
-            ("W17",     "CS Pro",     new WheelModelInfo(18, 14, false, null, 4)),  // firmware reports "W17" for CS Pro
+            ("W17",     "CS Pro",     new WheelModelInfo(16, 8,  false, null, 4)),  // firmware reports "W17" for CS Pro
             // KS Pro 3/12/3 LED strip appears to live entirely in group 0 (Shift/RPM),
             // not split across RPM + Meter flag sub-device. Driving all 18 as one RPM strip.
             ("W18",     "KS Pro",     new WheelModelInfo(18, 14, false, null, 5)),  // firmware reports "W18" for KS Pro

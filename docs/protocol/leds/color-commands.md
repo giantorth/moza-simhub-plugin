@@ -59,8 +59,8 @@ Chunks per group:
 
 | Group | LED count | Chunks needed |
 |-------|-----------|---------------|
-| RPM (`0x19 00`) | 10 LEDs (legacy), 18 LEDs (CS Pro / KS Pro) | 2 chunks for ≤10, 4 chunks for 18 (last padded) |
-| Button (`0x19 01`) | 14 (VGS) / 8 (CS V2.1) / varies | 3 chunks (last padded) |
+| RPM (`0x19 00`) | 10 LEDs (legacy), 16 LEDs (CS Pro), 18 LEDs (KS Pro) | 2 chunks for ≤10, 4 chunks for 16 (last padded), 4 chunks for 18 (last padded) |
+| Button (`0x19 01`) | 14 (VGS) / 8 (CS V2.1, CS Pro) / varies | 3 chunks (last padded) |
 
 **Padding rule:** unused entries within a chunk MUST use index `0xFF`. Zero
 padding (`00 00 00 00`) is interpreted as "set LED 0 to black" by firmware,

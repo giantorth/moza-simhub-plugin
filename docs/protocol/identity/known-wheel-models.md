@@ -11,6 +11,7 @@ the full identity probe order.
 |------------|-------|------------|-------------------------|--------|
 | `VGS` | Vision GS | 8 button LEDs, no flag LEDs | `01 02 1F 01` | `cs-to-vgs-wheel.ndjson` |
 | `CS V2.1` | CS V2 | (no integrated screen) | `01 02 26 00` | `vgs-to-cs-wheel.ndjson` |
+| `W17` | CS Pro | 16 RPM LEDs (single series), 8 button LEDs, no flag LEDs, 4 knobs | n/a | physical hardware inspection |
 | `Display` | Display sub-device (inside VGS-class wheels) | n/a | `01 02 00 00` | wrapped 0x43 probe; see [`display-sub-device.md`](display-sub-device.md) |
 
 ### Assumed from device naming (unverified)
@@ -22,7 +23,6 @@ LED counts come from the `WheelModelInfo` defaults:
 | Prefix | Wheel | RPM LEDs | Button LEDs | Flag LEDs |
 |--------|-------|----------|-------------|-----------|
 | `GS V2P` | GS V2P | (10 default) | 10 (5 per side) | none |
-| `W17` | CS Pro | 18 | varies | none |
 | `W18` | KS Pro | 18 | varies | none |
 | `KS` | KS | 10 default | 10 | none |
 | `W13` | FSR V2 | 16 | 10 | none |

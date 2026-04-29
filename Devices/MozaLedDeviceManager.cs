@@ -445,7 +445,7 @@ namespace MozaPlugin.Devices
         /// <summary>
         /// Build RPM active-LED bitmask payload sized for the wheel's LED count.
         /// 16 or fewer LEDs → 2 bytes (legacy wire format). 17+ LEDs → 4 bytes.
-        /// KS Pro / CS Pro (18 LEDs) require the extended form to light bits 16-17.
+        /// KS Pro (18 LEDs) requires the extended form to light bits 16-17.
         /// </summary>
         internal static byte[] BuildRpmBitmaskBytes(int bitmask, int ledCount)
         {

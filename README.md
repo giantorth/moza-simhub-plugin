@@ -96,7 +96,7 @@ Each wheel model has a dedicated SimHub device definition with the correct LED l
 |-------------|:------------:|:---:|:-------:|:-----:|----------------|
 | MOZA GS V2 Pro | GS V2P | 10 | 10 | No | Contiguous (5 left + 5 right) |
 | MOZA CS V2 | CS V2.1 | 10 | 6 | No | Non-contiguous: positions 1,2,4,7,9,10 |
-| MOZA CS Pro | W17 | 18 | 14 | No | Contiguous |
+| MOZA CS Pro | W17 | 16 | 8 | No | Contiguous |
 | MOZA KS Pro | W18 | 18 | 14 | No | RPM strip 3/12/3 (flags merged into RPM sequence) |
 | MOZA KS | KS | 10 | 10 | No | Contiguous |
 | MOZA FSR V2 | W13 | 16 | 10 | No | Contiguous |

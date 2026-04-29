@@ -279,9 +279,14 @@ namespace MozaPlugin
         /// answered — independent of whether <see cref="TelemetrySender"/> has started.
         /// The dashboard-telemetry UI section is gated on this flag, so detection must
         /// happen BEFORE the user can pick a profile (otherwise the section stays hidden
-        /// and there's no way to opt in to telemetry).</summary>
+        /// and there's no way to opt in to telemetry).
+        /// Some wheels (e.g. W17) populate display HW/SW/MCU identity fields but return
+        /// an empty model-name string — accept any populated identity field as detection.</summary>
         internal bool IsDisplayDetected =>
             !string.IsNullOrEmpty(_data?.DisplayModelName)
+            || !string.IsNullOrEmpty(_data?.DisplayHwVersion)
+            || !string.IsNullOrEmpty(_data?.DisplaySwVersion)
+            || (_data?.DisplayMcuUid?.Length ?? 0) > 0
             || (_telemetrySender?.DisplayDetected ?? false);
 
         /// <summary>Display sub-device model name (e.g. "W18 Display"), or empty.</summary>
@@ -674,6 +679,7 @@ namespace MozaPlugin
             };
             _telemetrySender.ProtocolVersion = protocolVersion;
             _telemetrySender.UploadWireFormat = wireFormat;
+            _telemetrySender.AutoFallbackWireFormat = s.TelemetryFirmwareEra == MozaFirmwareEra.Auto;
             _telemetrySender.UploadDashboard = s.TelemetryUploadDashboard;
 
             // Resolve the active multi-stream profile and raw mzdash content
