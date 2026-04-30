@@ -6,9 +6,12 @@ in-wheel display (`0x3F`/`0x40`/`0x17`) — the MDD is a separate physical
 peripheral with its own settings store.
 
 > **Wheel dashboards (integrated displays in formula-style wheels) are
-> NOT this device.** Those use group `0x3F` on dev `0x17` (see
-> [`wheel-0x17.md`](wheel-0x17.md) and
-> [`../devices/wheel-0x17.md`](../devices/wheel-0x17.md)).
+> NOT this device.** Those use group `0x3F` on dev `0x17` for stored
+> wheel config (see [`wheel-0x17.md`](wheel-0x17.md) and
+> [`../devices/wheel-0x17.md`](../devices/wheel-0x17.md)). PitHouse
+> additionally pushes some integrated-dashboard runtime settings
+> (brightness, display-standby) via session-0x01 `ff` records; see
+> [`../findings/2026-04-29-session-01-property-push.md`](../findings/2026-04-29-session-01-property-push.md).
 
 ### Frame layouts
 

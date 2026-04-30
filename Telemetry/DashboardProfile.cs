@@ -53,6 +53,16 @@ namespace MozaPlugin.Telemetry
         /// <summary>Telemetry tier this profile covers (ms interval).</summary>
         public int PackageLevel { get; set; } = 30;
 
+        /// <summary>
+        /// Wire flag byte for this tier in the V2 tier-def. Zero = use the
+        /// tier's index in <c>MultiStreamProfile.Tiers</c> (legacy behavior).
+        /// Non-zero = use this explicit flag (set by per-widget mzdash parse,
+        /// where each widget's id maps to its tier-def flag — verified
+        /// against PitHouse capture flag bytes 0x1f/0x20/0x21/0x22 matching
+        /// widget node IDs in the active mzdash).
+        /// </summary>
+        public byte FlagByte { get; set; } = 0;
+
         public override string ToString() =>
             $"{Name} ({Channels.Count} channels, {TotalBytes} bytes)";
     }
@@ -106,5 +116,6 @@ namespace MozaPlugin.Telemetry
         TyreWearFrontRight,
         TyreWearRearLeft,
         TyreWearRearRight,
+        CurrentLap,         // lap counter (1+)
     }
 }

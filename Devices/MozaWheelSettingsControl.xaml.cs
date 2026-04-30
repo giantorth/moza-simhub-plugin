@@ -367,6 +367,15 @@ namespace MozaPlugin.Devices
                 bool showTelemetry = newWheel && (_plugin?.IsDisplayDetected ?? false);
                 TelemetrySection.Visibility = showTelemetry ? Visibility.Visible : Visibility.Collapsed;
 
+                if (showTelemetry && _data != null)
+                {
+                    int b = _data.DashDisplayBrightness;
+                    if (b < 0) b = 0; else if (b > 100) b = 100;
+                    WheelDisplayBrightnessSlider.Value = b;
+                    WheelDisplayBrightnessValue.Text = $"{b}";
+                    SelectWheelDisplayStandbyByMinutes(_data.DashDisplayStandbyMin);
+                }
+
                 if (newWheel)
                 {
                     SetComboSafe(WheelTelemetryModeCombo, _data!.WheelTelemetryMode);
@@ -547,6 +556,7 @@ namespace MozaPlugin.Devices
                 TelemetryEnabledCheck.IsChecked = s.TelemetryEnabled;
 
                 TelemetryProfileCombo.Items.Clear();
+                TelemetryProfileCombo.Items.Add("(none)");
                 foreach (var profile in _plugin.DashProfileStore.BuiltinProfiles)
                     TelemetryProfileCombo.Items.Add(profile.Name);
                 if (!string.IsNullOrEmpty(s.TelemetryMzdashPath))
@@ -565,7 +575,16 @@ namespace MozaPlugin.Devices
                     }
                 }
                 if (TelemetryProfileCombo.SelectedIndex < 0 && TelemetryProfileCombo.Items.Count > 0)
-                    TelemetryProfileCombo.SelectedIndex = 0;
+                {
+                    // 2026-04-30: default selection is "(none)" — plugin
+                    // synthesises the subscription from the wheel's
+                    // session-0x02 catalog push (Type02 firmware) so the
+                    // active dashboard's channels are always covered without
+                    // a host-side mzdash. Users who want a specific bundled
+                    // dashboard or a custom .mzdash file can pick from the
+                    // dropdown; that path uploads dashboard bytes too.
+                    TelemetryProfileCombo.SelectedIndex = 0; // "(none)"
+                }
 
                 UpdateTelemetryProfileInfo();
             }
@@ -617,11 +636,61 @@ namespace MozaPlugin.Devices
             UpdateTelemetryProfileInfo();
         }
 
+        private void WheelDisplayBrightnessSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (_suppressEvents || _plugin == null) return;
+            int val = (int)Math.Round(e.NewValue);
+            WheelDisplayBrightnessValue.Text = $"{val}";
+            _data!.DashDisplayBrightness = val;
+            _settings!.DashDisplayBrightness = val;
+            _plugin.TelemetrySender?.SendDashDisplayBrightness(val);
+            _plugin.SaveSettings();
+        }
+
+        private void WheelDisplayStandbyCombo_Changed(object sender, SelectionChangedEventArgs e)
+        {
+            if (_suppressEvents || _plugin == null) return;
+            var item = WheelDisplayStandbyCombo.SelectedItem as ComboBoxItem;
+            if (item?.Tag is not string tagStr) return;
+            if (!int.TryParse(tagStr, out int minutes)) return;
+            _data!.DashDisplayStandbyMin = minutes;
+            _settings!.DashDisplayStandbyMin = minutes;
+            _plugin.TelemetrySender?.SendDashDisplayStandbyMinutes(minutes);
+            _plugin.SaveSettings();
+        }
+
+        private void SelectWheelDisplayStandbyByMinutes(int minutes)
+        {
+            for (int i = 0; i < WheelDisplayStandbyCombo.Items.Count; i++)
+            {
+                if (WheelDisplayStandbyCombo.Items[i] is ComboBoxItem cbi
+                    && cbi.Tag is string tag
+                    && int.TryParse(tag, out int m)
+                    && m == minutes)
+                {
+                    WheelDisplayStandbyCombo.SelectedIndex = i;
+                    return;
+                }
+            }
+            WheelDisplayStandbyCombo.SelectedIndex = -1;
+        }
+
         private void TelemetryProfileCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
             if (_suppressEvents || _plugin == null) return;
             var selected = TelemetryProfileCombo.SelectedItem?.ToString();
-            if (selected != null && !selected.StartsWith("[Custom:"))
+            if (selected == null) return;
+            if (selected == "(none)")
+            {
+                _plugin.Settings.TelemetryProfileName = "";
+                _plugin.Settings.TelemetryMzdashPath = "";
+                _plugin.SaveSettings();
+                _plugin.RestartTelemetry();
+                UpdateTelemetryProfileInfo();
+                if (TelemetryMappingsExpander.IsExpanded) PopulateChannelMappingGrid();
+                return;
+            }
+            if (!selected.StartsWith("[Custom:"))
             {
                 _plugin.Settings.TelemetryProfileName = selected;
                 _plugin.Settings.TelemetryMzdashPath = "";
@@ -633,6 +702,35 @@ namespace MozaPlugin.Devices
                 UpdateTelemetryProfileInfo();
                 if (TelemetryMappingsExpander.IsExpanded) PopulateChannelMappingGrid();
             }
+        }
+
+        private void TelemetryClearMzdash_Click(object sender, RoutedEventArgs e)
+        {
+            if (_plugin == null) return;
+            _plugin.Settings.TelemetryProfileName = "";
+            _plugin.Settings.TelemetryMzdashPath = "";
+            _plugin.SaveSettings();
+            _plugin.RestartTelemetry();
+
+            _suppressEvents = true;
+            // Drop any stale [Custom: ...] entry so the dropdown doesn't keep
+            // showing a previously-loaded mzdash filename.
+            for (int i = TelemetryProfileCombo.Items.Count - 1; i >= 0; i--)
+                if (TelemetryProfileCombo.Items[i]?.ToString()?.StartsWith("[Custom:") == true)
+                    TelemetryProfileCombo.Items.RemoveAt(i);
+            // Select "(none)".
+            for (int i = 0; i < TelemetryProfileCombo.Items.Count; i++)
+            {
+                if (TelemetryProfileCombo.Items[i]?.ToString() == "(none)")
+                {
+                    TelemetryProfileCombo.SelectedIndex = i;
+                    break;
+                }
+            }
+            _suppressEvents = false;
+
+            UpdateTelemetryProfileInfo();
+            if (TelemetryMappingsExpander.IsExpanded) PopulateChannelMappingGrid();
         }
 
         private void TelemetryLoadMzdash_Click(object sender, RoutedEventArgs e)
@@ -725,18 +823,57 @@ namespace MozaPlugin.Devices
             var profile = _plugin.TelemetrySender?.Profile;
             if (profile == null || profile.Tiers.Count == 0)
             {
-                TelemetryChannelGrid.ItemsSource = null;
-                TelemetryMappingStatus.Text = "(no dashboard loaded)";
+                // No mzdash loaded: fall back to whatever channel URLs the
+                // wheel has advertised in its catalog. Lets the user see /
+                // edit mappings even without uploading a profile.
+                var catalog = _plugin.TelemetrySender?.WheelChannelCatalog;
+                if (catalog == null || catalog.Count == 0)
+                {
+                    TelemetryChannelGrid.ItemsSource = null;
+                    TelemetryMappingStatus.Text =
+                        "(no dashboard loaded and wheel has not advertised a channel catalog)";
+                    return;
+                }
+                var catalogRows = new List<ChannelMappingRow>();
+                int idx = 1;
+                foreach (var url in catalog.OrderBy(u => u, StringComparer.OrdinalIgnoreCase))
+                {
+                    if (string.IsNullOrEmpty(url)) { idx++; continue; }
+                    catalogRows.Add(new ChannelMappingRow
+                    {
+                        Name = url,
+                        Url = url,
+                        PackageLevel = 0,
+                        Compression = "uint32_t",
+                        SimHubProperty = "",
+                    });
+                    idx++;
+                }
+                TelemetryChannelGrid.ItemsSource = catalogRows;
+                TelemetryMappingStatus.Text =
+                    $"(no dashboard loaded — showing {catalogRows.Count} wheel-advertised channels)";
                 return;
             }
 
+            // Per-widget tier-def emits one tier per dashboard widget, so a
+            // dashboard with 12 widgets binding 6 unique URLs surfaces 12
+            // tier×channel pairs. The mapping grid is keyed by URL → SimHub
+            // property, so collapse duplicates by URL (first occurrence wins).
+            // Also drop URLs the wheel's advertised catalog doesn't include —
+            // those widgets won't render even if subscribed.
+            var wheelCatalog = _plugin.TelemetrySender?.WheelChannelCatalog;
+            var catalogSet = wheelCatalog == null
+                ? null
+                : new HashSet<string>(wheelCatalog, StringComparer.OrdinalIgnoreCase);
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var rows = new List<ChannelMappingRow>();
             foreach (var tier in profile.Tiers.OrderBy(t => t.PackageLevel))
             {
                 foreach (var ch in tier.Channels.OrderBy(c => c.Url, StringComparer.OrdinalIgnoreCase))
                 {
-                    // Hide plugin-locked channels (resolved internally, not user-editable).
                     if (DashboardProfileStore.IsInternalChannel(ch.SimHubProperty)) continue;
+                    if (!seen.Add(ch.Url)) continue;
+                    if (catalogSet != null && catalogSet.Count > 0 && !catalogSet.Contains(ch.Url)) continue;
 
                     rows.Add(new ChannelMappingRow
                     {

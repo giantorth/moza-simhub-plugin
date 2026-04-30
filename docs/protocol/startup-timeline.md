@@ -53,3 +53,21 @@ Wheel plugged in cold, then Assetto Corsa started:
 | **Pre-game** | t=24–30.5s | `0x40/28:02` polling (response always `00:00`), heartbeats, keepalives |
 | **Game starts** | t=30.568s | `0x41/FD:DE` enable + `0x2D/F5:31` seq counter start simultaneously |
 | **Telemetry** | t=30.600s | `0x43/7D:23` live data (flag=0x02). ~31 frames/s steady state |
+
+### Game-start handshake — from live capture (R5 base, W17, 2026-04-29)
+
+Within ~1.5 s of the first game-tick frame, in addition to the streams above:
+
+| Offset | Frame | Notes |
+|--------|-------|-------|
+| +0.00 | `0x28/0x13 01 00 00` → `0xA8/0x31 01 01 c2` | Re-read base param `limit` (450). See [`periodic/group-0x28.md`](periodic/group-0x28.md) |
+| +0.00 | `0x28/0x13 17 00 00` → `0xA8/0x31 17 01 c2` | Re-read `max-angle` (450) |
+| +0.05 | `0x28/0x13 02 00 00` → `0xA8/0x31 02 03 e8` | Re-read `ffb-strength` (1000) |
+| +0.30 | `0x2B/0x13 02 00 00` → `0xAB/0x31 02 00 00` | Hub set/ack (semantic TBD; see [`periodic/group-0x2B.md`](periodic/group-0x2B.md)) |
+| +0.70 | `0x43/0x17 7C 00 03 01 73 00 00 00 00 00` | Slot-03 commit/idx marker |
+| +0.70 | `0xC3/0x71 7C 00 02 01 9D 04 00 00 00 00` | Slot-02 ack |
+| +1.20 | `0x43/0x17 7C 00 02 01 NN 04 ff …` | Slot-02 widget records start streaming |
+| +1.30 | `0x43/0x17 7D 23 32 …` | Tier-`0x23` telemetry begins |
+| +1.40 | `0x41/0x17 FD DE 00 00 00 00 …` | FFB tick stream (~20 Hz) |
+| +1.40 | `0x2D/0x13 F5 31 00 00 00 00 …` | Game tick stream (~20 Hz) |
+| +1.50 | `0x3F/0x17 1A NN MM …` | RPM-bar LED stream begins. See [`leds/color-commands.md`](leds/color-commands.md) |

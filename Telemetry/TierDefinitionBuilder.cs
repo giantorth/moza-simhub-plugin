@@ -35,6 +35,135 @@ namespace MozaPlugin.Telemetry
         /// Confirmed codes from F1 dashboard USB capture analysis.
         /// Unknown types get code 0xFFFF (the wheel may ignore them).
         /// </summary>
+        public static uint LookupCompressionCode(string compression)
+            => CompressionCodes.TryGetValue(compression ?? "", out var code) ? code : 0xFFFF;
+
+        /// <summary>
+        /// Build the V2 compact tier-def for Type02 firmware in PitHouse's
+        /// exact section ordering: each tier-def + enable lives in its own
+        /// chunk (separate session-data frame on the wire). Body returned here
+        /// is the FULL concatenated TLV stream which the caller then chunks via
+        /// <see cref="ChunkMessage"/> with default 54B max-net-per-chunk; the
+        /// wheel reassembles before TLV-walking, so chunk boundaries don't
+        /// affect parse correctness.
+        /// </summary>
+        private static byte[] BuildTierDefinitionMessageType02(MultiStreamProfile profile, byte flagBase,
+            System.Collections.Generic.IReadOnlyList<string> wheelCatalog)
+        {
+            using var ms = new MemoryStream();
+            using var w = new BinaryWriter(ms);
+
+            var idxByUrl = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < wheelCatalog.Count; i++)
+            {
+                if (!string.IsNullOrEmpty(wheelCatalog[i]))
+                    idxByUrl[wheelCatalog[i]] = i + 1; // 1-based
+            }
+
+            void WriteTier(byte flag, IReadOnlyList<ChannelDefinition> channels)
+            {
+                int numChannels = channels.Count;
+                uint size = (uint)(1 + numChannels * 16);
+                w.Write((byte)0x01);
+                w.Write(size);
+                w.Write(flag);
+                foreach (var ch in channels)
+                {
+                    int chIndex;
+                    if (!idxByUrl.TryGetValue(ch.Url, out chIndex)) chIndex = 0;
+                    uint compCode = LookupCompressionCode(ch.Compression);
+                    w.Write((uint)chIndex);
+                    w.Write(compCode);
+                    w.Write((uint)ch.BitWidth);
+                    w.Write((uint)0);  // reserved
+                }
+            }
+
+            void WriteEndMarker(uint count)
+            {
+                w.Write((byte)0x06);
+                w.Write((uint)4);
+                // PitHouse end marker counts seen in capture
+                // wireshark/csp/start-game-change-dash.pcapng vary (147, 159)
+                // and 0 (in startup capture's first batches). Semantics
+                // unconfirmed; using cumulative channel record count emitted
+                // so far as a non-zero placeholder — wheel ignored count=0
+                // version, try non-zero variant.
+                w.Write(count);
+            }
+
+            void WriteEnable(byte flag)
+            {
+                w.Write((byte)0x00);
+                w.Write((uint)1);
+                w.Write(flag);
+            }
+
+            int tierCount = profile.Tiers.Count;
+            byte FlagFor(int i) => (byte)(flagBase + i);
+
+            // PitHouse-exact format (R5 + W17, Rally V4 + Nebula in-game captures
+            // 2026-04-29). Broadcast = consecutive sub-tiers covering ALL
+            // pkg_levels. Each broadcast emits sub-tiers back-to-back, then a
+            // SINGLE end-marker, then enables for that broadcast's flags.
+            //
+            // Nebula (1 sub-tier × 3 broadcasts): each broadcast = 1 sub-tier.
+            //   tier_0  end-marker=0  enable_0
+            //   tier_1  end-marker=4  enable_1
+            //   tier_2  end-marker=4
+            //
+            // Rally V4 (3 sub-tiers × 4 broadcasts): each broadcast = 3 sub-tiers.
+            //   tier_0 tier_1 tier_2  end-marker=0
+            //   enable_0 enable_1 enable_2
+            //   tier_3 tier_4 tier_5  end-marker=9   (channel count 5+2+1=8 → wait
+            //   enable_3 enable_4 enable_5            should be 8 not 9; PitHouse
+            //   ...                                   used 9 because added TCActive
+            //                                         in subsequent broadcasts.)
+            //
+            // To detect broadcast boundaries we look for the SAME flag-offset
+            // pattern repeating: profile is built as `subPerBroadcast × N`
+            // broadcasts (TelemetrySender.Profile setter assembles it). Detect
+            // by finding the pkg_level repeat: when current tier's pkg_level
+            // matches profile.Tiers[0]'s pkg_level after the first tier, that's
+            // a broadcast boundary.
+            int subPerBroadcast = 1;
+            if (tierCount > 1)
+            {
+                int firstPkg = profile.Tiers[0].PackageLevel;
+                for (int j = 1; j < tierCount; j++)
+                {
+                    if (profile.Tiers[j].PackageLevel == firstPkg)
+                    {
+                        subPerBroadcast = j;
+                        break;
+                    }
+                }
+                if (subPerBroadcast == 1) subPerBroadcast = tierCount;  // single broadcast
+            }
+            int broadcastCount = tierCount / subPerBroadcast;
+
+            // Total channel count across one broadcast (used as end-marker for
+            // subsequent broadcasts; first uses 0).
+            int channelsPerBroadcast = 0;
+            for (int j = 0; j < subPerBroadcast; j++)
+                channelsPerBroadcast += profile.Tiers[j].Channels.Count;
+
+            for (int b = 0; b < broadcastCount; b++)
+            {
+                int baseTier = b * subPerBroadcast;
+                for (int s = 0; s < subPerBroadcast; s++)
+                    WriteTier(FlagFor(baseTier + s), profile.Tiers[baseTier + s].Channels);
+                WriteEndMarker(b == 0 ? 0u : (uint)channelsPerBroadcast);
+                if (b < broadcastCount - 1)
+                {
+                    for (int s = 0; s < subPerBroadcast; s++)
+                        WriteEnable(FlagFor(baseTier + s));
+                }
+            }
+
+            return ms.ToArray();
+        }
+
         private static readonly Dictionary<string, uint> CompressionCodes =
             new Dictionary<string, uint>(StringComparer.OrdinalIgnoreCase)
         {
@@ -70,33 +199,92 @@ namespace MozaPlugin.Telemetry
         /// This is the reassembled payload that gets chunked into 7c:00 frames.
         /// </summary>
         public static byte[] BuildTierDefinitionMessage(MultiStreamProfile profile, byte flagBase)
+            => BuildTierDefinitionMessage(profile, flagBase, includeEnableEntries: true,
+                useWheelCatalogIndices: false, wheelCatalog: null);
+
+        /// <summary>
+        /// Build the V2 compact tier-def message.
+        /// </summary>
+        /// <param name="includeEnableEntries">When true, prepends paired `[0x00] [4B=1] [1B flag]`
+        /// enable entries for each tier (legacy 2025-11 firmware behavior). Post-2026-04 CSP
+        /// PitHouse captures (`wireshark/csp/startup, change knob colors, ...pcapng`) omit
+        /// these — newer firmware only sees `0x01`-tag tier defs + `0x06`-tag end marker
+        /// per the host outbound stream on session 0x01.</param>
+        /// <param name="useWheelCatalogIndices">When true, the channel index in the tier-def
+        /// body is taken from the wheel's advertised catalog (1-based position) instead of
+        /// the host-assigned alphabetic index. PitHouse always uses wheel-catalog indices —
+        /// matching them is a prerequisite for the wheel correlating value frames against
+        /// the subscription.</param>
+        public static byte[] BuildTierDefinitionMessage(MultiStreamProfile profile, byte flagBase,
+            bool includeEnableEntries,
+            bool useWheelCatalogIndices,
+            System.Collections.Generic.IReadOnlyList<string>? wheelCatalog)
         {
+            // Type02 path: emit PitHouse-exact section ordering observed in
+            // `wireshark/csp/startup, change knob colors, ...pcapng`:
+            //   tier 0 def
+            //   end count=0 separator
+            //   enable flag 0
+            //   tier 1 def
+            //   tier 2 def
+            //   end count=0 final
+            //   enable flag 1
+            //   enable flag 2
+            // Detected by useWheelCatalogIndices=true (only Type02 callers set
+            // that). Other callers fall through to the legacy flat layout.
+            if (useWheelCatalogIndices && wheelCatalog != null && profile.Tiers.Count > 0)
+            {
+                return BuildTierDefinitionMessageType02(profile, flagBase, wheelCatalog);
+            }
+
             using var ms = new MemoryStream();
             using var w = new BinaryWriter(ms);
 
-            // Assign 1-based channel indices alphabetically across ALL tiers
+            // Assign 1-based channel indices. Default is alphabetic across all tiers,
+            // but when targeting a wheel that has advertised a catalog we must use
+            // its order so the wheel can correlate subscription with value frames.
             var allChannels = profile.Tiers
                 .SelectMany(t => t.Channels)
                 .OrderBy(c => c.Url, StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
             var channelIndexMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-            for (int i = 0; i < allChannels.Count; i++)
-                channelIndexMap[allChannels[i].Url] = i + 1; // 1-based
-
-            // Tier enable entries — observed: one per tier with value=1
-            // Pithouse sends enables for flag offsets 0 and 1 (regardless of tier count)
-            int enableCount = Math.Max(2, profile.Tiers.Count);
-            for (int i = 0; i < enableCount; i++)
+            if (useWheelCatalogIndices && wheelCatalog != null)
             {
-                w.Write((byte)0x00);         // tag
-                w.Write((uint)1);            // value = 1 (enabled)
-                w.Write((byte)i);            // flag offset
+                for (int i = 0; i < wheelCatalog.Count; i++)
+                {
+                    string url = wheelCatalog[i];
+                    if (!string.IsNullOrEmpty(url))
+                        channelIndexMap[url] = i + 1; // 1-based per wheel catalog order
+                }
+            }
+            else
+            {
+                for (int i = 0; i < allChannels.Count; i++)
+                    channelIndexMap[allChannels[i].Url] = i + 1;
             }
 
-            // Tier definitions
+            // PitHouse-exact format (R5 base, W17 wheel, Nebula in-game capture
+            // 2026-04-29 bridge-20260429-201848.jsonl): tier-def stream is
+            //   [tier_def 0x01] [end-marker 0x06 val=0x00000000]
+            //   [tier_def 0x01] [end-marker 0x06 val=0x04000000] [enable 0x00 val=tier_idx]
+            //   [tier_def 0x01] [end-marker 0x06 val=0x04000000]
+            // i.e. each subsequent tier preceded by a per-tier enable, and each
+            // tier followed by an end-marker with constant value (0 for first,
+            // 4 for subsequent — interpretation TBD). The previous plugin shape
+            // emitted N enables up front then all tier_defs back-to-back with a
+            // single trailing 0x06; wheel parser rejects that (no widget
+            // updates verified live 2026-04-29).
             for (int i = 0; i < profile.Tiers.Count; i++)
             {
+                // Enable entry preceding tiers 1..N-1 (not before tier 0).
+                if (includeEnableEntries && i > 0)
+                {
+                    w.Write((byte)0x00);     // tag
+                    w.Write((uint)1);        // size
+                    w.Write((byte)(i - 1));  // tier index of the PREVIOUS tier
+                }
+
                 var tier = profile.Tiers[i];
                 byte flag = (byte)(flagBase + i);
                 int numChannels = tier.Channels.Count;
@@ -106,7 +294,7 @@ namespace MozaPlugin.Telemetry
                 w.Write(size);               // size (LE)
                 w.Write(flag);               // flag byte for this tier
 
-                foreach (var ch in tier.Channels) // already sorted alphabetically
+                foreach (var ch in tier.Channels)
                 {
                     int chIndex;
                     if (!channelIndexMap.TryGetValue(ch.Url, out chIndex)) chIndex = 0;
@@ -117,12 +305,12 @@ namespace MozaPlugin.Telemetry
                     w.Write((uint)ch.BitWidth); // bit width (LE)
                     w.Write((uint)0);         // reserved
                 }
-            }
 
-            // End marker
-            w.Write((byte)0x06);             // tag
-            w.Write((uint)4);               // param (always 4 in captures)
-            w.Write((uint)allChannels.Count); // total channel count
+                // Per-tier end-marker. PitHouse: 0 for first tier, 4 for rest.
+                w.Write((byte)0x06);
+                w.Write((uint)4);
+                w.Write((uint)(i == 0 ? 0 : 4));
+            }
 
             return ms.ToArray();
         }

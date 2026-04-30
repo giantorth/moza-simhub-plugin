@@ -18,6 +18,7 @@
     <Compile Include="..\Protocol\MozaCommand.cs" Link="Src\Protocol\MozaCommand.cs" />
     <Compile Include="..\Protocol\MozaCommandDatabase.cs" Link="Src\Protocol\MozaCommandDatabase.cs" />
     <Compile Include="..\Protocol\MozaResponseParser.cs" Link="Src\Protocol\MozaResponseParser.cs" />
+    <Compile Include="..\Protocol\SessionPropertyPushBuilder.cs" Link="Src\Protocol\SessionPropertyPushBuilder.cs" />
     <Compile Include="..\Telemetry\TelemetryEncoder.cs" Link="Src\Telemetry\TelemetryEncoder.cs" />
     <Compile Include="..\Telemetry\TelemetryBitWriter.cs" Link="Src\Telemetry\TelemetryBitWriter.cs" />
     <Compile Include="..\Telemetry\DashboardProfile.cs" Link="Src\Telemetry\DashboardProfile.cs" />

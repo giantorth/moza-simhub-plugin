@@ -13,6 +13,8 @@ namespace MozaPlugin.Devices
         // Brightness (0-100)
         public int DashRpmBrightness { get; set; } = -1;
         public int DashFlagsBrightness { get; set; } = -1;
+        public int DashDisplayBrightness { get; set; } = -1;
+        public int DashDisplayStandbyMin { get; set; } = -1;
 
         // Indicator/display modes
         public int DashRpmIndicatorMode { get; set; } = -1;
@@ -33,6 +35,8 @@ namespace MozaPlugin.Devices
 
             DashRpmBrightness = settings.DashRpmBrightness;
             DashFlagsBrightness = settings.DashFlagsBrightness;
+            DashDisplayBrightness = settings.DashDisplayBrightness;
+            DashDisplayStandbyMin = settings.DashDisplayStandbyMin;
             DashRpmIndicatorMode = data.DashRpmIndicatorMode;
             DashFlagsIndicatorMode = data.DashFlagsIndicatorMode;
             DashRpmDisplayMode = data.DashRpmDisplayMode;
@@ -57,6 +61,16 @@ namespace MozaPlugin.Devices
             {
                 settings.DashFlagsBrightness = DashFlagsBrightness;
                 data.DashFlagsBrightness = DashFlagsBrightness;
+            }
+            if (DashDisplayBrightness >= 0)
+            {
+                settings.DashDisplayBrightness = DashDisplayBrightness;
+                data.DashDisplayBrightness = DashDisplayBrightness;
+            }
+            if (DashDisplayStandbyMin >= 0)
+            {
+                settings.DashDisplayStandbyMin = DashDisplayStandbyMin;
+                data.DashDisplayStandbyMin = DashDisplayStandbyMin;
             }
             if (DashRpmIndicatorMode >= 0) data.DashRpmIndicatorMode = DashRpmIndicatorMode;
             if (DashFlagsIndicatorMode >= 0) data.DashFlagsIndicatorMode = DashFlagsIndicatorMode;

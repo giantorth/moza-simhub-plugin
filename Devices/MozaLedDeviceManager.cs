@@ -26,7 +26,6 @@ namespace MozaPlugin.Devices
             Array.Empty<Color>(), Array.Empty<Color>(), 1.0, 1.0, 1.0, 1.0);
         private double _lastBrightness = -1;
         private double _lastButtonsBrightness = -1;
-        private double _lastFlagsBrightness = -1;
 
         // Per-component bitmask tracking (avoid redundant bitmask sends)
         private int _lastRpmBitmask = -1;
@@ -87,7 +86,6 @@ namespace MozaPlugin.Devices
                 _lastButtonBitmask = -1;
                 _lastBrightness = -1;
                 _lastButtonsBrightness = -1;
-                _lastFlagsBrightness = -1;
                 _ledsAwake = false;
                 OnDisconnect?.Invoke(this, EventArgs.Empty);
             }
@@ -368,15 +366,12 @@ namespace MozaPlugin.Devices
                     anySent = true;
                 }
 
-                // Flag brightness is slaved to RPM brightness on wheels with flag LEDs —
-                // the 3/N/3 layout is a single logical strip, so one master knob controls all.
-                // Routed through the Meter sub-device via dash-flags-brightness; gated on dash detect.
-                if (hasFlagLeds && plugin.IsDashDetected && rpmBrightness != _lastFlagsBrightness)
-                {
-                    _lastFlagsBrightness = rpmBrightness;
-                    plugin.DeviceManager.WriteSetting("dash-flags-brightness", (int)(rpmBrightness * 100));
-                    anySent = true;
-                }
+                // Flag brightness was previously slaved to SimHub's per-frame rpmBrightness
+                // here. Removed: SimHub passes 0 during scene transitions / no-game states,
+                // which would blank the flag LEDs (and was the source of the dashboard
+                // "incorrectly sending 0 brightness" bug). SimHub brightness now applies to
+                // wheel RPM + button LEDs only; flag LEDs use the stored config written via
+                // ApplySavedDashSettings on connect / plugin UI slider.
 
                 if (isNewWheel && buttonsBrightness != _lastButtonsBrightness)
                 {

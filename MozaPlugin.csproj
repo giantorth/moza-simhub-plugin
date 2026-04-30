@@ -65,6 +65,15 @@
     <EmbeddedResource Include="DeviceTemplates\MozaWheelGeneric\MOZA Racing Wheel\device.json" LogicalName="MozaPlugin.Devices.WheelGeneric.device.json" />
     <EmbeddedResource Include="DeviceTemplates\MozaWheelOldProto\MOZA Old Protocol Wheel\device.json" LogicalName="MozaPlugin.Devices.WheelOldProto.device.json" />
     <EmbeddedResource Include="DeviceTemplates\MozaDashShdp\MOZA Dashboard\device.json" LogicalName="MozaPlugin.Devices.Dash.device.json" />
+    <!-- Factory dashboards shipped with MOZA wheel firmware. Copied verbatim
+         from PitHouse `bin/dashes/<Name>/<Name>.mzdash`. Name underscores in
+         filenames map back to spaces in dashboard display name (e.g.
+         `Rally_V1.mzdash` → "Rally V1"). LoadBuiltinProfiles uses the URL
+         widget tree to derive per-widget tier-defs that match PitHouse's
+         channel-renegotiation pattern when the wheel switches dashboards. -->
+    <EmbeddedResource Include="Data\Dashes\*.mzdash">
+      <LogicalName>MozaPlugin.Data.Dashes.%(Filename).mzdash</LogicalName>
+    </EmbeddedResource>
   </ItemGroup>
 
   <ItemGroup>

@@ -32,7 +32,12 @@ Pit House sends telemetry as **three concurrent streams** using different flag b
 
 Wheel accepts flags at 0x00, 0x02, 0x07, 0x0a, 0x13 — any value works as long as tier definition and telemetry frames agree. Exact relationship between enable entry offsets and tier flag bytes is **not fully understood**. Plugin exposes `FlagByteMode` (0=zero-based, 1=session-port-based, 2=two-batch) for empirical testing.
 
-**Pithouse flag byte assignment (confirmed 2026-04-12 comparative captures):** Pithouse **always** uses 0-based flag bytes regardless of session port. In both `moza-startup-1` and `moza-startup-2`, tier definitions use flags 0x00, 0x01, 0x02 and first telemetry frame uses flag=0x00 — even though telemetry session was on port 0x02. Pithouse starts with flag=0x00 (fastest tier) and sends all tier flags from first frame.
+**Pithouse flag byte assignment:**
+
+- 2026-04-12 captures (older firmware): Pithouse uses 0-based flag bytes regardless of session port. Tier definitions use flags 0x00, 0x01, 0x02 and first telemetry frame uses flag=0x00 — even though telemetry session was on port 0x02. Pithouse starts with flag=0x00 (fastest tier).
+- **2026-04-29 capture** (R5+W17 Type02 firmware, Nebula in-game): tier definitions still at flags 0x00/0x01/0x02 broadcasting **the same channels at three rates**, but value frames emit at **flag=0x02 only**. Wheel binds widgets to flag=2 (the highest flag); frames at flags 0/1 don't update widgets. Plugin verified non-rendering on flag=0 → rendering when frames moved to flag=2 (2026-04-29 live test).
+
+The shift between eras: older firmware = flag=0 fast tier; Type02 firmware = flag=2 fast tier. Pick by firmware era, not by absolute byte value.
 
 Observed flag bytes (from raw JSON):
 

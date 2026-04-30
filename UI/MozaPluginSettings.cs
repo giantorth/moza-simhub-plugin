@@ -34,6 +34,11 @@ namespace MozaPlugin
         public int WheelESRpmBrightness { get; set; } = 15;
         public int DashRpmBrightness { get; set; } = 100;
         public int DashFlagsBrightness { get; set; } = 100;
+        // Wheel-integrated dashboard display brightness (0..100) and standby
+        // timeout (minutes). Sent via session-0x01 ff-record property push;
+        // see docs/protocol/findings/2026-04-29-session-01-property-push.md.
+        public int DashDisplayBrightness { get; set; } = 100;
+        public int DashDisplayStandbyMin { get; set; } = 5;
 
         // Blink colors (write-only, can't be polled — persisted here)
         // Packed as R<<16 | G<<8 | B, null = defaults not yet customized
@@ -73,6 +78,11 @@ namespace MozaPlugin
         // can't normally arm in time). Cleared on Init the moment capture is started, so
         // it never persists past one launch.
         public bool StartCaptureOnNextLaunch { get; set; } = false;
+
+        // Always-on bridge-format JSONL wire trace at SimHub/Logs/moza-wire-*.jsonl.
+        // Off by default to avoid disk-write churn; flip on when comparing plugin
+        // output to PitHouse captures via sim/diff_captures.py.
+        public bool EnableWireTraceFileSink { get; set; } = false;
 
         // ===== Profile system (SimHub native) =====
         public MozaProfileStore ProfileStore { get; set; } = new MozaProfileStore();

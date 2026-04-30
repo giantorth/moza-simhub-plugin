@@ -93,6 +93,10 @@ above apply only to the listed special cases.
 
 - [`dashboard-0x14.md`](dashboard-0x14.md) — analogous settings on the
   standalone MDD dash
+- [`../findings/2026-04-29-session-01-property-push.md`](../findings/2026-04-29-session-01-property-push.md)
+  — PitHouse pushes some wheel-integrated-dashboard runtime settings
+  (brightness, display-standby) via session-0x01, separate from the
+  `0x3F`/`0x40` settings path documented here
 - [`../telemetry/service-parameter-transforms.md`](../telemetry/service-parameter-transforms.md) —
   general value transforms (multiply / divide / custom) in
   rs21_parameter.db

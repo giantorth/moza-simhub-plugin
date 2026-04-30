@@ -61,7 +61,9 @@
                     <TextBlock Text="Dashboard:" Width="180" VerticalAlignment="Center"/>
                     <ComboBox x:Name="TelemetryProfileCombo" Width="200" Margin="0,0,8,0"
                               SelectionChanged="TelemetryProfileCombo_SelectionChanged"/>
-                    <Button Content="Load .mzdash…" Click="TelemetryLoadMzdash_Click" Padding="6,2"/>
+                    <Button Content="Load .mzdash…" Click="TelemetryLoadMzdash_Click" Padding="6,2" Margin="0,0,4,0"/>
+                    <Button Content="Clear" Click="TelemetryClearMzdash_Click" Padding="6,2"
+                            ToolTip="Clear the loaded .mzdash and revert to no profile"/>
                 </StackPanel>
                 <TextBlock x:Name="TelemetryProfileInfo" Foreground="Gray" FontSize="11"
                            Margin="180,0,0,8" Text="—"/>
@@ -105,6 +107,39 @@
                         </StackPanel>
                     </StackPanel>
                 </Expander>
+
+                <TextBlock Text="Display" Style="{StaticResource SectionHeader}"/>
+                <StackPanel Orientation="Horizontal" Margin="0,4">
+                    <TextBlock Text="Display Brightness" Style="{StaticResource SliderLabel}"/>
+                    <Slider x:Name="WheelDisplayBrightnessSlider" Style="{StaticResource SettingSlider}"
+                            Minimum="0" Maximum="100" TickFrequency="1"
+                            ValueChanged="WheelDisplayBrightnessSlider_ValueChanged"/>
+                    <TextBlock x:Name="WheelDisplayBrightnessValue" Style="{StaticResource SliderValue}" Text="100"/>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Margin="0,4">
+                    <TextBlock Text="Standby Time" Style="{StaticResource SliderLabel}"/>
+                    <ComboBox x:Name="WheelDisplayStandbyCombo" Width="140"
+                              SelectionChanged="WheelDisplayStandbyCombo_Changed">
+                        <ComboBoxItem Tag="1">1 minute</ComboBoxItem>
+                        <ComboBoxItem Tag="2">2 minutes</ComboBoxItem>
+                        <ComboBoxItem Tag="3">3 minutes</ComboBoxItem>
+                        <ComboBoxItem Tag="4">4 minutes</ComboBoxItem>
+                        <ComboBoxItem Tag="5">5 minutes</ComboBoxItem>
+                        <ComboBoxItem Tag="10">10 minutes</ComboBoxItem>
+                        <ComboBoxItem Tag="15">15 minutes</ComboBoxItem>
+                        <ComboBoxItem Tag="20">20 minutes</ComboBoxItem>
+                        <ComboBoxItem Tag="25">25 minutes</ComboBoxItem>
+                        <ComboBoxItem Tag="30">30 minutes</ComboBoxItem>
+                        <ComboBoxItem Tag="35">35 minutes</ComboBoxItem>
+                        <ComboBoxItem Tag="40">40 minutes</ComboBoxItem>
+                        <ComboBoxItem Tag="45">45 minutes</ComboBoxItem>
+                        <ComboBoxItem Tag="60">1 hour</ComboBoxItem>
+                        <ComboBoxItem Tag="120">2 hours</ComboBoxItem>
+                        <ComboBoxItem Tag="180">3 hours</ComboBoxItem>
+                        <ComboBoxItem Tag="240">4 hours</ComboBoxItem>
+                        <ComboBoxItem Tag="300">5 hours</ComboBoxItem>
+                    </ComboBox>
+                </StackPanel>
             </StackPanel>
 
             <!-- ===== NEW WHEEL (GS/FSR/CS/RS/TSW) ===== -->

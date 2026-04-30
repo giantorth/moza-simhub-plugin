@@ -319,6 +319,27 @@ namespace MozaPlugin
 
                 MozaLog.Info("[Moza] Initializing plugin");
 
+                // Bridge-format JSONL wire trace at SimHub/Logs/moza-wire-*.jsonl.
+                // Off by default; opt-in via _settings.EnableWireTraceFileSink for
+                // PitHouse-vs-plugin diff work (see sim/diff_captures.py). Each
+                // launch opens a fresh file when enabled.
+                if (_settings.EnableWireTraceFileSink)
+                {
+                    try
+                    {
+                        string ts = DateTime.Now.ToString("yyyyMMdd-HHmmss");
+                        string baseDir = AppDomain.CurrentDomain.BaseDirectory ?? ".";
+                        string logsDir = System.IO.Path.Combine(baseDir, "Logs");
+                        string sinkPath = System.IO.Path.Combine(logsDir, $"moza-wire-{ts}.jsonl");
+                        global::MozaPlugin.Diagnostics.SerialTrafficCapture.Instance.StartFileSink(sinkPath);
+                        MozaLog.Info($"[Moza] Wire trace sink → {sinkPath}");
+                    }
+                    catch (Exception ex)
+                    {
+                        MozaLog.Warn($"[Moza] Wire trace sink open failed: {ex.GetType().Name}: {ex.Message}");
+                    }
+                }
+
                 // Consume one-shot "start capture on next launch" arm flag. Done before
                 // any device connect / probe traffic so the capture covers the full
                 // connect handshake. Flag is cleared and persisted immediately so a
@@ -356,7 +377,12 @@ namespace MozaPlugin
                 _ab9Manager = new MozaAb9DeviceManager();
                 _ab9Manager.MessageReceived += OnAb9MessageReceived;
 
-                _pollTimer = new Timer(2000);
+                // 5 s poll interval. Was 2 s, but the diagnostic reads it issues
+                // (base-state, mcu/mosfet/motor temp via 0x2B/0x13 cmd 1/4/5/6 +
+                // hub/dash/handbrake/pedal probes) generated ~6 frames/s of plugin-
+                // only wire noise vs PitHouse. Slowing to 5 s halves the impact
+                // while keeping hot-swap and temperature UI responsive enough.
+                _pollTimer = new Timer(5000);
                 _pollTimer.Elapsed += PollStatus;
                 _pollTimer.AutoReset = true;
                 _pollTimer.Start();
@@ -442,6 +468,7 @@ namespace MozaPlugin
         {
             if (IsShuttingDown) return;
             _telemetrySender?.UpdateGameData(data.NewData);
+            _telemetrySender?.SetGameRunning(data.GameRunning);
         }
 
         public void End(PluginManager pluginManager)
@@ -669,20 +696,39 @@ namespace MozaPlugin
             }
 
             // Map era → tier-def ProtocolVersion + file-transfer UploadWireFormat.
+            // Auto: optimistic Type02 default. SendTierDefinition downgrades
+            // UploadWireFormat to New2026_04 if the wheel's session-0x02 catalog
+            // never arrives (older firmware doesn't push one). Sub-msg-1 ack
+            // timeout further fallbacks 6B → 8B header for legacy 2025-11.
             (int protocolVersion, FileTransferWireFormat wireFormat) = s.TelemetryFirmwareEra switch
             {
                 MozaFirmwareEra.TierDefV2_Upload8B => (2, FileTransferWireFormat.Legacy2025_11),
                 MozaFirmwareEra.TierDefV2_Upload6B => (2, FileTransferWireFormat.New2026_04),
-                MozaFirmwareEra.TierDefV0_Upload8B => (0, FileTransferWireFormat.Legacy2025_11),
                 MozaFirmwareEra.TierDefV0_Upload6B => (0, FileTransferWireFormat.New2026_04),
-                _ /* Auto */                       => (2, FileTransferWireFormat.New2026_04),
+                MozaFirmwareEra.TierDefV2_Type02   => (2, FileTransferWireFormat.New2026_04_Type02),
+                _ /* Auto */                       => (2, FileTransferWireFormat.New2026_04_Type02),
             };
             _telemetrySender.ProtocolVersion = protocolVersion;
             _telemetrySender.UploadWireFormat = wireFormat;
             _telemetrySender.AutoFallbackWireFormat = s.TelemetryFirmwareEra == MozaFirmwareEra.Auto;
             _telemetrySender.UploadDashboard = s.TelemetryUploadDashboard;
 
-            // Resolve the active multi-stream profile and raw mzdash content
+            // Resolve the active multi-stream profile and raw mzdash content.
+            //
+            // Precedence (2026-04-30):
+            //   1. User picked a custom mzdash file (TelemetryMzdashPath set
+            //      and exists) → parse it, use its channel list + bytes.
+            //   2. User picked a builtin by name (TelemetryProfileName set) →
+            //      load from BuiltinProfiles + embedded mzdash bytes.
+            //   3. Default → leave profile null. TelemetrySender's
+            //      MaybeSwapProfileForCatalog builds a synthetic
+            //      "WheelCatalog" profile from the wheel's session-0x02
+            //      catalog push. Subscription channel set always matches the
+            //      wheel's currently-active dashboard without the host
+            //      needing local mzdash metadata.
+            //
+            // Dashboard upload (TelemetryUploadDashboard=true) still requires
+            // mzdash bytes — only fires when path 1 or 2 supplied them.
             MultiStreamProfile? profile = null;
             byte[]? mzdashContent = null;
             string mzdashName = "";
@@ -693,32 +739,31 @@ namespace MozaPlugin
                 mzdashContent = System.IO.File.ReadAllBytes(s.TelemetryMzdashPath);
                 mzdashName = System.IO.Path.GetFileNameWithoutExtension(s.TelemetryMzdashPath);
             }
-
-            if (profile == null)
+            else if (!string.IsNullOrEmpty(s.TelemetryProfileName))
             {
                 var builtins = DashProfileStore.BuiltinProfiles;
                 if (builtins.Count > 0)
                 {
-                    if (!string.IsNullOrEmpty(s.TelemetryProfileName))
-                        profile = FindProfile(builtins, s.TelemetryProfileName);
-                    profile ??= builtins[0];
-                }
+                    profile = FindProfile(builtins, s.TelemetryProfileName);
 
-                // Load raw mzdash content from embedded resource for upload
-                if (profile != null && mzdashContent == null)
-                {
-                    mzdashName = profile.Name;
-                    string resourceName = $"MozaPlugin.Data.Dashes.{profile.Name.Replace(" ", "_")}.mzdash";
-                    var assembly = System.Reflection.Assembly.GetExecutingAssembly();
-                    using var stream = assembly.GetManifestResourceStream(resourceName);
-                    if (stream != null)
+                    // Load raw mzdash content from embedded resource for upload
+                    if (profile != null && mzdashContent == null)
                     {
-                        using var ms = new System.IO.MemoryStream();
-                        stream.CopyTo(ms);
-                        mzdashContent = ms.ToArray();
+                        mzdashName = profile.Name;
+                        string resourceName = $"MozaPlugin.Data.Dashes.{profile.Name.Replace(" ", "_")}.mzdash";
+                        var assembly = System.Reflection.Assembly.GetExecutingAssembly();
+                        using var stream = assembly.GetManifestResourceStream(resourceName);
+                        if (stream != null)
+                        {
+                            using var ms = new System.IO.MemoryStream();
+                            stream.CopyTo(ms);
+                            mzdashContent = ms.ToArray();
+                        }
                     }
                 }
             }
+            // else: catalog-only mode — profile stays null, sender will
+            // synthesise from wheel-advertised channels post-preamble.
 
             // Apply user channel mappings for the selected dashboard (overrides
             // each channel's SimHubProperty string by URL). Must run before
@@ -882,7 +927,11 @@ namespace MozaPlugin
             if (!_settings.TelemetryEnabled) return;
             if (!_connection.IsConnected) return;
             if (!_newWheelDetected && !_oldWheelDetected) return;
-            if (_telemetrySender.Profile == null) return;
+            // Profile may be null when no .mzdash is loaded and no builtin
+            // profiles are bundled. Sender starts anyway; preamble parses the
+            // wheel-advertised catalog (Type02 firmware pushes it unconditionally)
+            // and MaybeSwapProfileForCatalog synthesises a WheelCatalog profile
+            // post-preamble.
 
             // Already running — don't restart (avoids re-probing ports mid-session)
             if (_telemetrySender.FramesSent > 0) return;
@@ -1024,6 +1073,16 @@ namespace MozaPlugin
                 _deviceManager.ReadSetting("pedals-throttle-dir");
             if (!_hubDetected)
                 _deviceManager.ReadSetting("hub-port1-power");
+
+            // Re-probe wheel display sub-device until detected. The initial
+            // probe at wheel-detect time can race wheel-side power-up and
+            // return only partial identity (presence + identity-11 with
+            // model/HW/FW/MCU still empty), which leaves IsDisplayDetected
+            // false and hides the dashboard-telemetry UI section. PitHouse
+            // re-probes periodically until the display answers fully — mirror
+            // that here so the section auto-appears once the display is awake.
+            if (_newWheelDetected && !IsDisplayDetected)
+                _deviceManager.SendDisplayProbe();
 
             // Poll hub port status while hub is connected (read-only, no settings to save)
             if (_hubDetected)
@@ -1572,10 +1631,17 @@ namespace MozaPlugin
             // Pre-populate _data from saved settings so the UI shows correct values
             _data.DashRpmBrightness = _settings.DashRpmBrightness;
             _data.DashFlagsBrightness = _settings.DashFlagsBrightness;
+            _data.DashDisplayBrightness = _settings.DashDisplayBrightness;
+            _data.DashDisplayStandbyMin = _settings.DashDisplayStandbyMin;
 
             // Brightness
             _deviceManager.WriteSetting("dash-rpm-brightness", _settings.DashRpmBrightness);
             _deviceManager.WriteSetting("dash-flags-brightness", _settings.DashFlagsBrightness);
+
+            // Wheel-integrated display brightness + standby ride session-0x01
+            // ff-record property push (see findings/2026-04-29-session-01-property-push.md).
+            _telemetrySender?.SendDashDisplayBrightness(_settings.DashDisplayBrightness);
+            _telemetrySender?.SendDashDisplayStandbyMinutes(_settings.DashDisplayStandbyMin);
 
             // Enable flag indicator mode (0=Off, 1=Flags, 2=On). Firmware default is 0,
             // which silently drops all flag colour/bitmask writes. Set to 1 so the plugin's
@@ -1828,6 +1894,16 @@ namespace MozaPlugin
                 _settings.DashFlagsBrightness = profile.DashFlagsBrightness;
                 _data.DashFlagsBrightness = profile.DashFlagsBrightness;
             }
+            if (profile.DashDisplayBrightness >= 0)
+            {
+                _settings.DashDisplayBrightness = profile.DashDisplayBrightness;
+                _data.DashDisplayBrightness = profile.DashDisplayBrightness;
+            }
+            if (profile.DashDisplayStandbyMin >= 0)
+            {
+                _settings.DashDisplayStandbyMin = profile.DashDisplayStandbyMin;
+                _data.DashDisplayStandbyMin = profile.DashDisplayStandbyMin;
+            }
 
             // --- FFB Equalizer ---
             // Equalizer uses -1000 as sentinel (valid range is 0 to 400, where 100 = default/flat)
@@ -2029,6 +2105,10 @@ namespace MozaPlugin
                     _deviceManager.WriteSetting("dash-rpm-brightness", profile.DashRpmBrightness);
                 if (profile.DashFlagsBrightness >= 0)
                     _deviceManager.WriteSetting("dash-flags-brightness", profile.DashFlagsBrightness);
+                if (profile.DashDisplayBrightness >= 0)
+                    _telemetrySender?.SendDashDisplayBrightness(profile.DashDisplayBrightness);
+                if (profile.DashDisplayStandbyMin >= 0)
+                    _telemetrySender?.SendDashDisplayStandbyMinutes(profile.DashDisplayStandbyMin);
             }
         }
 
@@ -2212,6 +2292,10 @@ namespace MozaPlugin
                     _deviceManager.WriteSetting("dash-rpm-brightness", extSettings.DashRpmBrightness);
                 if (extSettings.DashFlagsBrightness >= 0)
                     _deviceManager.WriteSetting("dash-flags-brightness", extSettings.DashFlagsBrightness);
+                if (extSettings.DashDisplayBrightness >= 0)
+                    _telemetrySender?.SendDashDisplayBrightness(extSettings.DashDisplayBrightness);
+                if (extSettings.DashDisplayStandbyMin >= 0)
+                    _telemetrySender?.SendDashDisplayStandbyMinutes(extSettings.DashDisplayStandbyMin);
                 if (extSettings.DashRpmIndicatorMode >= 0)
                     _deviceManager.WriteSetting("dash-rpm-indicator-mode", extSettings.DashRpmIndicatorMode);
                 if (extSettings.DashFlagsIndicatorMode >= 0)

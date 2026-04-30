@@ -25,15 +25,27 @@ namespace MozaPlugin.Telemetry
         private readonly TelemetryBitWriter? _bitWriter;
 
         public TelemetryFrameBuilder(DashboardProfile profile)
-            : this(profile, propertyResolver: null) { }
+            : this(profile, propertyResolver: null, type02NConvention: false) { }
+
+        public TelemetryFrameBuilder(DashboardProfile profile, Func<string, double>? propertyResolver)
+            : this(profile, propertyResolver, type02NConvention: false) { }
 
         /// <summary>
         /// Build a frame builder. If <paramref name="propertyResolver"/> is supplied,
         /// channels with a non-empty <see cref="ChannelDefinition.SimHubProperty"/>
         /// read their value via that resolver. Channels with an empty property fall
         /// back to <see cref="GameDataSnapshot.GetField"/>.
+        ///
+        /// <paramref name="type02NConvention"/> selects the N-field formula:
+        /// false (default) = legacy 8+dataLen (VGS/F1), true = 10+dataLen
+        /// including grp+dev (CSP/Type02 wheel firmware). Verified against
+        /// PitHouse capture wireshark/csp/start-game-change-dash.pcapng — CSP
+        /// frame `7e 0b 43 17 7d 23 32 00 23 32 1d 20 1f 00` has N=11 with
+        /// data=1 byte, matching 10+1.
         /// </summary>
-        public TelemetryFrameBuilder(DashboardProfile profile, Func<string, double>? propertyResolver)
+        public TelemetryFrameBuilder(DashboardProfile profile,
+            Func<string, double>? propertyResolver,
+            bool type02NConvention)
         {
             _profile = profile;
 
@@ -64,7 +76,16 @@ namespace MozaPlugin.Telemetry
 
             // Write the static header bytes once
             _frameBuffer[0] = MozaProtocol.MessageStart;       // 7E
-            _frameBuffer[1] = (byte)(2 + 6 + dataLen);         // N = cmdId(2) + header(6) + data
+            // N field formula varies by firmware era:
+            //   legacy (VGS / KS Pro / F1 capture): N = 2(cmd) + 6(prefix) + data = 8+data
+            //   CSP / Type02 (wireshark/csp/start-game-change-dash.pcapng):
+            //     N = 2(grp+dev) + 8(cmd+prefix+flag+const) + data = 10+data
+            // Verified CSP frame `7e 0b 43 17 7d 23 32 00 23 32 1d 20 1f 00`
+            // has N=11 with data=1B (matches 10+1). Plugin sending N=8+data on
+            // CSP firmware leaves wheel unable to render.
+            _frameBuffer[1] = type02NConvention
+                ? (byte)(10 + dataLen)
+                : (byte)(2 + 6 + dataLen);
             _frameBuffer[2] = MozaProtocol.TelemetrySendGroup;  // 43
             _frameBuffer[3] = MozaProtocol.DeviceWheel;         // 17
             _frameBuffer[4] = 0x7D;                             // cmdId[0]
@@ -137,8 +158,15 @@ namespace MozaPlugin.Telemetry
             _frameBuffer[10] = flagByte;
 
             const int period = 100;
+            // Phase step scales with tier's pkg_level so slow tiers (e.g. pkg=2000
+            // firing every ~2s) still complete a full triangle sweep on a similar
+            // wall-clock timescale as fast tiers (pkg=30 firing every 30ms).
+            // Without this scale, pkg=2000 took ~200s for one full cycle and
+            // looked static during TestMode visual sweep.
+            int pkgLevel = _profile.PackageLevel > 0 ? _profile.PackageLevel : 30;
+            int phaseStep = System.Math.Max(1, pkgLevel / 30);
             int phase = _testPhase;
-            _testPhase = (_testPhase + 1) % period;
+            _testPhase = (_testPhase + phaseStep) % period;
             double t = 1.0 - Math.Abs(phase * 2.0 / period - 1.0); // 0 → 1 → 0
 
             if (_bitWriter != null)
@@ -169,6 +197,112 @@ namespace MozaPlugin.Telemetry
         }
 
         /// <summary>
+        /// Build a single V0 per-channel value frame for the URL-subscription
+        /// telemetry path used by post-2026-04 CSP firmware. Layout reverse-
+        /// engineered from PitHouse capture
+        /// `wireshark/csp/start-game-change-dash.pcapng` (host outbound on
+        /// session 0x02):
+        /// <code>
+        ///   [ff]                            sentinel
+        ///   [size:u32 LE = 4 + value.Length]
+        ///   [crc32_LE over (index_LE_4B || value_LE)]
+        ///   [index:u32 LE]
+        ///   [value: 4 or 8 bytes LE]
+        /// </code>
+        /// One frame per channel update; caller wraps each in a session-data
+        /// chunk via <see cref="TierDefinitionBuilder.ChunkMessage"/>.
+        /// </summary>
+        public static byte[] BuildV0ValueFrame(uint channelIndex, byte[] valueLE)
+        {
+            if (valueLE == null) throw new ArgumentNullException(nameof(valueLE));
+            if (valueLE.Length != 4 && valueLE.Length != 8)
+                throw new ArgumentException("V0 value must be 4 or 8 bytes", nameof(valueLE));
+            uint size = (uint)(4 + valueLE.Length);
+
+            // CRC32 input is index_LE concatenated with value_LE.
+            var crcInput = new byte[4 + valueLE.Length];
+            crcInput[0] = (byte)(channelIndex & 0xFF);
+            crcInput[1] = (byte)((channelIndex >> 8) & 0xFF);
+            crcInput[2] = (byte)((channelIndex >> 16) & 0xFF);
+            crcInput[3] = (byte)((channelIndex >> 24) & 0xFF);
+            Buffer.BlockCopy(valueLE, 0, crcInput, 4, valueLE.Length);
+            uint crc = TierDefinitionBuilder.Crc32(crcInput, 0, crcInput.Length);
+
+            var frame = new byte[1 + 4 + 4 + 4 + valueLE.Length];
+            int o = 0;
+            frame[o++] = 0xFF;
+            frame[o++] = (byte)(size & 0xFF);
+            frame[o++] = (byte)((size >> 8) & 0xFF);
+            frame[o++] = (byte)((size >> 16) & 0xFF);
+            frame[o++] = (byte)((size >> 24) & 0xFF);
+            frame[o++] = (byte)(crc & 0xFF);
+            frame[o++] = (byte)((crc >> 8) & 0xFF);
+            frame[o++] = (byte)((crc >> 16) & 0xFF);
+            frame[o++] = (byte)((crc >> 24) & 0xFF);
+            frame[o++] = (byte)(channelIndex & 0xFF);
+            frame[o++] = (byte)((channelIndex >> 8) & 0xFF);
+            frame[o++] = (byte)((channelIndex >> 16) & 0xFF);
+            frame[o++] = (byte)((channelIndex >> 24) & 0xFF);
+            Buffer.BlockCopy(valueLE, 0, frame, o, valueLE.Length);
+            return frame;
+        }
+
+        /// <summary>
+        /// Encode a decoded game value to the LE byte array expected by V0
+        /// per-channel value frames. 4-byte for most channels, 8-byte for
+        /// 64-bit / double channels (compression codes <c>int64_t</c>,
+        /// <c>uint64_t</c>, <c>double</c>).
+        /// </summary>
+        public static byte[] EncodeV0Value(string compression, double value)
+        {
+            if (compression == "double")
+            {
+                long bits = BitConverter.DoubleToInt64Bits(value);
+                return BitConverter.IsLittleEndian
+                    ? BitConverter.GetBytes(bits)
+                    : ReverseBytes(BitConverter.GetBytes(bits));
+            }
+            if (compression == "int64_t")
+            {
+                long v = (long)value;
+                return BitConverter.IsLittleEndian
+                    ? BitConverter.GetBytes(v)
+                    : ReverseBytes(BitConverter.GetBytes(v));
+            }
+            if (compression == "uint64_t")
+            {
+                ulong v = (ulong)value;
+                return BitConverter.IsLittleEndian
+                    ? BitConverter.GetBytes(v)
+                    : ReverseBytes(BitConverter.GetBytes(v));
+            }
+            if (compression == "float")
+            {
+                float v = (float)value;
+                return BitConverter.IsLittleEndian
+                    ? BitConverter.GetBytes(v)
+                    : ReverseBytes(BitConverter.GetBytes(v));
+            }
+            // Default: encode as u32 LE using the same compression-aware mapping
+            // the V2 path uses, then truncate to 4 bytes. Wheel firmware handles
+            // type interpretation via its internal channel metadata.
+            uint encoded = TelemetryEncoder.Encode(compression, value);
+            return new byte[]
+            {
+                (byte)(encoded & 0xFF),
+                (byte)((encoded >> 8) & 0xFF),
+                (byte)((encoded >> 16) & 0xFF),
+                (byte)((encoded >> 24) & 0xFF),
+            };
+        }
+
+        private static byte[] ReverseBytes(byte[] b)
+        {
+            Array.Reverse(b);
+            return b;
+        }
+
+        /// <summary>
         /// Build a stub frame for a tier with no active channels.
         /// Frame contains the full fixed header but no data bytes.
         /// </summary>
@@ -176,7 +310,7 @@ namespace MozaPlugin.Telemetry
         {
             var frame = new byte[HeaderLen + ChecksumLen];
             frame[0] = MozaProtocol.MessageStart;
-            frame[1] = (byte)(2 + 6);  // N with no data
+            frame[1] = (byte)(2 + 6);  // N legacy: cmd+prefix, no data
             frame[2] = MozaProtocol.TelemetrySendGroup;
             frame[3] = MozaProtocol.DeviceWheel;
             frame[4] = 0x7D;

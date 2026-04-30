@@ -61,6 +61,26 @@ namespace MozaPlugin.Protocol
                 return ParseDisplayIdentity(payload, responseDeviceId);
             }
 
+            // Channel-enable read-back: wheel responds to `0x40/0x17 1E PP CC 00 00`
+            // (BuildChannelEnableFrame) with `0xC0/0x71 1E PP CC HH LL`, where HHLL is
+            // the stored value (BE u16) for that channel. Observed 0x0bb8 (3000),
+            // 0x03e8 (1000), 0x01f4 (500). Parser exposes via "wheel-channel-enable-readback"
+            // so logs/diagnostics can show what the wheel committed for each (page,channel).
+            if (responseGroup == 0xC0 && responseDeviceId == 0x71
+                && payload.Length >= 5 && payload[0] == 0x1E)
+            {
+                int storedBE = (payload[3] << 8) | payload[4];
+                int packed = (payload[1] << 24) | (payload[2] << 16) | (payload[3] << 8) | payload[4];
+                return new ParsedResponse
+                {
+                    Name = $"wheel-channel-enable-readback[p{payload[1]:X2}c{payload[2]:X2}]",
+                    IntValue = storedBE,
+                    ArrayValue = new byte[] { payload[1], payload[2], payload[3], payload[4] },
+                    DeviceId = MozaProtocol.SwapNibbles(responseDeviceId),
+                    PayloadLength = packed,
+                };
+            }
+
             // Device hint overrides based on group range
             string? deviceHint = null;
             if (group >= 63 && group <= 66)

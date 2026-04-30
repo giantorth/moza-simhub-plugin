@@ -839,13 +839,13 @@
                                    Text="Attempt to upload selected mzdash file.  Experimental."/>
                         <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
                             <TextBlock Text="Wire protocol:" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                            <ComboBox x:Name="FirmwareEraCombo" Width="420"
+                            <ComboBox x:Name="FirmwareEraCombo" Width="500"
                                       SelectionChanged="FirmwareEra_Changed">
-                                <ComboBoxItem Content="Auto — pick safe defaults with fallback"/>
-                                <ComboBoxItem Content="Compact tier-def + 8-byte upload header"/>
-                                <ComboBoxItem Content="Compact tier-def + 6-byte upload header"/>
-                                <ComboBoxItem Content="URL tier-def + 8-byte upload header"/>
-                                <ComboBoxItem Content="URL tier-def + 6-byte upload header"/>
+                                <ComboBoxItem Content="Auto — detect Type02 from wheel catalog, fall back to legacy"/>
+                                <ComboBoxItem Content="Compact tier-def + 8-byte upload header (legacy 2025-11)"/>
+                                <ComboBoxItem Content="Compact tier-def + 6-byte upload header (2026-04 pre-Type02)"/>
+                                <ComboBoxItem Content="URL tier-def + 6-byte upload header (CSP on R9)"/>
+                                <ComboBoxItem Content="Compact tier-def + Type02 metadata (R5+W17, KS Pro)"/>
                             </ComboBox>
                         </StackPanel>
                         <TextBlock TextWrapping="Wrap" Foreground="Gray" FontSize="11" Margin="0,2,0,8"
@@ -998,6 +998,25 @@
                         <!-- Session / connection -->
                         <TextBlock Text="Session state" FontWeight="SemiBold" Margin="0,0,0,6"/>
                         <TextBlock x:Name="DiagSessionBox" FontFamily="Consolas" FontSize="11"
+                                   TextWrapping="Wrap" Text="—" Margin="0,0,0,10"/>
+
+                        <Separator Margin="0,4,0,8"/>
+
+                        <TextBlock Text="Wheel channel catalog" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                        <TextBlock x:Name="DiagWheelCatalogBox" FontFamily="Consolas" FontSize="11"
+                                   TextWrapping="Wrap" Text="—" Margin="0,0,0,10"/>
+
+                        <Separator Margin="0,4,0,8"/>
+
+                        <TextBlock Text="Last subscription sent" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                        <TextBlock x:Name="DiagSubscriptionBox" FontFamily="Consolas" FontSize="11"
+                                   TextWrapping="Wrap" Text="—" Margin="0,0,0,10"/>
+
+                        <Separator Margin="0,4,0,8"/>
+
+                        <TextBlock Text="Wheel response on session 0x02 (5s window after subscription)"
+                                   FontWeight="SemiBold" Margin="0,0,0,6"/>
+                        <TextBlock x:Name="DiagSubscriptionResponseBox" FontFamily="Consolas" FontSize="11"
                                    TextWrapping="Wrap" Text="—" Margin="0,0,0,10"/>
 
                         <Button Content="Copy all to clipboard" Padding="6,2"

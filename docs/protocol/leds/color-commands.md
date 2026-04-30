@@ -18,8 +18,28 @@ for the per-command rows.
 **RPM active-LED bitmask** (`wheel-send-rpm-telemetry`):
 
 ```
-7E [N] 3F 17 1A 00 [bitmask LE: 2 or 4 bytes] [checksum]
+7E [N] 3F 17 1A 00 [active_mask LE] [window_mask LE] [checksum]
 ```
+
+Three observed widths:
+- `[bitmask:u16] [u16 zeros]` — 2-byte form (older / small bars)
+- `[bitmask:u32]` — 4-byte form (≥17-LED bars)
+- `[active_mask:u32] [window_mask:u32]` — **8-byte form** observed live on R5 base + W17 wheel (2026-04-29 capture). `window_mask` defines which LEDs are addressable (e.g. `0x00001ff8` = 13-LED RPM strip, `0x0000ffff` = 16-LED extended) and `active_mask` is the subset currently lit. Different dashboards swap `window_mask` on the fly: `f81f00 00` → 13-LED RPM bar; `ffff0000` → 16-LED redline / wide-zone mode.
+
+Mask progression with rising RPM (8-byte form, `window_mask = 0x00001ff8`):
+```
+00 00 00 00  f8 1f 00 00   ← idle (no LEDs lit)
+00 08 00 00  f8 1f 00 00   ← stage 1 (bit 3)
+00 18 00 00  f8 1f 00 00   ← stage 2
+00 38 00 00  f8 1f 00 00   ← stage 3
+00 78 00 00  f8 1f 00 00   ← stage 4
+00 f8 03 00  f8 1f 00 00   ← stage 5
+00 f8 0f 00  f8 1f 00 00   ← stage 6
+00 f8 1f 00  f8 1f 00 00   ← full bar
+00 07 e0 00  ff ff 00 00   ← redline-zone-only mode (different window)
+```
+
+Companion `1A 03 …` and `1A 01 ff …` mode-toggle / scene-reset variants are emitted at dashboard switch and game-state transitions.
 
 **Button color chunk** (`wheel-telemetry-button-colors`):
 

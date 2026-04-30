@@ -95,35 +95,25 @@ namespace MozaPlugin.Tests.Telemetry
 
             int numChannels = profile.Tiers[0].Channels.Count;
 
-            // Per-tier enables: max(2, numTiers) = 2 entries × 6 bytes = 12 bytes
-            // Tier def: 1 tag + 4 size + 1 flag + 16*numChannels = 6 + 16*numChannels
-            // End marker: 1 tag + 4 param + 4 total = 9 bytes
-            int expectedSize = 2 * 6 + (6 + 16 * numChannels) + 9;
+            // PitHouse-exact 2026-04-29: per-tier interleaved enables (only
+            // before tiers 1..N-1, none upfront) + per-tier end-marker.
+            // For 1 tier: tier_def (6 + 16*N) + end_marker (9) = 15 + 16*N
+            int expectedSize = (6 + 16 * numChannels) + 9;
             Assert.Equal(expectedSize, msg.Length);
 
-            // Enable entry 0
-            Assert.Equal(0x00, msg[0]);
-            Assert.Equal(0x01, msg[1]); Assert.Equal(0x00, msg[2]);
-            Assert.Equal(0x00, msg[3]); Assert.Equal(0x00, msg[4]);
-            Assert.Equal(0x00, msg[5]);  // flag offset 0
-
-            // Enable entry 1 at offset 6
-            Assert.Equal(0x00, msg[6]);
-            Assert.Equal(0x01, msg[11]); // flag offset 1
-
-            // Tier def tag at offset 12
-            Assert.Equal(0x01, msg[12]);
-            uint size = (uint)(msg[13] | (msg[14] << 8) | (msg[15] << 16) | (msg[16] << 24));
+            // Tier def tag at offset 0 (no preceding enable for tier 0)
+            Assert.Equal(0x01, msg[0]);
+            uint size = (uint)(msg[1] | (msg[2] << 8) | (msg[3] << 16) | (msg[4] << 24));
             Assert.Equal((uint)(1 + numChannels * 16), size);
-            Assert.Equal(0x08, msg[17]);  // flag byte
+            Assert.Equal(0x08, msg[5]);  // flag byte = flagBase + 0
 
-            // End marker
+            // End marker after tier
             int endOffset = msg.Length - 9;
             Assert.Equal(0x06, msg[endOffset]);
-            Assert.Equal(0x04, msg[endOffset + 1]);  // param=4
-            uint total = (uint)(msg[endOffset + 5] | (msg[endOffset + 6] << 8)
-                              | (msg[endOffset + 7] << 16) | (msg[endOffset + 8] << 24));
-            Assert.Equal((uint)numChannels, total);
+            Assert.Equal(0x04, msg[endOffset + 1]);  // size=4
+            uint markerVal = (uint)(msg[endOffset + 5] | (msg[endOffset + 6] << 8)
+                                  | (msg[endOffset + 7] << 16) | (msg[endOffset + 8] << 24));
+            Assert.Equal(0u, markerVal);  // first tier marker = 0
         }
 
         [Fact]
@@ -132,14 +122,13 @@ namespace MozaPlugin.Tests.Telemetry
             var profile = F1DashboardProfileFixture.BuildMultiStream();
             byte[] msg = TierDefinitionBuilder.BuildTierDefinitionMessage(profile, flagBase: 0x08);
 
-            // First channel entry starts after: 12 (enables) + 6 (tier header) = 18
-            // Channel 0 is Brake (alphabetically first), should have index 1
-            int ch0 = 18;
+            // First channel entry starts at offset 6 (1 tag + 4 size + 1 flag).
+            int ch0 = 6;
             uint idx0 = (uint)(msg[ch0] | (msg[ch0 + 1] << 8) | (msg[ch0 + 2] << 16) | (msg[ch0 + 3] << 24));
             Assert.Equal(1u, idx0);
 
             // Channel 1 is CurrentLapTime, index 2
-            int ch1 = 18 + 16;
+            int ch1 = ch0 + 16;
             uint idx1 = (uint)(msg[ch1] | (msg[ch1 + 1] << 8) | (msg[ch1 + 2] << 16) | (msg[ch1 + 3] << 24));
             Assert.Equal(2u, idx1);
         }

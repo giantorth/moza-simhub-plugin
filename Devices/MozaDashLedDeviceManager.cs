@@ -22,7 +22,6 @@ namespace MozaPlugin.Devices
             Array.Empty<Color>(), Array.Empty<Color>(), 1.0, 1.0, 1.0, 1.0);
 
         private int _lastBitmask = -1;
-        private double _lastBrightness = -1;
 
         public LedModuleSettings LedModuleSettings { get; set; } = null!;
 
@@ -55,7 +54,6 @@ namespace MozaPlugin.Devices
             else
             {
                 _lastBitmask = -1;
-                _lastBrightness = -1;
                 OnDisconnect?.Invoke(this, EventArgs.Empty);
             }
         }
@@ -145,12 +143,11 @@ namespace MozaPlugin.Devices
                     plugin.DeviceManager.WriteSetting("dash-send-telemetry", bitmask);
                 }
 
-                // Brightness
-                if (rpmBrightness != _lastBrightness)
-                {
-                    _lastBrightness = rpmBrightness;
-                    plugin.DeviceManager.WriteSetting("dash-rpm-brightness", (int)(rpmBrightness * 100));
-                }
+                // Dashboard brightness is stored config (set via plugin UI slider →
+                // ApplySavedDashSettings on connect). Don't forward SimHub's per-frame
+                // rpmBrightness here — SimHub passes 0 during scene transitions / no-game
+                // states, which would blank the dashboard. SimHub brightness applies to
+                // wheel RPM + button LEDs only.
             }
             finally
             {

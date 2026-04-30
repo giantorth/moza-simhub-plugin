@@ -336,5 +336,6 @@ namespace MozaPlugin.Devices
             _device!.WriteSetting("dash-flags-brightness", val);
             _plugin.SaveSettings();
         }
+
     }
 }

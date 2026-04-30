@@ -22,8 +22,11 @@ namespace MozaPlugin.Telemetry
     public enum MozaFirmwareEra
     {
         /// <summary>
-        /// Plugin defaults: V2 compact tier-def + 6-byte upload header. Plugin
-        /// auto-fallbacks the upload header to 8-byte on first sub-msg-1 timeout.
+        /// Auto-detect at runtime. Tier-def emit path checks
+        /// <c>_wheelChannelCatalog</c>: catalog advertised by wheel on session
+        /// 0x02 → Type02 wire format (V2 + 6B + Type02); empty → legacy V2 + 6B
+        /// with one-shot fallback to 8B on first sub-msg-1 timeout. Verified
+        /// 2026-04-30 against R5+W17 (Type02) and CSP on R9 (legacy 6B).
         /// </summary>
         Auto = 0,
 
@@ -33,10 +36,17 @@ namespace MozaPlugin.Telemetry
         /// <summary>Compact tier-def (V2) + 6-byte upload header.</summary>
         TierDefV2_Upload6B = 2,
 
-        /// <summary>URL-subscription tier-def (V0) + 8-byte upload header.</summary>
-        TierDefV0_Upload8B = 3,
+        // Reserved = 3 (was TierDefV0_Upload8B — never tested live, dropped 2026-04-30)
 
         /// <summary>URL-subscription tier-def (V0) + 6-byte upload header.</summary>
         TierDefV0_Upload6B = 4,
+
+        /// <summary>Compact tier-def (V2) + 6-byte upload header + type-02
+        /// metadata sub-msg layout. Required for post-2026-04 CSP / W17 firmware
+        /// (verified `RS21-W17-MC SW` 2026-04-28). See
+        /// <see cref="FileTransferWireFormat.New2026_04_Type02"/>.</summary>
+        TierDefV2_Type02 = 5,
+
+        // Reserved = 6 (was TierDefV0_Type02 — speculative, never observed live, dropped 2026-04-30)
     }
 }

@@ -33,6 +33,8 @@ about 2 s apart):
 | `0x02` | `03 E8` | `ffb-strength` | BE u16 = 1000 (raw → 1000 × 0.01 = 10.0 ?) |
 | `0x17` | `01 C2` | `max-angle` | BE u16 = 450 |
 
+**Also fires at game start.** Live capture 2026-04-29 (R5 base, W17, in-game) shows the same triplet (`01/02/17`) re-emitted within 1 s of the first game-tick frame, alongside `0x2B/0x13 02 00 00 → 0xAB/0x31 02 00 00` and the slot-03 commit marker. So this read group is also part of the post-connect "telemetry-engaged" handshake, not just the cold-attach phase.
+
 The FFB-strength encoding above does not yet match the `0–10000 → 0–100%`
 transform documented in [`../telemetry/service-parameter-transforms.md`](../telemetry/service-parameter-transforms.md);
 PitHouse may store strength as a fraction-of-max in this slot rather than

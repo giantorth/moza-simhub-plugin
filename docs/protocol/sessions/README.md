@@ -11,4 +11,4 @@ Pit House transfers dashboard files, tier definitions, and RPCs using a propriet
 | [`type-0x81-channel-open.md`](type-0x81-channel-open.md) | Type `0x81` session-channel-open payload |
 | [`session-0x0a-rpc.md`](session-0x0a-rpc.md) | Session `0x0a` RPC (host → device) |
 
-Application layers built on top of sessions: [`../tier-definition/`](../tier-definition/) (uses sessions 0x01/0x02), [`../dashboard-upload/`](../dashboard-upload/) (uses sessions 0x01/0x04/0x09/0x0a).
+Application layers built on top of sessions: [`../tier-definition/`](../tier-definition/) (uses sessions 0x01/0x02), [`../dashboard-upload/`](../dashboard-upload/) (uses sessions 0x01/0x04/0x09/0x0a), and host→wheel property pushes for the wheel-integrated dashboard (uses session 0x01; see [`../findings/2026-04-29-session-01-property-push.md`](../findings/2026-04-29-session-01-property-push.md)).

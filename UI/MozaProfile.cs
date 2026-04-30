@@ -86,6 +86,8 @@ namespace MozaPlugin
         // ===== Dashboard settings =====
         public int DashRpmBrightness { get; set; } = -1;
         public int DashFlagsBrightness { get; set; } = -1;
+        public int DashDisplayBrightness { get; set; } = -1;
+        public int DashDisplayStandbyMin { get; set; } = -1;
 
         // ===== FFB Equalizer (6 bands) =====
         public int Equalizer1 { get; set; } = -1000;
@@ -169,6 +171,7 @@ namespace MozaPlugin
 
             // Dashboard
             DashRpmBrightness = p.DashRpmBrightness; DashFlagsBrightness = p.DashFlagsBrightness;
+            DashDisplayBrightness = p.DashDisplayBrightness; DashDisplayStandbyMin = p.DashDisplayStandbyMin;
 
             // FFB Equalizer
             Equalizer1 = p.Equalizer1; Equalizer2 = p.Equalizer2; Equalizer3 = p.Equalizer3;
@@ -248,6 +251,8 @@ namespace MozaPlugin
             // Dashboard
             DashRpmBrightness = settings.DashRpmBrightness;
             DashFlagsBrightness = settings.DashFlagsBrightness;
+            DashDisplayBrightness = settings.DashDisplayBrightness;
+            DashDisplayStandbyMin = settings.DashDisplayStandbyMin;
 
             // FFB Equalizer
             Equalizer1 = data.Equalizer1; Equalizer2 = data.Equalizer2; Equalizer3 = data.Equalizer3;

@@ -102,6 +102,126 @@ namespace MozaPlugin.Tests.Telemetry
         }
 
         [Fact]
+        public void BuildPathRegistration_New2026_04_Type02_UsesType02WithPadAndXor()
+        {
+            byte[] md5 = new byte[16];
+            for (int i = 0; i < 16; i++) md5[i] = (byte)(0x10 + i);
+            byte[] msg = FileTransferBuilder.BuildPathRegistration(
+                "C:/tmp/local", "ignored-for-metadata", md5, token: 0x054Bu,
+                FileTransferWireFormat.New2026_04_Type02);
+
+            // 6B header
+            Assert.Equal(0x02, msg[0]); // type=0x02 METADATA
+            int sizeLE = msg[1] | (msg[2] << 8);
+            Assert.Equal(msg.Length - 6, sizeLE);
+
+            // Body[0..1] = 2-byte 00 00 pad
+            Assert.Equal(0x00, msg[6]);
+            Assert.Equal(0x00, msg[7]);
+
+            // Body[2] = LOCAL TLV marker
+            Assert.Equal(0x8C, msg[8]);
+
+            // No REMOTE TLV in metadata sub-msg.
+            byte[] localUtf16 = Encoding.Unicode.GetBytes("C:/tmp/local");
+            Assert.NotEmpty(IndexesOf(msg, localUtf16));
+
+            // Last byte = XOR over body bytes excluding itself.
+            byte computed = 0;
+            for (int i = 6; i < msg.Length - 1; i++) computed ^= msg[i];
+            Assert.Equal(computed, msg[msg.Length - 1]);
+        }
+
+        [Fact]
+        public void BuildFileContent_New2026_04_Type02_UsesNewRemoteTlvAndXor()
+        {
+            byte[] md5 = new byte[16];
+            byte[] mzdash = Encoding.UTF8.GetBytes("dummy mzdash content");
+            byte[] msg = FileTransferBuilder.BuildFileContent(
+                "C:/tmp/loc", "/_moza_filetransfer_md5_abc", md5, 0x0u,
+                "/home/moza/resource/dashes/X/X.mzdash", mzdash,
+                FileTransferWireFormat.New2026_04_Type02);
+
+            Assert.Equal(0x03, msg[0]); // CONTENT
+            // Body 2B pad
+            Assert.Equal(0x00, msg[6]);
+            Assert.Equal(0x00, msg[7]);
+            // LOCAL TLV first
+            Assert.Equal(0x8C, msg[8]);
+            // REMOTE TLV uses NEW marker 0x70 — search for it in body
+            byte[] remoteUtf16 = Encoding.Unicode.GetBytes("/_moza_filetransfer_md5_abc");
+            int remoteOff = -1;
+            foreach (var idx in IndexesOf(msg, remoteUtf16)) { remoteOff = idx; break; }
+            Assert.True(remoteOff > 0, "remote path not found in body");
+            Assert.Equal(0x70, msg[remoteOff - 2]); // marker precedes utf-16le bytes by 2
+
+            // Last byte = XOR over body
+            byte computed = 0;
+            for (int i = 6; i < msg.Length - 1; i++) computed ^= msg[i];
+            Assert.Equal(computed, msg[msg.Length - 1]);
+        }
+
+        [Fact]
+        public void BuildCompressedHeaderType02_LayoutIsULenBE_CLenBE_CrcLE()
+        {
+            byte[] uncompressed = Encoding.UTF8.GetBytes("hello world");
+            int compressedLen = 19;
+            byte[] hdr = FileTransferBuilder.BuildCompressedHeaderType02(uncompressed, compressedLen);
+            Assert.Equal(12, hdr.Length);
+            uint uLen = (uint)(hdr[0] << 24 | hdr[1] << 16 | hdr[2] << 8 | hdr[3]);
+            Assert.Equal((uint)uncompressed.Length, uLen);
+            uint cLen = (uint)(hdr[4] << 24 | hdr[5] << 16 | hdr[6] << 8 | hdr[7]);
+            Assert.Equal((uint)compressedLen, cLen);
+            uint crc = (uint)(hdr[8] | hdr[9] << 8 | hdr[10] << 16 | hdr[11] << 24);
+            Assert.Equal(TierDefinitionBuilder.Crc32(uncompressed, 0, uncompressed.Length), crc);
+        }
+
+        [Fact]
+        public void BuildV0ValueFrame_KnownVector_PithouseCsp()
+        {
+            // From PitHouse capture wireshark/csp/start-game-change-dash.pcapng
+            // host outbound on session 0x02:
+            //   ff 08 00 00 00 0f ad ec c4 0e 00 00 00 64 00 00 00
+            // (channel index 14, value 100, CRC32 over index_LE||value_LE)
+            byte[] valueLE = { 0x64, 0x00, 0x00, 0x00 }; // 100 LE
+            byte[] frame = TelemetryFrameBuilder.BuildV0ValueFrame(
+                channelIndex: 14, valueLE);
+            byte[] expected = {
+                0xFF, 0x08, 0x00, 0x00, 0x00,
+                0x0F, 0xAD, 0xEC, 0xC4,
+                0x0E, 0x00, 0x00, 0x00,
+                0x64, 0x00, 0x00, 0x00,
+            };
+            Assert.Equal(expected, frame);
+        }
+
+        [Fact]
+        public void BuildV0ValueFrame_8ByteValue_KnownVector()
+        {
+            // From PitHouse capture host out:
+            //   ff 0c 00 00 00 a5 e6 36 ab 04 00 00 00 08 00 00 00 00 00 00 00
+            byte[] valueLE = { 0x08, 0, 0, 0, 0, 0, 0, 0 };
+            byte[] frame = TelemetryFrameBuilder.BuildV0ValueFrame(
+                channelIndex: 4, valueLE);
+            byte[] expected = {
+                0xFF, 0x0C, 0x00, 0x00, 0x00,
+                0xA5, 0xE6, 0x36, 0xAB,
+                0x04, 0x00, 0x00, 0x00,
+                0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            };
+            Assert.Equal(expected, frame);
+        }
+
+        [Fact]
+        public void BuildV0ValueFrame_RejectsBadValueLength()
+        {
+            Assert.Throws<ArgumentException>(() =>
+                TelemetryFrameBuilder.BuildV0ValueFrame(0, new byte[2]));
+            Assert.Throws<ArgumentException>(() =>
+                TelemetryFrameBuilder.BuildV0ValueFrame(0, new byte[16]));
+        }
+
+        [Fact]
         public void BuildSubMsgHeader_New2026_04_RejectsOversizedBody()
         {
             // 16-bit size cap: body > 0xFFFF must split into multiple sub-msgs.

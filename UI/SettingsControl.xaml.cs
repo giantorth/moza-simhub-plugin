@@ -1157,13 +1157,16 @@ namespace MozaPlugin
 
         private static int FirmwareEraToIndex(MozaFirmwareEra era)
         {
+            // Index ↔ enum: dropped V0+8B (was 3) and V0+Type02 (was 6) on
+            // 2026-04-30 — never live-tested. Stale settings still containing
+            // those enum values default to Auto.
             switch (era)
             {
                 case MozaFirmwareEra.Auto:               return 0;
                 case MozaFirmwareEra.TierDefV2_Upload8B: return 1;
                 case MozaFirmwareEra.TierDefV2_Upload6B: return 2;
-                case MozaFirmwareEra.TierDefV0_Upload8B: return 3;
-                case MozaFirmwareEra.TierDefV0_Upload6B: return 4;
+                case MozaFirmwareEra.TierDefV0_Upload6B: return 3;
+                case MozaFirmwareEra.TierDefV2_Type02:   return 4;
                 default: return 0;
             }
         }
@@ -1175,8 +1178,8 @@ namespace MozaPlugin
                 case 0: return MozaFirmwareEra.Auto;
                 case 1: return MozaFirmwareEra.TierDefV2_Upload8B;
                 case 2: return MozaFirmwareEra.TierDefV2_Upload6B;
-                case 3: return MozaFirmwareEra.TierDefV0_Upload8B;
-                case 4: return MozaFirmwareEra.TierDefV0_Upload6B;
+                case 3: return MozaFirmwareEra.TierDefV0_Upload6B;
+                case 4: return MozaFirmwareEra.TierDefV2_Type02;
                 default: return MozaFirmwareEra.Auto;
             }
         }
@@ -1191,6 +1194,12 @@ namespace MozaPlugin
             DiagDashboardStateBox.Text = BuildDashboardStateText();
             DiagTileServerBox.Text = BuildTileServerText();
             DiagSessionBox.Text = BuildSessionStateText();
+            if (DiagWheelCatalogBox != null)
+                DiagWheelCatalogBox.Text = BuildWheelCatalogText();
+            if (DiagSubscriptionBox != null)
+                DiagSubscriptionBox.Text = BuildSubscriptionText();
+            if (DiagSubscriptionResponseBox != null)
+                DiagSubscriptionResponseBox.Text = BuildSubscriptionResponseText();
         }
 
         private string BuildPluginInfoText()
@@ -1307,7 +1316,95 @@ namespace MozaPlugin
             sb.AppendLine($"FlagByte:           0x{ts.FlagByte:X2}");
             sb.AppendLine($"UploadDashboard:    {ts.UploadDashboard}");
             sb.Append    ($"Profile:            {ts.Profile?.Name ?? "(none)"}");
+
+            // Per-session chunk counters
+            var counts = ts.SessionCounts;
+            if (counts.Count > 0)
+            {
+                sb.AppendLine();
+                sb.AppendLine();
+                sb.AppendLine("Session traffic (in/out chunks):");
+                var keys = new System.Collections.Generic.List<byte>(counts.Keys);
+                keys.Sort();
+                foreach (var k in keys)
+                {
+                    var v = counts[k];
+                    sb.AppendLine($"  0x{k:X2}:  in={v.In,-5} out={v.Out}");
+                }
+            }
             return sb.ToString();
+        }
+
+        private string BuildWheelCatalogText()
+        {
+            var ts = _plugin.TelemetrySender;
+            var catalog = ts?.WheelChannelCatalog;
+            if (catalog == null || catalog.Count == 0)
+                return "(no channel catalog received from wheel yet)";
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine($"{catalog.Count} channels advertised by wheel:");
+            for (int i = 0; i < catalog.Count; i++)
+                sb.AppendLine($"  [{i + 1,2}]  {catalog[i]}");
+            return sb.ToString().TrimEnd();
+        }
+
+        private string BuildSubscriptionText()
+        {
+            var ts = _plugin.TelemetrySender;
+            var sub = ts?.LastSubscription;
+            if (sub == null) return "(no subscription sent yet)";
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine($"Sent on session {sub.SessionByte} format={sub.Format}  at {sub.CapturedAt:HH:mm:ss}");
+            if (sub.PreambleBytes.Length > 0)
+                sb.AppendLine($"Preamble ({sub.PreambleBytes.Length}B): {BitConverter.ToString(sub.PreambleBytes).Replace('-', ' ')}");
+            sb.AppendLine($"Body ({sub.BodyBytes.Length}B): {BitConverter.ToString(sub.BodyBytes).Replace('-', ' ')}");
+            if (sub.Channels.Count > 0)
+            {
+                sb.AppendLine();
+                sb.AppendLine($"Channels ({sub.Channels.Count}):");
+                foreach (var ch in sub.Channels)
+                    sb.AppendLine($"  idx={ch.Idx,2}  comp=0x{ch.Comp:X2}  width={ch.Width,3}  {ch.Url}");
+            }
+            return sb.ToString().TrimEnd();
+        }
+
+        private string BuildSubscriptionResponseText()
+        {
+            var ts = _plugin.TelemetrySender;
+            var chunks = ts?.LastSubscriptionResponse;
+            if (chunks == null || chunks.Count == 0)
+                return "(no inbound chunks captured on session 0x02 in 5s window after subscription)";
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine($"{chunks.Count} chunks captured on session 0x02 after most-recent subscription:");
+            int total = 0;
+            for (int i = 0; i < chunks.Count; i++)
+            {
+                var c = chunks[i];
+                total += c.Length;
+                int show = System.Math.Min(c.Length, 80);
+                string hex = BitConverter.ToString(c, 0, show).Replace('-', ' ');
+                string ellip = c.Length > show ? " …" : "";
+                sb.AppendLine($"  [{i,2}] {c.Length,3}B: {hex}{ellip}");
+            }
+            sb.AppendLine();
+            sb.AppendLine($"Concat ({total}B): {BuildConcatHex(chunks, 200)}");
+            return sb.ToString().TrimEnd();
+        }
+
+        private static string BuildConcatHex(System.Collections.Generic.IReadOnlyList<byte[]> chunks, int max)
+        {
+            var sb = new System.Text.StringBuilder();
+            int n = 0;
+            foreach (var c in chunks)
+            {
+                foreach (var b in c)
+                {
+                    if (n++ >= max) { sb.Append(" …"); return sb.ToString(); }
+                    sb.Append(b.ToString("X2"));
+                    sb.Append(' ');
+                }
+            }
+            return sb.ToString().TrimEnd();
         }
 
         private void DiagCopyAll_Click(object sender, System.Windows.RoutedEventArgs e)
@@ -1336,6 +1433,15 @@ namespace MozaPlugin
             sb.AppendLine();
             sb.AppendLine("=== Session state ===");
             sb.AppendLine(DiagSessionBox.Text);
+            sb.AppendLine();
+            sb.AppendLine("=== Wheel channel catalog ===");
+            sb.AppendLine(BuildWheelCatalogText());
+            sb.AppendLine();
+            sb.AppendLine("=== Last subscription sent ===");
+            sb.AppendLine(BuildSubscriptionText());
+            sb.AppendLine();
+            sb.AppendLine("=== Wheel response on 0x02 (post-subscription window) ===");
+            sb.AppendLine(BuildSubscriptionResponseText());
             return sb.ToString();
         }
 

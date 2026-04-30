@@ -12,18 +12,21 @@ Moza wheel/base firmware has shipped multiple incompatible protocol changes. Thi
 | **2025-11** | `usb-capture/latestcaps/automobilista2-*.pcapng`, `12-04-26/moza-startup.pcapng`, `12-04-26-2/moza-startup-*.pcapng`, `connect-wheel-start-game.pcapng` | VGS, CS | Session 0x04 dashboard upload via `0x8A` LOCAL marker; sub-msg 1/2 path/content split; configJson schema = 11 top-level fields |
 | **2026-04 legacy** | `09-04-26/dash-upload.pcapng` | VGS | Session 0x01 management RPC carries dashboard upload as FF-prefix envelope (3 fields). Path A in `dashboard-upload/` |
 | **2026-04+** (current PitHouse) | `usb-capture/latestcaps/pithouse-switch-list-delete-upload-reupload.pcapng` (CSP on R9), `usb-capture/ksp/putOnWheelAndOpenPitHouse.pcapng` (KS Pro on R12) | CSP, KS Pro | Dashboard upload session is **dynamic** (0x05 or 0x06) opened via `7c:23` trigger; `0x8C` LOCAL marker; 6-byte sub-msg header; per-chunk metadata trailer; `ff*4` sentinel + 1-byte XOR status; pedal device `0x19` appears on KS Pro |
+| **Type02 / 2026-04-30** (R5 + W17) | live bridge captures (no pcapng yet) | W17 on R5 base | Subset of 2026-04+ era. Tier-def uses **legacy N convention** (N=8+data, NOT 10+data) on the `7d:23` value frame; broadcast pattern is **3 broadcasts × 1 sub-tier** for single-pkg dashboards, **4 broadcasts × N sub-tiers** for multi-pkg (Grids, Rally V4); inferred tyre compression codes `0x10`/`0x11` are NOT decoded by this firmware (use `float` `0x07` instead); per-broadcast end-marker (NOT per sub-tier); enables interleaved between broadcasts; channel index sourced from the wheel's catalog response on session `0x02`, NOT alphabetic order |
 
 ## Wheels and bases tested
 
 | Hardware | First seen in | Notes |
 |----------|---------------|-------|
-| VGS Formula | All `moza-startup-*` captures | Integrated display, version 2 compact tier defs |
-| CS / CS V2.1 | `cs-to-vgs.pcapng`, `vgs-to-cs.pcapng` | Same protocol family as VGS |
+| VGS Formula | All `moza-startup-*` captures | Integrated display, version 2 compact tier defs. **Older firmware** — predates Type02; broadcast/end-marker semantics may differ from R5+W17 captures |
+| CS / CS V2.1 | `cs-to-vgs.pcapng`, `vgs-to-cs.pcapng` | Same protocol family as VGS (older firmware) |
 | CSP | `latestcaps/pithouse-switch-list-delete-upload-reupload.pcapng` | **Version 0 URL-subscription tier defs** (different from VGS/CS); 2026-04 firmware |
 | KS Pro | `ksp/putOnWheelAndOpenPitHouse.pcapng` | 2026-04+ firmware era; introduces dev `0x19` pedal |
+| W17 on R5 | live bridge captures (`sim/logs/bridge-*.jsonl`) | **Type02 firmware (2026-04-30)** — subset of 2026-04+. V2 compact tier-def with legacy N=14 framing on `7d:23` value frames, 3 or 4 broadcast pattern, inferred tyre codes broken — use `float` |
 | ES | (see [`identity/known-wheel-models.md`](identity/known-wheel-models.md)) | Identity caveat — responses don't follow standard pattern |
 | R9 base | CSP capture | Identity bytes byte-identical between dev `0x12` and dev `0x13` |
 | R12 base | KS Pro capture | Same identity-cascade behaviour as R9 |
+| R5 base | W17 live captures | Type02 host of W17 wheel; same identity-cascade pattern as R9/R12 |
 
 ## Topical pages by firmware sensitivity
 
