@@ -70,6 +70,80 @@ Device Manager should show a USB CDC device with `VID_346E&PID_0006`, and a
 new COM port appears. PitHouse's WMI scan picks it up; point PitHouse at the
 COM port or let it auto-detect.
 
+## Passthrough (MITM) mode
+
+Run a real MOZA base on the Linux dev host, forward it to Windows over USBIP,
+and log every framed message in the middle. Useful for diffing real-hardware
+conversation against `wheel_sim.py` responses.
+
+Pipeline:
+
+```
+PitHouse (Win) ─usbip─► /dev/ttyGS0 ◄─► bridge.py ◄─► /dev/ttyACMx ─USB─► real base
+```
+
+The libcomposite gadget is reused unchanged — Windows still attaches the same
+`1-1` busid. `bridge.py` replaces `wheel_sim.py` as the user-space process
+holding `/dev/ttyGS0`; instead of synthesising responses it pumps bytes to
+and from the real base.
+
+Steps:
+
+1. Plug the real MOZA base into the Linux host. Confirm it enumerates as a
+   CDC ACM device:
+   ```bash
+   ls /dev/ttyACM*
+   ```
+   The status script warns about this device (`Real MOZA wheel detected …
+   may interfere on re-setup`); in passthrough mode that warning is
+   expected.
+2. Build the gadget exactly as for the simulator:
+   ```bash
+   sudo bash sim/setup_usbip_gadget.sh
+   ```
+3. Start the bridge instead of `wheel_sim.py`:
+   ```bash
+   python3 sim/bridge.py /dev/ttyACM0
+   ```
+   `/dev/ttyGS0` is the default gadget endpoint; pass a second positional
+   arg to override. JSONL log goes to `sim/logs/bridge-<ts>.jsonl` unless
+   `--log` is given.
+4. From Windows: `usbip attach -r <linux-ip> -b 1-1`. PitHouse opens the
+   COM port; every byte flows through the bridge.
+
+Each log record is one frame:
+
+```json
+{"t": 1714200000.123, "dir": "h2b", "len": 8, "ok": true,
+ "grp": 67, "dev": 23, "payload": "0701..", "hex": "7e04432307010100.."}
+```
+
+`dir` is `h2b` (PitHouse → base) or `b2h` (base → PitHouse). `ok=false` means
+the checksum did not verify — usually a sync glitch, occasionally a real
+escape-handling bug worth investigating.
+
+### MCP control
+
+The bridge ships an MCP stdio server registered in `.mcp.json` as
+`bridge-linux` (defaults: `/dev/ttyACM0` ↔ `/dev/ttyGS0`). Tools:
+
+| Tool | Purpose |
+|------|---------|
+| `bridge_start` | Open both ports + start pumps. Args: `base_port`, `gadget_port`, `log_path` (all optional, defaults from server config). |
+| `bridge_stop` | Stop pumps; cross-process kill if another bridge owns the gadget. |
+| `bridge_info` | Configured ports + running flag (cheap). |
+| `bridge_status` | Frame/byte counters, uptime, current paths. |
+| `bridge_recent(count, direction)` | Last N frames (rolling 2000); filter `h2b` / `b2h`. |
+| `bridge_histogram(top)` | Per-(dir, group, device, cmd) frame count. |
+| `bridge_counters` | Aggregate frame + byte totals per direction. |
+| `bridge_reset_counters` | Zero counters; JSONL trace untouched. |
+| `bridge_log_path` | Current log path + on-disk size. |
+
+Bridge and wheel-sim share the same lockfile name
+(`/tmp/wheel_sim_<port-slug>.lock`), so starting one while the other holds
+`/dev/ttyGS0` returns a structured conflict with the owner pid. `bridge_stop`
+/ `sim_stop` will SIGTERM a cross-process owner.
+
 ## Capture workflow
 
 1. Start Wireshark on Linux. Capture on the `lo` interface filtered to

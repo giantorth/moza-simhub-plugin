@@ -14,6 +14,11 @@
       "command": ".venv/bin/python3",
       "args": ["sim/simhub_mcp.py"],
       "cwd": "."
+    },
+    "bridge-linux": {
+      "command": ".venv/bin/python3",
+      "args": ["sim/bridge.py", "--mcp", "/dev/ttyACM0", "/dev/ttyGS0"],
+      "cwd": "."
     }
   }
 }
