@@ -79,6 +79,16 @@ namespace MozaPlugin.Protocol
         private volatile bool _running;
         private readonly object _lock = new object();
         private string? _lastPortName;
+
+        /// <summary>
+        /// Last COM port that connected successfully. Persisted across sessions
+        /// by the plugin so <see cref="Connect"/> can try it first on next launch.
+        /// </summary>
+        public string? LastPortName
+        {
+            get => _lastPortName;
+            set => _lastPortName = value;
+        }
         private volatile bool _shutdownRequested;
 
         // Consecutive I/O error tracking. After sleep/resume the SerialPort handle

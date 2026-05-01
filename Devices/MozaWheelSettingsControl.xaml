@@ -61,9 +61,8 @@
                     <TextBlock Text="Dashboard:" Width="180" VerticalAlignment="Center"/>
                     <ComboBox x:Name="TelemetryProfileCombo" Width="200" Margin="0,0,8,0"
                               SelectionChanged="TelemetryProfileCombo_SelectionChanged"/>
-                    <Button Content="Load .mzdash…" Click="TelemetryLoadMzdash_Click" Padding="6,2" Margin="0,0,4,0"/>
-                    <Button Content="Clear" Click="TelemetryClearMzdash_Click" Padding="6,2"
-                            ToolTip="Clear the loaded .mzdash and revert to no profile"/>
+                    <Button Content="Load .mzdash…" Click="TelemetryLoadMzdash_Click" Padding="6,2" Margin="0,0,4,0"
+                            ToolTip="Load a local .mzdash file for tier-def channel matching (fallback when wheel state unavailable)"/>
                 </StackPanel>
                 <TextBlock x:Name="TelemetryProfileInfo" Foreground="Gray" FontSize="11"
                            Margin="180,0,0,8" Text="—"/>

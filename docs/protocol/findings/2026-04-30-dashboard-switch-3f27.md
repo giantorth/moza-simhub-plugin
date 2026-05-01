@@ -1,26 +1,22 @@
 # Dashboard switch wire signals (session 0x02 FF-record + `0x3F 27:NN`)
 
-**Date:** 2026-04-30
-**Capture:** `wireshark/csp/startup, change knob colors, change dash several times, delete dash.pcapng`
+**Date:** 2026-04-30 (updated 2026-05-01)
+**Captures:**
+- `wireshark/csp/startup, change knob colors, change dash several times, delete dash.pcapng`
+- Bridge capture `sim/logs/bridge-20260430-210453.jsonl` (PitHouse → real CSP wheel)
 **Hardware:** CSP firmware (R5 base + W17 wheel) — Pithouse 1.2.6.17
-**Status:** UNTESTED in plugin. Wire format verified from capture; behaviour against live wheel from plugin not confirmed.
+**Status:** Wire format verified from capture + bridge. Slot indexing verified against live wheel (plugin sent slot, wheel displayed correct dashboard). Tier-def re-send timing verified from bridge capture. Plugin implementation functional but still being refined.
 
 ## Summary
 
-Two distinct host→wheel signals observed during user-driven dashboard switches in the same capture. Roles inferred but not yet validated by replay testing:
+Two distinct host→wheel signals observed during dashboard switches:
 
-1. **FF-record on session 0x02** — likely the **primary** "set active dashboard from list" command (Dashboard Manager click).
-2. **`0x3F 0x17 27:[page]` direct frame** — likely a **secondary** per-page fingerprint update / state echo.
-
-Both formats are documented below. Plugin should try the FF-record path first.
+1. **FF-record on session 0x02** — the **primary** "set active dashboard" command.
+2. **`0x3F 0x17 27:[page]` direct frame** — **secondary** per-page fingerprint update (state sync, not the switch trigger).
 
 ---
 
-## Mechanism 1 — FF-record on session 0x02 (primary candidate)
-
-External writeup of this signal arrived 2026-04-30 from RE of capture
-`automobilista-switch-dashboard-many-ends-on-grids-1.2.6.17.pcapng`. Wire
-format described there matches records found in our capture too.
+## Mechanism 1 — FF-record on session 0x02 (primary, verified)
 
 ### Wire format
 
@@ -35,7 +31,7 @@ Payload (25 bytes):
   0c 00 00 00          // data_size = 12 (LE32)
   [data_crc:LE32]      // CRC32 of (field1 || field2 || field3)
   [field1:LE32]        // = 4 for switch ops; = 7 at session start (different cmd)
-  [field2:LE32]        // 1-based slot index into wheel's enabled-dashboards list
+  [field2:LE32]        // 0-based slot index into configJsonList
   [field3:LE32]        // = 0
   [body_crc:LE32]      // CRC32 of (ff || data_size || data_crc || field1 || field2 || field3)
 ```
@@ -43,11 +39,81 @@ Payload (25 bytes):
 CRC32 = standard polynomial `0xEDB88320`, init `0xFFFFFFFF`, XOR-out
 `0xFFFFFFFF` (Python `zlib.crc32` / Java `java.util.zip.CRC32`).
 
-### Captured records (this repo's capture)
+### Slot index source
+
+Slot = **0-based** index into `configJsonList` (the **alphabetical**
+dashboard name list from session 0x09 state push), **NOT** into
+`enableManager.dashboards` (which is insertion/upload order and has a
+different sequence).
+
+**Verified 2026-04-30 against live wheel:** sending slot=1 activated
+`configJsonList[1]` ("Grids"), not `enableManager.dashboards[1]`
+("Rally V5"). The two lists have different orderings.
+
+Example from live wheel with 12 dashboards:
+```
+configJsonList (alphabetical):
+  [0] Core       [1] Grids      [2] Mono
+  [3] Nebula     [4] Pulse      [5] Rally V1
+  [6] Rally V2   [7] Rally V3   [8] Rally V4
+  [9] Rally V5   [10] Rally V6  [11] asdf
+
+enableManager.dashboards (insertion order):
+  [0] Rally V1   [1] Rally V5   [2] Rally V2
+  [3] Rally V3   [4] Rally V6   [5] Rally V4
+  [6] Core       [7] Mono       [8] Pulse
+  [9] asdf       [10] Nebula    [11] Grids
+```
+
+### Wheel response sequence
+
+After receiving the FF-record the wheel:
+
+1. FC-acks the frame on session 0x02
+2. Echoes the record back on session 0x02 device→host
+3. Re-pushes the channel catalog on session 0x01 (new dashboard's
+   channel URLs, using `\x01` prefix shorthand — e.g. `\x01Rpm`
+   instead of `v1/gameData/Rpm`)
+4. Re-pushes binding catalog on session 0x01 (enable/tier/end TLV records)
+
+### Tier-def re-send timing (verified from bridge capture)
+
+**PitHouse sends tier-def ~800ms after the FF-record.**
+
+During the 800ms gap, the wheel pushes its new channel catalog on
+session 0x01. PitHouse uses this fresh catalog for correct channel
+indices in the tier-def.
+
+**Critical:** PitHouse does NOT re-send the tag 0x07/0x03 preamble on
+subsequent tier-defs. Preamble is sent ONCE at session connect. All
+re-sends (dashboard switch) use only enable/tier/end records. Sending a
+duplicate preamble causes the wheel to reject the tier-def.
+
+**Implementation lesson (2026-05-01):** The host must start buffering
+session 0x01 catalog data at the moment the FF-record is sent, not
+800ms later when the tier-def is built. The wheel's catalog push
+completes within ~300ms of the FF-record. If the host defers buffer
+accumulation to renegotiation time, all catalog chunks have already
+arrived and been discarded — causing the tier-def to reference stale
+channel indices from the previous dashboard.
+
+Bridge capture evidence (3 consecutive switches):
+```
+t=613.150  FF-record slot=6
+t=613.957  tier-def: ENABLE×3 + TIER×2 + END (no preamble)  [+807ms]
+
+t=615.570  FF-record slot=5
+t=615.974  tier-def: TIER×2 + END + ENABLE×2 + TIER×2 + END  [+404ms]
+
+t=617.282  FF-record slot=4
+t=617.988  tier-def: ENABLE×2 + TIER + END                   [+706ms]
+```
+
+### Captured records
 
 ```
-t=47.89s   fn=97411   field1=7  field2=3   (startup — different cmd, NOT a switch)
-t=212.10s  fn=558353  field1=4  field2=0
+t=47.89s   fn=97411   field1=7  field2=3   (startup — init, NOT a switch)
+t=212.10s  fn=558353  field1=4  field2=0   (switch to configJsonList[0])
 t=214.91s  fn=566115  field1=4  field2=1
 t=223.13s  fn=588199  field1=4  field2=0
 t=225.14s  fn=593671  field1=4  field2=2
@@ -56,70 +122,14 @@ t=228.55s  fn=603069  field1=4  field2=4
 t=238.74s  fn=631645  field1=4  field2=10
 ```
 
-`field1=4` records: 7 distinct slot writes, slots 0..4 + 10. Sequential
-cycling pattern matches user clicking through Dashboard Manager entries.
-
-`field1=7` at startup likely a different opcode (init / version
-declaration); not used for switching.
-
-### Slot index source
-
-Slot = 1-based position in the wheel's enabled-dashboards list. List comes
-from the session 0x09 configJson state push (`enableManager.dashboards`
-array). Slot 1 = first entry, slot N = N'th entry.
-
-### Wheel response
-
-After the FF-record:
-1. Wheel FC-acks the chunk on page 0x02
-2. Wheel echoes the record back on page 0x02 dev→host
-3. Wheel re-pushes binding catalog on page 0x01 (TLV records `00 01`,
-   `01 xx`, `03`, `06 04`, `0b`)
-
-External writeup states: no session re-open, no LVGL re-upload, no tier-def
-re-broadcast required.
-
-### Implementation skeleton (C# for plugin)
-
-```csharp
-byte[] BuildSwitchRecord(uint slotIndex)
-{
-    // 12-byte data block
-    Span<byte> data = stackalloc byte[12];
-    BinaryPrimitives.WriteUInt32LittleEndian(data[0..4], 4u);          // field1
-    BinaryPrimitives.WriteUInt32LittleEndian(data[4..8], slotIndex);   // field2
-    BinaryPrimitives.WriteUInt32LittleEndian(data[8..12], 0u);         // field3
-
-    uint dataCrc = Crc32.Compute(data);
-
-    // 21-byte body
-    Span<byte> body = stackalloc byte[21];
-    body[0] = 0xff;
-    BinaryPrimitives.WriteUInt32LittleEndian(body[1..5], 12u);         // data_size
-    BinaryPrimitives.WriteUInt32LittleEndian(body[5..9], dataCrc);
-    data.CopyTo(body[9..21]);
-
-    uint bodyCrc = Crc32.Compute(body);
-
-    // 25-byte payload = body + bodyCrc
-    var payload = new byte[25];
-    body.CopyTo(payload);
-    BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(21), bodyCrc);
-    return payload;
-}
-```
-
-Wrap with the SerialStream chunk header `7c 00 02 01 [seq:LE16]` before
-sending — same path used for tier-def / property-push on session 0x02.
-
 ---
 
-## Mechanism 2 — `0x3F 0x17 27:[page]` direct write (secondary / TBD role)
+## Mechanism 2 — `0x3F 0x17 27:[page]` direct write (secondary)
 
-Originally suspected as the primary switch path; later evidence suggests
-it's a per-page state update that may run alongside (or downstream of) the
-FF-record above. Documented for completeness but **not** the recommended
-plugin-driven switch path.
+Per-page binding state update observed alongside the FF-record path.
+Likely state sync rather than the switch trigger. See
+[`../channel-config/group-0x40-burst.md`](../channel-config/group-0x40-burst.md)
+§ 27:NN for wire format details.
 
 ### Wire format
 
@@ -130,57 +140,51 @@ reply : 7e 06 c0 71 27 [page] [flag:1] [fingerprint:3] [csum]
 ```
 
 `page` ∈ {0, 1, 2, 3}. `flag` byte: `0x00` = primary state, `0x01` =
-alternate state (semantics TBD). `fingerprint` = 24-bit opaque ID.
-
-### Captured writes
-
-```
-t=49.57s  page 3 ← 00 f6 b4 99   (initial bind at startup)
-t=49.59s  page 1 ← 00 c6 e1 9b
-t=49.60s  page 0 ← 00 f3 79 a1
-t=49.61s  page 2 ← 00 9b a7 eb
-t=49.88s  page 2 ← 01 11 47 e6
-t=150.57s page 2 ← 00 ff 64 00   ← user-driven event
-t=166.78s page 3 ← 00 5f 97 ff   ← user-driven event
-```
-
-Note these timestamps are DIFFERENT from the FF-record timestamps
-(t=212–238s) — same capture, different events. Two distinct user actions
-exercise two distinct mechanisms.
-
-### Fingerprint origin
-
-Opaque, NOT derivable from any visible field:
-- Doesn't match dashboard `id` / `dirName` / `title` / `hash` from session 0x09
-- Doesn't match MD5/SHA1/SHA256/CRC32 of any of those
-- Doesn't match MD5/SHA1/SHA256/CRC32 of mzdash file bytes
-
-Likely wheel-assigned at upload commit; or computed by a custom hash
-function we haven't reversed.
+alternate state (semantics TBD). `fingerprint` = 24-bit opaque ID,
+wheel-assigned, NOT derivable from any visible dashboard field.
 
 ---
 
-## Plugin recommendation
+## Wheel channel catalog format post-switch
 
-**Primary:** implement the FF-record path. Inputs needed:
-- Slot index (1-based) from session 0x09 `enableManager.dashboards` order
-- CRC32 (zlib-compatible)
-- SerialStream sequence counter for page 0x02
+After receiving the FF-record, wheel re-pushes its channel catalog on
+session 0x01 using a **shortened URL prefix**: byte `0x01` followed by
+the URL suffix (e.g. `\x01Rpm` = `v1/gameData/Rpm`). Parser must
+accept both `v1/gameData/` prefix and `\x01` prefix and normalize to
+the full URL form for catalog matching.
 
-**Verification:** after sending, confirm wheel:
-- FC-acks the chunk
-- Echoes record back on page 0x02 dev→host
-- Re-pushes binding catalog on page 0x01
+---
 
-If either signal is missing or wheel ignores the record, fall back to
-investigating the `0x3F 27:NN` path with a harvested fingerprint table.
+## End-marker u32 semantics
 
-**Both paths are UNTESTED from the plugin side.** Do not treat either as
-production-ready until live wheel replay confirms behaviour.
+The tag 0x06 end-marker in tier-def carries a u32 value that varies
+across switches: 0, 9, 21, 30, 42, 54, 76, 90, 96, 104 observed.
+Not a channel count. Likely a wheel-internal cumulative slot counter.
+Wheel accepts any value — plugin uses cumulative channel count as
+placeholder, which works.
+
+---
+
+## Plugin implementation notes
+
+**Recommended flow for dashboard switch:**
+
+1. Send FF-record on session 0x02 (slot = 0-based `configJsonList` index)
+2. Wait ~800ms for wheel to push new catalog on session 0x01
+3. Parse catalog (accept `\x01` prefix URLs)
+4. Send tier-def on session 0x01 (NO preamble, just enable/tier/end records)
+5. Send 0x40 channel-config burst
+
+**Do NOT:**
+- Send tier-def immediately (stale catalog → wrong indices)
+- Re-send preamble tags 0x07/0x03 (only on initial session connect)
+- Close or re-open any sessions
+- Upload .mzdash or send LVGL frames
 
 ---
 
 ## Doc cross-refs
 
-- [`../channel-config/group-0x40-burst.md`](../channel-config/group-0x40-burst.md) § 27:NN dashboard-switch — `3F 27:NN` wire format details
-- [`../../usb-capture/payload-09-state-re.md`](../../../usb-capture/payload-09-state-re.md) — earlier search history; FF-record format was the actually-used signal, not `3F:28`
+- [`../channel-config/group-0x40-burst.md`](../channel-config/group-0x40-burst.md) § 27:NN — `3F 27:NN` wire format
+- [`../../usb-capture/payload-09-state-re.md`](../../../usb-capture/payload-09-state-re.md) — SET-side signal history
+- [`../tier-definition/handshake.md`](../tier-definition/handshake.md) — startup tier-def phases + in-game re-send

@@ -555,14 +555,52 @@ namespace MozaPlugin.Devices
                 var s = _plugin.Settings;
                 TelemetryEnabledCheck.IsChecked = s.TelemetryEnabled;
 
-                TelemetryProfileCombo.Items.Clear();
-                TelemetryProfileCombo.Items.Add("(none)");
-                foreach (var profile in _plugin.DashProfileStore.BuiltinProfiles)
-                    TelemetryProfileCombo.Items.Add(profile.Name);
-                if (!string.IsNullOrEmpty(s.TelemetryMzdashPath))
-                    TelemetryProfileCombo.Items.Add("[Custom: " + System.IO.Path.GetFileName(s.TelemetryMzdashPath) + "]");
+                PopulateDashboardCombo();
+                UpdateTelemetryProfileInfo();
+            }
+            finally
+            {
+                _suppressEvents = false;
+            }
+        }
 
-                string selectedName = s.TelemetryProfileName;
+        /// <summary>
+        /// Populate the dashboard dropdown from the wheel's reported dashboard
+        /// list (session 0x09 configJson state push). Falls back to builtin
+        /// profile names if the wheel hasn't pushed state yet.
+        /// </summary>
+        private void PopulateDashboardCombo()
+        {
+            if (_plugin == null) return;
+
+            _suppressEvents = true;
+            try
+            {
+                TelemetryProfileCombo.Items.Clear();
+
+                var state = _plugin.TelemetrySender?.WheelState;
+                if (state != null && state.ConfigJsonList.Count > 0)
+                {
+                    // Wheel-reported dashboards in configJsonList order
+                    // (alphabetical). Dropdown index = configJsonList slot
+                    // used by SendDashboardSwitch.
+                    foreach (var name in state.ConfigJsonList)
+                        TelemetryProfileCombo.Items.Add(name);
+                }
+                else
+                {
+                    // Fallback: builtin profiles (wheel state not available yet).
+                    TelemetryProfileCombo.Items.Add("(none)");
+                    foreach (var profile in _plugin.DashProfileStore.BuiltinProfiles)
+                        TelemetryProfileCombo.Items.Add(profile.Name);
+                    if (!string.IsNullOrEmpty(_plugin.Settings.TelemetryMzdashPath))
+                        TelemetryProfileCombo.Items.Add(
+                            "[Custom: " + System.IO.Path.GetFileName(
+                                _plugin.Settings.TelemetryMzdashPath) + "]");
+                }
+
+                // Restore selection by saved name.
+                string selectedName = _plugin.Settings.TelemetryProfileName;
                 if (!string.IsNullOrEmpty(selectedName))
                 {
                     for (int i = 0; i < TelemetryProfileCombo.Items.Count; i++)
@@ -575,18 +613,7 @@ namespace MozaPlugin.Devices
                     }
                 }
                 if (TelemetryProfileCombo.SelectedIndex < 0 && TelemetryProfileCombo.Items.Count > 0)
-                {
-                    // 2026-04-30: default selection is "(none)" — plugin
-                    // synthesises the subscription from the wheel's
-                    // session-0x02 catalog push (Type02 firmware) so the
-                    // active dashboard's channels are always covered without
-                    // a host-side mzdash. Users who want a specific bundled
-                    // dashboard or a custom .mzdash file can pick from the
-                    // dropdown; that path uploads dashboard bytes too.
-                    TelemetryProfileCombo.SelectedIndex = 0; // "(none)"
-                }
-
-                UpdateTelemetryProfileInfo();
+                    TelemetryProfileCombo.SelectedIndex = 0;
             }
             finally
             {
@@ -594,11 +621,26 @@ namespace MozaPlugin.Devices
             }
         }
 
+        /// <summary>
+        /// Track whether the dropdown was last populated from wheel-reported
+        /// dashboards vs fallback builtins, so we can re-populate when wheel
+        /// state first arrives mid-session.
+        /// </summary>
+        private bool _dashComboFromWheelState;
+
         private void RefreshTelemetryStatus()
         {
             if (_plugin == null) return;
             var sender = _plugin.TelemetrySender;
             if (sender == null) return;
+
+            // Re-populate dropdown once when wheel state first becomes available.
+            var state = sender.WheelState;
+            if (!_dashComboFromWheelState && state != null && state.ConfigJsonList.Count > 0)
+            {
+                _dashComboFromWheelState = true;
+                PopulateDashboardCombo();
+            }
 
             bool enabled = _plugin.Settings.TelemetryEnabled;
             bool testMode = sender.TestMode;
@@ -680,6 +722,42 @@ namespace MozaPlugin.Devices
             if (_suppressEvents || _plugin == null) return;
             var selected = TelemetryProfileCombo.SelectedItem?.ToString();
             if (selected == null) return;
+
+            int idx = TelemetryProfileCombo.SelectedIndex;
+            var ts = _plugin.TelemetrySender;
+            var state = ts?.WheelState;
+
+            // Wheel-reported mode: dropdown is configJsonList-ordered.
+            // Index IS the slot directly.
+            if (state != null && state.ConfigJsonList.Count > 0
+                && idx >= 0 && idx < state.ConfigJsonList.Count)
+            {
+                ts!.SendDashboardSwitch((uint)idx);
+
+                _plugin.Settings.TelemetryProfileName = selected;
+                _plugin.Settings.TelemetryMzdashPath = "";
+                _plugin.SaveSettings();
+
+                // Load the new profile immediately so the UI's channel
+                // mapping grid shows correct channels for the selected
+                // dashboard. The 800ms background renegotiation will call
+                // ApplyTelemetrySettings() again (harmless duplicate) then
+                // send the tier-def with fresh catalog indices.
+                _plugin.ApplyTelemetrySettings();
+
+                var pluginRef = _plugin;
+                System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+                {
+                    System.Threading.Thread.Sleep(800);
+                    pluginRef.OnActiveDashboardChanged();
+                });
+
+                UpdateTelemetryProfileInfo();
+                if (TelemetryMappingsExpander.IsExpanded) PopulateChannelMappingGrid();
+                return;
+            }
+
+            // Fallback: builtin-profile mode (no wheel state).
             if (selected == "(none)")
             {
                 _plugin.Settings.TelemetryProfileName = "";
@@ -695,10 +773,6 @@ namespace MozaPlugin.Devices
                 _plugin.Settings.TelemetryProfileName = selected;
                 _plugin.Settings.TelemetryMzdashPath = "";
                 _plugin.SaveSettings();
-                // Hot-reload the new tier def on the existing session — mirrors
-                // PitHouse's mid-game dash-change burst on session 0x01.
-                // Without it, the wheel keeps the old tier def and decodes the
-                // new frame layout as garbage.
                 _plugin.OnActiveDashboardChanged();
                 UpdateTelemetryProfileInfo();
                 if (TelemetryMappingsExpander.IsExpanded) PopulateChannelMappingGrid();

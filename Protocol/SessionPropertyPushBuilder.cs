@@ -32,6 +32,13 @@ namespace MozaPlugin.Protocol
         public const uint KindDashStandbyMs = 10;
 
         /// <summary>
+        /// Field1 constant for the dashboard-switch FF-record. Verified
+        /// in capture <c>automobilista-switch-dashboard-many-ends-on-grids-1.2.6.17.pcapng</c>
+        /// and <c>wireshark/csp/startup, change knob colors, ...pcapng</c>.
+        /// </summary>
+        public const uint DashSwitchField1 = 4;
+
+        /// <summary>
         /// Build the net-data body for a u32-valued property (e.g. brightness).
         /// </summary>
         public static byte[] BuildU32Body(uint kind, uint value)
@@ -55,7 +62,23 @@ namespace MozaPlugin.Protocol
             return WrapFfRecord(kv);
         }
 
-        private static byte[] WrapFfRecord(byte[] kindAndValue)
+        /// <summary>
+        /// Build the net-data body for a dashboard-switch command.
+        /// <paramref name="slotIndex"/> is the <b>0-based</b> index into the
+        /// wheel's <c>configJsonList</c> (alphabetical name list from session
+        /// 0x09 state push). Verified 2026-04-30: slot=1 → configJsonList[1].
+        /// See <c>docs/protocol/findings/2026-04-30-dashboard-switch-3f27.md</c>.
+        /// </summary>
+        public static byte[] BuildDashboardSwitchBody(uint slotIndex)
+        {
+            var kv = new byte[12];
+            WriteU32LE(kv, 0, DashSwitchField1);  // field1 = 4
+            WriteU32LE(kv, 4, slotIndex);          // field2 = 0-based configJsonList index
+            WriteU32LE(kv, 8, 0u);                 // field3 = 0
+            return WrapFfRecord(kv);
+        }
+
+        internal static byte[] WrapFfRecord(byte[] kindAndValue)
         {
             int size = kindAndValue.Length;                 // 4 + sizeof(value)
             uint innerCrc = global::MozaPlugin.Telemetry.TierDefinitionBuilder

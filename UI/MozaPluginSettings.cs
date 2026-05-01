@@ -53,6 +53,12 @@ namespace MozaPlugin
         // Connection enabled (persisted toggle)
         public bool ConnectionEnabled { get; set; } = true;
 
+        // Last successful COM port — seeded into MozaSerialConnection on startup
+        // to skip re-probing. Empty = no saved port.
+        public string LastWheelbasePort { get; set; } = "";
+        public string LastAb9Port { get; set; } = "";
+
+
         // Whether to automatically apply profile settings on launch
         public bool AutoApplyProfileOnLaunch { get; set; } = true;
 
@@ -82,7 +88,7 @@ namespace MozaPlugin
         // Always-on bridge-format JSONL wire trace at SimHub/Logs/moza-wire-*.jsonl.
         // Off by default to avoid disk-write churn; flip on when comparing plugin
         // output to PitHouse captures via sim/diff_captures.py.
-        public bool EnableWireTraceFileSink { get; set; } = false;
+        public bool EnableWireTraceFileSink { get; set; } = true;
 
         // ===== Profile system (SimHub native) =====
         public MozaProfileStore ProfileStore { get; set; } = new MozaProfileStore();

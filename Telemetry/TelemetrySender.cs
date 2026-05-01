@@ -47,6 +47,14 @@ namespace MozaPlugin.Telemetry
 
         // Preamble state
         private bool _preambleComplete;
+        /// <summary>True after the first V2 tier-def preamble (tag 0x07/0x03)
+        /// has been sent this session. PitHouse only sends preamble once at
+        /// connect; subsequent tier-def re-sends (dashboard switch) omit it.
+        /// Wheel rejects/ignores tier-def that follows a duplicate preamble.</summary>
+        private bool _tierDefPreambleSent;
+        /// <summary>Temporarily re-enables catalog accumulation post-preamble
+        /// so renegotiation can capture the wheel's fresh catalog push.</summary>
+        private volatile bool _catalogAccumulateForRenegotiate;
         private int _preambleTickTarget;
         private int _sessionAckSeq;
 
@@ -641,6 +649,7 @@ namespace MozaPlugin.Telemetry
             _session09ReplySent = false;
             _session02OutboundSeq = 0;
             _session01OutboundSeq = 0;
+            _tierDefPreambleSent = false;
             _retransmitter.Clear();
             _lastSubscriptionDiag = null;
             lock (_subscriptionResponseChunks) _subscriptionResponseChunks.Clear();
@@ -761,6 +770,52 @@ namespace MozaPlugin.Telemetry
                 (uint)percent);
         }
 
+        /// <summary>
+        /// Send the dashboard-switch FF-record on session 0x02 to activate
+        /// a stored dashboard by its <b>0-based</b> index in the wheel's
+        /// <c>configJsonList</c> (alphabetical dashboard name list from
+        /// session 0x09 state push).
+        ///
+        /// Verified 2026-04-30: slot=1 activates <c>configJsonList[1]</c>
+        /// (Grids), NOT <c>enableManager.dashboards[1]</c> (Rally V5).
+        /// Wheel uses configJsonList ordering, 0-based.
+        /// See <c>docs/protocol/findings/2026-04-30-dashboard-switch-3f27.md</c>.
+        /// </summary>
+        public void SendDashboardSwitch(uint slotIndex)
+        {
+            if (!_connection.IsConnected) return;
+            byte[] body = global::MozaPlugin.Protocol.SessionPropertyPushBuilder
+                .BuildDashboardSwitchBody(slotIndex);
+            SendSessionPropertyBody(body);
+            MozaLog.Info(
+                $"[Moza] Sent dashboard-switch FF-record: slot={slotIndex} " +
+                $"on session 0x02 seq={_session02OutboundSeq - 1}");
+
+            // Open the catalog accumulation gate NOW so the wheel's
+            // post-switch catalog push (arriving over the next ~300ms)
+            // is buffered.  RenegotiateForDashboardChange() — called
+            // ~800ms later — will close the gate and parse.
+            lock (_incomingSessionBuffer) { _incomingSessionBuffer.Clear(); }
+            _catalogAccumulateForRenegotiate = true;
+        }
+
+        /// <summary>
+        /// Look up the 0-based configJsonList slot index for a dashboard by
+        /// title. Returns -1 if not found or wheel state unavailable.
+        /// </summary>
+        public int FindDashboardSlot(string title)
+        {
+            var state = WheelState;
+            if (state == null) return -1;
+            for (int i = 0; i < state.ConfigJsonList.Count; i++)
+            {
+                if (string.Equals(state.ConfigJsonList[i], title,
+                    System.StringComparison.OrdinalIgnoreCase))
+                    return i;
+            }
+            return -1;
+        }
+
         /// <summary>Convenience: push display standby timeout in minutes (converts to ms).</summary>
         public void SendDashDisplayStandbyMinutes(int minutes)
         {
@@ -804,6 +859,11 @@ namespace MozaPlugin.Telemetry
         /// </summary>
         public bool RenegotiateForDashboardChange()
         {
+            // Always close the catalog gate — SendDashboardSwitch()
+            // opened it, so even if we bail early the flag must not
+            // leak (it would buffer indefinitely and waste memory).
+            _catalogAccumulateForRenegotiate = false;
+
             if (!_enabled || !_connection.IsConnected) return false;
             if (!_preambleComplete) return false;
 
@@ -811,17 +871,24 @@ namespace MozaPlugin.Telemetry
             timer?.Stop();
             try
             {
-                // Re-parse the wheel's catalog: registrations stream
-                // continuously on session 0x02, so the cached set may have
-                // grown since the original preamble-end parse.
+                // Re-parse catalog. SendDashboardSwitch() opened the
+                // catalog accumulation gate and cleared the buffer
+                // immediately after the FF-record. The caller delays
+                // ~800ms before invoking us, giving the wheel time to
+                // push its new catalog. Gate is now closed; parse what
+                // accumulated.
+                int bufferSize;
+                lock (_incomingSessionBuffer) { bufferSize = _incomingSessionBuffer.Count; }
+                MozaLog.Info(
+                    $"[Moza] Renegotiate: catalog buffer has {bufferSize} bytes " +
+                    $"after 800ms accumulation window.");
                 ParseWheelChannelCatalog();
 
-                // Profile null (cleared) or Type02 → swap in a synthesised
-                // WheelCatalog profile so the tier-def references the
-                // wheel's currently-advertised channels. Matches user goal
-                // for clear: "default back to the channels the wheel was
-                // advertising."
-                MaybeSwapProfileForCatalog();
+                // Always synthesise from wheel catalog on Type02 —
+                // builtin profiles have fixed channel sets that don't
+                // match the wheel's post-switch catalog. PitHouse
+                // subscribes to whatever the wheel declares.
+                MaybeSwapProfileForCatalog(force: true);
 
                 if (_profile == null || _profile.Tiers.Count == 0)
                 {
@@ -830,6 +897,10 @@ namespace MozaPlugin.Telemetry
                         "catalog empty. Wheel keeps prior subscription.");
                     return false;
                 }
+
+                // Clear retransmitter so stale tier-def chunks from
+                // the previous subscription don't keep replaying.
+                _retransmitter.Clear();
 
                 SendTierDefinition();
                 SendChannelConfig();
@@ -900,6 +971,14 @@ namespace MozaPlugin.Telemetry
             byte telemetryPort = TryOpenSession(TelemSession, OpenAckTimeoutMs);
 
             _mgmtPort = mgmtPort;
+
+            // Session-open frames use seq=port. Data chunks must start
+            // AFTER the open seq. PitHouse bridge capture shows first
+            // session 0x02 data at seq=4 (not 2). Initialize outbound
+            // seq counters so SendSessionPropertyBody (Math.Max(2, seq))
+            // and SendTierDefinition (Math.Max(2, seq+1)) produce
+            // correct first-use values.
+            _session02OutboundSeq = TelemSession + 1; // port=2 → first data seq=3
 
             if (telemetryPort != 0)
             {
@@ -1116,20 +1195,15 @@ namespace MozaPlugin.Telemetry
             if (!_connection.IsConnected)
                 return;
 
-            // Intersect profile channels with wheel's advertised catalog so we
-            // don't reference channels the wheel can't decode. Older firmware
-            // rejects the entire tier-def on unknown channels; 2025-11 drops
-            // them silently but still wastes frame bits. No-op when catalog is
-            // empty (parse failure or wheel didn't push registrations).
+            // V0 URL-subscription firmware: build synthetic profile from
+            // wheel catalog (PitHouse echoes full catalog back).
+            // V2/Type02: send ALL profile channels unfiltered — PitHouse
+            // doesn't filter. Channels not in wheel catalog get index 0.
+            // V2 legacy (non-Type02): filter to catalog-matched subset.
             //
-            // EXCEPTION for V0 URL-subscription firmware: PitHouse echoes the
-            // wheel's full catalog back as the subscription, so the wheel's
-            // active dashboard always has every channel it advertised available
-            // for binding. Filtering down to just the host's profile channels
-            // leaves dashboard widgets bound to non-subscribed channels (RPM,
-            // CurrentLap, etc.) un-updated. Build a synthetic profile from the
-            // catalog instead so V0 subscription + value-frame loop cover all
-            // wheel-known channels.
+            // IMPORTANT: never assign to the Profile PROPERTY here — the
+            // setter re-expands tiers (broadcasts × subCount) causing
+            // exponential growth across repeated calls. Use local var only.
             var catalog = _wheelChannelCatalog;
             if (catalog != null && catalog.Count > 0)
             {
@@ -1143,15 +1217,23 @@ namespace MozaPlugin.Telemetry
                 }
                 else
                 {
-                    var filtered = FilterProfileToCatalog(profile, catalog);
-                    int originalCh = 0, filteredCh = 0;
-                    foreach (var t in profile.Tiers) originalCh += t.Channels.Count;
-                    foreach (var t in filtered.Tiers) filteredCh += t.Channels.Count;
-                    if (filteredCh < originalCh)
-                        MozaLog.Info(
-                            $"[Moza] Tier def filtered to wheel catalog: " +
-                            $"{filteredCh}/{originalCh} channels retained");
-                    profile = filtered;
+                    bool csp = UploadWireFormat == FileTransferWireFormat.New2026_04_Type02;
+                    if (!csp)
+                    {
+                        // Legacy V2: filter to catalog-matched channels.
+                        var filtered = FilterProfileToCatalog(profile, catalog);
+                        int originalCh = 0, filteredCh = 0;
+                        foreach (var t in profile.Tiers) originalCh += t.Channels.Count;
+                        foreach (var t in filtered.Tiers) filteredCh += t.Channels.Count;
+                        if (filteredCh < originalCh)
+                            MozaLog.Info(
+                                $"[Moza] Tier def filtered to wheel catalog: " +
+                                $"{filteredCh}/{originalCh} channels retained");
+                        profile = filtered;
+                    }
+                    // Type02: no filtering — send all channels, catalog
+                    // indices resolve in BuildTierDefinitionMessage via
+                    // useWheelCatalogIndices. Unmatched channels get idx=0.
                 }
             }
 
@@ -1194,14 +1276,23 @@ namespace MozaPlugin.Telemetry
             {
                 // Version 2: compact numeric tier definitions.
                 // Sub-message 1 preamble: tag 0x07 (version=2), tag 0x03 (value=0).
-                byte[] preambleMsg = new byte[]
+                // PitHouse only sends this ONCE per session (at connect).
+                // Subsequent tier-def re-sends (dashboard switch) omit it —
+                // wheel rejects/ignores tier-def after a duplicate preamble.
+                int preambleChunkCount = 0;
+                if (!_tierDefPreambleSent)
                 {
-                    0x07, 0x04, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
-                    0x03, 0x00, 0x00, 0x00, 0x00
-                };
-                var preambleFrames = TierDefinitionBuilder.ChunkMessage(preambleMsg, tierDefSession, ref seq);
-                foreach (var frame in preambleFrames)
-                    SendAndTrackChunk(frame);
+                    byte[] preambleMsg = new byte[]
+                    {
+                        0x07, 0x04, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
+                        0x03, 0x00, 0x00, 0x00, 0x00
+                    };
+                    var preambleFrames = TierDefinitionBuilder.ChunkMessage(preambleMsg, tierDefSession, ref seq);
+                    foreach (var frame in preambleFrames)
+                        SendAndTrackChunk(frame);
+                    preambleChunkCount = preambleFrames.Count;
+                    _tierDefPreambleSent = true;
+                }
 
                 // Post-2026-04 CSP firmware (Type02 wire format) indexes channels
                 // by the wheel's advertised catalog order, not by host alphabetic
@@ -1210,7 +1301,7 @@ namespace MozaPlugin.Telemetry
                 // PitHouse emits `00 01 00 00 00 [flag]` between every tier
                 // def). Match the capture format exactly so the wheel correlates
                 // value frames with subscribed channels.
-                bool csp = UploadWireFormat == FileTransferWireFormat.New2026_04_Type02;
+                bool cspIdx = UploadWireFormat == FileTransferWireFormat.New2026_04_Type02;
                 // Type02 firmware indexes channels by wheel-catalog position.
                 // Without catalog, falling through to legacy alphabetic indices
                 // double-counts duplicated channels in per-widget profiles and
@@ -1218,7 +1309,7 @@ namespace MozaPlugin.Telemetry
                 // specific era we skip and retry; under Auto we downgrade the
                 // upload wire format to non-Type02 (older 2026-04 firmware
                 // accepts that path) and continue with alphabetic indices.
-                if (csp && (_wheelChannelCatalog == null || _wheelChannelCatalog.Count == 0))
+                if (cspIdx && (_wheelChannelCatalog == null || _wheelChannelCatalog.Count == 0))
                 {
                     if (AutoFallbackWireFormat)
                     {
@@ -1226,7 +1317,7 @@ namespace MozaPlugin.Telemetry
                             "[Moza] Auto: no wheel catalog received — downgrading from Type02 " +
                             "to legacy V2 + 6B upload header (older firmware path).");
                         UploadWireFormat = FileTransferWireFormat.New2026_04;
-                        csp = false;
+                        cspIdx = false;
                     }
                     else
                     {
@@ -1239,16 +1330,16 @@ namespace MozaPlugin.Telemetry
                 byte[] message = TierDefinitionBuilder.BuildTierDefinitionMessage(
                     profile, 0x00,
                     includeEnableEntries: true,
-                    useWheelCatalogIndices: csp,
-                    wheelCatalog: csp ? _wheelChannelCatalog : null);
+                    useWheelCatalogIndices: cspIdx,
+                    wheelCatalog: cspIdx ? _wheelChannelCatalog : null);
                 var frames = TierDefinitionBuilder.ChunkMessage(message, tierDefSession, ref seq);
 
                 MozaLog.Info(
                     $"[Moza] Sending v2 tier definition: flagBase=0x00, " +
-                    $"preamble ({preambleFrames.Count} chunks)" +
+                    $"preamble ({preambleChunkCount} chunks)" +
                     $" + {message.Length} bytes in {frames.Count} chunks " +
                     $"on session 0x{tierDefSession:X2} ({profile.Tiers.Count} tiers, " +
-                    $"enables=yes, idx={(csp ? "wheel-catalog" : "alpha")})");
+                    $"enables=yes, idx={(cspIdx ? "wheel-catalog" : "alpha")})");
 
                 foreach (var frame in frames)
                     SendAndTrackChunk(frame);
@@ -1256,8 +1347,8 @@ namespace MozaPlugin.Telemetry
                 _session01OutboundSeq = seq;
 
                 CaptureSubscriptionDiag(tierDefSession,
-                    csp ? "v2-type02" : "v2-compact",
-                    preambleMsg, message, profile);
+                    cspIdx ? "v2-type02" : "v2-compact",
+                    System.Array.Empty<byte>(), message, profile);
             }
         }
 
@@ -1271,21 +1362,32 @@ namespace MozaPlugin.Telemetry
         /// yet, when era isn't Type02, or when the synthesized profile would be
         /// empty (e.g. wheel advertised zero channels).
         /// </summary>
-        private void MaybeSwapProfileForCatalog()
+        /// <remarks>
+        /// Public entry point for <see cref="MozaPlugin.ApplyTelemetrySettings"/>
+        /// to swap immediately after setting Profile, so the UI reads the
+        /// catalog-based channel list instead of the builtin's fixed set.
+        /// </remarks>
+        public void SwapProfileForCatalogIfType02() => MaybeSwapProfileForCatalog(force: true);
+
+        /// <summary>
+        /// Internal implementation.
+        /// </summary>
+        private void MaybeSwapProfileForCatalog(bool force = false)
         {
             if (UploadWireFormat != FileTransferWireFormat.New2026_04_Type02)
                 return;
             var catalog = _wheelChannelCatalog;
             if (catalog == null || catalog.Count == 0) return;
 
-            // Only synthesise WheelCatalog when there's no real profile loaded
-            // (no builtin or user-uploaded mzdash). If a real mzdash is active
-            // (e.g. user picked "Core" or factory-bundled profile), respect
-            // it — its widget tree drives proper per-widget tier-defs that
-            // match PitHouse's channel-renegotiation pattern. Overwriting with
-            // a flat synthesised profile would lose the per-widget grouping.
+            // On Type02 firmware the subscription MUST match the wheel's
+            // advertised catalog — PitHouse subscribes to whatever the
+            // wheel declares, not to a fixed builtin channel set. When
+            // force=true (renegotiation after dashboard switch), always
+            // replace the active profile with a WheelCatalog synthesised
+            // from the fresh catalog. Without force, preserve loaded
+            // builtins (e.g. initial connect before the first switch).
             var current = _profile;
-            if (current != null && current.Name != "WheelCatalog")
+            if (!force && current != null && current.Name != "WheelCatalog")
                 return;
 
             // Skip if synthesised profile already matches catalog (avoid
@@ -1307,9 +1409,11 @@ namespace MozaPlugin.Telemetry
             var store = MozaPlugin.Instance?.DashProfileStore ?? new DashboardProfileStore();
             var built = store.BuildProfileFromCatalog(catalog);
             Profile = built;
+            int totalCh = 0;
+            foreach (var t in built.Tiers) totalCh += t.Channels.Count;
             MozaLog.Info(
                 $"[Moza] Profile synthesized from wheel catalog: " +
-                $"{built.Tiers[0].Channels.Count} channels");
+                $"{totalCh} channels across {built.Tiers.Count} tiers");
         }
 
         private void CaptureSubscriptionDiag(byte session, string format,
@@ -2127,7 +2231,17 @@ namespace MozaPlugin.Telemetry
                     // from both during preamble so ParseWheelChannelCatalog sees
                     // entries regardless of which session the wheel uses.
                     bool isCatalogSession = session == FlagByte || session == 0x01;
-                    if (isCatalogSession && data.Length > 12 && !_preambleComplete)
+                    bool catalogGateOpen = !_preambleComplete || _catalogAccumulateForRenegotiate;
+                    if (isCatalogSession && data.Length > 12 && !catalogGateOpen)
+                    {
+                        // Diagnostic: log rejected catalog chunks so we can
+                        // see if the wheel is pushing data we're missing.
+                        MozaLog.Debug(
+                            $"[Moza] Catalog chunk REJECTED on session 0x{session:X2} " +
+                            $"({data.Length - 8} net bytes) — gate closed " +
+                            $"(preamble={_preambleComplete}, accumFlag={_catalogAccumulateForRenegotiate})");
+                    }
+                    if (isCatalogSession && data.Length > 12 && catalogGateOpen)
                     {
                         byte[] raw = new byte[data.Length - 8];
                         Array.Copy(data, 8, raw, 0, raw.Length);
@@ -2176,6 +2290,19 @@ namespace MozaPlugin.Telemetry
         /// Parse the wheel's channel catalog from the buffered incoming 7c:00 session data.
         /// The wheel sends tag 0x04 entries with channel URLs during the preamble.
         /// </summary>
+        private static bool CatalogEquals(
+            System.Collections.Generic.IReadOnlyList<string>? a,
+            System.Collections.Generic.IReadOnlyList<string>? b)
+        {
+            if (a == null && b == null) return true;
+            if (a == null || b == null) return false;
+            if (a.Count != b.Count) return false;
+            for (int i = 0; i < a.Count; i++)
+                if (!string.Equals(a[i], b[i], System.StringComparison.Ordinal))
+                    return false;
+            return true;
+        }
+
         private void ParseWheelChannelCatalog()
         {
             byte[] buffer;
@@ -2184,6 +2311,16 @@ namespace MozaPlugin.Telemetry
                 if (_incomingSessionBuffer.Count == 0) return;
                 buffer = _incomingSessionBuffer.ToArray();
             }
+
+            // Diagnostic: hex-dump first 128 bytes of catalog buffer
+            int dumpLen = Math.Min(buffer.Length, 128);
+            var hex = new System.Text.StringBuilder(dumpLen * 3);
+            for (int d = 0; d < dumpLen; d++)
+            {
+                if (d > 0) hex.Append('-');
+                hex.Append(buffer[d].ToString("X2"));
+            }
+            MozaLog.Info($"[Moza] Catalog buffer dump ({buffer.Length} bytes): {hex}");
 
             // Scan-forward search for `04`-tag URL entries instead of strict
             // TLV walk. The buffer is a concatenation of multiple session-data
@@ -2203,20 +2340,80 @@ namespace MozaPlugin.Telemetry
                 if (tag != 0x04) { i++; continue; }
                 uint param = (uint)(buffer[i + 1] | (buffer[i + 2] << 8) |
                              (buffer[i + 3] << 16) | (buffer[i + 4] << 24));
-                if (param < 2 || param >= 200 || i + 5 + (int)param > buffer.Length)
+                if (param < 1 || param >= 200 || i + 5 + (int)param > buffer.Length)
                 {
                     i++; continue;
                 }
                 int urlLen = (int)param - 1;
-                // Validate URL bytes: must start with "v1/" or be all printable
-                // ASCII to avoid false matches on binary noise.
                 int urlStart = i + 6;
+
+                // Post-dashboard-switch catalogs use three URL shapes:
+                //   1. Full URL: "v1/gameData/Rpm" (standard preamble)
+                //   2. Byte 0x01 prefix: 0x01 + "Rpm" → expand to
+                //      "v1/gameData/Rpm" (observed in earlier captures)
+                //   3. ASCII "\1" prefix: 0x5C 0x31 + "Rpm" → two-char
+                //      literal "\1" that the wheel sends post-switch
+                //      (observed in hex dump 2026-05-01)
+                //
+                // Additionally, size=1 entries (index-only, no URL) appear
+                // in post-switch catalogs as positional back-references to
+                // the previously-advertised catalog. These are handled
+                // separately below.
+                if (urlLen == 0)
+                {
+                    // Size=1 entry: index-only back-reference. The byte at
+                    // buffer[i+5] is the 1-based channel index. Resolve
+                    // from the existing _wheelChannelCatalog if available.
+                    int backIdx = buffer[i + 5];  // 1-based
+                    var existingCatalog = _wheelChannelCatalog;
+                    if (existingCatalog != null && backIdx >= 1 && backIdx <= existingCatalog.Count)
+                    {
+                        string backUrl = existingCatalog[backIdx - 1];
+                        if (seenUrls.Add(backUrl))
+                            channels.Add(backUrl);
+                    }
+                    i += 5 + (int)param;
+                    continue;
+                }
+
                 bool plausible = urlLen >= 3
-                    && buffer[urlStart] == (byte)'v'
-                    && buffer[urlStart + 1] == (byte)'1'
-                    && buffer[urlStart + 2] == (byte)'/';
+                    && ((buffer[urlStart] == (byte)'v'
+                         && buffer[urlStart + 1] == (byte)'1'
+                         && buffer[urlStart + 2] == (byte)'/')
+                        || buffer[urlStart] == 0x01
+                        || (buffer[urlStart] == 0x5C
+                            && urlLen >= 4
+                            && buffer[urlStart + 1] == 0x31));
                 if (!plausible) { i++; continue; }
-                string url = System.Text.Encoding.ASCII.GetString(buffer, urlStart, urlLen);
+                string url;
+                if (buffer[urlStart] == 0x01)
+                {
+                    // Byte 0x01 prefix → expand to v1/gameData/
+                    url = "v1/gameData/" + System.Text.Encoding.ASCII.GetString(
+                        buffer, urlStart + 1, urlLen - 1);
+                }
+                else if (buffer[urlStart] == 0x5C && buffer[urlStart + 1] == 0x31)
+                {
+                    // ASCII "\1" prefix → expand to v1/gameData/
+                    // Wheel post-switch shorthand uses additional
+                    // abbreviations: \t=TyreTemp, \P=TyrePressure,
+                    // {FL}=FrontLeft, {FR}=FrontRight, {RL}=RearLeft,
+                    // {RR}=RearRight. Expand after prefix strip.
+                    string suffix = System.Text.Encoding.ASCII.GetString(
+                        buffer, urlStart + 2, urlLen - 2);
+                    suffix = suffix
+                        .Replace("\\t", "TyreTemp")
+                        .Replace("\\P", "TyrePressure")
+                        .Replace("{FL}", "FrontLeft")
+                        .Replace("{FR}", "FrontRight")
+                        .Replace("{RL}", "RearLeft")
+                        .Replace("{RR}", "RearRight");
+                    url = "v1/gameData/" + suffix;
+                }
+                else
+                {
+                    url = System.Text.Encoding.ASCII.GetString(buffer, urlStart, urlLen);
+                }
                 if (seenUrls.Add(url))
                     channels.Add(url);
                 i += 5 + (int)param;
@@ -2268,9 +2465,12 @@ namespace MozaPlugin.Telemetry
 
             if (channels.Count > 0)
             {
+                if (!CatalogEquals(_wheelChannelCatalog, channels))
+                {
+                    MozaLog.Info(
+                        $"[Moza] Wheel channel catalog ({channels.Count}): {string.Join(", ", channels)}");
+                }
                 _wheelChannelCatalog = channels;
-                MozaLog.Info(
-                    $"[Moza] Wheel channel catalog ({channels.Count}): {string.Join(", ", channels)}");
             }
         }
 
@@ -2334,8 +2534,8 @@ namespace MozaPlugin.Telemetry
                         // receiving data post-preamble (dir refresh, configJson
                         // updates, RPC replies). Detaching here broke RPC round
                         // trips that fire after the 1s preamble window.
-                        // Channel-catalog buffer is guarded by !_preambleComplete
-                        // so it stops accumulating automatically.
+                        // Catalog buffer accumulates continuously (no guard) so
+                        // post-preamble catalog changes trigger auto-renegotiation.
 
                         // Parse the wheel's channel catalog from buffered session data
                         ParseWheelChannelCatalog();
