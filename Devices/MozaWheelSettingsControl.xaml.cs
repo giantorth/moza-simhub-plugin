@@ -685,7 +685,7 @@ namespace MozaPlugin.Devices
                 _plugin.Settings.TelemetryProfileName = "";
                 _plugin.Settings.TelemetryMzdashPath = "";
                 _plugin.SaveSettings();
-                _plugin.RestartTelemetry();
+                _plugin.OnActiveDashboardChanged();
                 UpdateTelemetryProfileInfo();
                 if (TelemetryMappingsExpander.IsExpanded) PopulateChannelMappingGrid();
                 return;
@@ -695,10 +695,11 @@ namespace MozaPlugin.Devices
                 _plugin.Settings.TelemetryProfileName = selected;
                 _plugin.Settings.TelemetryMzdashPath = "";
                 _plugin.SaveSettings();
-                // Restart so the wheel receives the new tier def + mzdash upload.
-                // Without a restart, the wheel keeps the old tier def and decodes
-                // the new frame layout as garbage.
-                _plugin.RestartTelemetry();
+                // Hot-reload the new tier def on the existing session — mirrors
+                // PitHouse's mid-game dash-change burst on session 0x01.
+                // Without it, the wheel keeps the old tier def and decodes the
+                // new frame layout as garbage.
+                _plugin.OnActiveDashboardChanged();
                 UpdateTelemetryProfileInfo();
                 if (TelemetryMappingsExpander.IsExpanded) PopulateChannelMappingGrid();
             }
@@ -710,7 +711,7 @@ namespace MozaPlugin.Devices
             _plugin.Settings.TelemetryProfileName = "";
             _plugin.Settings.TelemetryMzdashPath = "";
             _plugin.SaveSettings();
-            _plugin.RestartTelemetry();
+            _plugin.OnActiveDashboardChanged();
 
             _suppressEvents = true;
             // Drop any stale [Custom: ...] entry so the dropdown doesn't keep
@@ -747,8 +748,9 @@ namespace MozaPlugin.Devices
             _plugin.Settings.TelemetryMzdashPath = dlg.FileName;
             _plugin.Settings.TelemetryProfileName = "";
             _plugin.SaveSettings();
-            // Restart so the wheel receives the new tier def + mzdash upload.
-            _plugin.RestartTelemetry();
+            // Hot-reload tier def on the existing session — mirrors PitHouse's
+            // mid-game dash-change burst on session 0x01.
+            _plugin.OnActiveDashboardChanged();
 
             _suppressEvents = true;
             string label = "[Custom: " + System.IO.Path.GetFileName(dlg.FileName) + "]";

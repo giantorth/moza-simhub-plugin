@@ -85,10 +85,20 @@ namespace MozaPlugin.Protocol
         // stays .IsOpen==true but every read/write throws IOException("Not ready"),
         // so nothing triggers reconnect. Count failures and force-close at threshold.
         private int _consecutiveIoErrors;
-        private volatile bool _portFailureLogged;
+        // 0 = healthy, 1 = port-dead branch already taken. int+CompareExchange
+        // so two failure paths can race the threshold check without both
+        // closing the port and double-logging.
+        private int _portFailureLogged;
         private const int PortDeadThreshold = 10;
 
         public event Action<byte[]>? MessageReceived;
+        // Raised on the thread that hit the I/O failure (reader or writer)
+        // when the port was force-closed by HandleIoFailure. Subscribers
+        // must be safe to invoke from a background thread and should not
+        // block — used to pause the telemetry sender and reset wheel
+        // detection state immediately rather than waiting for the next
+        // reconnect-timer tick.
+        public event Action? Disconnected;
         public bool IsConnected => _port?.IsOpen == true;
 
         /// <summary>
@@ -206,7 +216,7 @@ namespace MozaPlugin.Protocol
                 _lastPortName = portName;
                 _activePorts[portName] = 1;
                 Interlocked.Exchange(ref _consecutiveIoErrors, 0);
-                _portFailureLogged = false;
+                Interlocked.Exchange(ref _portFailureLogged, 0);
                 MozaLog.Info($"[Moza] Connected to {portName}");
                 return true;
             }
@@ -294,14 +304,17 @@ namespace MozaPlugin.Protocol
 
             int count = Interlocked.Increment(ref _consecutiveIoErrors);
 
-            if (!_portFailureLogged)
+            if (Volatile.Read(ref _portFailureLogged) == 0)
             {
                 MozaLog.Error($"[Moza] {label} error: {ex.GetType().Name}: {ex.Message}");
             }
 
-            if (count >= PortDeadThreshold && !_portFailureLogged)
+            // Single-winner gate: only one thread crosses threshold AND wins
+            // the CAS. Loser path skips the close+log entirely instead of
+            // racing on a second close.
+            if (count >= PortDeadThreshold &&
+                Interlocked.CompareExchange(ref _portFailureLogged, 1, 0) == 0)
             {
-                _portFailureLogged = true;
                 MozaLog.Warn(
                     $"[Moza] Port wedged after {count} consecutive I/O errors — closing for reconnect");
                 lock (_lock)
@@ -312,6 +325,10 @@ namespace MozaPlugin.Protocol
                 while (_oneShotQueue.TryDequeue(out _)) { }
                 for (int k = 0; k < _streamSlots.Length; k++)
                     Interlocked.Exchange(ref _streamSlots[k], null);
+                try { Disconnected?.Invoke(); } catch (Exception dex)
+                {
+                    MozaLog.Debug($"[Moza] Disconnected handler: {dex.Message}");
+                }
             }
         }
 

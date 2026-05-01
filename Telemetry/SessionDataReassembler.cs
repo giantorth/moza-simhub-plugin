@@ -27,7 +27,15 @@ namespace MozaPlugin.Telemetry
     /// </summary>
     public sealed class SessionDataReassembler
     {
+        // Cap so a stream of chunks whose envelope/zlib never resolves can't
+        // grow the list to OOM. Mirrors TileServerStateParser's 1 MiB cap.
+        // Real session payloads (configJson state, mzdash uploads) sit well
+        // below this; overflow means the stream is corrupted or the END
+        // marker was lost.
+        private const int MaxBufferBytes = 1 << 20;
+
         private readonly List<byte> _buffer = new();
+        private bool _overflowLogged;
 
         public int Length { get { lock (_buffer) return _buffer.Count; } }
 
@@ -37,10 +45,22 @@ namespace MozaPlugin.Telemetry
             if (chunk == null || chunk.Length < 4) return;
             byte[] net = StripCrcTrailer(chunk);
             lock (_buffer)
+            {
+                if (_buffer.Count + net.Length > MaxBufferBytes)
+                {
+                    if (!_overflowLogged)
+                    {
+                        MozaLog.Warn($"[Moza] SessionDataReassembler exceeded {MaxBufferBytes} bytes ({_buffer.Count}+{net.Length}); dropping buffer");
+                        _overflowLogged = true;
+                    }
+                    _buffer.Clear();
+                    return;
+                }
                 _buffer.AddRange(net);
+            }
         }
 
-        public void Clear() { lock (_buffer) _buffer.Clear(); }
+        public void Clear() { lock (_buffer) { _buffer.Clear(); _overflowLogged = false; } }
 
         /// <summary>Snapshot the current reassembled buffer.</summary>
         public byte[] Snapshot()

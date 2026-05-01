@@ -120,6 +120,7 @@ namespace MozaPlugin.Telemetry
                 {
                     var ch = _profile.Channels[i];
                     double value = _resolvers[i](snapshot);
+                    if (double.IsNaN(value) || double.IsInfinity(value)) value = 0.0;
 
                     if (TelemetryEncoder.IsFloat(ch.Compression))
                         _bitWriter.WriteFloat((float)value);

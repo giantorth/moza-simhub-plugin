@@ -69,6 +69,16 @@ namespace MozaPlugin.Telemetry
         /// </summary>
         public static uint Encode(string compression, double gameValue)
         {
+            // SimHub games occasionally surface NaN / ±Infinity for fields the
+            // current game state hasn't initialised (fuel pre-pit data, tyre
+            // temps before warmup, etc.). NaN survives Clamp() because every
+            // comparison with NaN is false; the subsequent `(int)`/`(uint)`
+            // cast on NaN is platform-defined and on .NET Framework yields
+            // int.MinValue → wraps to 0x80000000 in the wire frame. Guard up
+            // front so the wheel sees a clean zero instead.
+            if (double.IsNaN(gameValue) || double.IsInfinity(gameValue))
+                gameValue = 0.0;
+
             switch (compression)
             {
                 case "bool":

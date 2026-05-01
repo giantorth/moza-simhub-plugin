@@ -646,6 +646,12 @@ namespace MozaPlugin.Telemetry
             lock (_subscriptionResponseChunks) _subscriptionResponseChunks.Clear();
             _subscriptionResponseDeadlineTicks = 0;
             lock (_sessionCounts) _sessionCounts.Clear();
+            // Drop reassembly buffers — otherwise residual chunks from before
+            // Stop persist into the next Start and (combined with the cap in
+            // SessionDataReassembler) get logged as overflow.
+            try { _configJson.Reset(); } catch { }
+            try { _tileServerParser.Clear(); } catch { }
+            try { _session0aInbox.Clear(); } catch { }
             // Reset so StartTelemetryIfReady() won't skip us on re-enable
             _framesSent = 0;
         }
@@ -781,6 +787,62 @@ namespace MozaPlugin.Telemetry
 
         /// <summary>Re-enable a paused tick timer. No-op if never started.</summary>
         public void Resume() => _sendTimer?.Start();
+
+        /// <summary>
+        /// Hot-reload the wheel's tier-def + channel-config for a new active
+        /// dashboard, without tearing down sessions. Mirrors PitHouse's
+        /// dash-change burst (capture
+        /// <c>wireshark/csp/start-game-change-dash.pcapng</c> t≈113-114 s):
+        /// chunked tier-def write on session 0x01 + 0x40 channel-config burst,
+        /// no session-open or session-close frames. Caller must update
+        /// <see cref="Profile"/> beforehand so the setter has rebuilt
+        /// <c>_tiers</c> for the new dashboard.
+        ///
+        /// Returns false if telemetry isn't running or preamble hasn't
+        /// completed — caller should fall back to a full <c>Start</c> in that
+        /// case (the cold-connect path already covers it).
+        /// </summary>
+        public bool RenegotiateForDashboardChange()
+        {
+            if (!_enabled || !_connection.IsConnected) return false;
+            if (!_preambleComplete) return false;
+
+            var timer = _sendTimer;
+            timer?.Stop();
+            try
+            {
+                // Re-parse the wheel's catalog: registrations stream
+                // continuously on session 0x02, so the cached set may have
+                // grown since the original preamble-end parse.
+                ParseWheelChannelCatalog();
+
+                // Profile null (cleared) or Type02 → swap in a synthesised
+                // WheelCatalog profile so the tier-def references the
+                // wheel's currently-advertised channels. Matches user goal
+                // for clear: "default back to the channels the wheel was
+                // advertising."
+                MaybeSwapProfileForCatalog();
+
+                if (_profile == null || _profile.Tiers.Count == 0)
+                {
+                    MozaLog.Info(
+                        "[Moza] Renegotiate skipped: no profile and wheel " +
+                        "catalog empty. Wheel keeps prior subscription.");
+                    return false;
+                }
+
+                SendTierDefinition();
+                SendChannelConfig();
+                MozaLog.Info(
+                    "[Moza] Renegotiated tier-def + channel config for new " +
+                    $"dashboard \"{(_profile?.Name ?? "<none>")}\".");
+                return true;
+            }
+            finally
+            {
+                timer?.Start();
+            }
+        }
 
         // ── Port probing ────────────────────────────────────────────────────
 

@@ -76,6 +76,17 @@ namespace MozaPlugin.Telemetry
         private string _lastMissingShape = "";
 
         /// <summary>
+        /// Clear reassembly buffer and state so a Stop/Start cycle doesn't
+        /// keep growing the inbox with leftover chunks from before Stop.
+        /// </summary>
+        public void Reset()
+        {
+            _deviceInbox.Clear();
+            _lastState = null;
+            _lastMissingShape = "";
+        }
+
+        /// <summary>
         /// Build the host's `configJson()` reply. Pass the library names the
         /// host wants to expose to the wheel — PitHouse's 2025-11 capture used
         /// ["Core","Grids","Mono","Nebula","Pulse","Rally V1".."Rally V6"].

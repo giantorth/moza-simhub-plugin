@@ -67,20 +67,20 @@ namespace MozaPlugin
 
         private void OnLoadedStartTimers(object sender, RoutedEventArgs e)
         {
-            _refreshTimer.Start();
-            _steeringAngleTimer.Start();
+            // WPF can fire Loaded more than once if the control is reparented
+            // (SimHub's tab containers do this during settings-panel layout).
+            // Calling Start() twice would double the tick rate.
+            if (!_refreshTimer.IsEnabled) _refreshTimer.Start();
+            if (!_steeringAngleTimer.IsEnabled) _steeringAngleTimer.Start();
         }
 
         private void OnUnloadedStopTimers(object sender, RoutedEventArgs e)
         {
-            // Stop and detach so the dispatcher's timer queue can release this
-            // control even if the parent window keeps it pinned.
+            // Stop only — leave Tick handlers attached so a subsequent Loaded
+            // re-Start picks up where it left off. Detaching here permanently
+            // killed the timers if the control was reloaded.
             _refreshTimer.Stop();
             _steeringAngleTimer.Stop();
-            _refreshTimer.Tick -= RefreshDisplay;
-            _steeringAngleTimer.Tick -= OnSteeringAngleTick;
-            Loaded -= OnLoadedStartTimers;
-            Unloaded -= OnUnloadedStopTimers;
         }
 
         private MozaPluginSettings _settings => _plugin.Settings;
@@ -1567,13 +1567,28 @@ namespace MozaPlugin
                 manifest.AppendLine("  (no capture buffer was active when this bundle was produced)");
             }
 
-            using (var fs = new System.IO.FileStream(zipPath, System.IO.FileMode.Create, System.IO.FileAccess.Write))
-            using (var zip = new System.IO.Compression.ZipArchive(fs, System.IO.Compression.ZipArchiveMode.Create))
+            // Write to a sibling .tmp first then atomic-rename on success so a
+            // disk-full / permission failure mid-write doesn't leave a partial
+            // zip at the user-visible path. Bug-report uploads have ended up
+            // truncated this way before.
+            string tmpPath = zipPath + ".tmp";
+            try
             {
-                WriteZipEntry(zip, "manifest.txt", manifest.ToString());
-                WriteZipEntry(zip, "serial-capture.txt", captureText);
-                WriteZipEntry(zip, "diagnostics.txt", diagText);
-                WriteZipEntry(zip, "moza-log.txt", logText);
+                using (var fs = new System.IO.FileStream(tmpPath, System.IO.FileMode.Create, System.IO.FileAccess.Write))
+                using (var zip = new System.IO.Compression.ZipArchive(fs, System.IO.Compression.ZipArchiveMode.Create))
+                {
+                    WriteZipEntry(zip, "manifest.txt", manifest.ToString());
+                    WriteZipEntry(zip, "serial-capture.txt", captureText);
+                    WriteZipEntry(zip, "diagnostics.txt", diagText);
+                    WriteZipEntry(zip, "moza-log.txt", logText);
+                }
+                if (System.IO.File.Exists(zipPath)) System.IO.File.Delete(zipPath);
+                System.IO.File.Move(tmpPath, zipPath);
+            }
+            catch
+            {
+                try { if (System.IO.File.Exists(tmpPath)) System.IO.File.Delete(tmpPath); } catch { }
+                throw;
             }
         }
 

@@ -35,16 +35,20 @@ namespace MozaPlugin
         private TelemetrySender _telemetrySender = null!;
         internal DashboardProfileStore DashProfileStore { get; } = new DashboardProfileStore();
 
-        // Device detection state
-        private bool _baseDetected;
-        private bool _dashDetected;
-        private bool _newWheelDetected;
-        private bool _oldWheelDetected;
-        private bool _handbrakeDetected;
-        private bool _pedalsDetected;
-        private bool _hubDetected;
-        private bool _ab9Detected;
-        private bool _ab9SettingsApplied;
+        // Device detection state. Written from serial-reader thread
+        // (OnMessageReceived → DetectDevices) and read from the poll timer,
+        // UI thread, and TelemetrySender.StartTelemetryIfReady — without
+        // volatile, readers can stay stuck on stale `false` after detect
+        // and never start telemetry / refresh UI.
+        private volatile bool _baseDetected;
+        private volatile bool _dashDetected;
+        private volatile bool _newWheelDetected;
+        private volatile bool _oldWheelDetected;
+        private volatile bool _handbrakeDetected;
+        private volatile bool _pedalsDetected;
+        private volatile bool _hubDetected;
+        private volatile bool _ab9Detected;
+        private volatile bool _ab9SettingsApplied;
 
         // Guard against concurrent/duplicate telemetry Start() dispatch
         private int _telemetryStartRequested;
@@ -371,6 +375,7 @@ namespace MozaPlugin
                 // Probe-based discovery (PID = null, Wine/Proton) still works.
                 _connection = new MozaSerialConnection(pid => !MozaUsbIds.IsAb9Pid(pid));
                 _connection.MessageReceived += OnMessageReceived;
+                _connection.Disconnected += OnSerialDisconnected;
 
                 _deviceManager = new MozaDeviceManager(_connection);
 
@@ -435,7 +440,10 @@ namespace MozaPlugin
             try
             {
                 if (_connection != null)
+                {
                     _connection.MessageReceived -= OnMessageReceived;
+                    _connection.Disconnected -= OnSerialDisconnected;
+                }
             }
             catch { }
             try
@@ -490,7 +498,10 @@ namespace MozaPlugin
             try
             {
                 if (_connection != null)
+                {
                     _connection.MessageReceived -= OnMessageReceived;
+                    _connection.Disconnected -= OnSerialDisconnected;
+                }
             }
             catch { }
             try
@@ -891,6 +902,37 @@ namespace MozaPlugin
                 StartTelemetryIfReady();
         }
 
+        /// <summary>
+        /// Hot-reload the wheel for a new (or cleared) active dashboard
+        /// without tearing down the session. Mirrors PitHouse's mid-game
+        /// dash-change burst (capture
+        /// <c>wireshark/csp/start-game-change-dash.pcapng</c> t≈113-114 s):
+        /// just a tier-def re-send on session 0x01 plus the 0x40 channel-
+        /// config burst. No port close / re-open, no Stop()/Start(), so
+        /// active gameplay isn't disrupted.
+        ///
+        /// Falls back to <see cref="RestartTelemetry"/> when telemetry isn't
+        /// running yet (cold-connect / pre-preamble) — that's the only path
+        /// that opens sessions in the first place.
+        /// </summary>
+        internal void OnActiveDashboardChanged()
+        {
+            if (_telemetrySender == null) return;
+
+            ApplyTelemetrySettings();
+
+            if (!_settings.TelemetryEnabled) return;
+
+            if (_telemetrySender.RenegotiateForDashboardChange())
+                return;
+
+            // Not running or preamble incomplete — go through the normal
+            // start path. Avoids the full Stop+ProbeAndOpen reset that
+            // disrupts a live session, but still gets us up cleanly when
+            // nothing's running yet.
+            StartTelemetryIfReady();
+        }
+
         internal void SetTelemetryEnabled(bool enabled)
         {
             _settings.TelemetryEnabled = enabled;
@@ -1010,6 +1052,21 @@ namespace MozaPlugin
         private int _wheelPollMisses;
         private const int WheelMissThreshold = 3;
         private volatile string _lastKnownWheelModel = "";
+
+        // Fires from MozaSerialConnection.HandleIoFailure on the read or
+        // write thread once the port has been force-closed. Pause telemetry
+        // and reset wheel detection right now rather than waiting for the
+        // next reconnect-timer tick — otherwise the sender keeps firing and
+        // accumulating ack waiters / catalog state for ~5 s.
+        private void OnSerialDisconnected()
+        {
+            if (IsShuttingDown) return;
+            // Pause first so the sender's next tick sees the timer stopped
+            // before ResetWheelDetection issues its full Stop().
+            try { _telemetrySender?.Pause(); } catch { }
+            if (_newWheelDetected || _oldWheelDetected || _dashDetected)
+                ResetWheelDetection("Serial disconnect — resetting wheel detection");
+        }
 
         private void ResetWheelDetection(string reason)
         {

@@ -142,62 +142,84 @@ namespace MozaPlugin
         public Dictionary<string, PerWheelSlot> PerWheelSlots { get; set; }
             = new Dictionary<string, PerWheelSlot>(StringComparer.OrdinalIgnoreCase);
 
+        // Guards every read/write on PerWheelSlots. Serial-reader thread
+        // detects a wheel and calls LoadSlotIntoActive while the UI thread
+        // can be calling MirrorActiveToSlot from SaveSettings — Dictionary<>
+        // is not safe for concurrent writers and corrupts buckets.
+        // Newtonsoft serialization touches the dictionary outside these
+        // helpers; SimHub serializes from the UI thread on shutdown so the
+        // window with the serial reader is small but not zero.
+        private readonly object _slotsLock = new object();
+
         /// <summary>Get the slot for a model, creating one on first access.</summary>
         public PerWheelSlot GetOrCreateSlot(string? modelName)
         {
             if (string.IsNullOrEmpty(modelName)) return new PerWheelSlot();
-            if (!PerWheelSlots.TryGetValue(modelName!, out var slot))
+            lock (_slotsLock)
             {
-                slot = new PerWheelSlot();
-                PerWheelSlots[modelName!] = slot;
+                if (!PerWheelSlots.TryGetValue(modelName!, out var slot))
+                {
+                    slot = new PerWheelSlot();
+                    PerWheelSlots[modelName!] = slot;
+                }
+                return slot;
             }
-            return slot;
         }
 
         /// <summary>Copy the flat Wheel* fields into the slot for <paramref name="modelName"/>.</summary>
         public void MirrorActiveToSlot(string? modelName)
         {
             if (string.IsNullOrEmpty(modelName)) return;
-            var slot = GetOrCreateSlot(modelName);
-            slot.WheelTelemetryMode     = WheelTelemetryMode;
-            slot.WheelIdleEffect        = WheelIdleEffect;
-            slot.WheelButtonsIdleEffect = WheelButtonsIdleEffect;
-            slot.WheelPaddlesMode       = WheelPaddlesMode;
-            slot.WheelClutchPoint       = WheelClutchPoint;
-            slot.WheelKnobMode          = WheelKnobMode;
-            slot.WheelStickMode         = WheelStickMode;
-            slot.WheelRpmIndicatorMode  = WheelRpmIndicatorMode;
-            slot.WheelRpmDisplayMode    = WheelRpmDisplayMode;
-            slot.WheelRpmBrightness     = WheelRpmBrightness;
-            slot.WheelButtonsBrightness = WheelButtonsBrightness;
-            slot.WheelFlagsBrightness   = WheelFlagsBrightness;
-            slot.WheelESRpmBrightness   = WheelESRpmBrightness;
-            slot.WheelRpmBlinkColors    = WheelRpmBlinkColors;
-            slot.WheelKnobBackgroundColors = WheelKnobBackgroundColors;
-            slot.WheelKnobPrimaryColors    = WheelKnobPrimaryColors;
+            lock (_slotsLock)
+            {
+                if (!PerWheelSlots.TryGetValue(modelName!, out var slot))
+                {
+                    slot = new PerWheelSlot();
+                    PerWheelSlots[modelName!] = slot;
+                }
+                slot.WheelTelemetryMode     = WheelTelemetryMode;
+                slot.WheelIdleEffect        = WheelIdleEffect;
+                slot.WheelButtonsIdleEffect = WheelButtonsIdleEffect;
+                slot.WheelPaddlesMode       = WheelPaddlesMode;
+                slot.WheelClutchPoint       = WheelClutchPoint;
+                slot.WheelKnobMode          = WheelKnobMode;
+                slot.WheelStickMode         = WheelStickMode;
+                slot.WheelRpmIndicatorMode  = WheelRpmIndicatorMode;
+                slot.WheelRpmDisplayMode    = WheelRpmDisplayMode;
+                slot.WheelRpmBrightness     = WheelRpmBrightness;
+                slot.WheelButtonsBrightness = WheelButtonsBrightness;
+                slot.WheelFlagsBrightness   = WheelFlagsBrightness;
+                slot.WheelESRpmBrightness   = WheelESRpmBrightness;
+                slot.WheelRpmBlinkColors    = WheelRpmBlinkColors;
+                slot.WheelKnobBackgroundColors = WheelKnobBackgroundColors;
+                slot.WheelKnobPrimaryColors    = WheelKnobPrimaryColors;
+            }
         }
 
         /// <summary>Copy the slot for <paramref name="modelName"/> into the flat Wheel* fields.</summary>
         public void LoadSlotIntoActive(string? modelName)
         {
             if (string.IsNullOrEmpty(modelName)) return;
-            if (!PerWheelSlots.TryGetValue(modelName!, out var slot)) return;
-            WheelTelemetryMode     = slot.WheelTelemetryMode;
-            WheelIdleEffect        = slot.WheelIdleEffect;
-            WheelButtonsIdleEffect = slot.WheelButtonsIdleEffect;
-            WheelPaddlesMode       = slot.WheelPaddlesMode;
-            WheelClutchPoint       = slot.WheelClutchPoint;
-            WheelKnobMode          = slot.WheelKnobMode;
-            WheelStickMode         = slot.WheelStickMode;
-            WheelRpmIndicatorMode  = slot.WheelRpmIndicatorMode;
-            WheelRpmDisplayMode    = slot.WheelRpmDisplayMode;
-            WheelRpmBrightness     = slot.WheelRpmBrightness;
-            WheelButtonsBrightness = slot.WheelButtonsBrightness;
-            WheelFlagsBrightness   = slot.WheelFlagsBrightness;
-            WheelESRpmBrightness   = slot.WheelESRpmBrightness;
-            WheelRpmBlinkColors    = slot.WheelRpmBlinkColors;
-            WheelKnobBackgroundColors = slot.WheelKnobBackgroundColors;
-            WheelKnobPrimaryColors    = slot.WheelKnobPrimaryColors;
+            lock (_slotsLock)
+            {
+                if (!PerWheelSlots.TryGetValue(modelName!, out var slot)) return;
+                WheelTelemetryMode     = slot.WheelTelemetryMode;
+                WheelIdleEffect        = slot.WheelIdleEffect;
+                WheelButtonsIdleEffect = slot.WheelButtonsIdleEffect;
+                WheelPaddlesMode       = slot.WheelPaddlesMode;
+                WheelClutchPoint       = slot.WheelClutchPoint;
+                WheelKnobMode          = slot.WheelKnobMode;
+                WheelStickMode         = slot.WheelStickMode;
+                WheelRpmIndicatorMode  = slot.WheelRpmIndicatorMode;
+                WheelRpmDisplayMode    = slot.WheelRpmDisplayMode;
+                WheelRpmBrightness     = slot.WheelRpmBrightness;
+                WheelButtonsBrightness = slot.WheelButtonsBrightness;
+                WheelFlagsBrightness   = slot.WheelFlagsBrightness;
+                WheelESRpmBrightness   = slot.WheelESRpmBrightness;
+                WheelRpmBlinkColors    = slot.WheelRpmBlinkColors;
+                WheelKnobBackgroundColors = slot.WheelKnobBackgroundColors;
+                WheelKnobPrimaryColors    = slot.WheelKnobPrimaryColors;
+            }
         }
     }
 

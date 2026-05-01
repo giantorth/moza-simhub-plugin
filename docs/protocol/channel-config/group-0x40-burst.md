@@ -15,7 +15,7 @@ After dashboard file transfer (or on wheel connect without upload), Pit House se
 | `28:02` | `01 00` | Set multi-channel telemetry mode (01=multi, 00=RPM only) |
 | `1b:00`/`1b:01` | `FF value` | Brightness per page (value `64`=100%) |
 | `1f:00`/`1f:01` | `FF idx 00 00 00` | LED color read per index (`idx`=`0a`–`0f` observed) |
-| `27:00`–`27:03` | `00/01 00 00 00` | Page/dashboard config (sub-IDs 0–3, variants with `01`) |
+| `27:00`–`27:03` | `00/01 XX YY ZZ` | **Per-page dashboard binding fingerprint** (read via 0x40, set via 0x3F — see § 27:NN dashboard-switch below) |
 | `29:00` | `00` | Display settings (TBD) |
 | `2a:03` | `00` | Display settings (TBD) |
 | various | — | Other display settings (`0a`, `0b`, `05`, `20`, `21`, `24`, etc.) |
@@ -59,3 +59,47 @@ Likely meaning of `page` and `channel`:
 Read-then-write pattern: Pithouse sends 28:00 and 28:01 (read state), then 28:02 (set mode) during burst. Wheel responds `00:00` to `28:02 data=01:00` — normal behavior, not failure.
 
 **Normal operation:** `28 02 01 00` continues polling ~3.4 Hz to maintain multi-channel mode.
+
+### 27:NN per-page binding state (host→wheel write on group 0x3F)
+
+**NOTE:** earlier draft of this section claimed `3F 27:NN` is THE
+dashboard-switch trigger. Subsequent capture analysis (same pcap) found a
+separate **FF-record on session 0x02** that's a stronger candidate for the
+primary switch signal — see [`../findings/2026-04-30-dashboard-switch-3f27.md`](../findings/2026-04-30-dashboard-switch-3f27.md). The `3F 27:NN`
+writes documented here may be a secondary per-page state update rather than
+the actual switch trigger. **Both paths are UNTESTED from the plugin side.**
+Wire format below is verified from capture; behaviour against live wheel
+from plugin replay not confirmed.
+
+Wire format observed in `wireshark/csp/startup, change knob colors, change dash several times, delete dash.pcapng`. CSP firmware writes per-page binding via group `0x3F` (wheel write), not `0x40` (read). Symmetric pair:
+
+```
+read  : 7e 03 40 17 27 [page] 00            host→wheel    (group 0x40)
+reply : 7e 06 c0 71 27 [page] [4-byte data] wheel→host    (group 0xc0, dev 0x71 = nibble-swap of 0x17)
+write : 7e 06 3f 17 27 [page] [4-byte data] host→wheel    (group 0x3F)
+```
+
+`page` = 0..3. `4-byte data` = opaque dashboard fingerprint, format `[flag:1] [3-byte fingerprint]`. Flag byte:
+- `0x00` — primary fingerprint (active state)
+- `0x01` — alternate fingerprint (cached / counter state — semantics TBD)
+
+Wheel poll responses oscillate between `00 XX YY ZZ` and `01 XX YY ZZ` for the same page across consecutive `27:NN` reads — wheel returns both states alternately.
+
+**Captured switch sequence** (from `startup,change knob colors,...pcapng`):
+```
+t=49.57s   page 3 ← 00 f6 b4 99    (initial bind at startup)
+t=49.59s   page 1 ← 00 c6 e1 9b
+t=49.60s   page 0 ← 00 f3 79 a1
+t=49.61s   page 2 ← 00 9b a7 eb
+t=49.88s   page 2 ← 01 11 47 e6    (alternate-state set)
+t=150.57s  page 2 ← 00 ff 64 00    ← user switched dashboard for page 2
+t=166.78s  page 3 ← 00 5f 97 ff    ← user switched dashboard for page 3
+```
+
+**Fingerprint origin (unknown):** the 24-bit fingerprint does NOT match any field in the session 0x09 configJson state (dashboard `id`, `dirName`, `title`, `hash`). Tried MD5/SHA1/SHA256/CRC32 of those fields and of mzdash file bytes — no match. Likely a wheel-internal opaque ID assigned at upload time, or a custom hash algorithm (FNV/Murmur/proprietary).
+
+**Plugin implications (all UNTESTED — verify with live wheel before trusting):**
+
+- **Detect** active-dashboard changes by polling `27:00..27:03` on group 0x40. Stash last-known fingerprint per page; non-match indicates change of some kind.
+- **Drive a switch via `3F 27:NN`** — would require a pre-recorded fingerprint→dashboard mapping. Fingerprint is wheel-assigned, not derivable from mzdash content. NOT the recommended path; try the FF-record on session 0x02 first ([`../findings/2026-04-30-dashboard-switch-3f27.md`](../findings/2026-04-30-dashboard-switch-3f27.md)).
+- **Doc correction**: [`../../usb-capture/payload-09-state-re.md`](../../../usb-capture/payload-09-state-re.md) line 167 said "zero `3F:28` write frames anywhere" — accurate but wrong cmd; real activity on cmd `27`, not `28`. The `3F 27:NN` writes here are likely a per-page state update; the actual switch trigger is the FF-record on session 0x02.
