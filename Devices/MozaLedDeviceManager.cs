@@ -385,7 +385,7 @@ namespace MozaPlugin.Devices
                 {
                     _lastSendTime = DateTime.UtcNow;
                 }
-                else if (plugin.Settings.WheelKeepalive && _lastLeds != null)
+                else if (_lastLeds != null)
                 {
                     var now = DateTime.UtcNow;
                     if ((now - _lastSendTime).TotalSeconds >= KeepaliveIntervalSeconds)

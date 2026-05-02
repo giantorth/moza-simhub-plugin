@@ -73,7 +73,7 @@ namespace MozaPlugin
 
         // When true, resend LED state to wheel every ~1 second even if unchanged.
         // Some ES wheels need this to stay in telemetry mode.
-        public bool WheelKeepalive { get; set; } = false;
+        public bool WheelKeepalive { get; set; } = true;
 
         // When true, always resend the LED bitmask alongside color updates even if the bitmask
         // value hasn't changed. Fixes wheels that don't pick up new colors without a bitmask write.

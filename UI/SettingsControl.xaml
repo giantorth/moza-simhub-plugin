@@ -818,13 +818,6 @@
                         <TextBlock Text="Only send LED data when it actually changes. Disable if your wheel stops responding to LED effects."
                                    Foreground="Gray" FontSize="11" Margin="0,4,0,0" TextWrapping="Wrap"/>
                         <StackPanel Orientation="Horizontal" Margin="0,8">
-                            <TextBlock Text="Periodic LED keepalive" Style="{StaticResource SliderLabel}"/>
-                            <CheckBox x:Name="WheelKeepaliveCheck" VerticalAlignment="Center"
-                                      Checked="WheelKeepaliveCheck_Changed" Unchecked="WheelKeepaliveCheck_Changed"/>
-                        </StackPanel>
-                        <TextBlock Text="Resend LED state every second. Some ES wheels need this to stay in telemetry mode. Disable if you see flickering."
-                                   Foreground="Gray" FontSize="11" Margin="0,4,0,0" TextWrapping="Wrap"/>
-                        <StackPanel Orientation="Horizontal" Margin="0,8">
                             <TextBlock Text="Always resend bitmask" Style="{StaticResource SliderLabel}"/>
                             <CheckBox x:Name="AlwaysResendBitmaskCheck" VerticalAlignment="Center"
                                       Checked="AlwaysResendBitmaskCheck_Changed" Unchecked="AlwaysResendBitmaskCheck_Changed"/>

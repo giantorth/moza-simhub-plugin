@@ -33,7 +33,6 @@ namespace MozaPlugin
             ConnectionToggle.IsChecked = plugin.ConnectionEnabled;
             AutoApplyProfileCheck.IsChecked = plugin.Settings.AutoApplyProfileOnLaunch;
             LimitWheelUpdatesCheck.IsChecked = plugin.Settings.LimitWheelUpdates;
-            WheelKeepaliveCheck.IsChecked = plugin.Settings.WheelKeepalive;
             AlwaysResendBitmaskCheck.IsChecked = plugin.Settings.AlwaysResendBitmask;
             StartCaptureOnNextLaunchCheck.IsChecked = plugin.Settings.StartCaptureOnNextLaunch;
             // Reflect any in-flight capture (e.g. armed from a previous session
@@ -1065,13 +1064,6 @@ namespace MozaPlugin
             _plugin.SaveSettings();
         }
 
-        private void WheelKeepaliveCheck_Changed(object sender, RoutedEventArgs e)
-        {
-            if (_suppressEvents) return;
-            _plugin.Settings.WheelKeepalive = WheelKeepaliveCheck.IsChecked == true;
-            _plugin.SaveSettings();
-        }
-
         private void AlwaysResendBitmaskCheck_Changed(object sender, RoutedEventArgs e)
         {
             if (_suppressEvents) return;
@@ -1097,7 +1089,6 @@ namespace MozaPlugin
             {
                 AutoApplyProfileCheck.IsChecked = _plugin.Settings.AutoApplyProfileOnLaunch;
                 LimitWheelUpdatesCheck.IsChecked = _plugin.Settings.LimitWheelUpdates;
-                WheelKeepaliveCheck.IsChecked = _plugin.Settings.WheelKeepalive;
                 ConnectionToggle.IsChecked = _plugin.Settings.ConnectionEnabled;
                 ProfileListControl.DataContext = null;
                 ProfileListControl.DataContext = _plugin.ProfileStore;
