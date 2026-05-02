@@ -424,9 +424,7 @@ namespace MozaPlugin
                 if (!string.IsNullOrEmpty(_settings.TelemetryMzdashFolder))
                     DashCache.LoadFromFolder(_settings.TelemetryMzdashFolder);
                 _telemetrySender.DashCache = DashCache;
-                // Gate download requests behind wire trace sink — protocol still
-                // being stabilized, don't fire on every user launch.
-                _telemetrySender.SetDownloadEnabled(_settings.EnableWireTraceFileSink);
+                _telemetrySender.SetDownloadEnabled(_settings.TelemetryDownloadDashboard);
 
                 ApplyTelemetrySettings();
                 // Don't start telemetry here — defer until wheel is detected.
@@ -742,6 +740,7 @@ namespace MozaPlugin
             _telemetrySender.UploadWireFormat = wireFormat;
             _telemetrySender.AutoFallbackWireFormat = s.TelemetryFirmwareEra == MozaFirmwareEra.Auto;
             _telemetrySender.UploadDashboard = s.TelemetryUploadDashboard;
+            _telemetrySender.SetDownloadEnabled(s.TelemetryDownloadDashboard);
 
             // Resolve the active multi-stream profile and raw mzdash content.
             //

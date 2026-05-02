@@ -830,6 +830,10 @@
                                   Margin="0,8,0,4" Checked="UploadDashboard_Changed" Unchecked="UploadDashboard_Changed"/>
                         <TextBlock TextWrapping="Wrap" Foreground="Gray" FontSize="11" Margin="0,0,0,8"
                                    Text="Attempt to upload selected mzdash file.  Experimental."/>
+                        <CheckBox x:Name="DownloadDashboardCheck" Content="Download dashboards from wheel"
+                                  Margin="0,8,0,4" Checked="DownloadDashboard_Changed" Unchecked="DownloadDashboard_Changed"/>
+                        <TextBlock TextWrapping="Wrap" Foreground="Gray" FontSize="11" Margin="0,0,0,8"
+                                   Text="Download dashboard files stored on the wheel.  Experimental."/>
                         <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
                             <TextBlock Text="Wire protocol:" VerticalAlignment="Center" Margin="0,0,8,0"/>
                             <ComboBox x:Name="FirmwareEraCombo" Width="500"

@@ -113,7 +113,7 @@ namespace MozaPlugin.Telemetry
         {
             if (!Enabled)
             {
-                MozaLog.Info("[Moza] DashboardDownloader: skipped (enable via wire trace sink toggle)");
+                MozaLog.Info("[Moza] DashboardDownloader: skipped (download not enabled)");
                 return 0;
             }
             if (state.EnabledDashboards == null || state.EnabledDashboards.Count == 0)

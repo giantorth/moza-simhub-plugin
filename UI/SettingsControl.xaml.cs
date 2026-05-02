@@ -1122,6 +1122,7 @@ namespace MozaPlugin
             {
                 var s = _plugin.Settings;
                 UploadDashboardCheck.IsChecked = s.TelemetryUploadDashboard;
+                DownloadDashboardCheck.IsChecked = s.TelemetryDownloadDashboard;
                 FirmwareEraCombo.SelectedIndex = FirmwareEraToIndex(s.TelemetryFirmwareEra);
             }
             finally
@@ -1134,6 +1135,14 @@ namespace MozaPlugin
         {
             if (_suppressEvents) return;
             _plugin.Settings.TelemetryUploadDashboard = UploadDashboardCheck.IsChecked == true;
+            _plugin.SaveSettings();
+            _plugin.RestartTelemetry();
+        }
+
+        private void DownloadDashboard_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_suppressEvents) return;
+            _plugin.Settings.TelemetryDownloadDashboard = DownloadDashboardCheck.IsChecked == true;
             _plugin.SaveSettings();
             _plugin.RestartTelemetry();
         }

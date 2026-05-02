@@ -114,6 +114,9 @@ namespace MozaPlugin
         // PitHouse does this on every connection — the wheel may require it.
         public bool TelemetryUploadDashboard { get; set; } = false;
 
+        // Download dashboards from the wheel when it reports them.
+        public bool TelemetryDownloadDashboard { get; set; } = false;
+
         // Legacy tier-def variant setting. Migrated into TelemetryFirmwareEra
         // on first load (see MozaPlugin.ApplyTelemetrySettings). Kept around so
         // older saved settings continue to round-trip during migration.
