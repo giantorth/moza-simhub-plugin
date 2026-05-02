@@ -304,7 +304,7 @@ namespace MozaPlugin.Telemetry
             }
         }
 
-        private MultiStreamProfile? ParseMzdashContent(string name, string content)
+        internal MultiStreamProfile? ParseMzdashContent(string name, string content)
         {
             // Extract Telemetry.get() URLs (legacy format, e.g. F1 mzdash)
             var allUrls = new HashSet<string>(StringComparer.OrdinalIgnoreCase);

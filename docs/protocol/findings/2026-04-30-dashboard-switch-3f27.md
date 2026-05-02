@@ -76,26 +76,29 @@ After receiving the FF-record the wheel:
    instead of `v1/gameData/Rpm`)
 4. Re-pushes binding catalog on session 0x01 (enable/tier/end TLV records)
 
-### Tier-def re-send timing (verified from bridge capture)
+### Tier-def re-send timing (verified from bridge capture 2026-05-01)
 
-**PitHouse sends tier-def ~800ms after the FF-record.**
+**PitHouse sends tier-def ~660ms after the FF-record, then retransmits
+2 more times at ~1s intervals (3 total sends).**
 
-During the 800ms gap, the wheel pushes its new channel catalog on
-session 0x01. PitHouse uses this fresh catalog for correct channel
-indices in the tier-def.
+PitHouse does NOT re-parse the post-switch channel catalog. It uses its
+OWN mzdash channel metadata (downloaded from the wheel at cold-start)
+combined with the INITIAL channel catalog indices from session connect
+(preamble). The initial catalog indices remain valid for the entire
+session — the post-switch catalog push from the wheel is informational
+only.
 
 **Critical:** PitHouse does NOT re-send the tag 0x07/0x03 preamble on
 subsequent tier-defs. Preamble is sent ONCE at session connect. All
 re-sends (dashboard switch) use only enable/tier/end records. Sending a
 duplicate preamble causes the wheel to reject the tier-def.
 
-**Implementation lesson (2026-05-01):** The host must start buffering
-session 0x01 catalog data at the moment the FF-record is sent, not
-800ms later when the tier-def is built. The wheel's catalog push
-completes within ~300ms of the FF-record. If the host defers buffer
-accumulation to renegotiation time, all catalog chunks have already
-arrived and been discarded — causing the tier-def to reference stale
-channel indices from the previous dashboard.
+**Corrected (2026-05-01):** Earlier note about buffering the
+post-switch catalog was wrong. PitHouse never parses it. The host
+should use cached mzdash metadata for channel definitions and the
+initial preamble catalog for index mapping. See
+[`../dashboard-upload/download-session-0x0b.md`](../dashboard-upload/download-session-0x0b.md)
+for how PitHouse downloads mzdash files from the wheel at cold-start.
 
 Bridge capture evidence (3 consecutive switches):
 ```

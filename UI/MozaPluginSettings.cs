@@ -88,7 +88,7 @@ namespace MozaPlugin
         // Always-on bridge-format JSONL wire trace at SimHub/Logs/moza-wire-*.jsonl.
         // Off by default to avoid disk-write churn; flip on when comparing plugin
         // output to PitHouse captures via sim/diff_captures.py.
-        public bool EnableWireTraceFileSink { get; set; } = true;
+        public bool EnableWireTraceFileSink { get; set; } = false;
 
         // ===== Profile system (SimHub native) =====
         public MozaProfileStore ProfileStore { get; set; } = new MozaProfileStore();

@@ -589,10 +589,13 @@ namespace MozaPlugin.Devices
                 }
                 else
                 {
-                    // Fallback: builtin profiles (wheel state not available yet).
+                    // Fallback: cached dashboard names (wheel state not available yet).
                     TelemetryProfileCombo.Items.Add("(none)");
-                    foreach (var profile in _plugin.DashProfileStore.BuiltinProfiles)
-                        TelemetryProfileCombo.Items.Add(profile.Name);
+                    if (_plugin.DashCache != null)
+                    {
+                        foreach (var name in _plugin.DashCache.CachedNames)
+                            TelemetryProfileCombo.Items.Add(name);
+                    }
                     if (!string.IsNullOrEmpty(_plugin.Settings.TelemetryMzdashPath))
                         TelemetryProfileCombo.Items.Add(
                             "[Custom: " + System.IO.Path.GetFileName(
@@ -654,6 +657,10 @@ namespace MozaPlugin.Devices
 
             TelemetryTestStopBtn.IsEnabled = testMode;
             TelemetryTestStartBtn.IsEnabled = !testMode;
+
+            // Refresh profile info — auto-renegotiate may have swapped
+            // the profile on a background thread after a dashboard switch.
+            UpdateTelemetryProfileInfo();
         }
 
         private void UpdateTelemetryProfileInfo()
@@ -740,15 +747,16 @@ namespace MozaPlugin.Devices
 
                 // Load the new profile immediately so the UI's channel
                 // mapping grid shows correct channels for the selected
-                // dashboard. The 800ms background renegotiation will call
-                // ApplyTelemetrySettings() again (harmless duplicate) then
-                // send the tier-def with fresh catalog indices.
+                // dashboard. Background renegotiation sends tier-def
+                // with 3× retransmit.
                 _plugin.ApplyTelemetrySettings();
 
                 var pluginRef = _plugin;
                 System.Threading.ThreadPool.QueueUserWorkItem(_ =>
                 {
-                    System.Threading.Thread.Sleep(800);
+                    // Brief delay for FF-record to reach wheel, then
+                    // renegotiation waits for the full catalog push.
+                    System.Threading.Thread.Sleep(100);
                     pluginRef.OnActiveDashboardChanged();
                 });
 
@@ -935,12 +943,6 @@ namespace MozaPlugin.Devices
             // dashboard with 12 widgets binding 6 unique URLs surfaces 12
             // tier×channel pairs. The mapping grid is keyed by URL → SimHub
             // property, so collapse duplicates by URL (first occurrence wins).
-            // Also drop URLs the wheel's advertised catalog doesn't include —
-            // those widgets won't render even if subscribed.
-            var wheelCatalog = _plugin.TelemetrySender?.WheelChannelCatalog;
-            var catalogSet = wheelCatalog == null
-                ? null
-                : new HashSet<string>(wheelCatalog, StringComparer.OrdinalIgnoreCase);
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var rows = new List<ChannelMappingRow>();
             foreach (var tier in profile.Tiers.OrderBy(t => t.PackageLevel))
@@ -949,7 +951,6 @@ namespace MozaPlugin.Devices
                 {
                     if (DashboardProfileStore.IsInternalChannel(ch.SimHubProperty)) continue;
                     if (!seen.Add(ch.Url)) continue;
-                    if (catalogSet != null && catalogSet.Count > 0 && !catalogSet.Contains(ch.Url)) continue;
 
                     rows.Add(new ChannelMappingRow
                     {

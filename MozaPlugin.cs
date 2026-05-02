@@ -34,6 +34,7 @@ namespace MozaPlugin
         private PluginManager _pluginManager = null!;
         private TelemetrySender _telemetrySender = null!;
         internal DashboardProfileStore DashProfileStore { get; } = new DashboardProfileStore();
+        internal DashboardCache DashCache { get; private set; } = null!;
 
         // Device detection state. Written from serial-reader thread
         // (OnMessageReceived → DetectDevices) and read from the poll timer,
@@ -374,12 +375,16 @@ namespace MozaPlugin
                 // wheelbase code path can grab the AB9 port and stall on probes.
                 // Probe-based discovery (PID = null, Wine/Proton) still works.
                 _connection = new MozaSerialConnection(pid => !MozaUsbIds.IsAb9Pid(pid));
+                if (!string.IsNullOrEmpty(_settings.LastWheelbasePort))
+                    _connection.LastPortName = _settings.LastWheelbasePort;
                 _connection.MessageReceived += OnMessageReceived;
                 _connection.Disconnected += OnSerialDisconnected;
 
                 _deviceManager = new MozaDeviceManager(_connection);
 
                 _ab9Manager = new MozaAb9DeviceManager();
+                if (!string.IsNullOrEmpty(_settings.LastAb9Port))
+                    _ab9Manager.Connection.LastPortName = _settings.LastAb9Port;
                 _ab9Manager.MessageReceived += OnAb9MessageReceived;
 
                 // 5 s poll interval. Was 2 s, but the diagnostic reads it issues
@@ -409,6 +414,18 @@ namespace MozaPlugin
                 _hidReader.Start();
 
                 _telemetrySender = new TelemetrySender(_connection);
+
+                // Initialize dashboard cache for download-on-connect.
+                string cacheDir = System.IO.Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "MozaSimHubPlugin", "DashboardCache");
+                DashCache = new DashboardCache(cacheDir, DashProfileStore);
+                DashCache.LoadFromDisk();
+                _telemetrySender.DashCache = DashCache;
+                // Gate download requests behind wire trace sink — protocol still
+                // being stabilized, don't fire on every user launch.
+                _telemetrySender.SetDownloadEnabled(_settings.EnableWireTraceFileSink);
+
                 ApplyTelemetrySettings();
                 // Don't start telemetry here — defer until wheel is detected.
                 // The session open probe requires the wheel to be present and responsive.
@@ -726,20 +743,16 @@ namespace MozaPlugin
 
             // Resolve the active multi-stream profile and raw mzdash content.
             //
-            // Precedence (2026-04-30):
+            // Precedence:
             //   1. User picked a custom mzdash file (TelemetryMzdashPath set
             //      and exists) → parse it, use its channel list + bytes.
-            //   2. User picked a builtin by name (TelemetryProfileName set) →
-            //      load from BuiltinProfiles + embedded mzdash bytes.
+            //   2. User picked a dashboard by name → look up in DashboardCache
+            //      (populated from wheel download via session 0x0B), then fall
+            //      back to builtin embedded profiles.
             //   3. Default → leave profile null. TelemetrySender's
             //      MaybeSwapProfileForCatalog builds a synthetic
             //      "WheelCatalog" profile from the wheel's session-0x02
-            //      catalog push. Subscription channel set always matches the
-            //      wheel's currently-active dashboard without the host
-            //      needing local mzdash metadata.
-            //
-            // Dashboard upload (TelemetryUploadDashboard=true) still requires
-            // mzdash bytes — only fires when path 1 or 2 supplied them.
+            //      catalog push.
             MultiStreamProfile? profile = null;
             byte[]? mzdashContent = null;
             string mzdashName = "";
@@ -752,23 +765,36 @@ namespace MozaPlugin
             }
             else if (!string.IsNullOrEmpty(s.TelemetryProfileName))
             {
-                var builtins = DashProfileStore.BuiltinProfiles;
-                if (builtins.Count > 0)
+                // Try cache first (populated from wheel download or disk).
+                if (DashCache != null)
                 {
-                    profile = FindProfile(builtins, s.TelemetryProfileName);
-
-                    // Load raw mzdash content from embedded resource for upload
-                    if (profile != null && mzdashContent == null)
+                    profile = DashCache.TryGetByName(s.TelemetryProfileName);
+                    if (profile != null)
                     {
                         mzdashName = profile.Name;
-                        string resourceName = $"MozaPlugin.Data.Dashes.{profile.Name.Replace(" ", "_")}.mzdash";
-                        var assembly = System.Reflection.Assembly.GetExecutingAssembly();
-                        using var stream = assembly.GetManifestResourceStream(resourceName);
-                        if (stream != null)
+                        mzdashContent = DashCache.TryGetRawContent(s.TelemetryProfileName);
+                    }
+                }
+
+                // Fall back to builtin embedded profiles when cache misses.
+                if (profile == null)
+                {
+                    var builtins = DashProfileStore.BuiltinProfiles;
+                    if (builtins.Count > 0)
+                    {
+                        profile = FindProfile(builtins, s.TelemetryProfileName);
+                        if (profile != null && mzdashContent == null)
                         {
-                            using var ms = new System.IO.MemoryStream();
-                            stream.CopyTo(ms);
-                            mzdashContent = ms.ToArray();
+                            mzdashName = profile.Name;
+                            string resourceName = $"MozaPlugin.Data.Dashes.{profile.Name.Replace(" ", "_")}.mzdash";
+                            var assembly = System.Reflection.Assembly.GetExecutingAssembly();
+                            using var stream = assembly.GetManifestResourceStream(resourceName);
+                            if (stream != null)
+                            {
+                                using var ms = new System.IO.MemoryStream();
+                                stream.CopyTo(ms);
+                                mzdashContent = ms.ToArray();
+                            }
                         }
                     }
                 }
@@ -791,17 +817,33 @@ namespace MozaPlugin
             }
 
             _telemetrySender.PropertyResolver = ResolvePropertyAsDouble;
+            int tierCount = profile?.Tiers?.Count ?? 0;
+            int chCount = 0;
+            if (profile != null)
+                foreach (var t in profile.Tiers) chCount += t.Channels.Count;
+            MozaLog.Info(
+                $"[Moza] ApplyTelemetrySettings: setting profile=" +
+                $"{profile?.Name ?? "null"} tiers={tierCount} channels={chCount} " +
+                $"mzdash={mzdashName} settingName={s.TelemetryProfileName}");
             _telemetrySender.Profile = profile;
             _telemetrySender.MzdashContent = mzdashContent;
             _telemetrySender.MzdashName = mzdashName;
 
-            // Advertise our built-in dashboard library to the wheel on session
-            // 0x09. Wheel echoes these names in its next configJson state blob
-            // (seen in usb-capture/latestcaps); PitHouse reads them for UI
-            // filtering. List matches the plugin's built-in profile set.
+            // Advertise dashboard library to the wheel on session 0x09.
+            // Wheel echoes names in its next configJson state blob.
+            // Use cached dashboard names (from wheel download) plus any
+            // builtin profiles, with cache winning on overlap.
             var libraryNames = new System.Collections.Generic.List<string>();
+            if (DashCache != null)
+            {
+                foreach (var name in DashCache.CachedNames)
+                    libraryNames.Add(name);
+            }
             foreach (var p in DashProfileStore.BuiltinProfiles)
-                libraryNames.Add(p.Name);
+            {
+                if (!libraryNames.Contains(p.Name))
+                    libraryNames.Add(p.Name);
+            }
             if (!string.IsNullOrEmpty(mzdashName) && !libraryNames.Contains(mzdashName))
                 libraryNames.Add(mzdashName);
             _telemetrySender.CanonicalDashboardList = libraryNames;
@@ -919,17 +961,16 @@ namespace MozaPlugin
         {
             if (_telemetrySender == null) return;
 
+            MozaLog.Info("[Moza] OnActiveDashboardChanged: called");
             ApplyTelemetrySettings();
 
             if (!_settings.TelemetryEnabled) return;
 
-            if (_telemetrySender.RenegotiateForDashboardChange())
-                return;
+            bool renegOk = _telemetrySender.RenegotiateForDashboardChange();
+            MozaLog.Info($"[Moza] OnActiveDashboardChanged: renegotiate={renegOk}");
+            if (renegOk) return;
 
-            // Not running or preamble incomplete — go through the normal
-            // start path. Avoids the full Stop+ProbeAndOpen reset that
-            // disrupts a live session, but still gets us up cleanly when
-            // nothing's running yet.
+            MozaLog.Info("[Moza] OnActiveDashboardChanged: falling back to StartTelemetryIfReady");
             StartTelemetryIfReady();
         }
 
@@ -1017,6 +1058,14 @@ namespace MozaPlugin
                     _deviceManager.ReadSetting("handbrake-direction");
                     _deviceManager.ReadSetting("pedals-throttle-dir");
                     _deviceManager.ReadSetting("hub-port1-power");
+
+                    // Persist successful port for next launch
+                    var port = _connection.LastPortName;
+                    if (!string.IsNullOrEmpty(port) && _settings.LastWheelbasePort != port)
+                    {
+                        _settings.LastWheelbasePort = port;
+                        ScheduleSave();
+                    }
                 }
             }
             finally
@@ -1046,6 +1095,14 @@ namespace MozaPlugin
             {
                 _ab9Manager.SendIdentityProbe();
                 _ab9Manager.RequestAllStoredSettings();
+
+                // Persist successful port for next launch
+                var port = _ab9Manager.Connection.LastPortName;
+                if (!string.IsNullOrEmpty(port) && _settings.LastAb9Port != port)
+                {
+                    _settings.LastAb9Port = port;
+                    ScheduleSave();
+                }
             }
         }
 

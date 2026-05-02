@@ -47,9 +47,10 @@ Phase 1 — FF-record switch:
 Phase 2 — Wheel re-pushes catalog (~200-500ms):
   Wheel >>> session 0x01: tag 0x04 channel URLs (\x01-prefix shorthand)
 
-Phase 3 — Tier-def re-send (~800ms after FF-record):
+Phase 3 — Tier-def re-send (~660ms after FF-record, 3× retransmit):
   Host  >>> session 0x01: tag 0x00 enables + tag 0x01 tier defs + tag 0x06 end
   (NO tag 0x07/0x03 preamble — preamble only on initial session connect)
+  Host  >>> [same tier-def again at +1.7s, +2.7s — 3 total sends]
 
 Phase 4 — Channel config burst:
   Host  >>> 0x40 1E:xx channel enables, 28:00, 28:01, 28:02
@@ -57,4 +58,4 @@ Phase 4 — Channel config burst:
 
 **No session close/reopen.** Sessions 0x01-0x03 stay open throughout. No LVGL re-upload, no display probe. See [`../findings/2026-04-30-dashboard-switch-3f27.md`](../findings/2026-04-30-dashboard-switch-3f27.md) for FF-record wire format and slot indexing.
 
-**Implementation note (2026-05-01):** The host must begin buffering catalog data on session 0x01 **immediately after sending the FF-record** (Phase 1), not after the ~800ms delay. The wheel's catalog push (Phase 2) completes well before the 800ms tier-def re-send. If the host only opens its buffer when building the tier-def, the catalog chunks have already been delivered and discarded, causing the tier-def to use stale channel indices from the previous dashboard.
+**Implementation note (2026-05-01, corrected):** PitHouse does NOT re-parse the Phase 2 catalog push. It builds the tier-def from its own locally-cached mzdash channel metadata + the initial preamble catalog indices (which stay valid for the entire session). The post-switch catalog push is informational — the wheel confirms what it switched to, but PitHouse already knows. See [`../dashboard-upload/download-session-0x0b.md`](../dashboard-upload/download-session-0x0b.md) for how PitHouse downloads mzdash files from the wheel at cold-start.
