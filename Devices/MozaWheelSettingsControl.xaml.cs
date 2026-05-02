@@ -557,6 +557,7 @@ namespace MozaPlugin.Devices
 
                 PopulateDashboardCombo();
                 UpdateTelemetryProfileInfo();
+                UpdateFolderInfo();
             }
             finally
             {
@@ -845,6 +846,35 @@ namespace MozaPlugin.Devices
 
             UpdateTelemetryProfileInfo();
             if (TelemetryMappingsExpander.IsExpanded) PopulateChannelMappingGrid();
+        }
+
+        private void TelemetrySetFolder_Click(object sender, RoutedEventArgs e)
+        {
+            if (_plugin == null) return;
+            using (var dlg = new System.Windows.Forms.FolderBrowserDialog())
+            {
+                dlg.Description = "Select folder containing .mzdash dashboard files";
+                dlg.ShowNewFolderButton = false;
+                if (!string.IsNullOrEmpty(_plugin.Settings.TelemetryMzdashFolder)
+                    && System.IO.Directory.Exists(_plugin.Settings.TelemetryMzdashFolder))
+                    dlg.SelectedPath = _plugin.Settings.TelemetryMzdashFolder;
+
+                if (dlg.ShowDialog() != System.Windows.Forms.DialogResult.OK) return;
+
+                _plugin.Settings.TelemetryMzdashFolder = dlg.SelectedPath;
+                _plugin.SaveSettings();
+                _plugin.DashCache?.LoadFromFolder(dlg.SelectedPath);
+                PopulateDashboardCombo();
+                _plugin.ApplyTelemetrySettings();
+                UpdateFolderInfo();
+            }
+        }
+
+        private void UpdateFolderInfo()
+        {
+            if (_plugin == null) return;
+            var folder = _plugin.Settings.TelemetryMzdashFolder;
+            TelemetryFolderInfo.Text = string.IsNullOrEmpty(folder) ? "" : $"Folder: {folder}";
         }
 
         private void TelemetryTestStart_Click(object sender, RoutedEventArgs e)

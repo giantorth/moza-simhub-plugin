@@ -102,6 +102,11 @@ namespace MozaPlugin
         // User-loaded .mzdash file path (empty = use builtin profile)
         public string TelemetryMzdashPath { get; set; } = "";
 
+        // User-configured folder of .mzdash files (empty = none).
+        // Scanned at init and on picker change. Wheel cache takes priority;
+        // folder acts as fallback library when cache misses.
+        public string TelemetryMzdashFolder { get; set; } = "";
+
         // Byte limit override (0 = auto from profile)
         public int TelemetryByteLimitOverride { get; set; } = 0;
 

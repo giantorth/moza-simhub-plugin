@@ -421,6 +421,8 @@ namespace MozaPlugin
                     "MozaSimHubPlugin", "DashboardCache");
                 DashCache = new DashboardCache(cacheDir, DashProfileStore);
                 DashCache.LoadFromDisk();
+                if (!string.IsNullOrEmpty(_settings.TelemetryMzdashFolder))
+                    DashCache.LoadFromFolder(_settings.TelemetryMzdashFolder);
                 _telemetrySender.DashCache = DashCache;
                 // Gate download requests behind wire trace sink — protocol still
                 // being stabilized, don't fire on every user launch.
@@ -807,8 +809,14 @@ namespace MozaPlugin
             // assigning Profile so the frame builder binds resolvers correctly.
             if (profile != null)
             {
+                // Resolve the file path for GetDashboardKey — single-file override,
+                // folder library, or null (builtin).
+                string? keyPath = s.TelemetryMzdashPath;
+                if (string.IsNullOrEmpty(keyPath) && DashCache != null)
+                    keyPath = DashCache.TryGetFolderFilePath(profile.Name);
+
                 string dashboardKey = DashboardProfileStore.GetDashboardKey(
-                    s.TelemetryMzdashPath, profile);
+                    keyPath, profile);
                 if (s.TelemetryChannelMappings != null &&
                     s.TelemetryChannelMappings.TryGetValue(dashboardKey, out var overrides))
                 {
@@ -888,8 +896,10 @@ namespace MozaPlugin
         {
             var profile = _telemetrySender?.Profile;
             if (profile == null) return "";
-            return DashboardProfileStore.GetDashboardKey(
-                _settings.TelemetryMzdashPath, profile);
+            string? keyPath = _settings.TelemetryMzdashPath;
+            if (string.IsNullOrEmpty(keyPath) && DashCache != null)
+                keyPath = DashCache.TryGetFolderFilePath(profile.Name);
+            return DashboardProfileStore.GetDashboardKey(keyPath, profile);
         }
 
         /// <summary>Set or clear a per-channel SimHub property override for the current dashboard.</summary>

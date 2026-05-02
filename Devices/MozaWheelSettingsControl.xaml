@@ -63,9 +63,13 @@
                               SelectionChanged="TelemetryProfileCombo_SelectionChanged"/>
                     <Button Content="Load .mzdash…" Click="TelemetryLoadMzdash_Click" Padding="6,2" Margin="0,0,4,0"
                             ToolTip="Load a local .mzdash file for tier-def channel matching (fallback when wheel state unavailable)"/>
+                    <Button Content="Set Folder…" Click="TelemetrySetFolder_Click" Padding="6,2" Margin="0,0,4,0"
+                            ToolTip="Set a folder of .mzdash files as a dashboard library"/>
                 </StackPanel>
                 <TextBlock x:Name="TelemetryProfileInfo" Foreground="Gray" FontSize="11"
-                           Margin="180,0,0,8" Text="—"/>
+                           Margin="180,0,0,4" Text="—"/>
+                <TextBlock x:Name="TelemetryFolderInfo" Foreground="Gray" FontSize="11"
+                           Margin="180,0,0,8"/>
                 <StackPanel Orientation="Horizontal" Margin="0,4,0,4">
                     <Button x:Name="TelemetryTestStartBtn" Content="▶ Send Test Pattern"
                             Padding="6,2" Margin="0,0,8,0" Click="TelemetryTestStart_Click"/>

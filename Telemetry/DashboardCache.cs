@@ -1,6 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using MozaPlugin.Diagnostics;
 
 namespace MozaPlugin.Telemetry
@@ -32,6 +35,16 @@ namespace MozaPlugin.Telemetry
         // hash → raw mzdash content (for upload to wheel)
         private readonly Dictionary<string, byte[]> _rawContent =
             new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
+
+        // --- User folder library (fallback after wheel cache) ---
+        private readonly Dictionary<string, MultiStreamProfile> _folderProfiles =
+            new Dictionary<string, MultiStreamProfile>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, byte[]> _folderRawContent =
+            new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, string> _folderFilePaths =
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, string> _folderHashes =
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
         public DashboardCache(string cacheDir, DashboardProfileStore store)
         {
@@ -184,11 +197,15 @@ namespace MozaPlugin.Telemetry
         public MultiStreamProfile? TryGetByName(string name)
         {
             if (string.IsNullOrEmpty(name)) return null;
+            // Wheel cache first (authoritative)
             if (_nameToHash.TryGetValue(name, out var hash))
             {
                 if (_byHash.TryGetValue(hash, out var profile))
                     return profile;
             }
+            // Folder fallback
+            if (_folderProfiles.TryGetValue(name, out var folderProfile))
+                return folderProfile;
             return null;
         }
 
@@ -208,11 +225,15 @@ namespace MozaPlugin.Telemetry
         public byte[]? TryGetRawContent(string name)
         {
             if (string.IsNullOrEmpty(name)) return null;
+            // Wheel cache first
             if (_nameToHash.TryGetValue(name, out var hash))
             {
                 if (_rawContent.TryGetValue(hash, out var content))
                     return content;
             }
+            // Folder fallback
+            if (_folderRawContent.TryGetValue(name, out var folderContent))
+                return folderContent;
             return null;
         }
 
@@ -222,8 +243,86 @@ namespace MozaPlugin.Telemetry
         public bool HasHash(string hash) => _byHash.ContainsKey(hash);
 
         /// <summary>
-        /// All cached dashboard names.
+        /// All cached dashboard names (wheel cache first, then folder, deduped).
         /// </summary>
-        public IEnumerable<string> CachedNames => _nameToHash.Keys;
+        public IEnumerable<string> CachedNames
+        {
+            get
+            {
+                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var name in _nameToHash.Keys)
+                    if (seen.Add(name)) yield return name;
+                foreach (var name in _folderProfiles.Keys)
+                    if (seen.Add(name)) yield return name;
+            }
+        }
+
+        /// <summary>
+        /// Scan a user-configured folder for .mzdash files and parse them.
+        /// These act as a fallback library when wheel cache misses.
+        /// </summary>
+        public void LoadFromFolder(string folderPath)
+        {
+            _folderProfiles.Clear();
+            _folderRawContent.Clear();
+            _folderFilePaths.Clear();
+            _folderHashes.Clear();
+
+            if (string.IsNullOrEmpty(folderPath) || !Directory.Exists(folderPath))
+                return;
+
+            foreach (var file in Directory.GetFiles(folderPath, "*.mzdash"))
+            {
+                try
+                {
+                    var profile = _store.ParseMzdash(file);
+                    if (profile == null) continue;
+
+                    byte[] rawBytes = File.ReadAllBytes(file);
+                    string hash;
+                    using (var sha = SHA1.Create())
+                    {
+                        byte[] digest = sha.ComputeHash(rawBytes);
+                        var sb = new StringBuilder(8);
+                        for (int i = 0; i < 4; i++) sb.Append(digest[i].ToString("x2"));
+                        hash = sb.ToString();
+                    }
+
+                    _folderProfiles[profile.Name] = profile;
+                    _folderRawContent[profile.Name] = rawBytes;
+                    _folderFilePaths[profile.Name] = file;
+                    _folderHashes[profile.Name] = hash;
+                }
+                catch (Exception ex)
+                {
+                    MozaLog.Warn($"[Moza] DashboardCache: failed to load folder file {file}: {ex.Message}");
+                }
+            }
+
+            MozaLog.Info($"[Moza] DashboardCache: {_folderProfiles.Count} profiles loaded from folder '{folderPath}'");
+        }
+
+        /// <summary>
+        /// Get the original file path for a folder-loaded profile (for GetDashboardKey).
+        /// </summary>
+        public string? TryGetFolderFilePath(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return null;
+            _folderFilePaths.TryGetValue(name, out var path);
+            return path;
+        }
+
+        /// <summary>
+        /// Get the precomputed SHA1 hash (first 8 hex chars) for a folder-loaded profile.
+        /// </summary>
+        public string? TryGetFolderHash(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return null;
+            _folderHashes.TryGetValue(name, out var hash);
+            return hash;
+        }
+
+        /// <summary>All folder-loaded dashboard names.</summary>
+        public IEnumerable<string> FolderNames => _folderProfiles.Keys;
     }
 }
