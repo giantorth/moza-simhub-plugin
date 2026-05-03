@@ -274,7 +274,7 @@ namespace MozaPlugin.Telemetry
             if (string.IsNullOrEmpty(folderPath) || !Directory.Exists(folderPath))
                 return;
 
-            foreach (var file in Directory.GetFiles(folderPath, "*.mzdash"))
+            foreach (var file in Directory.GetFiles(folderPath, "*.mzdash", SearchOption.AllDirectories))
             {
                 try
                 {
