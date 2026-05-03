@@ -30,8 +30,7 @@ wheels. Wire frame (6-byte body + checksum):
 ```
 
 - `group` — LED group selector:
-  - `0x00` — RPM strip (central LED bar)
-  - `0x01..0x05` — rotary knobs 1..5 (CS Pro has 4 knobs, KS Pro has 5). Group
+  - `0x00..0x04` — rotary knobs 1..5 (CS Pro has 4 knobs, KS Pro has 5). Group
     indices beyond the physical knob count are silently ignored by firmware.
 - `role` — colour role:
   - `0x00` — background / idle (colour shown while the knob is stationary or
@@ -43,14 +42,14 @@ wheels. Wire frame (6-byte body + checksum):
 Captured examples (CS Pro, W17):
 
 ```
-7E 06 3F 17 27 01 00 FF 00 00 0E   # knob 1 background = red
-7E 06 3F 17 27 01 01 FF FF FF 0D   # knob 1 primary   = white
-7E 06 3F 17 27 03 00 00 FF 00 10   # knob 3 background = green
-7E 06 3F 17 27 03 01 FF 00 00 11   # knob 3 primary   = red
+7E 06 3F 17 27 00 00 FF 00 00 0E   # knob 1 background = red  (group 0x00)
+7E 06 3F 17 27 00 01 FF FF FF 0D   # knob 1 primary   = white (group 0x00)
+7E 06 3F 17 27 02 00 00 FF 00 10   # knob 3 background = green (group 0x02)
+7E 06 3F 17 27 02 01 FF 00 00 11   # knob 3 primary   = red   (group 0x02)
 ```
 
 Wheel echoes `(group | 0x80)` / swapped device nibble / payload mirror — plugin
-recognizes via `WheelEchoPrefixes` entries for `(0x3F, 0x17, 0x27, 0x00..0x05)`.
+recognizes via `WheelEchoPrefixes` entries for `(0x3F, 0x17, 0x27, 0x00..0x04)`.
 Not readable — the `0x27 <group> 0xFF` form reads *brightness* for the same
 group, not colour. Plugin persists the last-written values in
 `MozaPluginSettings.WheelKnobBackgroundColors` / `WheelKnobPrimaryColors` (and
@@ -59,3 +58,4 @@ re-pushes them on wheel detect.
 
 Command names in `MozaCommandDatabase`: `wheel-knob{1..5}-bg-color`,
 `wheel-knob{1..5}-primary-color` (3-byte array payload = RGB).
+Wire group byte = knob_number - 1 (knob 1 → 0x00, knob 5 → 0x04).

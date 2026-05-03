@@ -197,6 +197,7 @@ namespace MozaPlugin
         // serial-message thread (which sets bits as group probes respond) and
         // any reader (UI, device extensions, poll timer).
         private int _wheelLedGroupMask;
+        private volatile bool _group3ColorsRead;
         internal bool IsWheelLedGroupPresent(int group)
         {
             if (group < 2 || group > 4) return false;
@@ -741,6 +742,8 @@ namespace MozaPlugin
             _telemetrySender.AutoFallbackWireFormat = s.TelemetryFirmwareEra == MozaFirmwareEra.Auto;
             _telemetrySender.UploadDashboard = s.TelemetryUploadDashboard;
             _telemetrySender.SetDownloadEnabled(s.TelemetryDownloadDashboard);
+            if (s.EnableAutoTestOnConnect)
+                _telemetrySender.EnableAutoTest();
 
             // Resolve the active multi-stream profile and raw mzdash content.
             //
@@ -774,6 +777,11 @@ namespace MozaPlugin
                     {
                         mzdashName = profile.Name;
                         mzdashContent = DashCache.TryGetRawContent(s.TelemetryProfileName);
+                        MozaLog.Info($"[Moza] ApplyTelemetrySettings: found '{s.TelemetryProfileName}' in cache as '{mzdashName}'");
+                    }
+                    else
+                    {
+                        MozaLog.Info($"[Moza] ApplyTelemetrySettings: '{s.TelemetryProfileName}' NOT found in cache (folder={DashCache.FolderProfileCount} wheel={DashCache.WheelCacheCount})");
                     }
                 }
 
@@ -946,7 +954,10 @@ namespace MozaPlugin
         internal void RestartTelemetry()
         {
             if (_telemetrySender == null) return;
-            _telemetrySender.Stop();
+            // Don't call Stop() here — StartInner() already calls Stop()
+            // as its first action. Calling it separately creates a race
+            // window where another thread can clear detection flags between
+            // our Stop() and the ThreadPool executing Start().
             Interlocked.Exchange(ref _telemetryStartRequested, 0);
             ApplyTelemetrySettings();
             if (_settings.TelemetryEnabled)
@@ -1143,6 +1154,7 @@ namespace MozaPlugin
             _dashDetected = false;
             WheelModelInfo = null;
             Interlocked.Exchange(ref _wheelLedGroupMask, 0);
+            _group3ColorsRead = false;
             _data.ClearWheelIdentity();
             _deviceManager.ResetWheelDetection();
             _telemetrySender.DetectedDeviceMask = 0;
@@ -1206,6 +1218,23 @@ namespace MozaPlugin
             // that here so the section auto-appears once the display is awake.
             if (_newWheelDetected && !IsDisplayDetected)
                 _deviceManager.SendDisplayProbe();
+
+            // Read Group 3 ring LED colors once after group detected + model resolved
+            if (!_group3ColorsRead && _newWheelDetected && IsWheelLedGroupPresent(3))
+            {
+                var model = WheelModelInfo;
+                if (model?.KnobRingLeds != null && model.KnobRingLedTotal > 0)
+                {
+                    _group3ColorsRead = true;
+                    int total = model.KnobRingLedTotal;
+                    var cmds = new string[total + 1];
+                    cmds[0] = "wheel-group3-brightness";
+                    for (int i = 0; i < total; i++)
+                        cmds[i + 1] = $"wheel-group3-color{i + 1}";
+                    _deviceManager.ReadSettingsPaced(cmds);
+                    MozaLog.Info($"[Moza] Reading Group 3 ring LED colors ({total} LEDs)");
+                }
+            }
 
             // Poll hub port status while hub is connected (read-only, no settings to save)
             if (_hubDetected)
@@ -1522,6 +1551,7 @@ namespace MozaPlugin
                             MozaProfile.UnpackColorsInto(_settings.WheelKnobBackgroundColors, _data.WheelKnobBackgroundColors);
                             MozaProfile.UnpackColorsInto(_settings.WheelKnobPrimaryColors,    _data.WheelKnobPrimaryColors);
                             WriteKnobColors(_settings.WheelKnobBackgroundColors, _settings.WheelKnobPrimaryColors);
+                            // Ring colors pushed after Group 3 is detected (via PollStatus read trigger)
                         }
                     }
                     else
@@ -2252,6 +2282,7 @@ namespace MozaPlugin
                     _deviceManager.WriteColor("wheel-idle-color", rgb[0], rgb[1], rgb[2]);
                 }
                 WriteKnobColors(profile.WheelKnobBackgroundColors, profile.WheelKnobPrimaryColors);
+                WriteKnobRingColors(profile.WheelKnobRingColors, profile.WheelKnobRingBrightness);
             }
 
             // Old-protocol (ES) wheel colors
@@ -2301,6 +2332,25 @@ namespace MozaPlugin
             {
                 var rgb = MozaProfile.UnpackColor(packedColors[i]);
                 _deviceManager.WriteColor($"wheel-knob{i + 1}-{roleSuffix}", rgb[0], rgb[1], rgb[2]);
+            }
+        }
+
+        /// <summary>
+        /// Push Group 3 per-LED ring colors to the wheel. No-op unless the active
+        /// wheel model has KnobRingLeds and Group 3 is present.
+        /// </summary>
+        private void WriteKnobRingColors(int[]? packedColors, int brightness)
+        {
+            var model = WheelModelInfo;
+            if (model?.KnobRingLeds == null || !IsWheelLedGroupPresent(3)) return;
+            if (brightness >= 0)
+                _deviceManager.WriteSetting("wheel-group3-brightness", brightness);
+            if (packedColors == null) return;
+            int total = Math.Min(packedColors.Length, model.KnobRingLedTotal);
+            for (int i = 0; i < total; i++)
+            {
+                var rgb = MozaProfile.UnpackColor(packedColors[i]);
+                _deviceManager.WriteColor($"wheel-group3-color{i + 1}", rgb[0], rgb[1], rgb[2]);
             }
         }
 
@@ -2375,6 +2425,7 @@ namespace MozaPlugin
                 }
                 WriteColorArray(extSettings.WheelESRpmColors, "wheel-old-rpm-color", 10);
                 WriteKnobColors(extSettings.WheelKnobBackgroundColors, extSettings.WheelKnobPrimaryColors);
+                WriteKnobRingColors(extSettings.WheelKnobRingColors, extSettings.WheelKnobRingBrightness);
             }
 
             PersistSettings();

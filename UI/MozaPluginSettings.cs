@@ -45,10 +45,15 @@ namespace MozaPlugin
         public int[]? WheelRpmBlinkColors { get; set; }
         public int[]? DashRpmBlinkColors { get; set; }
 
-        // Per-knob LED ring colours (W17/W18 only, 3 knobs). Write-only on the wire —
+        // Per-knob LED ring colours (W17/W18 only). Write-only on the wire —
         // persisted here so they survive restarts. Packed as R<<16 | G<<8 | B.
         public int[]? WheelKnobBackgroundColors { get; set; }
         public int[]? WheelKnobPrimaryColors { get; set; }
+
+        // Group 3 per-LED ring colors (up to 56 LEDs). Readable from wheel but persisted
+        // for profile switching. Packed as R<<16 | G<<8 | B.
+        public int[]? WheelKnobRingColors { get; set; }
+        public int WheelKnobRingBrightness { get; set; } = -1;
 
         // Connection enabled (persisted toggle)
         public bool ConnectionEnabled { get; set; } = true;
@@ -85,10 +90,14 @@ namespace MozaPlugin
         // it never persists past one launch.
         public bool StartCaptureOnNextLaunch { get; set; } = false;
 
-        // Always-on bridge-format JSONL wire trace at SimHub/Logs/moza-wire-*.jsonl.
-        // Off by default to avoid disk-write churn; flip on when comparing plugin
-        // output to PitHouse captures via sim/diff_captures.py.
+        // Bridge-format JSONL wire trace at SimHub/Logs/moza-wire-*.jsonl.
+        // Code-only toggle — not serialized so changing the default here
+        // is the only way to flip it. Avoids stale persisted values.
+        [Newtonsoft.Json.JsonIgnore]
         public bool EnableWireTraceFileSink { get; set; } = false;
+
+        [Newtonsoft.Json.JsonIgnore]
+        public bool EnableAutoTestOnConnect { get; set; } = false;
 
         // ===== Profile system (SimHub native) =====
         public MozaProfileStore ProfileStore { get; set; } = new MozaProfileStore();
@@ -207,6 +216,8 @@ namespace MozaPlugin
                 slot.WheelRpmBlinkColors    = WheelRpmBlinkColors;
                 slot.WheelKnobBackgroundColors = WheelKnobBackgroundColors;
                 slot.WheelKnobPrimaryColors    = WheelKnobPrimaryColors;
+                slot.WheelKnobRingColors       = WheelKnobRingColors;
+                slot.WheelKnobRingBrightness   = WheelKnobRingBrightness;
             }
         }
 
@@ -233,6 +244,8 @@ namespace MozaPlugin
                 WheelRpmBlinkColors    = slot.WheelRpmBlinkColors;
                 WheelKnobBackgroundColors = slot.WheelKnobBackgroundColors;
                 WheelKnobPrimaryColors    = slot.WheelKnobPrimaryColors;
+                WheelKnobRingColors       = slot.WheelKnobRingColors;
+                WheelKnobRingBrightness   = slot.WheelKnobRingBrightness;
             }
         }
     }
@@ -260,5 +273,7 @@ namespace MozaPlugin
         public int[]? WheelRpmBlinkColors { get; set; }
         public int[]? WheelKnobBackgroundColors { get; set; }
         public int[]? WheelKnobPrimaryColors { get; set; }
+        public int[]? WheelKnobRingColors { get; set; }
+        public int WheelKnobRingBrightness { get; set; } = -1;
     }
 }

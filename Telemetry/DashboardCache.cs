@@ -36,6 +36,9 @@ namespace MozaPlugin.Telemetry
         private readonly Dictionary<string, byte[]> _rawContent =
             new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
 
+        public int WheelCacheCount => _byHash.Count;
+        public int FolderProfileCount => _folderProfiles.Count;
+
         // --- User folder library (fallback after wheel cache) ---
         private readonly Dictionary<string, MultiStreamProfile> _folderProfiles =
             new Dictionary<string, MultiStreamProfile>(StringComparer.OrdinalIgnoreCase);
@@ -203,8 +206,8 @@ namespace MozaPlugin.Telemetry
                 if (_byHash.TryGetValue(hash, out var profile))
                     return profile;
             }
-            // Folder fallback
-            if (_folderProfiles.TryGetValue(name, out var folderProfile))
+            // Folder fallback with underscore↔space normalization
+            if (TryGetNormalized(_folderProfiles, name, out var folderProfile))
                 return folderProfile;
             return null;
         }
@@ -231,8 +234,8 @@ namespace MozaPlugin.Telemetry
                 if (_rawContent.TryGetValue(hash, out var content))
                     return content;
             }
-            // Folder fallback
-            if (_folderRawContent.TryGetValue(name, out var folderContent))
+            // Folder fallback with underscore↔space normalization
+            if (TryGetNormalized(_folderRawContent, name, out var folderContent))
                 return folderContent;
             return null;
         }
@@ -303,12 +306,27 @@ namespace MozaPlugin.Telemetry
         }
 
         /// <summary>
+        /// Try exact key, then underscore↔space variants. Wheel reports
+        /// "Rally V6" but mzdash filename is "Rally_V6.mzdash".
+        /// </summary>
+        private static bool TryGetNormalized<T>(Dictionary<string, T> dict, string name, out T value)
+        {
+            if (dict.TryGetValue(name, out value!)) return true;
+            string alt = name.Replace(' ', '_');
+            if (alt != name && dict.TryGetValue(alt, out value!)) return true;
+            alt = name.Replace('_', ' ');
+            if (alt != name && dict.TryGetValue(alt, out value!)) return true;
+            value = default!;
+            return false;
+        }
+
+        /// <summary>
         /// Get the original file path for a folder-loaded profile (for GetDashboardKey).
         /// </summary>
         public string? TryGetFolderFilePath(string name)
         {
             if (string.IsNullOrEmpty(name)) return null;
-            _folderFilePaths.TryGetValue(name, out var path);
+            TryGetNormalized(_folderFilePaths, name, out var path);
             return path;
         }
 

@@ -49,6 +49,10 @@ namespace MozaPlugin.Devices
         public int[]? WheelKnobBackgroundColors { get; set; }
         public int[]? WheelKnobPrimaryColors { get; set; }
 
+        // Group 3 per-LED ring colors (packed R<<16|G<<8|B per LED, up to 56)
+        public int[]? WheelKnobRingColors { get; set; }
+        public int WheelKnobRingBrightness { get; set; } = -1;
+
         /// <summary>
         /// Capture current wheel state from the plugin.
         /// </summary>
@@ -78,6 +82,8 @@ namespace MozaPlugin.Devices
             WheelESRpmColors = MozaProfile.PackColors(data.WheelESRpmColors);
             WheelKnobBackgroundColors = MozaProfile.PackColors(data.WheelKnobBackgroundColors);
             WheelKnobPrimaryColors = MozaProfile.PackColors(data.WheelKnobPrimaryColors);
+            WheelKnobRingColors = MozaProfile.PackColors(data.KnobRingColors);
+            WheelKnobRingBrightness = data.KnobRingBrightness;
         }
 
         /// <summary>
@@ -144,6 +150,8 @@ namespace MozaPlugin.Devices
             MozaProfile.UnpackColorsInto(WheelESRpmColors, data.WheelESRpmColors);
             MozaProfile.UnpackColorsInto(WheelKnobBackgroundColors, data.WheelKnobBackgroundColors);
             MozaProfile.UnpackColorsInto(WheelKnobPrimaryColors, data.WheelKnobPrimaryColors);
+            MozaProfile.UnpackColorsInto(WheelKnobRingColors, data.KnobRingColors);
+            if (WheelKnobRingBrightness >= 0) data.KnobRingBrightness = WheelKnobRingBrightness;
 
             // Knob colours are wheel-model-scoped (only W17/W18 expose them) and the
             // wire is write-only, so the plugin-level persisted slot needs the same
@@ -154,11 +162,15 @@ namespace MozaPlugin.Devices
                 var slot = settings.GetOrCreateSlot(extModel);
                 slot.WheelKnobBackgroundColors = WheelKnobBackgroundColors;
                 slot.WheelKnobPrimaryColors    = WheelKnobPrimaryColors;
+                slot.WheelKnobRingColors       = WheelKnobRingColors;
+                slot.WheelKnobRingBrightness   = WheelKnobRingBrightness;
             }
             if (writeFlat)
             {
                 settings.WheelKnobBackgroundColors = WheelKnobBackgroundColors;
                 settings.WheelKnobPrimaryColors    = WheelKnobPrimaryColors;
+                settings.WheelKnobRingColors       = WheelKnobRingColors;
+                settings.WheelKnobRingBrightness   = WheelKnobRingBrightness;
             }
         }
     }

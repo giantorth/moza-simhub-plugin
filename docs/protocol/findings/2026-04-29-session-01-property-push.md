@@ -71,37 +71,61 @@ nor a nonce — it is a deterministic CRC32 of `(kind ‖ value)` and serves as
 a redundant integrity check over the property+value pair, on top of the
 chunk-level CRC32.
 
-## `kind` field interpretation
+## `kind` field interpretation (updated 2026-05-02)
 
-The `kind` field appears to encode value-type / unit / re-emit-policy
-metadata. Same property at different values reuses the same `kind`:
+Session 0x02 FF records serve multiple purposes: property pushes, startup
+handshake, compressed catalog uploads, LED color state, and dashboard
+switching. `kind` is a property/command identifier. Directions differ:
+h2b (host→wheel) and b2h (wheel→host) can use the same `kind` value for
+entirely different record formats.
 
-| `kind` | Property family observed | Value width | Notes |
-|--------|--------------------------|-------------|-------|
-| 1      | dashboard brightness (0–100) | u32 LE | User-driven slider updates |
-| 10     | display standby timeout (ms) | u64 LE | Duration in milliseconds |
-| 14     | dashboard brightness = 100 baseline | u32 LE | Pushed continuously even with no UI change; `kind=1` only appears mid-slider-move. Hypothesis: `kind=14` is the "current persisted setting" re-emit; `kind=1` is "user slider in-flight". Not yet confirmed — needs capture of other settings' baselines |
+### Host → Wheel (h2b)
 
-`kind=14` for brightness=100 was observed every ~2 seconds with the slider
-parked. After moving the slider to 25%, `kind=1` value=25 appeared **once**;
-the periodic `kind=14` value=100 stream **continued** unchanged. So PitHouse
-keeps re-emitting the original baseline alongside the user delta — likely a
-state-sync mechanism for the wheel.
+| `kind` | Name | Value width | Notes |
+|--------|------|-------------|-------|
+| 1      | brightness (slider) | u32 LE (0–100) | User-driven slider updates. Transient — PitHouse only sends while slider moves |
+| 2      | session init | 12B: `[unix_ts:u32] [0:u32] [tz_offset_sec:i32]` | Sent once at startup (seq=3). tz_offset observed: -25200 = UTC-7 |
+| 4      | dashboard switch | 12B: `[field1=4:u32] [slot:u32] [0:u32]` | Slot = 0-based configJsonList index. See `2026-04-30-dashboard-switch-3f27.md` |
+| 7      | init command | 8B: `[3:u32] [0:u32]` | Always val=3. Sent once at startup (seq=4). Precedes channel catalog |
+| 8      | channel catalog | ~2 KB zlib | Compressed master channel catalog: UTF-16LE channel names (RpmAbsolute1, etc). 12,708 bytes decompressed. Multi-chunk FF record spanning ~40 session-data chunks. Sent once at startup |
+| 9      | LED color push (18B) | `[00] [addr:1B] [00 00 00 43 00 01 FF FF] [c0 c0 c1 c1 c2 c2 00 00]` | Push LED/knob colors. addr=target controller (0x6C, 0x97, 0xA4). Color bytes doubled. Periodic + around switches |
+| 9      | LED mode (11B) | `[00] [addr:1B] [00 00 00 02 00 00 00] [00] [val]` | LED mode command to different controllers (addr=0x1B, 0x1F, 0x27). Rare |
+| 9      | LED color (36B) | Two 18B entries concatenated | Dual-controller color push in single FF record |
+| 10     | standby timeout | u64 LE (ms) | Display standby timeout in milliseconds. Sent on slider change |
+| 11     | action catalog | ~2.5 KB zlib | Compressed button/action catalog: UTF-16LE action names (decrementEqualizerGain1, etc). 9,874 bytes decompressed. Multi-chunk. Sent once at startup, heavily retransmitted |
+| 14     | brightness baseline | u32 LE | Always value=100 in captures. Periodic heartbeat every ~2s. Never changes mid-session. Paired with kind=15 |
+| 15     | unknown baseline | u32 LE | Starts at 100, then quasi-random small values (1–37). Periodic heartbeat paired with kind=14. NOT switch-specific — cycles in steady-state. Purpose unidentified |
 
-## Open questions
+### Wheel → Host (b2h)
 
-- Is `kind` a property-id table (so brightness is always kind 1 / 14) or a
-  value-encoding selector (kind = "u32 percent" / "u64 ms")? Capture more
-  properties (RPM colors, flag colors, indicator modes) to disambiguate.
-- Why does brightness=100 ride `kind=14` while brightness=0/25/41/50 ride
-  `kind=1`? 100 happened to be the persisted baseline at capture start;
-  unclear whether 100 specifically uses `kind=14` or whether the persisted
-  vs. transient distinction drives `kind`.
-- Are there properties that use `size > 12` (longer values: strings, colour
-  triplets, multi-field structs)? Captures so far have only u32 and u64.
-- Does the wheel ACK individual property pushes? Chunks ride session 0x01
-  which has the standard `fc:00` ACK path, but per-property semantics
-  unconfirmed.
+| `kind` | Name | Value width | Notes |
+|--------|------|-------------|-------|
+| 4      | switch echo | 12B (same as h2b) | Wheel echoes back the switch command |
+| 9      | LED color report | 25B: `[00] [addr] [...0A...] [hex_color_UTF16]` | Wheel reports current LED color as hex string (e.g. "#64d90a"). Different format from h2b |
+| 10     | standby echo | varies | Single occurrence per session |
+| 14     | dashboard state | ~41B zlib each | Compressed dashboard state. Multi-chunk. Completely different format from h2b kind=14 (which is just u32 brightness) |
+| 16     | address report | 16B: two `[addr:u32] [0:u32]` pairs | Wheel-only. 4 records per session |
+
+### Periodic heartbeat pattern
+
+PitHouse emits kind=14 + kind=15 as a pair approximately every 2 seconds
+on session 0x02. kind=14 is always brightness=100. kind=15 starts at 100
+then transitions to small values (1–4 typical in steady state). This
+heartbeat runs continuously regardless of dashboard switching. Plugin
+currently sends **none** of these periodic pushes.
+
+### Startup sequence on session 0x02
+
+PitHouse startup sends kinds in this order (each sent once, some
+heavily retransmitted):
+1. kind=2 (timestamp init) at seq=3
+2. kind=7 (init command, val=3) at seq=4
+3. kind=8 (channel catalog, multi-chunk) starting seq=5
+4. kind=11 (action catalog, multi-chunk) at seq=44+
+5. kind=9 (LED color pushes) starting seq=92+
+6. kind=14/15 periodic heartbeat begins
+
+Plugin currently sends **none** of these startup records.
 
 ## Capture method
 

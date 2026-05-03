@@ -41,6 +41,10 @@ namespace MozaPlugin.Devices
         private readonly Border[] _wheelKnobPrimarySwatches = new Border[MozaData.WheelKnobMax];
         private readonly FrameworkElement[] _wheelKnobRowContainers = new FrameworkElement[MozaData.WheelKnobMax];
 
+        // Group 3 per-LED ring swatches
+        private readonly Border[] _knobRingColorSwatches = new Border[MozaData.KnobRingLedMax];
+        private readonly FrameworkElement[] _knobRingKnobContainers = new FrameworkElement[MozaData.WheelKnobMax];
+
         // ES wheel indicator: device 1=RPM, 2=Off, 3=On (1-based, -1 applied on read)
         // UI combo: 0="SimHub Mode", 1="Always On", 2="Off"
         private static readonly int[] EsIndicatorToDisplay = { 0, 2, 1 };
@@ -97,6 +101,7 @@ namespace MozaPlugin.Devices
             BuildButtonSwatchRow();
             BuildRpmSwatches();
             BuildKnobSwatchRows();
+            BuildKnobRingSwatchRows();
             _swatchesBuilt = true;
         }
 
@@ -230,10 +235,10 @@ namespace MozaPlugin.Devices
                     Width = 70,
                     VerticalAlignment = VerticalAlignment.Center,
                 });
-                var bg = CreateKnobSwatch($"wheel-knob{idx + 1}-bg-color", idx, _data.WheelKnobBackgroundColors, isBackground: true);
                 var primary = CreateKnobSwatch($"wheel-knob{idx + 1}-primary-color", idx, _data.WheelKnobPrimaryColors, isBackground: false);
-                row.Children.Add(WrapInCell(bg));
+                var bg = CreateKnobSwatch($"wheel-knob{idx + 1}-bg-color", idx, _data.WheelKnobBackgroundColors, isBackground: true);
                 row.Children.Add(WrapInCell(primary));
+                row.Children.Add(WrapInCell(bg));
                 WheelKnobPanel.Children.Add(row);
                 _wheelKnobBgSwatches[idx] = bg;
                 _wheelKnobPrimarySwatches[idx] = primary;
@@ -277,9 +282,128 @@ namespace MozaPlugin.Devices
             // Write-only on the wire — settings is the canonical store. Repack the
             // full 3-element array each time so null -> default black is preserved.
             if (isBackground)
+            {
                 _settings.WheelKnobBackgroundColors = MozaProfile.PackColors(_data.WheelKnobBackgroundColors);
+                // "Inactive" swatch bulk-sets all ring LEDs for this knob to the same color.
+                // Writes to hardware + updates MozaData but does NOT persist ring colors —
+                // individual ring swatch edits take priority on next save.
+                BulkSetKnobRingColor(idx);
+            }
             else
-                _settings.WheelKnobPrimaryColors    = MozaProfile.PackColors(_data.WheelKnobPrimaryColors);
+            {
+                _settings.WheelKnobPrimaryColors = MozaProfile.PackColors(_data.WheelKnobPrimaryColors);
+            }
+        }
+
+        private void BulkSetKnobRingColor(int knobIdx)
+        {
+            if (_data == null || _device == null || _plugin == null) return;
+            var model = _plugin.WheelModelInfo;
+            if (model?.KnobRingLeds == null || knobIdx >= model.KnobRingLeds.Length) return;
+            if (!_plugin.IsWheelLedGroupPresent(3)) return;
+
+            var color = _data.WheelKnobBackgroundColors[knobIdx];
+            byte r = color[0], g = color[1], b = color[2];
+            int startIdx = model.KnobRingStartIndex(knobIdx);
+            int count = model.KnobRingLeds[knobIdx];
+
+            for (int i = 0; i < count; i++)
+            {
+                int ledIdx = startIdx + i;
+                _device.WriteColor($"wheel-group3-color{ledIdx + 1}", r, g, b);
+                _data.KnobRingColors[ledIdx][0] = r;
+                _data.KnobRingColors[ledIdx][1] = g;
+                _data.KnobRingColors[ledIdx][2] = b;
+            }
+            // Intentionally NOT calling PersistKnobRingColors() — bulk-set is a
+            // convenience shortcut, individual ring edits take persistence priority.
+        }
+
+        private void BuildKnobRingSwatchRows()
+        {
+            if (_data == null) return;
+            int knobMax = MozaData.WheelKnobMax;
+            // Build with maximum possible LED count per knob (12); visibility is
+            // controlled per-knob in RefreshWheel based on actual WheelModelInfo.
+            for (int k = 0; k < knobMax; k++)
+            {
+                int knobIdx = k;
+                var knobPanel = new StackPanel { Margin = new Thickness(0, 0, 0, 8) };
+                knobPanel.Children.Add(new TextBlock
+                {
+                    Text = $"Knob {knobIdx + 1} Ring",
+                    FontWeight = FontWeights.SemiBold,
+                    FontSize = 12,
+                    Margin = new Thickness(0, 0, 0, 4),
+                });
+
+                // Index labels row
+                var indexRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 2) };
+                for (int i = 0; i < 12; i++)
+                {
+                    indexRow.Children.Add(new TextBlock
+                    {
+                        Text = (i + 1).ToString(),
+                        Width = 28,
+                        TextAlignment = TextAlignment.Center,
+                        Foreground = Brushes.Gray,
+                        FontSize = 10,
+                        Margin = new Thickness(2, 0, 2, 0),
+                    });
+                }
+                knobPanel.Children.Add(indexRow);
+
+                // Swatch row — always build 12, hide extras in RefreshWheel
+                var swatchRow = new StackPanel { Orientation = Orientation.Horizontal };
+                for (int i = 0; i < 12; i++)
+                {
+                    // Placeholder LED index — corrected per-model in RefreshWheel
+                    int ledIndex = knobIdx * 12 + i;
+                    if (ledIndex >= MozaData.KnobRingLedMax) break;
+                    var border = new Border
+                    {
+                        Width = 28, Height = 28,
+                        BorderBrush = GetCachedBrush(85, 85, 85),
+                        BorderThickness = new Thickness(1),
+                        CornerRadius = new CornerRadius(3),
+                        Margin = new Thickness(2, 0, 2, 0),
+                        Cursor = Cursors.Hand,
+                        Background = Brushes.Black,
+                        Tag = new ColorSwatchInfo
+                        {
+                            CommandPrefix = "wheel-group3-color",
+                            Index = ledIndex,
+                            ColorSource = _data.KnobRingColors,
+                            OnChanged = () => PersistKnobRingColors(),
+                        },
+                    };
+                    border.MouseLeftButtonUp += ColorSwatch_Click;
+                    swatchRow.Children.Add(border);
+                    if (ledIndex < MozaData.KnobRingLedMax)
+                        _knobRingColorSwatches[ledIndex] = border;
+                }
+                knobPanel.Children.Add(swatchRow);
+
+                WheelKnobRingPanel.Children.Add(knobPanel);
+                _knobRingKnobContainers[knobIdx] = knobPanel;
+            }
+        }
+
+        private void PersistKnobRingColors()
+        {
+            if (_data == null || _settings == null) return;
+            _settings.WheelKnobRingColors = MozaProfile.PackColors(_data.KnobRingColors);
+        }
+
+        private void KnobRingBrightnessSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (_suppressEvents || _plugin == null) return;
+            int val = (int)Math.Round(e.NewValue);
+            KnobRingBrightnessValue.Text = $"{val}";
+            _data!.KnobRingBrightness = val;
+            _device!.WriteSetting("wheel-group3-brightness", val);
+            _settings!.WheelKnobRingBrightness = val;
+            _plugin.SaveSettings();
         }
 
         private void ColorSwatch_Click(object sender, MouseButtonEventArgs e)
@@ -426,6 +550,65 @@ namespace MozaPlugin.Devices
                     }
                     UpdateSwatches(_wheelKnobBgSwatches, _data.WheelKnobBackgroundColors, knobCount);
                     UpdateSwatches(_wheelKnobPrimarySwatches, _data.WheelKnobPrimaryColors, knobCount);
+
+                    // Knob ring LEDs (Group 3)
+                    var ringLeds = modelInfo?.KnobRingLeds;
+                    bool showRings = knobCount > 0 && ringLeds != null && _plugin!.IsWheelLedGroupPresent(3);
+                    WheelKnobRingSection.Visibility = showRings ? Visibility.Visible : Visibility.Collapsed;
+                    if (showRings)
+                    {
+                        for (int k = 0; k < MozaData.WheelKnobMax; k++)
+                        {
+                            bool knobVisible = k < knobCount;
+                            if (_knobRingKnobContainers[k] != null)
+                                _knobRingKnobContainers[k].Visibility = knobVisible ? Visibility.Visible : Visibility.Collapsed;
+
+                            if (knobVisible)
+                            {
+                                // Update swatch indices + visibility based on actual per-knob LED count
+                                int startIdx = modelInfo!.KnobRingStartIndex(k);
+                                int ledsThisKnob = ringLeds![k];
+                                for (int i = 0; i < 12; i++)
+                                {
+                                    int swatchSlot = k * 12 + i;
+                                    if (swatchSlot >= MozaData.KnobRingLedMax) break;
+                                    var swatch = _knobRingColorSwatches[swatchSlot];
+                                    if (swatch == null) continue;
+                                    if (i < ledsThisKnob)
+                                    {
+                                        swatch.Visibility = Visibility.Visible;
+                                        var info = (ColorSwatchInfo)swatch.Tag;
+                                        info.Index = startIdx + i;
+                                    }
+                                    else
+                                    {
+                                        swatch.Visibility = Visibility.Collapsed;
+                                    }
+                                }
+                            }
+                        }
+                        // Update swatch colors from data
+                        for (int k = 0; k < knobCount; k++)
+                        {
+                            int startIdx = modelInfo!.KnobRingStartIndex(k);
+                            int ledsThisKnob = ringLeds![k];
+                            for (int i = 0; i < ledsThisKnob; i++)
+                            {
+                                int swatchSlot = k * 12 + i;
+                                if (swatchSlot >= MozaData.KnobRingLedMax) break;
+                                var swatch = _knobRingColorSwatches[swatchSlot];
+                                if (swatch == null) continue;
+                                var c = _data.KnobRingColors[startIdx + i];
+                                swatch.Background = GetCachedBrush(c[0], c[1], c[2]);
+                            }
+                        }
+
+                        if (_data.KnobRingBrightness >= 0 && !KnobRingBrightnessSlider.IsMouseCaptureWithin)
+                        {
+                            KnobRingBrightnessSlider.Value = _data.KnobRingBrightness;
+                            KnobRingBrightnessValue.Text = $"{_data.KnobRingBrightness}";
+                        }
+                    }
                 }
 
                 if (oldWheel)
@@ -740,17 +923,16 @@ namespace MozaPlugin.Devices
             if (state != null && state.ConfigJsonList.Count > 0
                 && idx >= 0 && idx < state.ConfigJsonList.Count)
             {
-                ts!.SendDashboardSwitch((uint)idx);
-
+                // Load the new profile BEFORE sending the switch so that
+                // SendDashboardSwitch can emit a pre-switch tier-def with
+                // the new profile's channels. PitHouse sends tier-def
+                // before FF-SWITCH in the same burst.
                 _plugin.Settings.TelemetryProfileName = selected;
                 _plugin.Settings.TelemetryMzdashPath = "";
                 _plugin.SaveSettings();
-
-                // Load the new profile immediately so the UI's channel
-                // mapping grid shows correct channels for the selected
-                // dashboard. Background renegotiation sends tier-def
-                // with 3× retransmit.
                 _plugin.ApplyTelemetrySettings();
+
+                ts!.SendDashboardSwitch((uint)idx);
 
                 var pluginRef = _plugin;
                 System.Threading.ThreadPool.QueueUserWorkItem(_ =>

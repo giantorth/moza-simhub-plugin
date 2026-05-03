@@ -160,11 +160,17 @@ namespace MozaPlugin
 
         // Per-knob LED ring colors — W17 CS Pro (4 knobs) / W18 KS Pro (5 knobs).
         // Background = idle colour shown when the knob is not being turned;
-        // primary = colour flashed on rotation. Wire: [27, group, role] + RGB,
-        // group 1..KnobCount (group 0 = RPM), role 0=background, 1=primary.
+        // primary = colour flashed on rotation. Wire: [0x27, group, role] + RGB,
+        // group 0..KnobCount-1, role 0=background, 1=primary.
         public const int WheelKnobMax = 5;
         public readonly byte[][] WheelKnobBackgroundColors = InitColorArray(WheelKnobMax);
         public readonly byte[][] WheelKnobPrimaryColors = InitColorArray(WheelKnobMax);
+
+        // Group 3 (Rotary) per-LED ring colors. Up to 56 LEDs (CS Pro 48, KS Pro 56).
+        // Readable + writable via wheel-group3-color{1..56}.
+        public const int KnobRingLedMax = 56;
+        public readonly byte[][] KnobRingColors = InitColorArray(KnobRingLedMax);
+        public volatile int KnobRingBrightness = -1;
 
         // ES wheel
         public volatile int WheelESRpmBrightness;
@@ -357,6 +363,7 @@ namespace MozaPlugin
                 case "wheel-rpm-indicator-mode":     WheelRpmIndicatorMode = value - 1; break; // raw 1/2/3 → display 0/1/2
                 case "wheel-get-rpm-display-mode":  WheelRpmDisplayMode = value; break;
                 case "wheel-old-rpm-brightness":     WheelESRpmBrightness = value; break;
+                case "wheel-group3-brightness":      KnobRingBrightness = value; break;
 
                 // Dash settings
                 case "dash-rpm-indicator-mode":  DashRpmIndicatorMode = value; break;
@@ -490,6 +497,13 @@ namespace MozaPlugin
                 int idx = ParseTrailingIndex(commandName, "dash-flag-color");
                 if (idx >= 0 && idx < 6 && data.Length >= 3)
                     SetColor(DashFlagColors[idx], data);
+            }
+            // Group 3 (Rotary) per-LED ring colors
+            else if (commandName.StartsWith("wheel-group3-color"))
+            {
+                int idx = ParseTrailingIndex(commandName, "wheel-group3-color");
+                if (idx >= 0 && idx < KnobRingLedMax && data.Length >= 3)
+                    SetColor(KnobRingColors[idx], data);
             }
             // Wheel identity strings (work with any data length)
             else if (commandName == "wheel-model-name")
