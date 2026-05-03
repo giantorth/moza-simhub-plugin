@@ -33,8 +33,7 @@
         </Style>
     </UserControl.Resources>
 
-    <ScrollViewer VerticalScrollBarVisibility="Auto">
-        <StackPanel Margin="5">
+    <StackPanel Margin="5">
             <TextBlock Text="MOZA Wheel" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,12"/>
 
             <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
@@ -248,6 +247,5 @@
                 </StackPanel>
             </StackPanel>
 
-        </StackPanel>
-    </ScrollViewer>
+    </StackPanel>
 </UserControl>
