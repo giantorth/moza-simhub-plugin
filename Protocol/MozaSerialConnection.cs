@@ -344,7 +344,7 @@ namespace MozaPlugin.Protocol
 
         private void ReadLoop()
         {
-            MozaLog.Info("[Moza] Read thread started");
+            MozaLog.Debug("[Moza] Read thread started");
             int messageCount = 0;
             // Bulk read buffer — drains all available bytes from the OS read
             // buffer in one SerialPort.Read() call, then parses frames from
@@ -452,7 +452,7 @@ namespace MozaPlugin.Protocol
                         {
                             int nn = Math.Min(8, Math.Max(0, decoded));
                             string first8a = nn > 0 ? BitConverter.ToString(raw, 0, nn) : "(empty)";
-                            MozaLog.Info(
+                            MozaLog.Debug(
                                 $"[Moza] DROP frame-error: decoded={decoded}/{needed} len={payloadLength} first8={first8a}");
                             // Skip past the bad start byte and try to resync.
                             cursor = frameStart + 1;
@@ -471,7 +471,7 @@ namespace MozaPlugin.Protocol
                         {
                             int nn = Math.Min(8, raw.Length);
                             string first8a = nn > 0 ? BitConverter.ToString(raw, 0, nn) : "(empty)";
-                            MozaLog.Info(
+                            MozaLog.Debug(
                                 $"[Moza] DROP checksum mismatch: expected=0x{expected:X2} actual=0x{actual:X2} " +
                                 $"len={payloadLength} group=0x{raw[0]:X2} dev=0x{raw[1]:X2} first8={first8a}");
                             cursor = frameStart + 1;
@@ -485,7 +485,7 @@ namespace MozaPlugin.Protocol
                         messageCount++;
                         if (messageCount <= 5)
                         {
-                            MozaLog.Info(
+                            MozaLog.Debug(
                                 $"[Moza] Received msg #{messageCount}: len={payloadLength} " +
                                 $"group=0x{data[0]:X2} dev=0x{data[1]:X2} ({data.Length} bytes)");
                         }
@@ -533,7 +533,7 @@ namespace MozaPlugin.Protocol
 
         private void WriteLoop()
         {
-            MozaLog.Info("[Moza] Write thread started");
+            MozaLog.Debug("[Moza] Write thread started");
             int writeCount = 0;
             // Pooled stuffing buffer. Worst-case stuffed size is 2 * decoded size;
             // grows on demand if a larger frame arrives.
@@ -576,7 +576,7 @@ namespace MozaPlugin.Protocol
                     {
                         writeCount++;
                         if (writeCount <= 5)
-                            MozaLog.Info($"[Moza] Sent cmd #{writeCount}: {msg.Length} bytes, group=0x{(msg.Length > 2 ? msg[2] : 0):X2}");
+                            MozaLog.Debug($"[Moza] Sent cmd #{writeCount}: {msg.Length} bytes, group=0x{(msg.Length > 2 ? msg[2] : 0):X2}");
                         lastWriteTs = System.Diagnostics.Stopwatch.GetTimestamp();
                         lastWasOneShot = true;
                     }
@@ -713,7 +713,7 @@ namespace MozaPlugin.Protocol
                             $"[Moza] Skipping {portName} PID={pid ?? "unknown"} (filtered)");
                         continue;
                     }
-                    MozaLog.Info(
+                    MozaLog.Debug(
                         $"[Moza] Found Moza device on {portName} PID={pid ?? "unknown"} (WMI)");
                     return (portName, pid, false);
                 }

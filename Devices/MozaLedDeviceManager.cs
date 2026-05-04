@@ -203,7 +203,7 @@ namespace MozaPlugin.Devices
                     _ledsAwake = true;
                     plugin.DeviceManager.WriteSetting("wheel-old-send-telemetry", 0x3FF);
                     plugin.DeviceManager.WriteSetting("wheel-old-send-telemetry", 0);
-                    MozaLog.Info("[Moza] ES wheel LED wake-up sent");
+                    MozaLog.Debug("[Moza] ES wheel LED wake-up sent");
                 }
 
                 bool limitUpdates = plugin.Settings.LimitWheelUpdates;

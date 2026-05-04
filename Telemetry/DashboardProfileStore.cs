@@ -339,7 +339,7 @@ namespace MozaPlugin.Telemetry
                 }
                 catch (Exception ex)
                 {
-                    MozaLog.Info($"[Moza] mzdash widget-tree parse failed for '{name}': {ex.Message}");
+                    MozaLog.Debug($"[Moza] mzdash widget-tree parse failed for '{name}': {ex.Message}");
                 }
             }
 
@@ -352,7 +352,7 @@ namespace MozaPlugin.Telemetry
             }
             catch (Exception ex)
             {
-                MozaLog.Info($"[Moza] mzdash page-count parse failed for '{name}': {ex.Message}");
+                MozaLog.Debug($"[Moza] mzdash page-count parse failed for '{name}': {ex.Message}");
             }
 
             return profile;

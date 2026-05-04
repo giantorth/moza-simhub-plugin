@@ -24,7 +24,7 @@ namespace MozaPlugin.Telemetry
             {
                 if (_owners.TryGetValue(session, out var prev) && prev != owner)
                 {
-                    MozaLog.Info(
+                    MozaLog.Debug(
                         $"[Moza] SessionDispatcher: session 0x{session:X2} " +
                         $"transferred {prev.GetType().Name} → {owner.GetType().Name}");
                 }

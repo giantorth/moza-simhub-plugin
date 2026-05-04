@@ -120,7 +120,7 @@ namespace MozaPlugin.Devices
         {
             if (_detected) return;
             _detected = true;
-            MozaLog.Info("[Moza/AB9] AB9 active shifter detected");
+            MozaLog.Debug("[Moza/AB9] AB9 active shifter detected");
         }
 
         /// <summary>

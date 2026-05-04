@@ -144,7 +144,7 @@ namespace MozaPlugin.Protocol
                 }
                 catch (Exception ex)
                 {
-                    MozaLog.Info($"[Moza] HID error: {ex.Message}");
+                    MozaLog.Debug($"[Moza] HID error: {ex.Message}");
                 }
 
                 _data.IsHidConnected = false;
@@ -319,7 +319,7 @@ namespace MozaPlugin.Protocol
                 try
                 {
                     receiver.Start(stream);
-                    MozaLog.Info(
+                    MozaLog.Debug(
                         $"[Moza] HID device opened: {device.GetFriendlyName()} " +
                         $"(VID {device.VendorID:X4} PID {device.ProductID:X4}, " +
                         $"usages: {string.Join(", ", usages.Keys.Select(u => $"0x{u:X8}"))})");
@@ -337,7 +337,7 @@ namespace MozaPlugin.Protocol
             }
             catch (Exception ex)
             {
-                MozaLog.Info($"[Moza] HID device read error ({device.GetFriendlyName()}): {ex.Message}");
+                MozaLog.Debug($"[Moza] HID device read error ({device.GetFriendlyName()}): {ex.Message}");
             }
         }
 

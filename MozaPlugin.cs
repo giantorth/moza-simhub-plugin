@@ -338,7 +338,7 @@ namespace MozaPlugin
                         string logsDir = System.IO.Path.Combine(baseDir, "Logs");
                         string sinkPath = System.IO.Path.Combine(logsDir, $"moza-wire-{ts}.jsonl");
                         global::MozaPlugin.Diagnostics.SerialTrafficCapture.Instance.StartFileSink(sinkPath);
-                        MozaLog.Info($"[Moza] Wire trace sink → {sinkPath}");
+                        MozaLog.Debug($"[Moza] Wire trace sink → {sinkPath}");
                     }
                     catch (Exception ex)
                     {
@@ -355,7 +355,7 @@ namespace MozaPlugin
                     _settings.StartCaptureOnNextLaunch = false;
                     try { this.SaveCommonSettings("MozaPluginSettings", _settings); } catch { }
                     global::MozaPlugin.Diagnostics.SerialTrafficCapture.Instance.Start();
-                    MozaLog.Info("[Moza] Serial traffic capture armed from previous session — capturing now");
+                    MozaLog.Debug("[Moza] Serial traffic capture armed from previous session — capturing now");
                 }
 
                 MozaDeviceConstants.InitializeRegistry();
@@ -363,7 +363,7 @@ namespace MozaPlugin
                 // Read SimHub's global temperature unit preference (set at first launch)
                 var tempUnit = pluginManager.GetPropertyValue("DataCorePlugin.GameData.TemperatureUnit");
                 _data.UseFahrenheit = string.Equals(tempUnit as string, "Fahrenheit", StringComparison.OrdinalIgnoreCase);
-                MozaLog.Info($"[Moza] Temperature unit: {(_data.UseFahrenheit ? "Fahrenheit" : "Celsius")}");
+                MozaLog.Debug($"[Moza] Temperature unit: {(_data.UseFahrenheit ? "Fahrenheit" : "Celsius")}");
 
                 // Initialize the native profile system (detects current game, selects profile)
                 InitProfileSystem();
@@ -682,7 +682,7 @@ namespace MozaPlugin
             this.AddAction("Moza.ClearLeds", (a, b) =>
             {
                 ClearLedsOnHardware();
-                MozaLog.Info("[Moza] LEDs cleared via action");
+                MozaLog.Debug("[Moza] LEDs cleared via action");
             });
         }
 
@@ -777,11 +777,11 @@ namespace MozaPlugin
                     {
                         mzdashName = profile.Name;
                         mzdashContent = DashCache.TryGetRawContent(s.TelemetryProfileName);
-                        MozaLog.Info($"[Moza] ApplyTelemetrySettings: found '{s.TelemetryProfileName}' in cache as '{mzdashName}'");
+                        MozaLog.Debug($"[Moza] ApplyTelemetrySettings: found '{s.TelemetryProfileName}' in cache as '{mzdashName}'");
                     }
                     else
                     {
-                        MozaLog.Info($"[Moza] ApplyTelemetrySettings: '{s.TelemetryProfileName}' NOT found in cache (folder={DashCache.FolderProfileCount} wheel={DashCache.WheelCacheCount})");
+                        MozaLog.Debug($"[Moza] ApplyTelemetrySettings: '{s.TelemetryProfileName}' NOT found in cache (folder={DashCache.FolderProfileCount} wheel={DashCache.WheelCacheCount})");
                     }
                 }
 
@@ -836,7 +836,7 @@ namespace MozaPlugin
             int chCount = 0;
             if (profile != null)
                 foreach (var t in profile.Tiers) chCount += t.Channels.Count;
-            MozaLog.Info(
+            MozaLog.Debug(
                 $"[Moza] ApplyTelemetrySettings: setting profile=" +
                 $"{profile?.Name ?? "null"} tiers={tierCount} channels={chCount} " +
                 $"mzdash={mzdashName} settingName={s.TelemetryProfileName}");
@@ -981,16 +981,16 @@ namespace MozaPlugin
         {
             if (_telemetrySender == null) return;
 
-            MozaLog.Info("[Moza] OnActiveDashboardChanged: called");
+            MozaLog.Debug("[Moza] OnActiveDashboardChanged: called");
             ApplyTelemetrySettings();
 
             if (!_settings.TelemetryEnabled) return;
 
             bool renegOk = _telemetrySender.RenegotiateForDashboardChange();
-            MozaLog.Info($"[Moza] OnActiveDashboardChanged: renegotiate={renegOk}");
+            MozaLog.Debug($"[Moza] OnActiveDashboardChanged: renegotiate={renegOk}");
             if (renegOk) return;
 
-            MozaLog.Info("[Moza] OnActiveDashboardChanged: falling back to StartTelemetryIfReady");
+            MozaLog.Debug("[Moza] OnActiveDashboardChanged: falling back to StartTelemetryIfReady");
             StartTelemetryIfReady();
         }
 
@@ -1147,7 +1147,7 @@ namespace MozaPlugin
 
         private void ResetWheelDetection(string reason)
         {
-            MozaLog.Info($"[Moza] {reason}");
+            MozaLog.Debug($"[Moza] {reason}");
             _telemetrySender.Stop();
             _newWheelDetected = false;
             _oldWheelDetected = false;
@@ -1232,7 +1232,7 @@ namespace MozaPlugin
                     for (int i = 0; i < total; i++)
                         cmds[i + 1] = $"wheel-group3-color{i + 1}";
                     _deviceManager.ReadSettingsPaced(cmds);
-                    MozaLog.Info($"[Moza] Reading Group 3 ring LED colors ({total} LEDs)");
+                    MozaLog.Debug($"[Moza] Reading Group 3 ring LED colors ({total} LEDs)");
                 }
             }
 
@@ -1324,7 +1324,7 @@ namespace MozaPlugin
                 {
                     byte grp = MozaProtocol.ToggleBit7(data[0]);
                     byte dev = MozaProtocol.SwapNibbles(data[1]);
-                    MozaLog.Info(
+                    MozaLog.Debug(
                         $"[Moza] Unmatched #{_unmatched}: rawGroup=0x{data[0]:X2} group=0x{grp:X2} " +
                         $"rawDev=0x{data[1]:X2} dev={dev} len={data.Length} " +
                         $"payload={BitConverter.ToString(data, 2, Math.Min(data.Length - 2, 8))}");
@@ -1368,7 +1368,7 @@ namespace MozaPlugin
                         if ((prev & bit) != 0) break;
                     } while (Interlocked.CompareExchange(ref _wheelLedGroupMask, prev | bit, prev) != prev);
                     if ((prev & bit) == 0)
-                        MozaLog.Info($"[Moza] Wheel LED group {g} detected");
+                        MozaLog.Debug($"[Moza] Wheel LED group {g} detected");
                 }
             }
 
@@ -1424,7 +1424,7 @@ namespace MozaPlugin
                 return;
             }
 
-            MozaLog.Info("[Moza/AB9] Applying saved AB9 settings");
+            MozaLog.Debug("[Moza/AB9] Applying saved AB9 settings");
             _ab9Manager.SendMode(ab9.Mode);
             _ab9Manager.SendSlider(Devices.Ab9Slider.MechanicalResistance, ab9.MechanicalResistance);
             _ab9Manager.SendSlider(Devices.Ab9Slider.Spring, ab9.Spring);
@@ -1447,14 +1447,14 @@ namespace MozaPlugin
             // below, because UpdateFromArray has already stored the raw 12 bytes.
             if (commandName == "wheel-mcu-uid" && _data.WheelMcuUid.Length > 0)
             {
-                MozaLog.Info(
+                MozaLog.Debug(
                     $"[Moza] Wheel MCU UID ({_data.WheelMcuUid.Length}B): " +
                     MozaLog.RedactBytesHex(_data.WheelMcuUid));
                 return;
             }
             if (commandName == "display-mcu-uid" && _data.DisplayMcuUid.Length > 0)
             {
-                MozaLog.Info(
+                MozaLog.Debug(
                     $"[Moza] Display MCU UID ({_data.DisplayMcuUid.Length}B): " +
                     MozaLog.RedactBytesHex(_data.DisplayMcuUid));
                 return;
@@ -1556,7 +1556,7 @@ namespace MozaPlugin
                         {
                             _lastKnownWheelModel = currentModel;
                             WheelModelInfo = Devices.WheelModelInfo.FromModelName(currentModel);
-                            MozaLog.Info(
+                            MozaLog.Debug(
                                 $"[Moza] Wheel model: {currentModel} " +
                                 $"(rpm={WheelModelInfo.RpmLedCount}, buttons={WheelModelInfo.ButtonLedCount}, flags={WheelModelInfo.HasFlagLeds}, knobs={WheelModelInfo.KnobCount})");
                             // Load this wheel model's persisted slot (brightness/modes/inputs)
@@ -1578,98 +1578,98 @@ namespace MozaPlugin
                     }
                     else
                     {
-                        MozaLog.Info(
+                        MozaLog.Debug(
                             $"[Moza] Wheel model (ES/base): {_data.WheelModelName}");
                     }
                     break;
 
                 case "wheel-sw-version":
-                    MozaLog.Info($"[Moza] Wheel FW: {_data.WheelSwVersion}");
+                    MozaLog.Debug($"[Moza] Wheel FW: {_data.WheelSwVersion}");
                     break;
 
                 case "wheel-serial-b":
                     if (!string.IsNullOrEmpty(_data.WheelSerialNumber))
-                        MozaLog.Info($"[Moza] Wheel serial: {MozaLog.RedactId(_data.WheelSerialNumber)}");
+                        MozaLog.Debug($"[Moza] Wheel serial: {MozaLog.RedactId(_data.WheelSerialNumber)}");
                     break;
 
                 case "wheel-hw-sub":
                     if (!string.IsNullOrEmpty(_data.WheelHwSubVersion))
-                        MozaLog.Info($"[Moza] Wheel HW sub: {_data.WheelHwSubVersion}");
+                        MozaLog.Debug($"[Moza] Wheel HW sub: {_data.WheelHwSubVersion}");
                     break;
 
                 case "wheel-mcu-uid":
                     if (_data.WheelMcuUid.Length > 0)
-                        MozaLog.Info(
+                        MozaLog.Debug(
                             $"[Moza] Wheel MCU UID ({_data.WheelMcuUid.Length}B): " +
                             MozaLog.RedactBytesHex(_data.WheelMcuUid));
                     break;
 
                 case "wheel-device-type":
                     if (_data.WheelDeviceType.Length > 0)
-                        MozaLog.Info(
+                        MozaLog.Debug(
                             $"[Moza] Wheel device type: {BitConverter.ToString(_data.WheelDeviceType)}");
                     break;
 
                 case "wheel-capabilities":
                     if (_data.WheelCapabilities.Length > 0)
-                        MozaLog.Info(
+                        MozaLog.Debug(
                             $"[Moza] Wheel capabilities: {BitConverter.ToString(_data.WheelCapabilities)}");
                     break;
 
                 case "wheel-presence":
-                    MozaLog.Info(
+                    MozaLog.Debug(
                         $"[Moza] Wheel presence/ready: sub_device_count={_data.WheelSubDeviceCount}");
                     break;
 
                 case "wheel-device-presence":
-                    MozaLog.Info(
+                    MozaLog.Debug(
                         $"[Moza] Wheel device presence byte: 0x{_data.WheelDevicePresence:X2}");
                     break;
 
                 case "wheel-identity-11":
                     if (_data.WheelIdentity11.Length > 0)
-                        MozaLog.Info(
+                        MozaLog.Debug(
                             $"[Moza] Wheel identity-11: {BitConverter.ToString(_data.WheelIdentity11)}");
                     break;
 
                 // Display sub-device identity responses (wrapped via 0x43)
                 case "display-model-name":
                     if (!string.IsNullOrEmpty(_data.DisplayModelName))
-                        MozaLog.Info($"[Moza] Display model: {_data.DisplayModelName}");
+                        MozaLog.Debug($"[Moza] Display model: {_data.DisplayModelName}");
                     break;
                 case "display-hw-version":
                     if (!string.IsNullOrEmpty(_data.DisplayHwVersion))
-                        MozaLog.Info($"[Moza] Display HW: {_data.DisplayHwVersion}");
+                        MozaLog.Debug($"[Moza] Display HW: {_data.DisplayHwVersion}");
                     break;
                 case "display-sw-version":
                     if (!string.IsNullOrEmpty(_data.DisplaySwVersion))
-                        MozaLog.Info($"[Moza] Display FW: {_data.DisplaySwVersion}");
+                        MozaLog.Debug($"[Moza] Display FW: {_data.DisplaySwVersion}");
                     break;
                 case "display-serial":
                     if (!string.IsNullOrEmpty(_data.DisplaySerialNumber))
-                        MozaLog.Info($"[Moza] Display serial: {MozaLog.RedactId(_data.DisplaySerialNumber)}");
+                        MozaLog.Debug($"[Moza] Display serial: {MozaLog.RedactId(_data.DisplaySerialNumber)}");
                     break;
                 case "display-presence":
-                    MozaLog.Info(
+                    MozaLog.Debug(
                         $"[Moza] Display presence/ready: sub_device_count={_data.DisplaySubDeviceCount}");
                     break;
                 case "display-device-presence":
-                    MozaLog.Info(
+                    MozaLog.Debug(
                         $"[Moza] Display device presence byte: 0x{_data.DisplayDevicePresence:X2}");
                     break;
                 case "display-device-type":
                     if (_data.DisplayDeviceType.Length > 0)
-                        MozaLog.Info(
+                        MozaLog.Debug(
                             $"[Moza] Display device type: {BitConverter.ToString(_data.DisplayDeviceType)}");
                     break;
                 case "display-capabilities":
                     if (_data.DisplayCapabilities.Length > 0)
-                        MozaLog.Info(
+                        MozaLog.Debug(
                             $"[Moza] Display capabilities: {BitConverter.ToString(_data.DisplayCapabilities)}");
                     break;
                 case "display-identity-11":
                     if (_data.DisplayIdentity11.Length > 0)
-                        MozaLog.Info(
+                        MozaLog.Debug(
                             $"[Moza] Display identity-11: {BitConverter.ToString(_data.DisplayIdentity11)}");
                     break;
                 case "display-mcu-uid":
@@ -1737,7 +1737,7 @@ namespace MozaPlugin
         /// </summary>
         private void ApplySavedWheelSettings()
         {
-            MozaLog.Info("[Moza] Applying saved wheel settings");
+            MozaLog.Debug("[Moza] Applying saved wheel settings");
 
             // Pre-populate _data from saved settings so the UI shows correct values
             // immediately, before device responses arrive.
@@ -1801,7 +1801,7 @@ namespace MozaPlugin
         /// </summary>
         private void ApplySavedDashSettings()
         {
-            MozaLog.Info("[Moza] Applying saved dash settings");
+            MozaLog.Debug("[Moza] Applying saved dash settings");
 
             // Pre-populate _data from saved settings so the UI shows correct values
             _data.DashRpmBrightness = _settings.DashRpmBrightness;
@@ -1834,7 +1834,7 @@ namespace MozaPlugin
         {
             var profile = _settings.ProfileStore.CurrentProfile;
             if (profile == null) return;
-            MozaLog.Info("[Moza] Applying saved handbrake settings");
+            MozaLog.Debug("[Moza] Applying saved handbrake settings");
 
             if (profile.HandbrakeMode >= 0)
             {
@@ -1878,7 +1878,7 @@ namespace MozaPlugin
         {
             var profile = _settings.ProfileStore.CurrentProfile;
             if (profile == null) return;
-            MozaLog.Info("[Moza] Applying saved pedal settings");
+            MozaLog.Debug("[Moza] Applying saved pedal settings");
 
             if (profile.PedalsThrottleDir >= 0)
             {
@@ -1938,11 +1938,11 @@ namespace MozaPlugin
             // Apply the initially selected profile
             if (store.CurrentProfile != null)
             {
-                MozaLog.Info($"[Moza] Initial profile: {store.CurrentProfile.Name}");
+                MozaLog.Debug($"[Moza] Initial profile: {store.CurrentProfile.Name}");
                 if (_settings.AutoApplyProfileOnLaunch)
                     ApplyProfile(store.CurrentProfile);
                 else
-                    MozaLog.Info("[Moza] Skipping auto-apply (disabled in Options)");
+                    MozaLog.Debug("[Moza] Skipping auto-apply (disabled in Options)");
             }
         }
 
@@ -1961,7 +1961,7 @@ namespace MozaPlugin
         /// </summary>
         internal void ApplyProfile(MozaProfile profile)
         {
-            MozaLog.Info($"[Moza] Applying profile: {profile.Name}");
+            MozaLog.Debug($"[Moza] Applying profile: {profile.Name}");
 
             // Guard: a profile with all core base settings at zero was captured from
             // uninitialized device data (first-launch race condition). Reset them to
@@ -2092,7 +2092,7 @@ namespace MozaPlugin
 
             // --- FFB Curve (X breakpoints always fixed at 20/40/60/80) ---
             // Always write fixed X breakpoints when base is connected (device may not persist them)
-            MozaLog.Info($"[Moza] ApplyProfile curve: IsBaseConnected={_data.IsBaseConnected} Y1={profile.FfbCurveY1} Y2={profile.FfbCurveY2} Y3={profile.FfbCurveY3} Y4={profile.FfbCurveY4} Y5={profile.FfbCurveY5}");
+            MozaLog.Debug($"[Moza] ApplyProfile curve: IsBaseConnected={_data.IsBaseConnected} Y1={profile.FfbCurveY1} Y2={profile.FfbCurveY2} Y3={profile.FfbCurveY3} Y4={profile.FfbCurveY4} Y5={profile.FfbCurveY5}");
             if (_data.IsBaseConnected)
             {
                 _deviceManager.WriteSetting("base-ffb-curve-x1", 20);
@@ -2382,7 +2382,7 @@ namespace MozaPlugin
         /// </summary>
         internal void ApplyWheelExtensionSettings(MozaWheelExtensionSettings extSettings)
         {
-            MozaLog.Info("[Moza] Applying wheel device extension settings");
+            MozaLog.Debug("[Moza] Applying wheel device extension settings");
 
             // Update _settings and _data in-memory. ApplyTo already routes into
             // the correct per-model slot and only updates flat fields when this
@@ -2473,7 +2473,7 @@ namespace MozaPlugin
         /// </summary>
         internal void ApplyDashExtensionSettings(MozaDashExtensionSettings extSettings)
         {
-            MozaLog.Info("[Moza] Applying dash device extension settings");
+            MozaLog.Debug("[Moza] Applying dash device extension settings");
 
             // Update _settings and _data in-memory
             extSettings.ApplyTo(_settings, _data);
@@ -2569,7 +2569,7 @@ namespace MozaPlugin
 
                 DeviceDefinitionDeployed = true;
                 string action = stale ? "Refreshed" : "Deployed";
-                MozaLog.Info(
+                MozaLog.Debug(
                     $"[Moza] {action} device definition: {deviceName} " +
                     $"(guid={guid}, telemetryLeds={expectedTelemetryCount}, rpm={rpmCount}, flags={hasFlagLeds}, " +
                     $"buttons={buttonCount}, knobs={knobCount}, pid={pid}, restart SimHub to pick up changes)");
@@ -2737,14 +2737,14 @@ namespace MozaPlugin
                     if (discoveredPid != null)
                     {
                         json = json.Replace("__DETECT_PID__", discoveredPid);
-                        MozaLog.Info($"[Moza] Patched device PID to {discoveredPid} for {deviceName}");
+                        MozaLog.Debug($"[Moza] Patched device PID to {discoveredPid} for {deviceName}");
                     }
                     else
                     {
                         // Fallback: no PID discovered (e.g. probe-based discovery under Wine).
                         // Use 0x0004 as a reasonable default.
                         json = json.Replace("__DETECT_PID__", "0x0004");
-                        MozaLog.Info($"[Moza] No PID discovered, using fallback 0x0004 for {deviceName}");
+                        MozaLog.Debug($"[Moza] No PID discovered, using fallback 0x0004 for {deviceName}");
                     }
 
                     File.WriteAllText(deviceJsonPath, json);

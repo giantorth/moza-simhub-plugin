@@ -100,7 +100,7 @@ namespace MozaPlugin.Telemetry
                         _byHash[hash] = profile;
                         _nameToHash[name] = hash;
                         _rawContent[hash] = System.Text.Encoding.UTF8.GetBytes(content);
-                        MozaLog.Info($"[Moza] DashboardCache: loaded '{name}' from disk (hash={hash.Substring(0, 8)}...)");
+                        MozaLog.Debug($"[Moza] DashboardCache: loaded '{name}' from disk (hash={hash.Substring(0, 8)}...)");
                     }
                 }
                 catch (Exception ex)
@@ -109,7 +109,7 @@ namespace MozaPlugin.Telemetry
                 }
             }
 
-            MozaLog.Info($"[Moza] DashboardCache: {_byHash.Count} profiles loaded from disk");
+            MozaLog.Debug($"[Moza] DashboardCache: {_byHash.Count} profiles loaded from disk");
         }
 
         /// <summary>
@@ -136,7 +136,7 @@ namespace MozaPlugin.Telemetry
             }
 
             if (missing.Count > 0)
-                MozaLog.Info($"[Moza] DashboardCache: {missing.Count} dashboards not cached, need download");
+                MozaLog.Debug($"[Moza] DashboardCache: {missing.Count} dashboards not cached, need download");
 
             return missing;
         }
@@ -174,7 +174,7 @@ namespace MozaPlugin.Telemetry
                     MozaLog.Warn($"[Moza] DashboardCache: disk write failed for '{dashboardName}': {ex.Message}");
                 }
 
-                MozaLog.Info($"[Moza] DashboardCache: ingested '{dashboardName}' (hash={hash.Substring(0, Math.Min(8, hash.Length))}...)");
+                MozaLog.Debug($"[Moza] DashboardCache: ingested '{dashboardName}' (hash={hash.Substring(0, Math.Min(8, hash.Length))}...)");
                 return true;
             }
             catch (Exception ex)
@@ -302,7 +302,7 @@ namespace MozaPlugin.Telemetry
                 }
             }
 
-            MozaLog.Info($"[Moza] DashboardCache: {_folderProfiles.Count} profiles loaded from folder '{folderPath}'");
+            MozaLog.Debug($"[Moza] DashboardCache: {_folderProfiles.Count} profiles loaded from folder '{folderPath}'");
         }
 
         /// <summary>

@@ -113,7 +113,7 @@ namespace MozaPlugin.Telemetry
         {
             if (!Enabled)
             {
-                MozaLog.Info("[Moza] DashboardDownloader: skipped (download not enabled)");
+                MozaLog.Debug("[Moza] DashboardDownloader: skipped (download not enabled)");
                 return 0;
             }
             if (state.EnabledDashboards == null || state.EnabledDashboards.Count == 0)
@@ -135,12 +135,12 @@ namespace MozaPlugin.Telemetry
             // Claim 0x0B through the dispatcher so we get exclusive routing.
             // This evicts the tile-server parser from 0x0B during download.
             _dispatcher.Claim(0x0B, this);
-            MozaLog.Info("[Moza] DashboardDownloader: claimed session 0x0B, sending FT activate...");
+            MozaLog.Debug("[Moza] DashboardDownloader: claimed session 0x0B, sending FT activate...");
             SendFileTransferActivate(0x0B);
 
             if (!_sessionOpened.IsSet)
             {
-                MozaLog.Info("[Moza] DashboardDownloader: waiting for FT session device-init...");
+                MozaLog.Debug("[Moza] DashboardDownloader: waiting for FT session device-init...");
                 if (!_sessionOpened.Wait(15_000))
                 {
                     MozaLog.Warn("[Moza] DashboardDownloader: no FT session opened by wheel");
@@ -148,7 +148,7 @@ namespace MozaPlugin.Telemetry
                     return 0;
                 }
             }
-            MozaLog.Info($"[Moza] DashboardDownloader: using session 0x{_session:X2}");
+            MozaLog.Debug($"[Moza] DashboardDownloader: using session 0x{_session:X2}");
 
             // ── Phase 3: Build and send download request ──────────────────
             _retransmitter.Clear();
@@ -162,7 +162,7 @@ namespace MozaPlugin.Telemetry
                 "pithouse_replay.txt");
             if (System.IO.File.Exists(replayPath))
             {
-                MozaLog.Info("[Moza] DashboardDownloader: REPLAY MODE — sending PitHouse frames");
+                MozaLog.Debug("[Moza] DashboardDownloader: REPLAY MODE — sending PitHouse frames");
                 var lines = System.IO.File.ReadAllLines(replayPath);
                 lock (_responseBuffer) { _responseBuffer.Clear(); }
                 _downloadComplete.Reset();
@@ -176,7 +176,7 @@ namespace MozaPlugin.Telemetry
                         raw[i] = Convert.ToByte(line.Substring(i * 2, 2), 16);
                     _connection.Send(raw);
                 }
-                MozaLog.Info($"[Moza] DashboardDownloader: sent {lines.Length} replay frames");
+                MozaLog.Debug($"[Moza] DashboardDownloader: sent {lines.Length} replay frames");
                 // Wait for response
                 _lastChunkTicks = Environment.TickCount;
                 int deadline2 = Environment.TickCount + 60_000;
@@ -189,13 +189,13 @@ namespace MozaPlugin.Telemetry
                 }
                 byte[] rd; lock (_responseBuffer) { rd = _responseBuffer.ToArray(); _responseBuffer.Clear(); }
                 _receiving = false;
-                MozaLog.Info($"[Moza] DashboardDownloader: replay response = {rd.Length} bytes");
+                MozaLog.Debug($"[Moza] DashboardDownloader: replay response = {rd.Length} bytes");
                 _dispatcher.Release(_session, this);
                 return 0;
             }
 
             byte[] requestBody = BuildRequestBody(state, hashByName);
-            MozaLog.Info(
+            MozaLog.Debug(
                 $"[Moza] DashboardDownloader: built {requestBody.Length} byte request " +
                 $"for {hashByName.Count} dashboards on session 0x{_session:X2}");
 
@@ -215,7 +215,7 @@ namespace MozaPlugin.Telemetry
                 var frames = TierDefinitionBuilder.ChunkMessage(
                     requestBody, _session, ref seq);
 
-                MozaLog.Info(
+                MozaLog.Debug(
                     $"[Moza] DashboardDownloader: sending {frames.Count} chunks " +
                     $"(seq {_deviceInitSeq + 3}..{seq - 1}), windowed");
 
@@ -243,7 +243,7 @@ namespace MozaPlugin.Telemetry
                 }
 
                 int closeSeq = seq; // seq after last data frame
-                MozaLog.Info(
+                MozaLog.Debug(
                     $"[Moza] DashboardDownloader: all {frames.Count} request chunks sent, " +
                     $"waiting for response (timeout={timeoutMs}ms)");
 
@@ -269,7 +269,7 @@ namespace MozaPlugin.Telemetry
                     int idle = Environment.TickCount - _lastChunkTicks;
                     if (bufSize > 0 && idle > InactivityMs)
                     {
-                        MozaLog.Info(
+                        MozaLog.Debug(
                             $"[Moza] DashboardDownloader: {bufSize} bytes, idle {idle}ms — closing");
                         if (!closeSent)
                         {
@@ -306,7 +306,7 @@ namespace MozaPlugin.Telemetry
                 return 0;
             }
 
-            MozaLog.Info($"[Moza] DashboardDownloader: received {responseData.Length} bytes");
+            MozaLog.Debug($"[Moza] DashboardDownloader: received {responseData.Length} bytes");
 
             byte[]? decompressed = DecompressResponse(responseData);
             if (decompressed == null || decompressed.Length == 0)
@@ -316,10 +316,10 @@ namespace MozaPlugin.Telemetry
                 return 0;
             }
 
-            MozaLog.Info($"[Moza] DashboardDownloader: decompressed {decompressed.Length} bytes");
+            MozaLog.Debug($"[Moza] DashboardDownloader: decompressed {decompressed.Length} bytes");
 
             var mzdashFiles = SplitMzdashFiles(decompressed);
-            MozaLog.Info($"[Moza] DashboardDownloader: found {mzdashFiles.Count} mzdash files");
+            MozaLog.Debug($"[Moza] DashboardDownloader: found {mzdashFiles.Count} mzdash files");
 
             int ingested = 0;
             var nameOrder = new List<string>(hashByName.Keys);
@@ -331,7 +331,7 @@ namespace MozaPlugin.Telemetry
                     ingested++;
             }
 
-            MozaLog.Info(
+            MozaLog.Debug(
                 $"[Moza] DashboardDownloader: ingested {ingested}/{mzdashFiles.Count} dashboards");
             _dispatcher.Release(_session, this);
             return ingested;

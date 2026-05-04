@@ -390,7 +390,7 @@ namespace MozaPlugin.Telemetry
                 if (_testMode != value)
                 {
                     _testMode = value;
-                    MozaLog.Info($"[Moza] TestMode changed to {value}");
+                    MozaLog.Debug($"[Moza] TestMode changed to {value}");
                 }
             }
         }
@@ -497,7 +497,7 @@ namespace MozaPlugin.Telemetry
                         TickInterval = tickInterval,
                     };
                 }
-                MozaLog.Info(tierDiag.ToString());
+                MozaLog.Debug(tierDiag.ToString());
             }
         }
         private MultiStreamProfile? _profile;
@@ -865,7 +865,7 @@ namespace MozaPlugin.Telemetry
             byte[] body = global::MozaPlugin.Protocol.SessionPropertyPushBuilder
                 .BuildDashboardSwitchBody(slotIndex);
             SendSessionPropertyBody(body);
-            MozaLog.Info(
+            MozaLog.Debug(
                 $"[Moza] Sent dashboard-switch FF-record: slot={slotIndex} " +
                 $"on session 0x02 seq={_session02OutboundSeq - 1}");
 
@@ -942,7 +942,7 @@ namespace MozaPlugin.Telemetry
             // reactivated. Re-pending the handshake here forces it to fire
             // again after renegotiate completes.
             _gameStartHandshakePending = true;
-            MozaLog.Info(
+            MozaLog.Debug(
                 $"[Moza] Renegotiate: profile={_profile?.Name ?? "null"} " +
                 $"catalog={_wheelChannelCatalog?.Count ?? -1}");
 
@@ -1000,7 +1000,7 @@ namespace MozaPlugin.Telemetry
 
             // Reclaim any HOST-managed sessions left open by a prior SimHub
             // crash/kill. Don't touch 0x04..0x10 — those are wheel-managed.
-            MozaLog.Info("[Moza] Closing any stale host sessions (0x01..0x03)...");
+            MozaLog.Debug("[Moza] Closing any stale host sessions (0x01..0x03)...");
             for (byte port = 1; port <= 0x03; port++)
             {
                 if (!_connection.IsConnected) return;
@@ -1026,7 +1026,7 @@ namespace MozaPlugin.Telemetry
             if (telemetryPort != 0)
             {
                 FlagByte = telemetryPort;
-                MozaLog.Info(
+                MozaLog.Debug(
                     $"[Moza] Sessions opened: mgmt=0x{mgmtPort:X2} telem=0x{telemetryPort:X2}");
             }
             else if (mgmtPort != 0)
@@ -1254,7 +1254,7 @@ namespace MozaPlugin.Telemetry
 
             int chCount = 0;
             foreach (var t in _profile.Tiers) chCount += t.Channels.Count;
-            MozaLog.Info(
+            MozaLog.Debug(
                 $"[Moza] Subscription applied: \"{_profile.Name}\" " +
                 $"{chCount}ch/{_profile.Tiers.Count}t " +
                 $"catalog={_wheelChannelCatalog?.Count ?? -1}");
@@ -1294,7 +1294,7 @@ namespace MozaPlugin.Telemetry
                 {
                     profile = BuildV0ProfileFromCatalog(profile, catalog);
                     int catalogCh = profile.Tiers[0].Channels.Count;
-                    MozaLog.Info(
+                    MozaLog.Debug(
                         $"[Moza] V0 subscription expanded to wheel catalog: " +
                         $"{catalogCh} channels");
                 }
@@ -1323,7 +1323,7 @@ namespace MozaPlugin.Telemetry
 
                 int channelCount = 0;
                 foreach (var t in profile.Tiers) channelCount += t.Channels.Count;
-                MozaLog.Info(
+                MozaLog.Debug(
                     $"[Moza] Sending v0 URL subscription: " +
                     $"{message.Length} bytes in {frames.Count} chunks " +
                     $"on session 0x{tierDefSession:X2} ({channelCount} channels)");
@@ -1377,7 +1377,7 @@ namespace MozaPlugin.Telemetry
                 {
                     if (AutoFallbackWireFormat)
                     {
-                        MozaLog.Info(
+                        MozaLog.Debug(
                             "[Moza] Auto: no wheel catalog received — downgrading from Type02 " +
                             "to legacy V2 + 6B upload header (older firmware path).");
                         UploadWireFormat = FileTransferWireFormat.New2026_04;
@@ -1385,7 +1385,7 @@ namespace MozaPlugin.Telemetry
                     }
                     else
                     {
-                        MozaLog.Info(
+                        MozaLog.Debug(
                             "[Moza] Tier def skipped: Type02 wire format requires wheel catalog, " +
                             "none received yet. Will retry on next preamble cycle.");
                         return;
@@ -1401,7 +1401,7 @@ namespace MozaPlugin.Telemetry
                     wheelCatalog: cspIdx ? _wheelChannelCatalog : null);
                 var frames = TierDefinitionBuilder.ChunkMessage(message, tierDefSession, ref seq);
 
-                MozaLog.Info(
+                MozaLog.Debug(
                     $"[Moza] Sending v2 tier definition: flagBase=0x{flagBase:X2}, " +
                     $"priorFlagCount={flagBase} " +
                     $"preamble ({preambleChunkCount} chunks)" +
@@ -1515,7 +1515,7 @@ namespace MozaPlugin.Telemetry
                 var frames = TierDefinitionBuilder.ChunkMessage(payload, 0x03, ref seq);
                 foreach (var frame in frames)
                     _connection.Send(frame);
-                MozaLog.Info(
+                MozaLog.Debug(
                     $"[Moza] Sent empty tile-server state on session 0x03: " +
                     $"{json.Length}B JSON → {payload.Length}B (12B env + zlib) → " +
                     $"{frames.Count} chunk(s)");
@@ -1626,7 +1626,7 @@ namespace MozaPlugin.Telemetry
             // re-upload. Saves ~1 s of handshake per reconnect.
             if (CanSkipUpload(content))
             {
-                MozaLog.Info(
+                MozaLog.Debug(
                     $"[Moza] Dashboard \"{MzdashName}\" already loaded on wheel (hash match) — skipping upload");
                 return;
             }
@@ -1647,7 +1647,7 @@ namespace MozaPlugin.Telemetry
             DashboardUploader.UploadPayload upload =
                 DashboardUploader.BuildUpload(content, dashboardName, token, tsMs, UploadWireFormat);
 
-            MozaLog.Info(
+            MozaLog.Debug(
                 $"[Moza] Uploading dashboard \"{dashboardName}\" via session 0x{uploadSess:X2} " +
                 $"(wire={UploadWireFormat}): " +
                 $"raw={upload.UncompressedSize}B md5={upload.Md5Hex} token=0x{token:X8}");
@@ -1714,7 +1714,7 @@ namespace MozaPlugin.Telemetry
                             $"[Moza] Session 0x{uploadSess:X2} sub-msg 1 ack timeout on fallback " +
                             $"wire={UploadWireFormat} — wheel may not be in upload-ready state");
                     else
-                        MozaLog.Info(
+                        MozaLog.Debug(
                             $"[Moza] Wire format auto-detected: wheel accepts {UploadWireFormat} " +
                             "(cached for this session)");
                 }
@@ -1747,9 +1747,9 @@ namespace MozaPlugin.Telemetry
             SendSessionEnd(uploadSess, (ushort)_uploadOutboundSeq);
 
             if (_uploadEndReceived.Wait(1000))
-                MozaLog.Info($"[Moza] Dashboard upload complete (session 0x{uploadSess:X2} closed by device)");
+                MozaLog.Debug($"[Moza] Dashboard upload complete (session 0x{uploadSess:X2} closed by device)");
             else
-                MozaLog.Info("[Moza] Dashboard upload finished; device did not echo end marker within 1s");
+                MozaLog.Debug("[Moza] Dashboard upload finished; device did not echo end marker within 1s");
 
             // Wheel's 2025-11 firmware fires a post-upload state refresh on
             // the upload session (updated directory listing) and session 0x09
@@ -1761,7 +1761,7 @@ namespace MozaPlugin.Telemetry
             Thread.Sleep(500);
             int refreshChunks = _uploadInboundMsgCount - preRefreshCount;
             if (refreshChunks > 0)
-                MozaLog.Info(
+                MozaLog.Debug(
                     $"[Moza] Session 0x{uploadSess:X2} post-upload state refresh: {refreshChunks} chunks");
         }
 
@@ -1826,7 +1826,7 @@ namespace MozaPlugin.Telemetry
             }
             _session09OutboundSeq = seq;
             _session09ReplySent = true;
-            MozaLog.Info(
+            MozaLog.Debug(
                 $"[Moza] Sent configJson() reply on session 0x{session:X2}: " +
                 $"{CanonicalDashboardList.Count} dashboards, {frames.Count} chunks");
         }
@@ -1855,7 +1855,7 @@ namespace MozaPlugin.Telemetry
                 {
                     int ingested = downloader.Execute(state, missing);
                     if (ingested > 0)
-                        MozaLog.Info(
+                        MozaLog.Debug(
                             $"[Moza] Dashboard download complete: {ingested} dashboards cached");
                 }
                 catch (Exception ex)
@@ -2234,7 +2234,7 @@ namespace MozaPlugin.Telemetry
                             try
                             {
                                 string json = System.Text.Encoding.UTF8.GetString(dirBlob);
-                                MozaLog.Info(
+                                MozaLog.Debug(
                                     $"[Moza] Session 0x{session:X2} dir listing: {dirBlob.Length} bytes, " +
                                     $"children≈{CountOccurrences(json, "\"name\"")}");
                             }
@@ -2261,7 +2261,7 @@ namespace MozaPlugin.Telemetry
                         if (session == 0x09) _session09InboundSeq = seq;
                         try
                         {
-                            MozaLog.Info(
+                            MozaLog.Debug(
                                 $"[Moza] session 0x{session:X2} inbound chunk: seq={seq} payload={chunkPayload.Length}B " +
                                 $"first8={BitConverter.ToString(chunkPayload, 0, Math.Min(8, chunkPayload.Length))}");
                         }
@@ -2318,7 +2318,7 @@ namespace MozaPlugin.Telemetry
                             {
                                 try
                                 {
-                                    MozaLog.Info(
+                                    MozaLog.Debug(
                                         $"[Moza] Tile-server state received on session 0x{session:X2}: " +
                                         $"root='{tile.Root}' version={tile.Version} games={tile.Games.Count} " +
                                         $"any_populated={tile.AnyPopulated}");
@@ -2387,7 +2387,7 @@ namespace MozaPlugin.Telemetry
                 {
                     _displayModelName = System.Text.Encoding.ASCII.GetString(data, 4, nameLen);
                     _displayDetected = true;
-                    MozaLog.Info($"[Moza] Display sub-device detected: \"{_displayModelName}\"");
+                    MozaLog.Debug($"[Moza] Display sub-device detected: \"{_displayModelName}\"");
                 }
             }
         }
@@ -2479,7 +2479,7 @@ namespace MozaPlugin.Telemetry
                 if (d > 0) hex.Append('-');
                 hex.Append(buffer[d].ToString("X2"));
             }
-            MozaLog.Info($"[Moza] Catalog buffer dump ({buffer.Length} bytes): {hex}");
+            MozaLog.Debug($"[Moza] Catalog buffer dump ({buffer.Length} bytes): {hex}");
 
             // Scan-forward for `04`-tag URL records. Each record encodes its
             // canonical wheel-firmware idx in the byte at offset i+5 (1-based).
@@ -2568,7 +2568,7 @@ namespace MozaPlugin.Telemetry
                 if (idx >= 1) parsed[idx] = url;
                 i += 5 + (int)param;
             }
-            MozaLog.Info(
+            MozaLog.Debug(
                 $"[Moza] Catalog parse stats: full={diagFullUrl} prefix={diagPrefixUrl} " +
                 $"abbr={diagAbbrUrl} backref={diagBackRef} backrefFail={diagBackRefFail} " +
                 $"sizeReject={diagSizeReject} plausReject={diagPlausReject} " +
@@ -2602,7 +2602,7 @@ namespace MozaPlugin.Telemetry
                             || !string.Equals(prior[kv.Key - 1], kv.Value, StringComparison.OrdinalIgnoreCase);
                         if (wasDifferent) diff.Append($" [{kv.Key}]={kv.Value}");
                     }
-                    MozaLog.Info(
+                    MozaLog.Debug(
                         $"[Moza] Wheel channel catalog updated (size {prior?.Count ?? 0}→{merged.Count}):{diff}");
                 }
             }
@@ -2729,7 +2729,7 @@ namespace MozaPlugin.Telemetry
 
                         if (_wheelChannelCatalog != null && _wheelChannelCatalog.Count > 0)
                         {
-                            MozaLog.Info(
+                            MozaLog.Debug(
                                 $"[Moza] Dashboard switch renegotiate: " +
                                 $"catalog={_wheelChannelCatalog.Count} (was {prevCatalog?.Count ?? 0})");
                             ApplySubscription(force: false);
@@ -2749,7 +2749,7 @@ namespace MozaPlugin.Telemetry
                 if (_postRenegDiagTicks > 0)
                 {
                     bool useV0Diag = ProtocolVersion == 0;
-                    MozaLog.Info(
+                    MozaLog.Debug(
                         $"[Moza] TICK DIAG: tiers={tiers.Length} " +
                         $"testMode={TestMode} gameRunning={_gameRunning} " +
                         $"useV0={useV0Diag} tickCounter={_tickCounter} " +
@@ -2889,7 +2889,7 @@ namespace MozaPlugin.Telemetry
                         if (!_enabled || !_connection.IsConnected) break;
                         _connection.Send(_tierDefBlindFrames[i]);
                     }
-                    MozaLog.Info(
+                    MozaLog.Debug(
                         $"[Moza] Blind retransmit round {_tierDefBlindSentRounds}/{TierDefBlindMaxRounds} " +
                         $"({_tierDefBlindCount} chunks)");
                     if (_tierDefBlindSentRounds >= TierDefBlindMaxRounds)
@@ -2901,7 +2901,8 @@ namespace MozaPlugin.Telemetry
                 // PitHouse-mirror widget polls: one frame per outer tick
                 // (33Hz). Cycle of 80 slots = each frame fires ~0.4/s,
                 // matching capture cadence ~0.2/s within tolerable range.
-                SendWidgetStatePoll();
+                if (_tickCounter % 10 == 0)
+                    SendWidgetStatePoll();
 
                 int slow = Math.Max(1, 1000 / _baseTickMs);
                 if (_slowCounter++ % slow == 0)
@@ -2923,7 +2924,7 @@ namespace MozaPlugin.Telemetry
                     // 1 Hz which made 7c23 ~7× too frequent vs PitHouse baseline.
                     if ((_slowCounter & 1) == 1)
                         SendDisplayConfig();
-                    else
+                    else if (_slowCounter % 4 == 0)
                         Send28xPoll();
                     SendStatusPush();
                     SendSession09Keepalive();

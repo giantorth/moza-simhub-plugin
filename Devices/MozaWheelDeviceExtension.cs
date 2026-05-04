@@ -38,7 +38,7 @@ namespace MozaPlugin.Devices
             var typeId = LinkedDevice.DeviceDescriptor.DeviceTypeID ?? "";
             _expectedModelPrefix = MozaDeviceConstants.GetWheelModelPrefix(typeId);
 
-            MozaLog.Info(
+            MozaLog.Debug(
                 $"[Moza] WheelDeviceExtension Init — DeviceTypeID={typeId}, modelPrefix={_expectedModelPrefix ?? "(null)"}");
 
             // Injection is deferred to DataUpdate() — calling it here would run before
@@ -102,7 +102,7 @@ namespace MozaPlugin.Devices
                             if (plugin != null)
                                 plugin.DeviceExtensionActive = true;
 
-                            MozaLog.Info("[Moza] Injected virtual LED driver — effects UI should be available");
+                            MozaLog.Debug("[Moza] Injected virtual LED driver — effects UI should be available");
                         }
                         else
                         {
@@ -111,7 +111,7 @@ namespace MozaPlugin.Devices
                         return;
                     }
                 }
-                MozaLog.Info("[Moza] No LedModuleDevice found on device instance");
+                MozaLog.Debug("[Moza] No LedModuleDevice found on device instance");
             }
             catch (Exception ex)
             {
@@ -131,7 +131,7 @@ namespace MozaPlugin.Devices
                 plugin.DeviceExtensionActive = false;
                 if (_expectedModelPrefix != null)
                     plugin.UnregisterActiveModelPrefix(_expectedModelPrefix);
-                MozaLog.Info("[Moza] Device extension ended");
+                MozaLog.Debug("[Moza] Device extension ended");
             }
         }
 
@@ -157,7 +157,7 @@ namespace MozaPlugin.Devices
                         if (modelInfo.KnobCount > 0)
                             SetEncodersCount(lmd.ledModuleSettings, modelInfo.KnobCount);
                         _buttonsCountSet = true;
-                        MozaLog.Info($"[Moza] Set ButtonsCount={modelInfo.ButtonLedCount}, EncodersCount={modelInfo.KnobCount} for {MozaPlugin.Instance!.Data.WheelModelName}");
+                        MozaLog.Debug($"[Moza] Set ButtonsCount={modelInfo.ButtonLedCount}, EncodersCount={modelInfo.KnobCount} for {MozaPlugin.Instance!.Data.WheelModelName}");
                         break;
                     }
                 }

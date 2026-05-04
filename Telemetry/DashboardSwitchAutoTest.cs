@@ -84,7 +84,7 @@ namespace MozaPlugin.Telemetry
             {
                 if (_elapsedMs >= IdleTimeoutMs)
                 {
-                    MozaLog.Info("[Moza] AUTO-TEST: <2 dashboards after 30s, skipping");
+                    MozaLog.Debug("[Moza] AUTO-TEST: <2 dashboards after 30s, skipping");
                     _state = State.Done;
                 }
                 return;
@@ -133,7 +133,7 @@ namespace MozaPlugin.Telemetry
             int frames = _sender.FramesSent - _framesAtPhaseStart;
             string startName = _startSlot >= 0 && _dashList != null && _startSlot < _dashList.Count
                 ? _dashList[_startSlot] : "?";
-            MozaLog.Info(
+            MozaLog.Debug(
                 $"[Moza] AUTO-TEST: pre-switch test done dash=\"{startName}\" " +
                 $"frames={frames} {(frames > 0 ? "PASS" : "FAIL")}");
 
@@ -197,7 +197,7 @@ namespace MozaPlugin.Telemetry
             int frames = _sender.FramesSent - _framesAtPhaseStart;
             string targetName = _dashList?[_targetSlot] ?? "?";
             bool ok = frames > 0;
-            MozaLog.Info(
+            MozaLog.Debug(
                 $"[Moza] AUTO-TEST: post-switch test done dash=\"{targetName}\" " +
                 $"frames={frames} {(ok ? "PASS" : "FAIL")}");
 
@@ -214,19 +214,19 @@ namespace MozaPlugin.Telemetry
                 {
                     plugin.Settings.AutoTestLastSlot = _targetSlot;
                     plugin.SaveSettings();
-                    MozaLog.Info(
+                    MozaLog.Debug(
                         $"[Moza] AUTO-TEST: persisted AutoTestLastSlot={_targetSlot} " +
                         "(next run will switch the other direction)");
                 }
             }
-            MozaLog.Info("[Moza] AUTO-TEST: state=DONE");
+            MozaLog.Debug("[Moza] AUTO-TEST: state=DONE");
             _state = State.Done;
         }
 
         private void Transition(State next, string detail)
         {
             _state = next;
-            MozaLog.Info($"[Moza] AUTO-TEST: state={next} {detail}");
+            MozaLog.Debug($"[Moza] AUTO-TEST: state={next} {detail}");
         }
     }
 }

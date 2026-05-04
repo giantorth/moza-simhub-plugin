@@ -41,7 +41,7 @@ namespace MozaPlugin.Telemetry
                 _deviceInbox.Clear();
                 try
                 {
-                    MozaLog.Info(
+                    MozaLog.Debug(
                         $"[Moza] configJson state received: TitleId={state.TitleId} " +
                         $"displayVersion={state.DisplayVersion} resetVersion={state.ResetVersion} " +
                         $"configJsonList={state.ConfigJsonList.Count} " +
@@ -62,7 +62,7 @@ namespace MozaPlugin.Telemetry
                         _lastMissingShape = shape;
                         try
                         {
-                            MozaLog.Info(
+                            MozaLog.Debug(
                                 $"[Moza] configJson state missing {missing.Count} expected top-level field(s): {shape}. " +
                                 "Firmware may be older than 2025-11 or schema has drifted.");
                         }
