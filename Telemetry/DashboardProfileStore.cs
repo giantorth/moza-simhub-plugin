@@ -347,7 +347,7 @@ namespace MozaPlugin.Telemetry
             {
                 var json = JObject.Parse(content);
                 var children = json["children"] as JArray;
-                if (children != null && children.Count > 0)
+                if (children != null && children.Count > 0 && profile != null)
                     profile.PageCount = children.Count;
             }
             catch (Exception ex)

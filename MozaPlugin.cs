@@ -1083,7 +1083,7 @@ namespace MozaPlugin
                     var port = _connection.LastPortName;
                     if (!string.IsNullOrEmpty(port) && _settings.LastWheelbasePort != port)
                     {
-                        _settings.LastWheelbasePort = port;
+                        _settings.LastWheelbasePort = port!;
                         ScheduleSave();
                     }
                 }
@@ -1120,7 +1120,7 @@ namespace MozaPlugin
                 var port = _ab9Manager.Connection.LastPortName;
                 if (!string.IsNullOrEmpty(port) && _settings.LastAb9Port != port)
                 {
-                    _settings.LastAb9Port = port;
+                    _settings.LastAb9Port = port!;
                     ScheduleSave();
                 }
             }
