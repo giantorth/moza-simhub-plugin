@@ -94,6 +94,8 @@ namespace MozaPlugin.Devices
                             if (plugin?.WheelModelInfo is { } modelInfo)
                             {
                                 lmd.ledModuleSettings.ButtonsCount = modelInfo.ButtonLedCount;
+                                if (modelInfo.KnobCount > 0)
+                                    SetEncodersCount(lmd.ledModuleSettings, modelInfo.KnobCount);
                                 _buttonsCountSet = true;
                             }
 
@@ -152,8 +154,10 @@ namespace MozaPlugin.Devices
                     if (instance is LedModuleDevice lmd && lmd.ledModuleSettings != null)
                     {
                         lmd.ledModuleSettings.ButtonsCount = modelInfo.ButtonLedCount;
+                        if (modelInfo.KnobCount > 0)
+                            SetEncodersCount(lmd.ledModuleSettings, modelInfo.KnobCount);
                         _buttonsCountSet = true;
-                        MozaLog.Info($"[Moza] Set ButtonsCount={modelInfo.ButtonLedCount} for {MozaPlugin.Instance!.Data.WheelModelName}");
+                        MozaLog.Info($"[Moza] Set ButtonsCount={modelInfo.ButtonLedCount}, EncodersCount={modelInfo.KnobCount} for {MozaPlugin.Instance!.Data.WheelModelName}");
                         break;
                     }
                 }
@@ -198,6 +202,24 @@ namespace MozaPlugin.Devices
         public override IEnumerable<DynamicButtonAction> GetDynamicButtonActions()
         {
             yield break;
+        }
+
+        /// <summary>
+        /// Set EncodersCount via reflection — property is private in SimHub's LedModuleSettings.
+        /// </summary>
+        private static void SetEncodersCount(LedModuleSettings settings, int count)
+        {
+            try
+            {
+                var prop = typeof(LedModuleSettings).GetProperty(
+                    "EncodersCount",
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                prop?.SetValue(settings, count);
+            }
+            catch (Exception ex)
+            {
+                MozaLog.Warn($"[Moza] Could not set EncodersCount: {ex.Message}");
+            }
         }
     }
 }

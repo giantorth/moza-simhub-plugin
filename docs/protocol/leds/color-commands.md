@@ -39,7 +39,38 @@ Mask progression with rising RPM (8-byte form, `window_mask = 0x00001ff8`):
 00 07 e0 00  ff ff 00 00   ← redline-zone-only mode (different window)
 ```
 
-Companion `1A 03 …` and `1A 01 ff …` mode-toggle / scene-reset variants are emitted at dashboard switch and game-state transitions.
+`1A 01 ff …` is a scene-reset / mode-toggle variant emitted at dashboard switch and game-state transitions.
+
+**Knob color chunk** (`wheel-telemetry-knob-colors`):
+
+```
+7E 16 3F 17 19 03 [20 bytes: 5 × (idx, R, G, B)] [checksum]
+```
+
+**Knob active-LED bitmask** (`wheel-send-knob-telemetry`):
+
+```
+7E 0C 3F 17 1A 03 [active_mask:u32 LE] [window_mask:u32 LE] [checksum]
+```
+
+8-byte form only (same as RPM 8-byte form). `window_mask` = `0x0000000F`
+(4 knobs, CS Pro) or `0x0000001F` (5 knobs, KS Pro). Each bit = one
+rotary knob indicator.
+
+Mask progression (CS Pro, 4 knobs, RPM-synced effect):
+```
+00 00 00 00  0f 00 00 00   ← idle (no knobs lit)
+01 00 00 00  0f 00 00 00   ← 1 knob
+03 00 00 00  0f 00 00 00   ← 2 knobs
+07 00 00 00  0f 00 00 00   ← 3 knobs
+0f 00 00 00  0f 00 00 00   ← all 4 knobs lit
+```
+
+Companion color writes set per-knob RGB (gradient from blue → purple → red):
+```
+19 03  00 00 00 FF   01 3F 00 C0   02 7F 00 80   03 BF 00 40   FF 00 00 00
+       knob 0=blue   knob 1        knob 2        knob 3=red    (padding)
+```
 
 **Button color chunk** (`wheel-telemetry-button-colors`):
 
@@ -60,7 +91,7 @@ Companion `1A 03 …` and `1A 01 ff …` mode-toggle / scene-reset variants are 
 | 2 | `0x3F` | Wheel-config write group |
 | 3 | `0x17` | Device wheel |
 | 4 | `0x19` (color) / `0x1A` (bitmask) | Cmd ID byte 1 |
-| 5 | `0x00` (RPM) / `0x01` (button) | Cmd ID byte 2 — selects RPM vs button group |
+| 5 | `0x00` (RPM) / `0x01` (button) / `0x03` (knob) | Cmd ID byte 2 — selects LED group |
 | 6.. | LED entries / bitmask | See per-command sections below |
 
 ### 20-byte color chunk format
@@ -81,6 +112,7 @@ Chunks per group:
 |-------|-----------|---------------|
 | RPM (`0x19 00`) | 10 LEDs (legacy), 16 LEDs (CS Pro), 18 LEDs (KS Pro) | 2 chunks for ≤10, 4 chunks for 16 (last padded), 4 chunks for 18 (last padded) |
 | Button (`0x19 01`) | 14 (VGS) / 8 (CS V2.1, CS Pro) / varies | 3 chunks (last padded) |
+| Knob (`0x19 03`) | 4 (CS Pro) / 5 (KS Pro) | 1 chunk (last padded) |
 
 **Padding rule:** unused entries within a chunk MUST use index `0xFF`. Zero
 padding (`00 00 00 00`) is interpreted as "set LED 0 to black" by firmware,
@@ -128,7 +160,7 @@ Bitmask (all 10 lit):
 
 Both write commands echo verbatim — see
 [`../wire/wheel-write-echoes.md`](../wire/wheel-write-echoes.md) entries for
-prefixes `19 00`, `19 01`, `1A 00`, `1A 01` (group `0x3F`, dev `0x17`).
+prefixes `19 00`, `19 01`, `19 03`, `1A 00`, `1A 01`, `1A 03` (group `0x3F`, dev `0x17`).
 
 ### Static (settings) vs live (telemetry) paths
 

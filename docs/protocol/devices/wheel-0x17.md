@@ -111,10 +111,12 @@ See [`../leds/color-commands.md`](../leds/color-commands.md) for the LED encodin
 
 | Command | ID | Bytes | Type | Notes |
 |---------|----|-------|------|-------|
-| send-rpm-telemetry | `1A 00` | 2 | array | Current RPM position on the LED bar; see [`../telemetry/control-signals.md` § RPM LED telemetry](../telemetry/control-signals.md) |
-| send-buttons-telemetry | `1A 01` | 2 | array | |
+| send-rpm-telemetry | `1A 00` | 2..8 | array | Current RPM position on the LED bar; see [`../telemetry/control-signals.md` § RPM LED telemetry](../telemetry/control-signals.md) |
+| send-buttons-telemetry | `1A 01` | 2..8 | array | |
+| send-knob-telemetry | `1A 03` | 8 | array | Knob indicator bitmask (8-byte active+window form). 4 bits on CSP, 5 on KSP. See [`../leds/color-commands.md`](../leds/color-commands.md) |
 | telemetry-rpm-colors | `19 00` | 20 | array | 5 LEDs per chunk; 2 chunks needed for 10 RPM LEDs |
 | telemetry-button-colors | `19 01` | 20 | array | 3 chunks for 14 button LEDs; pad unused entries with index `0xFF` |
+| telemetry-knob-colors | `19 03` | 20 | array | 1 chunk for 4–5 knob LEDs; pad unused entries with index `0xFF` |
 
 ### Group `0x41` (65) — Telemetry Enable (write-only)
 
@@ -180,10 +182,10 @@ Per-group commands (G = group ID 0–4, N = LED index):
 | group-standby-mode | `1D [G]` | 1 | int | Idle mode. Not yet exposed by plugin |
 | group-standby-interval | `1E [G] [2..6]` | 2 | int | 2=breath, 3=circular, 4=rainbow, 5=drift sand, 6=breath color. Not yet exposed by plugin |
 | group-led-color | `1F [G] FF [N]` | 3 | array | LED N static RGB. Plugin commands `wheel-rpm-color{1..25}` (G=0), `wheel-button-color{1..16}` (G=1), `wheel-group{G}-color{1..Nmax}` (G=2..4) |
-| group-live-colors | `19 [G]` | 20 | array | Bulk live telemetry frame (packed `[idx, R, G, B]` entries, 0xFF padding). **Only groups 0/1 confirmed** — 2/3/4 may or may not support. Plugin `wheel-telemetry-rpm-colors`, `wheel-telemetry-button-colors` |
-| group-live-bitmask | `1A [G]` | 2 | int | Per-frame active-LED bitmask (LE). Groups 0/1 only. Plugin `wheel-send-rpm-telemetry`, `wheel-send-buttons-telemetry` |
+| group-live-colors | `19 [G]` | 20 | array | Bulk live telemetry frame (packed `[idx, R, G, B]` entries, 0xFF padding). **Groups 0/1/3 confirmed**; 2/4 may or may not support. Plugin `wheel-telemetry-rpm-colors`, `wheel-telemetry-button-colors`, `wheel-telemetry-knob-colors` |
+| group-live-bitmask | `1A [G]` | 2..8 | int | Per-frame active-LED bitmask (LE). **Groups 0/1/3 confirmed**. Plugin `wheel-send-rpm-telemetry`, `wheel-send-buttons-telemetry`, `wheel-send-knob-telemetry` |
 
-**Static vs live paths**: groups 0/1 have two rendering pipelines. Static (`1F`) writes persist in EEPROM and render only when firmware is in idle/constant mode (`wheel-telemetry-mode=2`, `wheel-buttons-idle-effect=1`). Live (`19` + `1A`) writes a volatile frame buffer used while telemetry is active. Groups 2-4 have only the static path in documented commands.
+**Static vs live paths**: groups 0/1/3 have two rendering pipelines. Static (`1F`) writes persist in EEPROM and render only when firmware is in idle/constant mode (`wheel-telemetry-mode=2`, `wheel-buttons-idle-effect=1`). Live (`19` + `1A`) writes a volatile frame buffer used while telemetry is active. Group 3 (Rotary/knob) live path confirmed via `knob-rpm-effect.pcapng` (2026-05-03, CS Pro). Groups 2/4 have only the static path in documented commands.
 
 Additional newer wheel commands:
 

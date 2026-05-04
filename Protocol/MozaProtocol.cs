@@ -179,6 +179,8 @@ namespace MozaPlugin.Protocol
             new byte[] { 0x3F, 0x17, 0x1a, 0x00 }, // RPM LED telemetry write
             new byte[] { 0x3F, 0x17, 0x19, 0x00 }, // RPM LED color write
             new byte[] { 0x3F, 0x17, 0x19, 0x01 }, // button LED color write
+            new byte[] { 0x3F, 0x17, 0x1a, 0x03 }, // knob bitmask telemetry write
+            new byte[] { 0x3F, 0x17, 0x19, 0x03 }, // knob LED color write
             new byte[] { 0x3E, 0x17, 0x0b },       // newer-wheel LED cmd (1-byte prefix)
         };
 

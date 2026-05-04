@@ -47,8 +47,8 @@ group byte differs.
 | group-standby-mode | `1D [G]` | 1 | int | Idle mode. Not yet exposed by plugin |
 | group-standby-interval | `1E [G] [2..6]` | 2 | int | 2 = breath, 3 = circular, 4 = rainbow, 5 = drift sand, 6 = breath color. Not yet exposed |
 | group-led-color | `1F [G] FF [N]` | 3 | array (RGB) | LED N static RGB. Plugin commands `wheel-rpm-color{1..25}` (G=0), `wheel-button-color{1..16}` (G=1), `wheel-group{G}-color{1..Nmax}` (G=2..4) |
-| group-live-colors | `19 [G]` | 20 | array (5×idx+RGB) | Bulk live telemetry frame. **Only groups 0/1 confirmed**; 2/3/4 may or may not support |
-| group-live-bitmask | `1A [G]` | 2..4 | int (LE) | Per-frame active-LED bitmask. Groups 0/1 only. Plugin `wheel-send-rpm-telemetry`, `wheel-send-buttons-telemetry` |
+| group-live-colors | `19 [G]` | 20 | array (5×idx+RGB) | Bulk live telemetry frame. **Groups 0/1/3 confirmed**; 2/4 may or may not support |
+| group-live-bitmask | `1A [G]` | 2..8 | int (LE) | Per-frame active-LED bitmask. **Groups 0/1/3 confirmed**. Plugin `wheel-send-rpm-telemetry`, `wheel-send-buttons-telemetry`, `wheel-send-knob-telemetry` |
 
 ### Static vs live rendering pipelines
 
@@ -60,8 +60,11 @@ multiplexes based on the active mode:
 | Static | `1F [G] FF [N]` | EEPROM (per-LED RGB) | Idle/constant mode (`telemetry-mode = 2`, `buttons-idle-effect = 1`) |
 | Live | `19 [G]` + `1A [G]` | Volatile frame buffer | While telemetry is actively pumping the bitmask |
 
-Groups 2–4 have only the static path documented — live frame writes are
-not exercised by any current capture.
+Groups 2 and 4 have only the static path documented — live frame writes
+are not exercised by any current capture. **Group 3 (Rotary/knob)** live
+path confirmed via `knob-rpm-effect.pcapng` (2026-05-03, CS Pro): PitHouse
+sends `19 03` color chunks and `1A 03` bitmasks during telemetry to drive
+knob indicator LEDs in sync with RPM.
 
 ### Worked example: light KS Pro single-LED group LED 5 red
 

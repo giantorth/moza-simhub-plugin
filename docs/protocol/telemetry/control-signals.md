@@ -20,6 +20,28 @@ Sent ~once/s. 8 data bytes = 4 × 16-bit LE values:
 - Value 3 always 1023 (fixed denominator)
 - Values 2 and 4 always 0
 
+### Knob LED telemetry (group 0x3F, device 0x17, cmd `[0x1A, 0x03]`)
+
+Live knob indicator bitmask, sent in sync with RPM during telemetry.
+Uses the 8-byte active+window form:
+
+```
+7E 0C 3F 17 1A 03 [active_mask:u32 LE] [window_mask:u32 LE] [checksum]
+```
+
+- `window_mask` = `0x0000000F` (CS Pro, 4 knobs) or `0x0000001F` (KS Pro, 5 knobs)
+- `active_mask` = subset of window — each bit = one knob indicator LED
+- Knob 0 = bit 0, knob 1 = bit 1, etc.
+
+PitHouse fills knobs progressively alongside RPM: as RPM rises, knob bits
+light left→right; at redline all are lit; on RPM drop they drain in sync.
+Companion color writes (`0x19 0x03`) set per-knob RGB — observed gradient
+from blue (knob 0) through purple to red (knob 3). See
+[`../leds/color-commands.md`](../leds/color-commands.md) for frame layout and
+worked examples.
+
+Source: `knob-rpm-effect.pcapng` (2026-05-03, CS Pro W17).
+
 ### LED group colour (group 0x3F, device 0x17, cmd `[0x27, <group>, <role>]`)
 
 Sets the **idle** and **active** colours for an entire LED group on new-protocol

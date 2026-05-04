@@ -2522,10 +2522,10 @@ namespace MozaPlugin
             var modelInfo = WheelModelInfo.FromModelName(modelName);
             var deviceName = "MOZA " + friendlyName;
 
-            DeployGeneratedWheelDefinition(deviceName, guid, friendlyName, modelInfo.RpmLedCount, modelInfo.HasFlagLeds, modelInfo.ButtonLedCount);
+            DeployGeneratedWheelDefinition(deviceName, guid, friendlyName, modelInfo.RpmLedCount, modelInfo.HasFlagLeds, modelInfo.ButtonLedCount, modelInfo.KnobCount);
         }
 
-        private void DeployGeneratedWheelDefinition(string deviceName, string guid, string productName, int rpmCount, bool hasFlagLeds, int buttonCount)
+        private void DeployGeneratedWheelDefinition(string deviceName, string guid, string productName, int rpmCount, bool hasFlagLeds, int buttonCount, int knobCount)
         {
             try
             {
@@ -2547,7 +2547,8 @@ namespace MozaPlugin
                         var existing = JObject.Parse(File.ReadAllText(deviceJsonPath));
                         int existingLed = existing.SelectToken("LedsFeature.LogicalTelemetryLeds.LedCount")?.Value<int>() ?? -1;
                         int existingButtons = (existing.SelectToken("LedsFeature.LogicalButtonsSection.Items") as JArray)?.Count ?? -1;
-                        stale = existingLed != expectedTelemetryCount || existingButtons != buttonCount;
+                        int existingExtra = existing.SelectToken("LedsFeature.LogicalExtraSection.LedCount")?.Value<int>() ?? 0;
+                        stale = existingLed != expectedTelemetryCount || existingButtons != buttonCount || existingExtra != knobCount;
                     }
                     catch (Exception parseEx)
                     {
@@ -2563,7 +2564,7 @@ namespace MozaPlugin
                 Directory.CreateDirectory(deviceDir);
 
                 var pid = _connection.DiscoveredPid ?? "0x0004";
-                var json = GenerateWheelDeviceJson(guid, productName, rpmCount, hasFlagLeds, buttonCount, pid);
+                var json = GenerateWheelDeviceJson(guid, productName, rpmCount, hasFlagLeds, buttonCount, knobCount, pid);
                 File.WriteAllText(deviceJsonPath, json);
 
                 DeviceDefinitionDeployed = true;
@@ -2571,7 +2572,7 @@ namespace MozaPlugin
                 MozaLog.Info(
                     $"[Moza] {action} device definition: {deviceName} " +
                     $"(guid={guid}, telemetryLeds={expectedTelemetryCount}, rpm={rpmCount}, flags={hasFlagLeds}, " +
-                    $"buttons={buttonCount}, pid={pid}, restart SimHub to pick up changes)");
+                    $"buttons={buttonCount}, knobs={knobCount}, pid={pid}, restart SimHub to pick up changes)");
             }
             catch (Exception ex)
             {
@@ -2579,7 +2580,7 @@ namespace MozaPlugin
             }
         }
 
-        private static string GenerateWheelDeviceJson(string guid, string productName, int rpmCount, bool hasFlagLeds, int buttonCount, string pid)
+        private static string GenerateWheelDeviceJson(string guid, string productName, int rpmCount, bool hasFlagLeds, int buttonCount, int knobCount, string pid)
         {
             var physItems = new JArray();
 
@@ -2607,6 +2608,20 @@ namespace MozaPlugin
             });
             for (int i = 1; i < buttonCount; i++)
                 physItems.Add(new JObject());
+
+            // Knob indicator LEDs (Extra/encoders channel): one per rotary knob
+            if (knobCount > 0)
+            {
+                physItems.Add(new JObject
+                {
+                    ["SourceRole"] = 3,
+                    ["SourceIndex"] = 0,
+                    ["RepeatCount"] = knobCount,
+                    ["RepeatMode"] = 1
+                });
+                for (int i = 1; i < knobCount; i++)
+                    physItems.Add(new JObject());
+            }
 
             var buttonItems = new JArray();
             for (int i = 0; i < buttonCount; i++)
@@ -2647,6 +2662,14 @@ namespace MozaPlugin
                         ["Items"] = buttonItems,
                         ["IsEnabled"] = true
                     },
+                    ["LogicalExtraSection"] = knobCount > 0
+                        ? new JObject
+                        {
+                            ["LedCount"] = knobCount,
+                            ["TitleOverride"] = "Knob Indicators",
+                            ["IsEnabled"] = true
+                        }
+                        : new JObject { ["IsEnabled"] = false },
                     ["IsEnabled"] = true
                 },
                 ["HardwareInterface"] = new JObject
