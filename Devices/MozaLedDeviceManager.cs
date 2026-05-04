@@ -39,6 +39,10 @@ namespace MozaPlugin.Devices
 
         // Keepalive timer
         private DateTime _lastSendTime = DateTime.MinValue;
+        // Tracked separately so knob frames are refreshed even while RPM is updating
+        // every frame (RPM activity keeps the RPM controller alive but not the knob
+        // controller, which forgets its state if not periodically retold).
+        private DateTime _lastKnobSendTime = DateTime.MinValue;
         private const double KeepaliveIntervalSeconds = 1.0;
 
         // ES wheel wake-up
@@ -84,11 +88,14 @@ namespace MozaPlugin.Devices
                 // Reset cached state so everything re-initializes on reconnect
                 _lastLeds = null;
                 _lastButtons = null;
+                _lastKnobs = null;
                 _lastFlagColorsPrimed = false;
                 _lastRpmBitmask = -1;
                 _lastButtonBitmask = -1;
+                _lastKnobBitmask = -1;
                 _lastBrightness = -1;
                 _lastButtonsBrightness = -1;
+                _lastKnobSendTime = DateTime.MinValue;
                 _ledsAwake = false;
                 OnDisconnect?.Invoke(this, EventArgs.Empty);
             }
@@ -416,6 +423,7 @@ namespace MozaPlugin.Devices
                                 int windowMask = (1 << knobCount) - 1;
                                 plugin.DeviceManager.WriteArray("wheel-send-knob-telemetry", BuildKnobBitmaskBytes(knobBitmask, windowMask));
                             }
+                            _lastKnobSendTime = DateTime.UtcNow;
                             anySent = true;
                         }
                     }
@@ -458,6 +466,29 @@ namespace MozaPlugin.Devices
                     {
                         _lastSendTime = now;
                         ResendLastState(plugin, isNewWheel, isOldWheel);
+                    }
+                }
+
+                // Independent knob keepalive: knob colors rarely change, so the
+                // change-detection path above stops re-sending them once SimHub
+                // stabilizes. The shared keepalive above only fires when nothing
+                // else moved — under live RPM that never happens. Refresh knob
+                // frame on its own cadence so the knob LED controller doesn't
+                // forget the state.
+                if (isNewWheel && _lastKnobs != null && modelInfo?.KnobCount > 0)
+                {
+                    var now = DateTime.UtcNow;
+                    if ((now - _lastKnobSendTime).TotalSeconds >= KeepaliveIntervalSeconds)
+                    {
+                        _lastKnobSendTime = now;
+                        int knobCount = Math.Min(_lastKnobs.Length, modelInfo.KnobCount);
+                        SendColorChunks(plugin, _lastKnobs, knobCount, "wheel-telemetry-knob-colors");
+                        if (_lastKnobBitmask >= 0)
+                        {
+                            int windowMask = (1 << modelInfo.KnobCount) - 1;
+                            plugin.DeviceManager.WriteArray("wheel-send-knob-telemetry",
+                                BuildKnobBitmaskBytes(_lastKnobBitmask, windowMask));
+                        }
                     }
                 }
             }

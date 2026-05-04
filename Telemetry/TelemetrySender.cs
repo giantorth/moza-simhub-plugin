@@ -40,7 +40,6 @@ namespace MozaPlugin.Telemetry
         private volatile bool _gameStartHandshakePending;
         private volatile bool _enabled;
         private int _tickCounter;
-        private int _modeCounter;
         private int _slowCounter;
         private int _baseTickMs;  // Timer period derived from fastest tier's package_level
         private byte _sequenceCounter;
@@ -106,7 +105,6 @@ namespace MozaPlugin.Telemetry
         // retransmits each chunk ~10× regardless of acks (wheel never acks
         // session 0x01). See findings/2026-05-02-tier-def-retransmission.md.
         private byte[][]? _tierDefBlindFrames;
-        private int _tierDefBlindCount;
         private int _tierDefBlindSentRounds;
         private int _tierDefBlindLastTickCount;
         private const int TierDefBlindMaxRounds = 12;
@@ -567,7 +565,6 @@ namespace MozaPlugin.Telemetry
             Stop();
             _enabled = true;
             _tickCounter = 0;
-            _modeCounter = 0;
             _framesSent = 0;
             _sequenceCounter = 0;
             _slowCounter = 0;
@@ -2612,7 +2609,7 @@ namespace MozaPlugin.Telemetry
 
         // Re-entry guard. System.Timers.Timer fires Elapsed on the ThreadPool,
         // so a handler that overruns its interval gets concurrent invocations.
-        // Without this, _tickCounter/_slowCounter/_modeCounter all race and
+        // Without this, _tickCounter/_slowCounter all race and
         // non-coalesced one-shot frames (heartbeat, display_cfg) fire 2–3× the
         // intended rate. Stream-lane traffic is coalesced so it's immune, but
         // the counter races still skew scheduling. Drop overlapping ticks —
@@ -2669,7 +2666,6 @@ namespace MozaPlugin.Telemetry
                         ApplySubscription(force: false);
 
                         _tickCounter = 0;
-                        _modeCounter = 0;
                         _slowCounter = 0;
                     }
                     return;
@@ -2891,7 +2887,7 @@ namespace MozaPlugin.Telemetry
                     }
                     MozaLog.Debug(
                         $"[Moza] Blind retransmit round {_tierDefBlindSentRounds}/{TierDefBlindMaxRounds} " +
-                        $"({_tierDefBlindCount} chunks)");
+                        $"({_tierDefBlindFrames.Length} chunks)");
                     if (_tierDefBlindSentRounds >= TierDefBlindMaxRounds)
                         _tierDefBlindFrames = null;
                 }
