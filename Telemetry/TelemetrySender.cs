@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Threading;
 using System.Timers;
 using GameReaderCommon;
@@ -173,6 +174,12 @@ namespace MozaPlugin.Telemetry
         private System.Collections.Generic.List<byte> _incomingSessionBuffer = new();
         private volatile System.Collections.Generic.List<string>? _wheelChannelCatalog;
         private volatile int _channelBufferLastActivityMs;
+        // Tracks buffer length at last successful catalog parse — drives
+        // continuous parse-on-tick. Wheel announces URLs in batches with up
+        // to ~1.2s gaps (verified against bridge-20260503-112940.jsonl: idx
+        // 1-8 at t+7.124s, idx 9-16 at t+8.328s). Parse on every buffer
+        // growth + merge non-destructively so no URLs get dropped.
+        private int _lastCatalogParseLen;
 
         // ── Subscription state ─────────────────────────────────────────
         // Immutable snapshot published atomically by ApplySubscription.
@@ -201,10 +208,11 @@ namespace MozaPlugin.Telemetry
         // value; initial/re-subscribe resets to 0.
         private byte _nextFlagBase;
 
-        // Cumulative END marker value. PitHouse END markers are always
-        // non-decreasing across the session; the wheel may reject tier-defs
-        // whose END value is lower than a previously seen one.
-        private int _endMarkerAccumulator;
+        // Monotonic counter incremented every time ApplySubscription sends a
+        // tier-def. DashboardSwitchAutoTest uses this to detect renegotiate
+        // completion.
+        private int _subscriptionGen;
+        internal int SubscriptionGen => System.Threading.Volatile.Read(ref _subscriptionGen);
 
         // Set by SendDashboardSwitch to force renegotiation even when
         // the new dashboard has identical channel URLs to the old one.
@@ -422,30 +430,16 @@ namespace MozaPlugin.Telemetry
             {
                 if (value != null && value.Tiers.Count > 0)
                 {
-                    // PitHouse 2026-04-29 captures show two patterns:
-                    //   Nebula (1 pkg_level=30, 4 channels): 3 broadcasts of 1
-                    //     sub-tier each → 3 tiers at flags 0/1/2 with identical
-                    //     channels.
-                    //   Rally V4 (3 pkg_levels=30/500/2000, 9 channels split
-                    //     5+2+1): 4 broadcasts of 3 sub-tiers each → 12 tiers
-                    //     at flags 0..11. Within a broadcast, sub-tiers ordered
-                    //     by pkg_level ASCENDING (fastest=flag offset 0,
-                    //     slowest=highest offset).
-                    // Generalised: sort sub-tiers by pkg_level ascending, then
-                    // replicate the sub-tier sequence `max(3, sub_count + 1)`
-                    // times with consecutive flag bytes.
+                    // Multi-broadcast: replicate each sub-tier 3-N+1 times with
+                    // consecutive flag bytes. Without this, slow-pkg tiers
+                    // (pkg=500, pkg=2000) only fire at their nominal rate (2Hz,
+                    // 0.5Hz) → visible test-mode lag for slow-tier channels.
+                    // Replication forces every channel to update at the fast
+                    // base tick rate via parallel flag bytes.
                     var subTiers = new System.Collections.Generic.List<DashboardProfile>(value.Tiers);
                     subTiers.Sort((a, b) => a.PackageLevel.CompareTo(b.PackageLevel));
                     int subCount = subTiers.Count;
-                    // PitHouse capture pattern (2026-04-29):
-                    //   1 pkg-level (Nebula): 3 broadcasts × 1 sub-tier = 3 tiers
-                    //   2+ pkg-levels (Grids 8+12, Rally V4 5+2+1): 4 broadcasts
-                    // Single-pkg-level dashboards stay at 3; multi-pkg need 4 so
-                    // the wheel's tier slots 0..N-1 are all filled (widgets bound
-                    // to flags >= broadcasts × subCount stay unsubscribed and
-                    // never animate during TestMode/live).
                     int broadcasts = subCount == 1 ? 3 : System.Math.Max(4, subCount + 1);
-
                     var expanded = new System.Collections.Generic.List<DashboardProfile>(subCount * broadcasts);
                     for (int b = 0; b < broadcasts; b++)
                     {
@@ -477,10 +471,7 @@ namespace MozaPlugin.Telemetry
                     return;
                 }
 
-                // Base tick = fastest tier's pkg_level (smallest), not first.
-                // After expansion order reversal (slow→fast), Tiers[0] is now
-                // the SLOWEST. Using that as base would slow the timer to 0.5
-                // Hz. Pick the minimum.
+                // Base tick = fastest tier's pkg_level (smallest).
                 int minPkg = int.MaxValue;
                 foreach (var t in value.Tiers)
                     if (t.PackageLevel > 0 && t.PackageLevel < minPkg) minPkg = t.PackageLevel;
@@ -583,9 +574,9 @@ namespace MozaPlugin.Telemetry
             _displayConfigPage = 0;
             _preambleComplete = false;
             lock (_incomingSessionBuffer) { _incomingSessionBuffer.Clear(); }
+            _lastCatalogParseLen = 0;
             _wheelChannelCatalog = null;
             _nextFlagBase = 0;
-            _endMarkerAccumulator = 0;
             _activeSubscription = null;
             _renegotiateRequired = false;
             _sessionAckSeq = 0;
@@ -864,22 +855,13 @@ namespace MozaPlugin.Telemetry
         {
             if (!_connection.IsConnected) return;
 
-            // Don't send a pre-switch tier-def here. The current
-            // _wheelChannelCatalog belongs to the OLD dashboard — channel
-            // URLs from the NEW profile won't match, producing catIdx=0 for
-            // every unmatched channel. The wheel can't decode data with
-            // catIdx=0 and enters a bad state that persists across
-            // subsequent (correct) tier-defs.
-            //
-            // Instead, send ONLY the FF-SWITCH record. The wheel pushes a
-            // new catalog for the target dashboard; the renegotiation code
-            // (line ~2771) detects catalog completion via end-marker and
-            // calls ApplySubscription(force: true) with the correct
-            // catalog. This matches PitHouse semantics: PitHouse can send
-            // tier-def before FF-SWITCH because it derives catIdx from its
-            // own mzdash data (which matches the wheel's internal catalog),
-            // not from the wheel's catalog push.
-
+            // Send FF-record first, then defer tier-def until the wheel
+            // pushes its post-switch catalog. The new dash typically uses
+            // URLs not present in the prior dash's catalog; emitting a
+            // tier-def before the wheel announces them produces idx=0
+            // entries the wheel rejects. Catalog merge (non-destructive
+            // grow) preserves the original catalog while back-ref / new
+            // entries append.
             byte[] body = global::MozaPlugin.Protocol.SessionPropertyPushBuilder
                 .BuildDashboardSwitchBody(slotIndex);
             SendSessionPropertyBody(body);
@@ -888,7 +870,11 @@ namespace MozaPlugin.Telemetry
                 $"on session 0x02 seq={_session02OutboundSeq - 1}");
 
             lock (_incomingSessionBuffer) { _incomingSessionBuffer.Clear(); }
+            _lastCatalogParseLen = 0;
             _channelBufferLastActivityMs = 0;
+            // Don't clear catalog — wheel needs prior entries to resolve
+            // backrefs in the post-switch announcement, AND only sends
+            // re-indexed URLs once it sees a tier-def to correct.
             _renegotiateRequired = true;
         }
 
@@ -947,11 +933,18 @@ namespace MozaPlugin.Telemetry
             if (!_enabled || !_connection.IsConnected) return false;
             if (!_preambleComplete) return false;
 
+            lock (_incomingSessionBuffer) { _incomingSessionBuffer.Clear(); }
+            _lastCatalogParseLen = 0;
             _renegotiateRequired = true;
+            // PitHouse fires SendGameStartHandshake's `27:02:01:00` (channel-
+            // mode SET) at every dash phase, not just game start. Plugin only
+            // fires at game-start, so post-switch the widget never gets
+            // reactivated. Re-pending the handshake here forces it to fire
+            // again after renegotiate completes.
+            _gameStartHandshakePending = true;
             MozaLog.Info(
-                $"[Moza] Renegotiate: waiting for post-switch catalog " +
-                $"(profile={_profile?.Name ?? "null"} " +
-                $"catalog={_wheelChannelCatalog?.Count ?? -1})");
+                $"[Moza] Renegotiate: profile={_profile?.Name ?? "null"} " +
+                $"catalog={_wheelChannelCatalog?.Count ?? -1}");
 
             // Update timer interval if profile changed _baseTickMs.
             var timer = _sendTimer;
@@ -1241,7 +1234,17 @@ namespace MozaPlugin.Telemetry
             if (_profile == null || _profile.Tiers.Count == 0)
                 return;
 
-            _tierDefPreambleSent = false;
+            // Note: don't defer on missing URLs. Wheel only pushes the new
+            // dashboard's URL→idx mapping AFTER it sees the plugin's tier-def
+            // (presumably as a correction). Deferring creates deadlock: wheel
+            // waits for tier-def, plugin waits for catalog (verified
+            // moza-wire 164047 — post-FF wheel sent only end-marker 06 04 ...
+            // val=8 until plugin emitted, then nothing came back). Send with
+            // whatever catalog we have; renegotiate-on-grow re-emits when
+            // wheel pushes corrected mappings.
+
+            // Preamble is one-shot per session (captures: bridge-20260503-*).
+            // Don't reset _tierDefPreambleSent here — session start handles it.
             _retransmitter.Clear();
             lock (_subscriptionResponseChunks) _subscriptionResponseChunks.Clear();
             _subscriptionResponseDeadlineTicks = 0;
@@ -1295,26 +1298,11 @@ namespace MozaPlugin.Telemetry
                         $"[Moza] V0 subscription expanded to wheel catalog: " +
                         $"{catalogCh} channels");
                 }
-                else
-                {
-                    bool csp = UploadWireFormat == FileTransferWireFormat.New2026_04_Type02;
-                    if (!csp)
-                    {
-                        // Legacy V2: filter to catalog-matched channels.
-                        var filtered = FilterProfileToCatalog(profile, catalog);
-                        int originalCh = 0, filteredCh = 0;
-                        foreach (var t in profile.Tiers) originalCh += t.Channels.Count;
-                        foreach (var t in filtered.Tiers) filteredCh += t.Channels.Count;
-                        if (filteredCh < originalCh)
-                            MozaLog.Info(
-                                $"[Moza] Tier def filtered to wheel catalog: " +
-                                $"{filteredCh}/{originalCh} channels retained");
-                        profile = filtered;
-                    }
-                    // Type02: no filtering — send all channels, catalog
-                    // indices resolve in BuildTierDefinitionMessage via
-                    // useWheelCatalogIndices. Unmatched channels get idx=0.
-                }
+                // Catalog-based filtering disabled — wheel pushes a partial
+                // catalog post-switch (back-refs only) that drops half the
+                // mzdash channels. Plugin now sends the full bundled
+                // mzdash tier-def. Wheel decodes per the tier-def we send;
+                // widget reads whichever channels it knows of.
             }
 
             // PitHouse uses either session 0x01 or 0x02 for tier-def TLV
@@ -1403,19 +1391,31 @@ namespace MozaPlugin.Telemetry
                         return;
                     }
                 }
-                byte[] message = TierDefinitionBuilder.BuildTierDefinitionMessage(
-                    profile, 0x00,
-                    includeEnableEntries: true,
-                    useWheelCatalogIndices: cspIdx,
+                // PitHouse-shape body: header ENABLEs for flags 0..flagBase-1
+                // (derived from flagBase, no parallel list), new tiers, single
+                // END watermark. See TierDefinitionBuilder.BuildTierDefinitionV2
+                // and docs/protocol/findings/2026-05-03-pithouse-tierdef-reference.md.
+                byte flagBase = _nextFlagBase;
+                byte[] message = TierDefinitionBuilder.BuildTierDefinitionV2(
+                    profile, flagBase,
                     wheelCatalog: cspIdx ? _wheelChannelCatalog : null);
                 var frames = TierDefinitionBuilder.ChunkMessage(message, tierDefSession, ref seq);
 
                 MozaLog.Info(
-                    $"[Moza] Sending v2 tier definition: flagBase=0x00, " +
+                    $"[Moza] Sending v2 tier definition: flagBase=0x{flagBase:X2}, " +
+                    $"priorFlagCount={flagBase} " +
                     $"preamble ({preambleChunkCount} chunks)" +
                     $" + {message.Length} bytes in {frames.Count} chunks " +
                     $"on session 0x{tierDefSession:X2} ({profile.Tiers.Count} tiers, " +
-                    $"enables=yes, idx={(cspIdx ? "wheel-catalog" : "alpha")})");
+                    $"idx={(cspIdx ? "wheel-catalog" : "alpha")})");
+
+                _activeSubscription = new SubscriptionState(
+                    flagBase: flagBase,
+                    tierCount: profile.Tiers.Count,
+                    subTiersPerBroadcast: profile.Tiers.Count,
+                    profileName: profile.Name);
+                System.Threading.Interlocked.Increment(ref _subscriptionGen);
+                _nextFlagBase = (byte)(flagBase + profile.Tiers.Count);
 
                 foreach (var frame in frames)
                     SendAndTrackChunk(frame);
@@ -1447,37 +1447,12 @@ namespace MozaPlugin.Telemetry
 
         private void MaybeSwapProfileForCatalog(bool force = false)
         {
-            if (UploadWireFormat != FileTransferWireFormat.New2026_04_Type02)
-                return;
-            var catalog = _wheelChannelCatalog;
-            if (catalog == null || catalog.Count == 0) return;
-
-            var current = _profile;
-            if (!force && current != null && current.Name != "WheelCatalog")
-                return;
-
-            if (current?.Name == "WheelCatalog"
-                && current.Tiers.Count == 1
-                && current.Tiers[0].Channels.Count == catalog.Count)
-            {
-                bool same = true;
-                for (int i = 0; i < catalog.Count; i++)
-                {
-                    if (!string.Equals(current.Tiers[0].Channels[i].Url, catalog[i],
-                        StringComparison.OrdinalIgnoreCase))
-                    { same = false; break; }
-                }
-                if (same) return;
-            }
-
-            var store = MozaPlugin.Instance?.DashProfileStore ?? new DashboardProfileStore();
-            var built = store.BuildProfileFromCatalog(catalog);
-            Profile = built;
-            int totalCh = 0;
-            foreach (var t in built.Tiers) totalCh += t.Channels.Count;
-            MozaLog.Info(
-                $"[Moza] Profile synthesized from wheel catalog: " +
-                $"{totalCh} channels across {built.Tiers.Count} tiers");
+            // Disabled — plugin uses bundled mzdash exclusively.
+            // Wheel-catalog-driven profile synthesis dropped channels post-
+            // switch (incomplete back-ref catalog) and clobbered the
+            // user-selected profile. mzdash-only path is simpler and the
+            // active path the user has decided to support.
+            return;
         }
 
         private void CaptureSubscriptionDiag(byte session, string format,
@@ -2477,6 +2452,25 @@ namespace MozaPlugin.Telemetry
                 buffer = _incomingSessionBuffer.ToArray();
             }
 
+            // Pre-scan: any tag=0x04 records present? Buffer fills with end-
+            // marker noise (06 04 ... val) post-renegotiate; parsing every tick
+            // is wasted work. Skip + suppress logging unless URL records exist.
+            bool hasUrlRecord = false;
+            for (int b = 0; b + 5 < buffer.Length; b++)
+            {
+                if (buffer[b] == 0x04)
+                {
+                    uint sz = (uint)(buffer[b + 1] | (buffer[b + 2] << 8)
+                                   | (buffer[b + 3] << 16) | (buffer[b + 4] << 24));
+                    if (sz >= 1 && sz < 200 && b + 5 + (int)sz <= buffer.Length)
+                    {
+                        hasUrlRecord = true;
+                        break;
+                    }
+                }
+            }
+            if (!hasUrlRecord) return;
+
             // Diagnostic: hex-dump first 128 bytes of catalog buffer
             int dumpLen = Math.Min(buffer.Length, 128);
             var hex = new System.Text.StringBuilder(dumpLen * 3);
@@ -2487,21 +2481,21 @@ namespace MozaPlugin.Telemetry
             }
             MozaLog.Info($"[Moza] Catalog buffer dump ({buffer.Length} bytes): {hex}");
 
-            // Scan-forward search for `04`-tag URL entries instead of strict
-            // TLV walk. The buffer is a concatenation of multiple session-data
-            // chunks from possibly multiple sessions, so unrelated tags
-            // (`07/0c/01/03` from token-assignment and config TLVs) may appear
-            // before, between, or after the URL list. Strict TLV walk used to
-            // bail on the first unknown tag because its 4-byte size field
-            // reads as a huge number — we just advance one byte and keep
-            // scanning for the next plausible `04 [size <200] [idx:u8]
-            // "v1/..."` entry.
-            var channels = new System.Collections.Generic.List<string>();
-            var seenUrls = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            // Scan-forward for `04`-tag URL records. Each record encodes its
+            // canonical wheel-firmware idx in the byte at offset i+5 (1-based).
+            // Wheel re-indexes URLs per dashboard — same URL gets different idx
+            // before/after a dash switch (verified in moza-wire 161929: idx 4 =
+            // Gear under Core, idx 4 = TyreTempFrontRight under Grids). Plugin
+            // MUST honor the wheel's idx, not parse-order positional.
+            //
+            // Catalog stored as List<string?> indexed by idx-1; nulls fill
+            // unannounced gaps. Merge writes URLs at canonical positions.
+            var parsed = new System.Collections.Generic.Dictionary<int, string>();
             int i = 0;
             int diagFullUrl = 0, diagPrefixUrl = 0, diagAbbrUrl = 0;
             int diagBackRef = 0, diagBackRefFail = 0;
             int diagSizeReject = 0, diagPlausReject = 0;
+            var existingCatalog = _wheelChannelCatalog;
             while (i + 6 < buffer.Length)
             {
                 byte tag = buffer[i];
@@ -2513,18 +2507,19 @@ namespace MozaPlugin.Telemetry
                     diagSizeReject++;
                     i++; continue;
                 }
+                int idx = buffer[i + 5];  // wheel-firmware-canonical idx (1-based)
                 int urlLen = (int)param - 1;
                 int urlStart = i + 6;
 
                 if (urlLen == 0)
                 {
-                    int backIdx = buffer[i + 5];  // 1-based
-                    var existingCatalog = _wheelChannelCatalog;
-                    if (existingCatalog != null && backIdx >= 1 && backIdx <= existingCatalog.Count)
+                    // Backref: payload is just the idx byte. Resolve URL from
+                    // the existing catalog at this idx; record the same idx
+                    // in our parse map so merge preserves the binding.
+                    if (existingCatalog != null && idx >= 1 && idx <= existingCatalog.Count
+                        && !string.IsNullOrEmpty(existingCatalog[idx - 1]))
                     {
-                        string backUrl = existingCatalog[backIdx - 1];
-                        if (seenUrls.Add(backUrl))
-                            channels.Add(backUrl);
+                        parsed[idx] = existingCatalog[idx - 1];
                         diagBackRef++;
                     }
                     else
@@ -2570,68 +2565,46 @@ namespace MozaPlugin.Telemetry
                     url = System.Text.Encoding.ASCII.GetString(buffer, urlStart, urlLen);
                     diagFullUrl++;
                 }
-                if (seenUrls.Add(url))
-                    channels.Add(url);
+                if (idx >= 1) parsed[idx] = url;
                 i += 5 + (int)param;
             }
             MozaLog.Info(
                 $"[Moza] Catalog parse stats: full={diagFullUrl} prefix={diagPrefixUrl} " +
                 $"abbr={diagAbbrUrl} backref={diagBackRef} backrefFail={diagBackRefFail} " +
                 $"sizeReject={diagSizeReject} plausReject={diagPlausReject} " +
-                $"total={channels.Count}");
-            // Fall through to legacy strict-walk if scan-forward found nothing
-            // — preserves behaviour on captures whose buffer happens to start
-            // cleanly on tag 0x03/0xFF (older firmware).
-            if (channels.Count == 0)
-            {
-            i = 0;
-            while (i < buffer.Length)
-            {
-                byte tag = buffer[i];
-                if (tag == 0xFF)
-                {
-                    i++;
-                    continue;
-                }
-                if (i + 5 > buffer.Length) break;
-                uint param = (uint)(buffer[i + 1] | (buffer[i + 2] << 8) |
-                             (buffer[i + 3] << 16) | (buffer[i + 4] << 24));
+                $"distinct-idx={parsed.Count}");
 
-                if (tag == 0x04 && i + 5 + (int)param <= buffer.Length && param > 1 && param < 200)
-                {
-                    // Channel URL: [ch_index:u8] [url:ASCII]
-                    int urlLen = (int)param - 1;
-                    string url = System.Text.Encoding.ASCII.GetString(buffer, i + 6, urlLen);
-                    channels.Add(url);
-                    i += 5 + (int)param;
-                }
-                else if (tag == 0x06)
-                {
-                    break; // end marker
-                }
-                else if (tag == 0x03 && param <= 8)
-                {
-                    i += 5 + (int)param;
-                }
-                else
-                {
-                    // Unknown tag — skip by trying param as size
-                    if (param < 200)
-                        i += 5 + (int)param;
-                    else
-                        break;
-                }
-            }
-            } // end legacy strict-walk fallback
-
-            if (channels.Count > 0)
+            if (parsed.Count > 0)
             {
-                if (!CatalogEquals(_wheelChannelCatalog, channels))
+                // Build/extend the idx-positional catalog. Latest wheel
+                // announcement wins per idx (dashboard switches re-index URLs).
+                var prior = _wheelChannelCatalog;
+                int maxIdx = parsed.Keys.Max();
+                int newSize = Math.Max(maxIdx, prior?.Count ?? 0);
+                var merged = new System.Collections.Generic.List<string>(newSize);
+                for (int k = 0; k < newSize; k++)
                 {
+                    string? entry = (prior != null && k < prior.Count) ? prior[k] : null;
+                    if (parsed.TryGetValue(k + 1, out var u)) entry = u;
+                    merged.Add(entry ?? "");
+                }
+                bool changed = prior == null
+                    || prior.Count != merged.Count
+                    || !prior.SequenceEqual(merged, StringComparer.OrdinalIgnoreCase);
+                if (changed)
+                {
+                    _wheelChannelCatalog = merged;
+                    var diff = new System.Text.StringBuilder();
+                    foreach (var kv in parsed.OrderBy(kv => kv.Key))
+                    {
+                        bool wasDifferent = prior == null
+                            || kv.Key - 1 >= prior.Count
+                            || !string.Equals(prior[kv.Key - 1], kv.Value, StringComparison.OrdinalIgnoreCase);
+                        if (wasDifferent) diff.Append($" [{kv.Key}]={kv.Value}");
+                    }
                     MozaLog.Info(
-                        $"[Moza] Wheel channel catalog ({channels.Count}): {string.Join(", ", channels)}");
+                        $"[Moza] Wheel channel catalog updated (size {prior?.Count ?? 0}→{merged.Count}):{diff}");
                 }
-                _wheelChannelCatalog = channels;
             }
         }
 
@@ -2702,10 +2675,41 @@ namespace MozaPlugin.Telemetry
                     return;
                 }
 
-                // ── Auto-detect catalog changes (dashboard switch only) ──
-                // After a SendDashboardSwitch, the wheel pushes a new
-                // catalog. Detect completion via 0x06 end-marker and
-                // re-subscribe with advanced flag counter.
+                // Continuous catalog absorption. Wheel pushes URL records in
+                // batches with ~1.2s gaps; parse every time the buffer grows
+                // and merge non-destructively so URLs are never dropped. If
+                // catalog grew since the last subscription, request a
+                // renegotiate so the new tier-def includes the new URLs.
+                {
+                    int curLen;
+                    lock (_incomingSessionBuffer) curLen = _incomingSessionBuffer.Count;
+                    if (curLen > _lastCatalogParseLen)
+                    {
+                        int beforeCount = _wheelChannelCatalog?.Count ?? 0;
+                        ParseWheelChannelCatalog();
+                        _lastCatalogParseLen = curLen;
+                        int afterCount = _wheelChannelCatalog?.Count ?? 0;
+                        if (afterCount > beforeCount)
+                        {
+                            _renegotiateRequired = true;
+                        }
+                        // Truncate when buffer balloons with non-URL noise
+                        // (end-markers arrive every ~1s in steady state). Keep
+                        // a small head for any URL record straddling an
+                        // upcoming chunk boundary.
+                        if (curLen > 4096 && !_renegotiateRequired)
+                        {
+                            lock (_incomingSessionBuffer) _incomingSessionBuffer.Clear();
+                            _lastCatalogParseLen = 0;
+                        }
+                    }
+                }
+
+                // Dashboard-switch renegotiate: after FF-record the wheel
+                // streams the new dash's URLs (already absorbed above), then
+                // an end-marker. End-marker = signal that catalog has settled
+                // for the new dash. Re-emit tier-def with the now-complete
+                // catalog.
                 {
                     bool hasCatalogWithEnd = false;
                     if (_renegotiateRequired)
@@ -2717,9 +2721,9 @@ namespace MozaPlugin.Telemetry
                     if (hasCatalogWithEnd)
                     {
                         var prevCatalog = _wheelChannelCatalog;
-                        ParseWheelChannelCatalog();
 
                         lock (_incomingSessionBuffer) _incomingSessionBuffer.Clear();
+                        _lastCatalogParseLen = 0;
                         _channelBufferLastActivityMs = 0;
                         _renegotiateRequired = false;
 
@@ -2727,8 +2731,8 @@ namespace MozaPlugin.Telemetry
                         {
                             MozaLog.Info(
                                 $"[Moza] Dashboard switch renegotiate: " +
-                                $"{prevCatalog?.Count ?? 0}→{_wheelChannelCatalog.Count}");
-                            ApplySubscription(force: true);
+                                $"catalog={_wheelChannelCatalog.Count} (was {prevCatalog?.Count ?? 0})");
+                            ApplySubscription(force: false);
                         }
                     }
                 }
@@ -2792,13 +2796,18 @@ namespace MozaPlugin.Telemetry
                     // Legacy V2 path: always send. BuildTestFrame vs
                     // BuildFrameFromSnapshot differentiates test/live within
                     // the loop.
+                    byte subFlagBase = _activeSubscription?.FlagBase ?? 0;
                     for (int i = 0; i < tiers.Length; i++)
                     {
                         var tier = tiers[i];
                         if (_tickCounter % tier.TickInterval != 0)
                             continue;
 
-                        byte flagByte = (byte)i;
+                        // Match flag byte to the tier-def we last sent: each
+                        // tier-def claims `flagBase + tierIdx` (BuildTier-
+                        // DefinitionMessage line 289). Wheel routes value
+                        // frames by flag byte → registered tier.
+                        byte flagByte = (byte)(subFlagBase + i);
                         byte[] frame = TestMode
                             ? tier.Builder.BuildTestFrame(flagByte)
                             : tier.Builder.BuildFrameFromSnapshot(snapshot, flagByte);
@@ -2889,6 +2898,11 @@ namespace MozaPlugin.Telemetry
 
                 _tickCounter++;
 
+                // PitHouse-mirror widget polls: one frame per outer tick
+                // (33Hz). Cycle of 80 slots = each frame fires ~0.4/s,
+                // matching capture cadence ~0.2/s within tolerable range.
+                SendWidgetStatePoll();
+
                 int slow = Math.Max(1, 1000 / _baseTickMs);
                 if (_slowCounter++ % slow == 0)
                 {
@@ -2909,6 +2923,8 @@ namespace MozaPlugin.Telemetry
                     // 1 Hz which made 7c23 ~7× too frequent vs PitHouse baseline.
                     if ((_slowCounter & 1) == 1)
                         SendDisplayConfig();
+                    else
+                        Send28xPoll();
                     SendStatusPush();
                     SendSession09Keepalive();
                 }
@@ -3411,6 +3427,169 @@ namespace MozaPlugin.Telemetry
         {
             var frame = new byte[] { MozaProtocol.MessageStart, 0x01, MozaProtocol.TelemetrySendGroup, dev, 0x00, 0x00 };
             frame[5] = MozaProtocol.CalculateWireChecksum(frame);
+            return frame;
+        }
+
+        /// <summary>
+        /// Re-send the 28:00 + 28:01 read commands matching PitHouse's
+        /// observed cadence. Across all four bridge captures
+        /// (sim/logs/bridge-20260503-*.jsonl) PitHouse polls these channels
+        /// at ~1 Hz throughout the active phase; plugin currently sends
+        /// each only once at preamble (SendChannelConfig line 3219-3220).
+        /// Replies are captured raw in MozaData by the inbound filter at
+        /// MozaPlugin.cs:1280 — semantics not yet decoded, so the bytes
+        /// surface in Diagnostics for offline correlation.
+        /// </summary>
+        private void Send28xPoll()
+        {
+            if (!_preambleComplete) return;
+            if (!_connection.IsConnected) return;
+            _connection.Send(BuildGroup40Frame3(0x28, 0x00, 0x00));
+            _connection.Send(BuildGroup40Frame3(0x28, 0x01, 0x00));
+        }
+
+        // Widget-state poll cycle. Per bridge capture
+        // (sim/logs/bridge-20260503-115840.jsonl) PitHouse continuously emits
+        // a family of grp 0x40 dev 0x17 polls every dash phase at ~0.2/s
+        // each. Plugin previously sent none; wheel widget likely treats
+        // their absence as "host not actively managing widget" and stays
+        // inactive after a dash switch.
+        //
+        // Three categories observed in the capture:
+        //   STATIC: identical payload across 95+ frames per session — looks
+        //     like state polls / status reads. Sub-cmds 00/01/03 (skip 02)
+        //     suggest 3 page/zone slots.
+        //   SCAN-1e: byte 4 cycles 02..06 — 5-index sweep, payload 1e0X 0Y 00 00
+        //   SCAN-1f: byte 5 cycles 02..0f with byte 4 = 0xff — 14-index sweep
+        //
+        // Implementation: emit BURST of widget-poll frames per slow tick to
+        // match PitHouse's ~0.2/s per-frame cadence. Cycle 58 slots; with
+        // 10 emits per slow tick (~1Hz), each fires ~0.17/s ≈ PitHouse.
+        private int _widgetPollIndex;
+        private void SendWidgetStatePoll()
+        {
+            if (!_preambleComplete) return;
+            if (!_connection.IsConnected) return;
+            SendOneWidgetPoll();
+        }
+
+        private void SendOneWidgetPoll()
+        {
+            int idx = _widgetPollIndex++;
+            // Cycle layout (slot ranges):
+            //   0..14   = 15 grp 0x40 dev 0x17 static polls
+            //   15..29  = 15 grp 0x40 dev 0x17 1e0x scan (5×3)
+            //   30..43  = 14 grp 0x40 dev 0x17 1f00 scan
+            //   44..57  = 14 grp 0x40 dev 0x17 1f01 scan
+            //   58..69  = 12 grp 0x0E dev 0x12/13/17/19 discovery probes
+            //   70..73  = 4 grp 0x1F dev 0x12 4f08-4f0b LED state reads
+            //   74..79  = 6 grp 0x3F dev 0x17 1901/1903/1a01/1a03/1f00/2100 display variants
+            const int totalCycle = 80;
+            int slot = idx % totalCycle;
+
+            byte[]? frame = null;
+            if (slot < 15)
+            {
+                frame = slot switch
+                {
+                    0 => BuildGroup40Bytes(new byte[] { 0x1B, 0x00, 0xFF, 0x00, 0x00 }),
+                    1 => BuildGroup40Bytes(new byte[] { 0x1B, 0x01, 0xFF, 0x00, 0x00 }),
+                    2 => BuildGroup40Bytes(new byte[] { 0x1B, 0x03, 0xFF, 0x00, 0x00 }),
+                    3 => BuildGroup40Bytes(new byte[] { 0x1C, 0x00, 0x00 }),
+                    4 => BuildGroup40Bytes(new byte[] { 0x1C, 0x01, 0x00 }),
+                    5 => BuildGroup40Bytes(new byte[] { 0x1C, 0x03, 0x00 }),
+                    6 => BuildGroup40Bytes(new byte[] { 0x1D, 0x00, 0x00 }),
+                    7 => BuildGroup40Bytes(new byte[] { 0x1D, 0x01, 0x00 }),
+                    8 => BuildGroup40Bytes(new byte[] { 0x1D, 0x03, 0x00 }),
+                    9 => BuildGroup40Bytes(new byte[] { 0x20, 0x00 }),
+                    10 => BuildGroup40Bytes(new byte[] { 0x21, 0x00, 0x00 }),
+                    11 => BuildGroup40Bytes(new byte[] { 0x27, 0x00, 0x00, 0x00, 0x00, 0x00 }),
+                    12 => BuildGroup40Bytes(new byte[] { 0x28, 0x00, 0x00 }),
+                    13 => BuildGroup40Bytes(new byte[] { 0x29, 0x00, 0x00 }),
+                    14 => BuildGroup40Bytes(new byte[] { 0x2A, 0x00, 0x00 }),
+                    _ => null,
+                };
+            }
+            else if (slot < 30)
+            {
+                int s = slot - 15;
+                byte sub = (byte)((s / 5) == 0 ? 0x00 : (s / 5) == 1 ? 0x01 : 0x03);
+                byte b4 = (byte)(0x02 + (s % 5));
+                frame = BuildGroup40Bytes(new byte[] { 0x1E, sub, b4, 0x00, 0x00 });
+            }
+            else if (slot < 44)
+            {
+                byte b5 = (byte)(0x02 + (slot - 30));
+                frame = BuildGroup40Bytes(new byte[] { 0x1F, 0x00, 0xFF, b5, 0x00, 0x00, 0x00 });
+            }
+            else if (slot < 58)
+            {
+                byte b5 = (byte)(0x02 + (slot - 44));
+                frame = BuildGroup40Bytes(new byte[] { 0x1F, 0x01, 0xFF, b5, 0x00, 0x00, 0x00 });
+            }
+            else if (slot < 70)
+            {
+                // grp 0x0E discovery probes — wheel/base device discovery
+                int s = slot - 58;
+                byte dev = (byte)(s / 3 switch
+                {
+                    0 => 0x12, 1 => 0x13, 2 => 0x17, _ => 0x19,
+                });
+                int sub = s % 3;
+                byte cmd = (byte)(sub == 0 ? 0x00 : sub == 1 ? 0x01 :
+                    (dev == 0x12 ? 0x03 : dev == 0x13 ? 0x07 :
+                     dev == 0x17 ? 0x0F : 0x13));
+                frame = BuildGenericFrame(0x0E, dev, new byte[] { 0x00, cmd });
+            }
+            else if (slot < 74)
+            {
+                // grp 0x1F dev 0x12 cmd 4f08-4f0b — LED state reads
+                byte cmd2 = (byte)(0x08 + (slot - 70));
+                frame = BuildGenericFrame(0x1F, 0x12, new byte[] { 0x4F, cmd2, 0x00 });
+            }
+            else
+            {
+                // grp 0x3F dev 0x17 display variants
+                int s = slot - 74;
+                frame = s switch
+                {
+                    0 => BuildGenericFrame(0x3F, 0x17, new byte[] { 0x19, 0x01, 0x00 }),
+                    1 => BuildGenericFrame(0x3F, 0x17, new byte[] { 0x19, 0x03, 0x00 }),
+                    2 => BuildGenericFrame(0x3F, 0x17, new byte[] { 0x1A, 0x01, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }),
+                    3 => BuildGenericFrame(0x3F, 0x17, new byte[] { 0x1A, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }),
+                    4 => BuildGenericFrame(0x3F, 0x17, new byte[] { 0x1F, 0x00, 0xFF, 0x00, 0x00, 0x00, 0x00 }),
+                    5 => BuildGenericFrame(0x3F, 0x17, new byte[] { 0x21, 0x00, 0x00 }),
+                    _ => null,
+                };
+            }
+
+            if (frame != null) _connection.Send(frame);
+        }
+
+        // Build any group/dev frame from raw payload bytes.
+        private byte[] BuildGenericFrame(byte grp, byte dev, byte[] payload)
+        {
+            var frame = new byte[payload.Length + 4];
+            frame[0] = MozaProtocol.MessageStart;
+            frame[1] = (byte)payload.Length;
+            frame[2] = grp;
+            frame[3] = dev;
+            Array.Copy(payload, 0, frame, 4, payload.Length);
+            frame[frame.Length - 1] = MozaProtocol.CalculateWireChecksum(frame, frame.Length - 1);
+            return frame;
+        }
+
+        // Build grp=0x40 dev=0x17 frame from raw payload bytes.
+        // Wraps with start byte, length, cmd bytes, checksum.
+        private byte[] BuildGroup40Bytes(byte[] payload)
+        {
+            var frame = new byte[payload.Length + 4];
+            frame[0] = MozaProtocol.MessageStart;
+            frame[1] = (byte)payload.Length;
+            frame[2] = 0x40;
+            frame[3] = MozaProtocol.DeviceWheel;
+            Array.Copy(payload, 0, frame, 4, payload.Length);
+            frame[frame.Length - 1] = MozaProtocol.CalculateWireChecksum(frame, frame.Length - 1);
             return frame;
         }
 

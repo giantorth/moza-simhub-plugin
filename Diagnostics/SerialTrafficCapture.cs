@@ -42,6 +42,7 @@ namespace MozaPlugin.Diagnostics
         private readonly object _fileLock = new object();
         private StreamWriter? _fileSink;
         private string? _fileSinkPath;
+        private int _fileSinkLineCount;
 
         public bool Enabled => _enabled;
         public int Count => Volatile.Read(ref _count);
@@ -69,12 +70,19 @@ namespace MozaPlugin.Diagnostics
             {
                 CloseFileSinkLocked();
                 Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
+                // AutoFlush=true forced sync flush per frame which under Wine
+                // blocks the read/write hot path for milliseconds → telemetry
+                // tick stall → visible test-mode lag. Use OS buffering; flush
+                // periodically (every ~64 lines) to keep crashes from losing
+                // more than a fraction of a second.
                 _fileSink = new StreamWriter(new FileStream(
-                    path, FileMode.Create, FileAccess.Write, FileShare.Read))
+                    path, FileMode.Create, FileAccess.Write, FileShare.Read,
+                    bufferSize: 16384))
                 {
-                    AutoFlush = true,
+                    AutoFlush = false,
                 };
                 _fileSinkPath = path;
+                _fileSinkLineCount = 0;
             }
         }
 
@@ -199,7 +207,14 @@ namespace MozaPlugin.Diagnostics
                 sb.Append('"');
             }
             sb.Append('}');
-            try { lock (_fileLock) sink.WriteLine(sb.ToString()); }
+            try
+            {
+                lock (_fileLock)
+                {
+                    sink.WriteLine(sb.ToString());
+                    if ((++_fileSinkLineCount & 63) == 0) sink.Flush();
+                }
+            }
             catch { /* sink may have been closed concurrently — silent drop */ }
         }
 

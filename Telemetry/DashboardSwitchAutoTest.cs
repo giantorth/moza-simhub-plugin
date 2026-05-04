@@ -4,24 +4,43 @@ using System.Linq;
 
 namespace MozaPlugin.Telemetry
 {
+    /// <summary>
+    /// Single-switch auto test harness. Flow:
+    ///   1. Wait for initial subscription to settle.
+    ///   2. Enable TestMode for <see cref="PreSwitchTestMs"/> — captures the
+    ///      starting dashboard's wire-level test pattern as baseline.
+    ///   3. Determine target slot: opposite of the persisted
+    ///      <see cref="MozaPluginSettings.AutoTestLastSlot"/>. Defaults to
+    ///      slot 1 (alphabetical second dash) if no persisted state.
+    ///   4. SendDashboardSwitch + wait for renegotiate.
+    ///   5. TestMode for <see cref="PostSwitchTestMs"/> on the new dashboard.
+    ///   6. Persist the new slot, finish.
+    ///
+    /// On each launch the test alternates direction so debugging captures
+    /// cover both A→B and B→A switch behavior across runs.
+    /// Triggered by <see cref="MozaPluginSettings.EnableAutoTestOnConnect"/>.
+    /// </summary>
     internal sealed class DashboardSwitchAutoTest
     {
-        private enum State { Idle, WaitNegotiate, TestRunning, SwitchPending, WaitRenegotiate, Done }
+        private enum State
+        {
+            Idle, PreSwitchTest, SwitchPending, WaitRenegotiate,
+            PostSwitchTest, Done,
+        }
 
         private readonly TelemetrySender _sender;
         private State _state = State.Idle;
         private int _elapsedMs;
-        private int _dashIndex;
-        private byte _prevFlagBase;
-        private int _framesSentAtStart;
+        private int _targetSlot = -1;
+        private int _startSlot = -1;
+        private int _prevSubscriptionGen;
+        private int _framesAtPhaseStart;
         private IReadOnlyList<string>? _dashList;
-        private readonly List<string> _failed = new();
-        private int _passed;
 
         private const int IdleTimeoutMs = 30000;
-        private const int NegotiateTimeoutMs = 5000;
-        private const int TestRunMs = 8000;
+        private const int PreSwitchTestMs = 6000;
         private const int RenegotiateTimeoutMs = 10000;
+        private const int PostSwitchTestMs = 6000;
 
         public DashboardSwitchAutoTest(TelemetrySender sender)
         {
@@ -31,49 +50,34 @@ namespace MozaPlugin.Telemetry
         public void Tick(int tickMs)
         {
             _elapsedMs += tickMs;
-
             switch (_state)
             {
-                case State.Idle:
-                    TickIdle();
-                    break;
-                case State.WaitNegotiate:
-                    TickWaitNegotiate();
-                    break;
-                case State.TestRunning:
-                    TickTestRunning();
-                    break;
-                case State.SwitchPending:
-                    TickSwitchPending();
-                    break;
-                case State.WaitRenegotiate:
-                    TickWaitRenegotiate();
-                    break;
-                case State.Done:
-                    break;
+                case State.Idle: TickIdle(); break;
+                case State.PreSwitchTest: TickPreSwitchTest(); break;
+                case State.SwitchPending: TickSwitchPending(); break;
+                case State.WaitRenegotiate: TickWaitRenegotiate(); break;
+                case State.PostSwitchTest: TickPostSwitchTest(); break;
+                case State.Done: break;
             }
         }
 
         private void TickIdle()
         {
-            var flagBase = _sender.ActiveFlagBase;
-            if (flagBase == null) return;
+            int gen = _sender.SubscriptionGen;
+            if (gen == 0) return; // wait for first subscription
 
+            // Resolve dash list from wheel state, fall back to cache sorted.
             _dashList = _sender.WheelState?.ConfigJsonList;
             if (_dashList == null || _dashList.Count < 2)
             {
-                // ConfigJsonList from session 0x09 is fragile (dropped chunks
-                // prevent reassembly). Fall back to DashboardCache names sorted
-                // alphabetically — matches wheel's configJsonList ordering.
                 var cache = _sender.DashCache;
                 if (cache != null)
                 {
-                    var sorted = cache.CachedNames.OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
+                    var sorted = cache.CachedNames
+                        .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
+                        .ToList();
                     if (sorted.Count >= 2)
-                    {
-                        MozaLog.Info($"[Moza] AUTO-TEST: using DashboardCache fallback ({sorted.Count} dashboards)");
                         _dashList = sorted;
-                    }
                 }
             }
             if (_dashList == null || _dashList.Count < 2)
@@ -86,85 +90,92 @@ namespace MozaPlugin.Telemetry
                 return;
             }
 
+            // Pick target slot opposite of last run's slot. First run picks 1.
+            int lastSlot = MozaPlugin.Instance?.Settings?.AutoTestLastSlot ?? -1;
+            _targetSlot = lastSlot == 0 ? 1 : 0;
+            if (_targetSlot >= _dashList.Count) _targetSlot = 0;
+
+            // Resolve current slot from active profile name (best effort).
+            string currentName = _sender.ActiveProfileName ?? "";
+            _startSlot = -1;
+            for (int i = 0; i < _dashList.Count; i++)
+            {
+                if (string.Equals(_dashList[i], currentName,
+                    StringComparison.OrdinalIgnoreCase))
+                {
+                    _startSlot = i;
+                    break;
+                }
+            }
+
+            // If we're already on the target, flip to the other.
+            if (_startSlot == _targetSlot)
+                _targetSlot = (_targetSlot + 1) % _dashList.Count;
+
+            _prevSubscriptionGen = gen;
+            _framesAtPhaseStart = _sender.FramesSent;
             _sender.TestMode = true;
-            _dashIndex = 0;
             _elapsedMs = 0;
-            _prevFlagBase = flagBase.Value;
-            Transition(State.WaitNegotiate, $"dash=\"{_dashList[0]}\" slot=0");
+
+            string startName = _startSlot >= 0 && _startSlot < _dashList.Count
+                ? _dashList[_startSlot] : currentName;
+            string targetName = _dashList[_targetSlot];
+            Transition(State.PreSwitchTest,
+                $"start=\"{startName}\"(slot={_startSlot}) " +
+                $"target=\"{targetName}\"(slot={_targetSlot}) " +
+                $"subGen={gen}");
         }
 
-        private void TickWaitNegotiate()
+        private void TickPreSwitchTest()
         {
-            var flagBase = _sender.ActiveFlagBase;
-            if (flagBase != null)
-            {
-                _framesSentAtStart = _sender.FramesSent;
-                _elapsedMs = 0;
-                Transition(State.TestRunning,
-                    $"dash=\"{CurrentDash()}\" slot={_dashIndex} " +
-                    $"flagBase=0x{flagBase.Value:X2} " +
-                    $"tiers={_sender.ActiveTierCount} " +
-                    $"catalog={_sender.CatalogChannelCount}");
-                return;
-            }
+            if (_elapsedMs < PreSwitchTestMs) return;
 
-            if (_elapsedMs >= NegotiateTimeoutMs)
-            {
-                _failed.Add(CurrentDash());
-                MozaLog.Warn($"[Moza] AUTO-TEST: negotiate timeout dash=\"{CurrentDash()}\"");
-                AdvanceOrFinish();
-            }
-        }
-
-        private void TickTestRunning()
-        {
-            if (_elapsedMs < TestRunMs) return;
-
-            int framesDelta = _sender.FramesSent - _framesSentAtStart;
-            bool ok = framesDelta > 0;
+            int frames = _sender.FramesSent - _framesAtPhaseStart;
+            string startName = _startSlot >= 0 && _dashList != null && _startSlot < _dashList.Count
+                ? _dashList[_startSlot] : "?";
             MozaLog.Info(
-                $"[Moza] AUTO-TEST: test phase done dash=\"{CurrentDash()}\" " +
-                $"slot={_dashIndex} frames={framesDelta} " +
-                $"result={(ok ? "PASS" : "FAIL")}");
+                $"[Moza] AUTO-TEST: pre-switch test done dash=\"{startName}\" " +
+                $"frames={frames} {(frames > 0 ? "PASS" : "FAIL")}");
 
-            if (ok) _passed++;
-            else _failed.Add(CurrentDash());
-
-            AdvanceOrFinish();
+            _elapsedMs = 0;
+            _state = State.SwitchPending;
         }
 
         private void TickSwitchPending()
         {
-            var dash = CurrentDash();
-            MozaLog.Info(
-                $"[Moza] AUTO-TEST: state=SWITCH_PENDING dash=\"{dash}\" slot={_dashIndex} " +
-                $"prevFlag=0x{_prevFlagBase:X2}");
+            if (_dashList == null) { _state = State.Done; return; }
+            string targetName = _dashList[_targetSlot];
 
             var plugin = MozaPlugin.Instance;
             if (plugin != null)
             {
-                plugin.Settings.TelemetryProfileName = dash;
+                plugin.Settings.TelemetryProfileName = targetName;
                 plugin.Settings.TelemetryMzdashPath = "";
                 plugin.ApplyTelemetrySettings();
             }
 
-            _sender.SendDashboardSwitch((uint)_dashIndex);
-            _prevFlagBase = _sender.ActiveFlagBase ?? _prevFlagBase;
+            // Capture gen BEFORE the switch — SendDashboardSwitch now emits
+            // tier-def synchronously and bumps SubscriptionGen in the same
+            // call, so reading gen after the call would skip the increment.
+            _prevSubscriptionGen = _sender.SubscriptionGen;
+            _sender.SendDashboardSwitch((uint)_targetSlot);
             _elapsedMs = 0;
-            Transition(State.WaitRenegotiate, $"dash=\"{dash}\" slot={_dashIndex}");
+            Transition(State.WaitRenegotiate,
+                $"target=\"{targetName}\"(slot={_targetSlot})");
         }
 
         private void TickWaitRenegotiate()
         {
-            var flagBase = _sender.ActiveFlagBase;
-            if (flagBase != null && flagBase.Value != _prevFlagBase)
+            int gen = _sender.SubscriptionGen;
+            if (gen != _prevSubscriptionGen)
             {
-                _framesSentAtStart = _sender.FramesSent;
-                _prevFlagBase = flagBase.Value;
+                _prevSubscriptionGen = gen;
+                _framesAtPhaseStart = _sender.FramesSent;
                 _elapsedMs = 0;
-                Transition(State.TestRunning,
-                    $"dash=\"{CurrentDash()}\" slot={_dashIndex} " +
-                    $"flagBase=0x{flagBase.Value:X2} " +
+                string targetName = _dashList?[_targetSlot] ?? "?";
+                Transition(State.PostSwitchTest,
+                    $"target=\"{targetName}\"(slot={_targetSlot}) " +
+                    $"subGen={gen} " +
                     $"tiers={_sender.ActiveTierCount} " +
                     $"catalog={_sender.CatalogChannelCount}");
                 return;
@@ -172,43 +183,45 @@ namespace MozaPlugin.Telemetry
 
             if (_elapsedMs >= RenegotiateTimeoutMs)
             {
-                _failed.Add(CurrentDash());
-                MozaLog.Warn($"[Moza] AUTO-TEST: renegotiate timeout dash=\"{CurrentDash()}\"");
-                AdvanceOrFinish();
+                MozaLog.Warn(
+                    $"[Moza] AUTO-TEST: renegotiate TIMEOUT after {RenegotiateTimeoutMs}ms — " +
+                    $"target slot={_targetSlot} subGen still {_prevSubscriptionGen}");
+                Finish(persistTarget: false);
             }
         }
 
-        private void AdvanceOrFinish()
+        private void TickPostSwitchTest()
         {
-            _dashIndex++;
-            if (_dashIndex < (_dashList?.Count ?? 0))
-            {
-                _elapsedMs = 0;
-                _state = State.SwitchPending;
-            }
-            else
-            {
-                Finish();
-            }
+            if (_elapsedMs < PostSwitchTestMs) return;
+
+            int frames = _sender.FramesSent - _framesAtPhaseStart;
+            string targetName = _dashList?[_targetSlot] ?? "?";
+            bool ok = frames > 0;
+            MozaLog.Info(
+                $"[Moza] AUTO-TEST: post-switch test done dash=\"{targetName}\" " +
+                $"frames={frames} {(ok ? "PASS" : "FAIL")}");
+
+            Finish(persistTarget: true);
         }
 
-        private void Finish()
+        private void Finish(bool persistTarget)
         {
             _sender.TestMode = false;
-            int total = _passed + _failed.Count;
-            string failedStr = _failed.Count > 0
-                ? "[\"" + string.Join("\",\"", _failed) + "\"]"
-                : "[]";
-            MozaLog.Info(
-                $"[Moza] AUTO-TEST: state=DONE passed={_passed}/{total} " +
-                $"failed={failedStr}");
+            if (persistTarget && _targetSlot >= 0)
+            {
+                var plugin = MozaPlugin.Instance;
+                if (plugin?.Settings != null)
+                {
+                    plugin.Settings.AutoTestLastSlot = _targetSlot;
+                    plugin.SaveSettings();
+                    MozaLog.Info(
+                        $"[Moza] AUTO-TEST: persisted AutoTestLastSlot={_targetSlot} " +
+                        "(next run will switch the other direction)");
+                }
+            }
+            MozaLog.Info("[Moza] AUTO-TEST: state=DONE");
             _state = State.Done;
         }
-
-        private string CurrentDash() =>
-            _dashList != null && _dashIndex < _dashList.Count
-                ? _dashList[_dashIndex]
-                : "?";
 
         private void Transition(State next, string detail)
         {

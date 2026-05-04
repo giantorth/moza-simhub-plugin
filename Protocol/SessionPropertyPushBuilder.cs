@@ -78,6 +78,41 @@ namespace MozaPlugin.Protocol
             return WrapFfRecord(kv);
         }
 
+        /// <summary>
+        /// Session-init handshake record #1 sent by PitHouse on session 0x02
+        /// at session start (verified bridge-20260503-115840.jsonl t=...723.161:
+        /// `ff 10 00 00 00 [crc] 02 00 00 00 e2 9a f7 69 00 00 00 00 90 9d ff ff [crc]`).
+        /// Wheel apparently requires this before accepting field1=4 dashboard
+        /// switches — without it, FF-record switches sent on a fresh session
+        /// 0x02 are silently ignored. Body bytes are static across captures.
+        /// </summary>
+        public static byte[] BuildSessionInitField2Body()
+        {
+            var kv = new byte[16];
+            WriteU32LE(kv, 0, 2u);            // field1 = 2 (init kind)
+            // 12-byte payload from PitHouse capture (treat as opaque magic;
+            // semantics not yet decoded).
+            kv[4]  = 0xe2; kv[5]  = 0x9a; kv[6]  = 0xf7; kv[7]  = 0x69;
+            kv[8]  = 0x00; kv[9]  = 0x00; kv[10] = 0x00; kv[11] = 0x00;
+            kv[12] = 0x90; kv[13] = 0x9d; kv[14] = 0xff; kv[15] = 0xff;
+            return WrapFfRecord(kv);
+        }
+
+        /// <summary>
+        /// Session-init handshake record #2: sets the initial active dashboard
+        /// slot. Sent by PitHouse immediately after the field1=2 record on
+        /// session 0x02. Format `ff 0c 00 00 00 [crc] 07 00 00 00 [slot:LE32]
+        /// 00 00 00 00 [crc]`.
+        /// </summary>
+        public static byte[] BuildSessionInitField7Body(uint slotIndex)
+        {
+            var kv = new byte[12];
+            WriteU32LE(kv, 0, 7u);
+            WriteU32LE(kv, 4, slotIndex);
+            WriteU32LE(kv, 8, 0u);
+            return WrapFfRecord(kv);
+        }
+
         internal static byte[] WrapFfRecord(byte[] kindAndValue)
         {
             int size = kindAndValue.Length;                 // 4 + sizeof(value)

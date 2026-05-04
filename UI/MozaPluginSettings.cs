@@ -94,10 +94,18 @@ namespace MozaPlugin
         // Code-only toggle — not serialized so changing the default here
         // is the only way to flip it. Avoids stale persisted values.
         [Newtonsoft.Json.JsonIgnore]
-        public bool EnableWireTraceFileSink { get; set; } = false;
+        public bool EnableWireTraceFileSink { get; set; } = true;
 
         [Newtonsoft.Json.JsonIgnore]
         public bool EnableAutoTestOnConnect { get; set; } = false;
+
+        /// <summary>
+        /// Persisted slot the auto-test most recently switched TO. On next
+        /// run the harness picks the OTHER of {Core, Grids} so each launch
+        /// flips direction without manual config. Persisted so debugging
+        /// across restarts alternates dashboards naturally.
+        /// </summary>
+        public int AutoTestLastSlot { get; set; } = -1;
 
         // ===== Profile system (SimHub native) =====
         public MozaProfileStore ProfileStore { get; set; } = new MozaProfileStore();

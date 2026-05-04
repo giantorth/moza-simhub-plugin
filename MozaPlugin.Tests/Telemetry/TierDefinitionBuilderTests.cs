@@ -91,46 +91,63 @@ namespace MozaPlugin.Tests.Telemetry
         public void BuildTierDefinitionMessage_F1Profile_StructureValid()
         {
             var profile = F1DashboardProfileFixture.BuildMultiStream();
-            byte[] msg = TierDefinitionBuilder.BuildTierDefinitionMessage(profile, flagBase: 0x08);
+            byte[] msg = TierDefinitionBuilder.BuildTierDefinitionMessage(profile, flagBase: 0x00);
 
             int numChannels = profile.Tiers[0].Channels.Count;
 
-            // PitHouse-exact 2026-04-29: per-tier interleaved enables (only
-            // before tiers 1..N-1, none upfront) + per-tier end-marker.
-            // For 1 tier: tier_def (6 + 16*N) + end_marker (9) = 15 + 16*N
+            // PitHouse shape with no prior flags (flagBase=0):
+            //   tier_def (6 + 16*N) + end_marker (9) = 15 + 16*N
             int expectedSize = (6 + 16 * numChannels) + 9;
             Assert.Equal(expectedSize, msg.Length);
 
-            // Tier def tag at offset 0 (no preceding enable for tier 0)
             Assert.Equal(0x01, msg[0]);
             uint size = (uint)(msg[1] | (msg[2] << 8) | (msg[3] << 16) | (msg[4] << 24));
             Assert.Equal((uint)(1 + numChannels * 16), size);
-            Assert.Equal(0x08, msg[5]);  // flag byte = flagBase + 0
+            Assert.Equal(0x00, msg[5]);
 
-            // End marker after tier
             int endOffset = msg.Length - 9;
             Assert.Equal(0x06, msg[endOffset]);
-            Assert.Equal(0x04, msg[endOffset + 1]);  // size=4
+            Assert.Equal(0x04, msg[endOffset + 1]);
             uint markerVal = (uint)(msg[endOffset + 5] | (msg[endOffset + 6] << 8)
                                   | (msg[endOffset + 7] << 16) | (msg[endOffset + 8] << 24));
-            Assert.Equal(0u, markerVal);  // first tier marker = 0
+            // END val = max channel idx in this msg
+            Assert.Equal((uint)numChannels, markerVal);
         }
 
         [Fact]
         public void BuildTierDefinitionMessage_ChannelIndices_AreOneBasedAlphabetical()
         {
             var profile = F1DashboardProfileFixture.BuildMultiStream();
-            byte[] msg = TierDefinitionBuilder.BuildTierDefinitionMessage(profile, flagBase: 0x08);
+            byte[] msg = TierDefinitionBuilder.BuildTierDefinitionMessage(profile, flagBase: 0x00);
 
             // First channel entry starts at offset 6 (1 tag + 4 size + 1 flag).
             int ch0 = 6;
             uint idx0 = (uint)(msg[ch0] | (msg[ch0 + 1] << 8) | (msg[ch0 + 2] << 16) | (msg[ch0 + 3] << 24));
             Assert.Equal(1u, idx0);
 
-            // Channel 1 is CurrentLapTime, index 2
             int ch1 = ch0 + 16;
             uint idx1 = (uint)(msg[ch1] | (msg[ch1 + 1] << 8) | (msg[ch1 + 2] << 16) | (msg[ch1 + 3] << 24));
             Assert.Equal(2u, idx1);
+        }
+
+        [Fact]
+        public void BuildTierDefinitionV2_PriorFlags_EmitsEnablesInHeader()
+        {
+            var profile = F1DashboardProfileFixture.BuildMultiStream();
+            byte[] msg = TierDefinitionBuilder.BuildTierDefinitionV2(
+                profile, flagBase: 0x05, wheelCatalog: null);
+
+            // 5 ENABLE records each [tag=0x00][size=01000000][flag] = 6B.
+            for (int i = 0; i < 5; i++)
+            {
+                int o = i * 6;
+                Assert.Equal(0x00, msg[o]);
+                Assert.Equal(0x01, msg[o + 1]);
+                Assert.Equal(i,    msg[o + 5]);
+            }
+            // Tier-def starts after enables.
+            Assert.Equal(0x01, msg[30]);
+            Assert.Equal(0x05, msg[35]); // flag = flagBase
         }
 
         [Fact]

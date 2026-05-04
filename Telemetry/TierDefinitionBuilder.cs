@@ -48,7 +48,8 @@ namespace MozaPlugin.Telemetry
         /// affect parse correctness.
         /// </summary>
         private static byte[] BuildTierDefinitionMessageType02(MultiStreamProfile profile, byte flagBase,
-            System.Collections.Generic.IReadOnlyList<string> wheelCatalog)
+             System.Collections.Generic.IReadOnlyList<string> wheelCatalog,
+            byte? prevFlagBase = null, int prevTierCount = 0, int prevSubPerBroadcast = 0)
         {
             using var ms = new MemoryStream();
             using var w = new BinaryWriter(ms);
@@ -148,6 +149,18 @@ namespace MozaPlugin.Telemetry
             for (int j = 0; j < subPerBroadcast; j++)
                 channelsPerBroadcast += profile.Tiers[j].Channels.Count;
 
+            // On dashboard switch, emit ENABLE records for the previous
+            // subscription's last-broadcast flags BEFORE the first new TIER.
+            // PitHouse does this to signal the wheel that the old tier's
+            // flags are still valid while it processes the new definition.
+            if (prevFlagBase.HasValue && prevTierCount > 0 && prevSubPerBroadcast > 0)
+            {
+                int prevBroadcasts = prevTierCount / prevSubPerBroadcast;
+                int prevLastBase = prevFlagBase.Value + (prevBroadcasts - 1) * prevSubPerBroadcast;
+                for (int s = 0; s < prevSubPerBroadcast; s++)
+                    WriteEnable((byte)(prevLastBase + s));
+            }
+
             for (int b = 0; b < broadcastCount; b++)
             {
                 int baseTier = b * subPerBroadcast;
@@ -195,12 +208,92 @@ namespace MozaPlugin.Telemetry
         };
 
         /// <summary>
+        /// PitHouse-shape tier-def body (no preamble — caller emits the
+        /// preamble TLV separately on first send per session). Layout per
+        /// docs/protocol/findings/2026-05-03-pithouse-tierdef-reference.md:
+        ///   [ENABLE 0x00 size=1 flag] × flagBase  (prior-flag enables)
+        ///   [TIER 0x01 size=1+16N flag channel_records] × profile.Tiers.Count
+        ///   [END 0x06 size=4 max_channel_idx]
+        ///
+        /// Channel index resolution: when <paramref name="wheelCatalog"/> is
+        /// non-null + non-empty, indices come from the wheel's advertised
+        /// catalog (1-based position). Otherwise indices fall back to
+        /// alphabetic ordering of channel URLs across all tiers (legacy).
+        /// END value uses the max channel idx referenced in this message —
+        /// "max-ever-seen" semantics noted in findings doc require session
+        /// state the caller must track separately.
+        /// </summary>
+        public static byte[] BuildTierDefinitionV2(MultiStreamProfile profile, byte flagBase,
+            System.Collections.Generic.IReadOnlyList<string>? wheelCatalog)
+        {
+            using var ms = new MemoryStream();
+            using var w = new BinaryWriter(ms);
+
+            var idxByUrl = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            if (wheelCatalog != null && wheelCatalog.Count > 0)
+            {
+                for (int i = 0; i < wheelCatalog.Count; i++)
+                {
+                    string url = wheelCatalog[i];
+                    if (!string.IsNullOrEmpty(url))
+                        idxByUrl[url] = i + 1;
+                }
+            }
+            else
+            {
+                var allChannels = profile.Tiers
+                    .SelectMany(t => t.Channels)
+                    .OrderBy(c => c.Url, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                for (int i = 0; i < allChannels.Count; i++)
+                    idxByUrl[allChannels[i].Url] = i + 1;
+            }
+
+            for (int f = 0; f < flagBase; f++)
+            {
+                w.Write((byte)0x00);
+                w.Write((uint)1);
+                w.Write((byte)f);
+            }
+
+            int maxIdx = 0;
+            for (int t = 0; t < profile.Tiers.Count; t++)
+            {
+                var tier = profile.Tiers[t];
+                byte flag = (byte)(flagBase + t);
+                int n = tier.Channels.Count;
+                uint size = (uint)(1 + n * 16);
+                w.Write((byte)0x01);
+                w.Write(size);
+                w.Write(flag);
+                foreach (var ch in tier.Channels)
+                {
+                    int chIndex;
+                    if (!idxByUrl.TryGetValue(ch.Url, out chIndex)) chIndex = 0;
+                    if (chIndex > maxIdx) maxIdx = chIndex;
+                    uint compCode = LookupCompressionCode(ch.Compression);
+                    w.Write((uint)chIndex);
+                    w.Write(compCode);
+                    w.Write((uint)ch.BitWidth);
+                    w.Write((uint)0);
+                }
+            }
+
+            w.Write((byte)0x06);
+            w.Write((uint)4);
+            w.Write((uint)maxIdx);
+
+            return ms.ToArray();
+        }
+
+        /// <summary>
         /// Build the complete tier definition message bytes from a MultiStreamProfile.
-        /// This is the reassembled payload that gets chunked into 7c:00 frames.
+        /// Production callers use <see cref="BuildTierDefinitionV2"/> directly; this
+        /// 2-arg overload is the legacy entry point retained for tests and emits the
+        /// same V2 shape with alphabetic channel indices (no wheel catalog).
         /// </summary>
         public static byte[] BuildTierDefinitionMessage(MultiStreamProfile profile, byte flagBase)
-            => BuildTierDefinitionMessage(profile, flagBase, includeEnableEntries: true,
-                useWheelCatalogIndices: false, wheelCatalog: null);
+            => BuildTierDefinitionV2(profile, flagBase, wheelCatalog: null);
 
         /// <summary>
         /// Build the V2 compact tier-def message.
@@ -218,7 +311,8 @@ namespace MozaPlugin.Telemetry
         public static byte[] BuildTierDefinitionMessage(MultiStreamProfile profile, byte flagBase,
             bool includeEnableEntries,
             bool useWheelCatalogIndices,
-            System.Collections.Generic.IReadOnlyList<string>? wheelCatalog)
+            System.Collections.Generic.IReadOnlyList<string>? wheelCatalog,
+            byte? prevFlagBase = null, int prevTierCount = 0, int prevSubPerBroadcast = 0)
         {
             // Type02 path: emit PitHouse-exact section ordering observed in
             // `wireshark/csp/startup, change knob colors, ...pcapng`:
@@ -234,7 +328,8 @@ namespace MozaPlugin.Telemetry
             // that). Other callers fall through to the legacy flat layout.
             if (useWheelCatalogIndices && wheelCatalog != null && profile.Tiers.Count > 0)
             {
-                return BuildTierDefinitionMessageType02(profile, flagBase, wheelCatalog);
+                return BuildTierDefinitionMessageType02(profile, flagBase, wheelCatalog,
+                    prevFlagBase, prevTierCount, prevSubPerBroadcast);
             }
 
             using var ms = new MemoryStream();

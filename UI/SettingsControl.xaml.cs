@@ -1263,6 +1263,7 @@ namespace MozaPlugin
             sb.AppendLine($"fontRefMap:     {state.FontRefMap.Count} entries");
             sb.AppendLine($"imagePath:      {state.ImagePath.Count} entries");
             sb.AppendLine($"captured at:    {state.CapturedAt:HH:mm:ss}");
+            sb.AppendLine(Build28xRawLine());
             sb.AppendLine();
             sb.AppendLine($"-- Enabled dashboards ({state.EnabledDashboards.Count}) --");
             foreach (var d in state.EnabledDashboards)
@@ -1280,6 +1281,32 @@ namespace MozaPlugin
             foreach (var d in state.DisabledDashboards)
                 sb.Append($"\n  • {d.Title} / {d.DirName}");
             return sb.ToString();
+        }
+
+        /// <summary>
+        /// Render the wheel's most recent 28:00 / 28:01 reply bytes raw,
+        /// with age in milliseconds. Semantics not decoded — captured for
+        /// offline correlation against game state. See plan
+        /// /home/rorth/.claude/plans/drifting-moseying-cook.md Phase 0.
+        /// </summary>
+        private string Build28xRawLine()
+        {
+            var d = _plugin.Data;
+            if (d == null) return "wheel 28:xx raw: (no data)";
+            string b00 = d.Last28x00ByteValid
+                ? $"0x{d.Last28x00Byte5:X2}" : "(none)";
+            string b01 = d.Last28x01BytesValid
+                ? $"0x{d.Last28x01Byte4:X2} 0x{d.Last28x01Byte5:X2}"
+                : "(none)";
+            string age;
+            if (d.Last28xReplyTickMs == 0)
+                age = "never";
+            else
+            {
+                int dt = unchecked(Environment.TickCount - d.Last28xReplyTickMs);
+                age = dt < 0 ? "?" : $"{dt} ms";
+            }
+            return $"wheel 28:xx raw: 28:00=[{b00}]  28:01=[{b01}]  age={age}";
         }
 
         private string BuildTileServerText()

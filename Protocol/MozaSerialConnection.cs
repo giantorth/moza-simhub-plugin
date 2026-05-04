@@ -556,6 +556,11 @@ namespace MozaPlugin.Protocol
                 //    settings writes when flooded (ApplyProfile sends 30+ in a burst).
                 //    Pacing is skipped when the previous write was a stream frame,
                 //    since telemetry-group writes never trigger the drop.
+                // 1) One-shot FIFO: session traffic, settings writes, probes.
+                //    Paced at 4 ms between consecutive one-shots — Moza bases drop
+                //    settings writes when flooded (ApplyProfile sends 30+ in a burst).
+                //    Pacing is skipped when the previous write was a stream frame,
+                //    since telemetry-group writes never trigger the drop.
                 if (_oneShotQueue.TryDequeue(out var msg))
                 {
                     if (lastWasOneShot)

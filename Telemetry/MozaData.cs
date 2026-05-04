@@ -50,6 +50,25 @@ namespace MozaPlugin
         private volatile string _serialPartA = "";
         private volatile string _serialPartB = "";
 
+        // Raw observed reply bytes from group 0x40 cmd 0x28 polls.
+        // PitHouse polls 28:00 + 28:01 at ~1 Hz throughout the active phase
+        // across all four bridge captures (sim/logs/bridge-20260503-*.jsonl).
+        // Reply layouts:
+        //   28:00 reply: C0 71 28 00 00 <byte5>
+        //   28:01 reply: C0 71 28 01 <byte4> <byte5>
+        // Cross-capture analysis shows byte5 of 28:00 takes dominant 00/01 +
+        // recurring 0x0b across all captures, with sporadic high values.
+        // Same observation applies even when the user is NOT touching wheel
+        // controls — the byte still oscillates. Semantics not yet decoded;
+        // stored raw without naming so a maintainer can correlate values
+        // against game state in subsequent controlled experiments.
+        public volatile byte Last28x00Byte5;
+        public volatile bool Last28x00ByteValid;
+        public volatile byte Last28x01Byte4;
+        public volatile byte Last28x01Byte5;
+        public volatile bool Last28x01BytesValid;
+        public volatile int Last28xReplyTickMs; // Environment.TickCount snapshot
+
         // Temperatures (raw / 100 = degrees C from device)
         public volatile int McuTemp;
         public volatile int MosfetTemp;
@@ -623,6 +642,12 @@ namespace MozaPlugin
             DisplayDeviceType = System.Array.Empty<byte>();
             DisplayCapabilities = System.Array.Empty<byte>();
             DisplayIdentity11 = System.Array.Empty<byte>();
+            Last28x00Byte5 = 0;
+            Last28x00ByteValid = false;
+            Last28x01Byte4 = 0;
+            Last28x01Byte5 = 0;
+            Last28x01BytesValid = false;
+            Last28xReplyTickMs = 0;
             _serialPartA = "";
             _serialPartB = "";
         }

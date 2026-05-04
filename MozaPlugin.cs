@@ -1280,6 +1280,28 @@ namespace MozaPlugin
             if (data.Length >= 4 && data[0] == 0xC0 && data[1] == 0x71 &&
                 (data[2] == 0x1E || data[2] == 0x28))
             {
+                // Capture raw 28:00 / 28:01 reply bytes before swallowing.
+                // PitHouse polls these at ~1 Hz across all four bridge captures
+                // (sim/logs/bridge-20260503-*.jsonl). Semantics not yet decoded
+                // — store raw so future controlled experiments can correlate
+                // values against game state. See plan
+                // /home/rorth/.claude/plans/drifting-moseying-cook.md Phase 0.
+                if (data.Length >= 6 && data[2] == 0x28)
+                {
+                    if (data[3] == 0x00 && _data != null)
+                    {
+                        _data.Last28x00Byte5 = data[5];
+                        _data.Last28x00ByteValid = true;
+                        _data.Last28xReplyTickMs = Environment.TickCount;
+                    }
+                    else if (data[3] == 0x01 && _data != null)
+                    {
+                        _data.Last28x01Byte4 = data[4];
+                        _data.Last28x01Byte5 = data[5];
+                        _data.Last28x01BytesValid = true;
+                        _data.Last28xReplyTickMs = Environment.TickCount;
+                    }
+                }
                 _deviceManager.MarkWheelResponse(MozaProtocol.SwapNibbles(data[1]));
                 return;
             }
