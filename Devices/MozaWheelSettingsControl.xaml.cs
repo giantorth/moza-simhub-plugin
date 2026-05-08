@@ -22,6 +22,20 @@ namespace MozaPlugin.Devices
 
         private readonly DispatcherTimer _refreshTimer;
 
+        // Debounce timer for the wheel-integrated display brightness slider.
+        // Slider drags fire one ValueChanged per integer step; firing
+        // SendDashDisplayBrightness on each fills the session-0x02 retransmit
+        // queue with up to 100 chunks, every one of which retransmits for ~20s
+        // until acked. On a wheel that doesn't ack (e.g. CSP-on-hub
+        // engagement issue) the queue clogs the wire and stale values keep
+        // firing — including any momentary pass through brightness=0 — so
+        // the display stays blanked. We only commit (and persist) the
+        // brightness once the slider has been still for the debounce
+        // interval. _propertyPushLastSeqs in TelemetrySender additionally
+        // supersedes any in-flight retransmit when a new value lands.
+        private DispatcherTimer? _displayBrightnessDebounce;
+        private static readonly TimeSpan DisplayBrightnessDebounce = TimeSpan.FromMilliseconds(500);
+
         /// <summary>
         /// The virtual LED driver for the device instance this control belongs to.
         /// When set, connection status is derived from the driver's model-aware IsConnected().
@@ -77,6 +91,12 @@ namespace MozaPlugin.Devices
         private void OnUnloaded(object sender, RoutedEventArgs e)
         {
             _refreshTimer.Stop();
+
+            // Flush any pending brightness debounce so the user's latest
+            // slider value reaches the wheel + persisted settings even if
+            // they navigate away before the 1s debounce expires.
+            if (_displayBrightnessDebounce != null && _displayBrightnessDebounce.IsEnabled)
+                DisplayBrightnessDebounce_Tick(this, EventArgs.Empty);
         }
 
         private bool ResolvePlugin()
@@ -875,7 +895,39 @@ namespace MozaPlugin.Devices
             WheelDisplayBrightnessValue.Text = $"{val}";
             _data!.DashDisplayBrightness = val;
             _settings!.DashDisplayBrightness = val;
-            _plugin.TelemetrySender?.SendDashDisplayBrightness(val);
+            // Defer the wire write + persist until the slider has been still
+            // for DisplayBrightnessDebounce. A drag fires ValueChanged per
+            // integer step (~30 events for a full sweep); pushing each value
+            // floods the session-0x02 retransmit queue with intermediate
+            // chunks, including any momentary 0 the user passes through —
+            // and that 0 keeps retransmitting alongside the final value
+            // until the queue ages out, leaving the display blanked. The
+            // timer resets on every ValueChanged so only the final
+            // resting value is committed; 500 ms is long enough to skip a
+            // fast drag, short enough to feel instant when the user
+            // releases.
+            if (_displayBrightnessDebounce == null)
+            {
+                _displayBrightnessDebounce = new DispatcherTimer { Interval = DisplayBrightnessDebounce };
+                _displayBrightnessDebounce.Tick += DisplayBrightnessDebounce_Tick;
+            }
+            _displayBrightnessDebounce.Stop();
+            _displayBrightnessDebounce.Start();
+        }
+
+        private void DisplayBrightnessDebounce_Tick(object? sender, EventArgs e)
+        {
+            _displayBrightnessDebounce?.Stop();
+            if (_plugin == null || _data == null) return;
+            int val = _data.DashDisplayBrightness;
+            if (val < 0) val = 0; else if (val > 100) val = 100;
+            // allowZero: true — this is the deliberate user-intent path.
+            // Every other call site of SendDashDisplayBrightness (settings
+            // load, profile apply, dash-extension apply) leaves the default
+            // false so a stray 0 there is suppressed, but a slider dragged
+            // to 0 and held is honoured (display turns off as the user
+            // requested).
+            _plugin.TelemetrySender?.SendDashDisplayBrightness(val, allowZero: true);
             _plugin.SaveSettings();
         }
 

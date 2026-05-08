@@ -103,6 +103,23 @@ namespace MozaPlugin.Telemetry
         private readonly global::MozaPlugin.Diagnostics.SessionRetransmitter _retransmitter
             = new global::MozaPlugin.Diagnostics.SessionRetransmitter();
 
+        // Latest chunk seqs of the most-recent FF property push of each
+        // (session, kind). Lets SendSessionPropertyBody supersede a pending
+        // push of the same kind by dropping its prior seqs from the retransmit
+        // queue before queuing the new push.
+        //
+        // Without this coalescing, when the user drags the wheel-display
+        // brightness slider quickly each ValueChanged fires its own FF chunk
+        // that retransmits up to 100× (200ms intervals, ~20s total). Every
+        // intermediate value — including any momentary pass through
+        // brightness=0 — keeps firing alongside the latest, so the wheel sees
+        // the stale values interleaved and the display stays blanked. Bundle1
+        // of usb-capture/displaybrightnessbug shows exactly this: 88 unacked
+        // chunks (ramp 1→100→0) retransmitting 48–68× each over 22s on a
+        // wheel that wasn't fully engaged on session 0x02 (no acks at all).
+        private readonly System.Collections.Generic.Dictionary<(byte session, uint kind), System.Collections.Generic.List<int>> _propertyPushLastSeqs
+            = new System.Collections.Generic.Dictionary<(byte, uint), System.Collections.Generic.List<int>>();
+
         // Blind retransmission for session 0x01 tier-def chunks. PitHouse
         // retransmits each chunk ~10× regardless of acks (wheel never acks
         // session 0x01). See findings/2026-05-02-tier-def-retransmission.md.
@@ -786,6 +803,7 @@ namespace MozaPlugin.Telemetry
             _tierDefPreambleSent = false;
             _autoResolutionDone = false;
             _retransmitter.Clear();
+            _propertyPushLastSeqs.Clear();
             _tierDefBlindFrames = null;
             _lastSubscriptionDiag = null;
             lock (_subscriptionResponseChunks) _subscriptionResponseChunks.Clear();
@@ -873,12 +891,50 @@ namespace MozaPlugin.Telemetry
             // 2026-04-28..05-03 PitHouse captures: every meaningful FF record
             // appears on sess=0x02 in both directions; sess=0x01 carries
             // tier-def TLV traffic only.
+            if (body == null) return;
             const byte session = 0x02;
+
+            // Pull the property `kind` out of the FF body so we can supersede
+            // any prior outstanding push of the same kind in the retransmit
+            // queue. Body layout (from SessionPropertyPushBuilder.WrapFfRecord):
+            //   [0]      0xFF
+            //   [1..4]   size:u32 LE
+            //   [5..8]   inner crc32
+            //   [9..12]  kind:u32 LE
+            //   [13...]  value bytes
+            bool haveKind = body.Length >= 13 && body[0] == 0xFF;
+            uint kind = haveKind
+                ? (uint)(body[9] | (body[10] << 8) | (body[11] << 16) | (body[12] << 24))
+                : 0u;
+
+            // Drop the prior seqs for the same kind before queuing the new
+            // chunk. See _propertyPushLastSeqs comment for the user-visible
+            // failure this prevents (stale brightness=0 retransmits leaving
+            // the display stuck blanked after a quick slider drag).
+            if (haveKind && _propertyPushLastSeqs.TryGetValue((session, kind), out var prevSeqs))
+            {
+                foreach (int s in prevSeqs)
+                    _retransmitter.Drop(session, s);
+                prevSeqs.Clear();
+            }
+
             int seq = Math.Max(2, _session02OutboundSeq);
             var frames = TierDefinitionBuilder.ChunkMessage(body, session, ref seq);
+            var newSeqs = haveKind
+                ? new System.Collections.Generic.List<int>(frames.Count)
+                : null;
             foreach (var frame in frames)
+            {
                 SendAndTrackChunk(frame);
+                // Frame layout (TierDefinitionBuilder.ChunkMessage):
+                //   7E [N] 43 17 7C 00 [session] [type=01] [seq_lo] [seq_hi] [payload] [chk]
+                if (newSeqs != null && frame.Length >= 10)
+                    newSeqs.Add(frame[8] | (frame[9] << 8));
+            }
             _session02OutboundSeq = seq;
+
+            if (haveKind)
+                _propertyPushLastSeqs[(session, kind)] = newSeqs!;
         }
 
         /// <summary>
@@ -893,11 +949,40 @@ namespace MozaPlugin.Telemetry
             _retransmitter.Track(frame);
         }
 
-        /// <summary>Convenience: push wheel-integrated dashboard display brightness (0–100).</summary>
-        public void SendDashDisplayBrightness(int percent)
+        /// <summary>
+        /// Push wheel-integrated dashboard display brightness (0–100; 0 turns
+        /// the display off entirely).
+        ///
+        /// <para>brightness=0 is destructive in the user-experience sense: on
+        /// the CSP-on-hub firmware seen in
+        /// <c>usb-capture/displaybrightnessbug</c> a single 0-push leaves the
+        /// display blanked, and even though our retransmit-coalescing fix
+        /// (<see cref="SendSessionPropertyBody"/>) lets a subsequent
+        /// brightness>0 unblank it, transient 0s during startup/profile
+        /// switching scare users. So unless <paramref name="allowZero"/> is
+        /// explicitly set, a 0 value is silently skipped — only the
+        /// debounced UI slider path opts in to actually pushing 0
+        /// (<c>MozaWheelSettingsControl.DisplayBrightnessDebounce_Tick</c>).
+        /// Storage isn't touched: callers' settings/profile keep their 0,
+        /// only the wire push is suppressed.</para>
+        /// </summary>
+        /// <param name="percent">Brightness 0..100 (clamped).</param>
+        /// <param name="allowZero">
+        /// When false (default), a value of 0 is skipped. When true, 0 is
+        /// pushed verbatim — used for explicit user intent (slider committed
+        /// at 0).
+        /// </param>
+        public void SendDashDisplayBrightness(int percent, bool allowZero = false)
         {
             if (percent < 0) percent = 0;
             if (percent > 100) percent = 100;
+            if (percent == 0 && !allowZero)
+            {
+                global::MozaPlugin.MozaLog.Debug(
+                    "[Moza] SendDashDisplayBrightness: skipping non-explicit 0 push " +
+                    "(use allowZero=true for deliberate display-off)");
+                return;
+            }
             SendSessionPropertyU32(
                 global::MozaPlugin.Protocol.SessionPropertyPushBuilder.KindDashBrightness,
                 (uint)percent);
@@ -1596,6 +1681,7 @@ namespace MozaPlugin.Telemetry
             // Preamble is one-shot per session (captures: bridge-20260503-*).
             // Don't reset _tierDefPreambleSent here — session start handles it.
             _retransmitter.Clear();
+            _propertyPushLastSeqs.Clear();
             lock (_subscriptionResponseChunks) _subscriptionResponseChunks.Clear();
             _subscriptionResponseDeadlineTicks = 0;
 

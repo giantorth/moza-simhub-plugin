@@ -86,6 +86,18 @@ namespace MozaPlugin.Diagnostics
         }
 
         /// <summary>
+        /// Drop a specific <c>(session, seq)</c> chunk from the queue. Used by
+        /// callers that supersede a pending push (e.g. an FF property push of
+        /// the same <c>kind</c> replacing an older one) so the older chunk
+        /// doesn't keep retransmitting a stale value alongside the new one.
+        /// No-op if the entry is absent.
+        /// </summary>
+        public void Drop(byte session, int seq)
+        {
+            lock (_lock) _queue.Remove((session, seq));
+        }
+
+        /// <summary>
         /// Return frames whose last send was &gt;= <paramref name="intervalMs"/>
         /// ago. Chunks past <paramref name="maxRetries"/> sends are silently
         /// dropped from the queue (assume permanent loss).
