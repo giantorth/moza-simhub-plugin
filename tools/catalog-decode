@@ -1,0 +1,417 @@
+#!/usr/bin/env python3
+"""Decode b2h channel catalog announcements from a MOZA wire-trace JSONL file.
+
+Extracts tag=0x04 URL records from b2h session data, builds a catalog
+growth timeline, and cross-references with dashboard channel requirements.
+
+Usage:
+    tools/catalog-decode sim/logs/bridge-20260503-112940.jsonl
+    tools/catalog-decode latest --dashboard "Rally V3"
+    tools/catalog-decode trace1.jsonl --compare trace2.jsonl --dashboard "Rally V3"
+    tools/catalog-decode latest --json
+"""
+import argparse
+import json
+import re
+import struct
+import sys
+import zlib
+from collections import defaultdict
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Optional
+
+sys.path.insert(0, str(Path(__file__).parent))
+from moza_trace import load_trace, resolve_trace, Frame
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+TELEMETRY_JSON = REPO_ROOT / "Data" / "Telemetry.json"
+DASHES_DIR = Path.home() / "dashes"
+
+
+@dataclass
+class CatalogEntry:
+    idx: int
+    url: str
+    timestamp: float  # relative to trace start
+    session: int
+
+
+def strip_crc(payload: bytes) -> bytes:
+    """Strip 4-byte CRC32 trailer if it matches the preceding payload."""
+    if len(payload) < 5:
+        return payload
+    wire_crc = struct.unpack_from('<I', payload, len(payload) - 4)[0]
+    actual = zlib.crc32(payload[:-4]) & 0xFFFFFFFF
+    if actual == wire_crc:
+        return payload[:-4]
+    return payload
+
+
+def extract_b2h_session_data(frames: list[Frame]) -> dict[int, list[tuple[float, int, bytes]]]:
+    """Extract b2h session data payloads keyed by session ID.
+
+    Handles both frame formats:
+      - raw b2h: raw[0]==0xC3, session layer at raw[2:]
+      - 7E-wrapped b2h: raw[0]==0x7E, raw[2]==0xC3, session layer at raw[4:]
+    """
+    by_session: dict[int, list[tuple[float, int, bytes]]] = defaultdict(list)
+    for f in frames:
+        if f.dir != 'b2h':
+            continue
+        raw = f.raw
+        # Determine where the group byte lives
+        if len(raw) >= 8 and raw[0] == 0xC3:
+            # Direct b2h format: [C3][dev][7C][00][sess][type][seq_lo][seq_hi][data...]
+            if raw[2] != 0x7C or raw[3] != 0x00:
+                continue
+            sess = raw[4]
+            stype = raw[5]
+            if stype != 0x01:
+                continue
+            seq = raw[6] | (raw[7] << 8)
+            payload = strip_crc(raw[8:])
+            by_session[sess].append((f.t, seq, payload))
+        elif len(raw) >= 10 and raw[0] == 0x7E and raw[2] == 0xC3:
+            # 7E-wrapped b2h: [7E][len][C3][dev][7C][00][sess][type][seq_lo][seq_hi][data...][chk]
+            if raw[4] != 0x7C or raw[5] != 0x00:
+                continue
+            sess = raw[6]
+            stype = raw[7]
+            if stype != 0x01:
+                continue
+            seq = raw[8] | (raw[9] << 8)
+            # Strip trailing checksum byte and CRC
+            payload = strip_crc(raw[10:-1]) if len(raw) > 11 else raw[10:]
+            by_session[sess].append((f.t, seq, payload))
+    return by_session
+
+
+def scan_catalog_entries(data: bytes, timestamp_base: float, session: int,
+                         chunk_timestamps: dict[int, float]) -> list[CatalogEntry]:
+    """Scan reassembled session data for tag=0x04 TLV catalog records.
+
+    TLV format: tag(u8) + size(u32LE) + value(size bytes)
+    tag=0x04 value: idx(u8) + url(ASCII)
+    """
+    entries = []
+    i = 0
+    while i + 5 <= len(data):
+        tag = data[i]
+        size = struct.unpack_from('<I', data, i + 1)[0]
+        if size > 100_000 or i + 5 + size > len(data):
+            i += 1
+            continue
+
+        if tag == 0x04 and size >= 2:
+            value = data[i + 5:i + 5 + size]
+            idx = value[0]
+            url_bytes = value[1:]
+            if all(0x20 <= b < 0x7F for b in url_bytes) and len(url_bytes) > 0:
+                try:
+                    url = url_bytes.decode('ascii')
+                    # Estimate timestamp: find which chunk this offset falls in
+                    ts = estimate_timestamp(i, chunk_timestamps)
+                    entries.append(CatalogEntry(
+                        idx=idx, url=url,
+                        timestamp=ts if ts is not None else timestamp_base,
+                        session=session,
+                    ))
+                except UnicodeDecodeError:
+                    pass
+            i += 5 + size
+            continue
+
+        # Skip FF records and other TLV tags
+        if tag == 0xFF and i + 9 <= len(data):
+            ff_size = struct.unpack_from('<I', data, i + 1)[0]
+            if 4 <= ff_size <= 100_000 and i + 1 + 4 + 4 + ff_size <= len(data):
+                i += 1 + 4 + 4 + ff_size
+                continue
+
+        if size < 100_000:
+            i += 5 + size
+        else:
+            i += 1
+    return entries
+
+
+def estimate_timestamp(offset: int, chunk_timestamps: dict[int, float]) -> Optional[float]:
+    """Estimate the timestamp for a byte offset within reassembled data."""
+    # chunk_timestamps maps cumulative byte offset -> timestamp
+    best_ts = None
+    best_off = -1
+    for off, ts in chunk_timestamps.items():
+        if off <= offset and off > best_off:
+            best_off = off
+            best_ts = ts
+    return best_ts
+
+
+def reassemble_with_timestamps(chunks: list[tuple[float, int, bytes]]) -> tuple[bytes, dict[int, float]]:
+    """Reassemble session data in seq order, deduplicating by seq number.
+
+    Keeps the first occurrence of each seq. Tracks cumulative offset -> timestamp.
+    """
+    # Deduplicate: keep first chunk per seq
+    by_seq: dict[int, tuple[float, bytes]] = {}
+    for ts, seq, payload in chunks:
+        if seq not in by_seq:
+            by_seq[seq] = (ts, payload)
+
+    data = bytearray()
+    timestamps: dict[int, float] = {}
+    for seq in sorted(by_seq.keys()):
+        ts, payload = by_seq[seq]
+        timestamps[len(data)] = ts
+        data.extend(payload)
+    return bytes(data), timestamps
+
+
+def decode_catalog(trace_path: Path) -> tuple[list[CatalogEntry], list[int], Path]:
+    """Decode catalog from a trace file. Returns (entries, session_ids, path)."""
+    frames = load_trace(trace_path)
+    by_session = extract_b2h_session_data(frames)
+
+    all_entries: list[CatalogEntry] = []
+    sessions_with_catalog: set[int] = set()
+
+    for sid in sorted(by_session.keys()):
+        chunks = by_session[sid]
+        if not chunks:
+            continue
+        data, chunk_ts = reassemble_with_timestamps(chunks)
+        base_ts = chunks[0][0] if chunks else 0.0
+        entries = scan_catalog_entries(data, base_ts, sid, chunk_ts)
+        if entries:
+            sessions_with_catalog.add(sid)
+            all_entries.extend(entries)
+
+    # Deduplicate: keep first appearance of each (idx, url) pair
+    seen: dict[tuple[int, str], CatalogEntry] = {}
+    for e in all_entries:
+        key = (e.idx, e.url)
+        if key not in seen:
+            seen[key] = e
+    deduped = sorted(seen.values(), key=lambda e: e.timestamp)
+
+    return deduped, sorted(sessions_with_catalog), trace_path
+
+
+def load_telemetry_json() -> dict[str, int]:
+    """Load package_level by URL from Data/Telemetry.json."""
+    url_to_pkg: dict[str, int] = {}
+    if not TELEMETRY_JSON.exists():
+        return url_to_pkg
+    with open(TELEMETRY_JSON) as f:
+        data = json.load(f)
+    for sector in data.get("sectors", []):
+        url = sector.get("url", "")
+        pkg = sector.get("package_level", 0)
+        if url:
+            url_to_pkg[url] = pkg
+    return url_to_pkg
+
+
+def load_dashboard_channels(name: str) -> list[str]:
+    """Load channel URLs from a dashboard mzdash file."""
+    dash_dir = DASHES_DIR / name
+    mzdash = dash_dir / f"{name}.mzdash"
+    if not mzdash.exists():
+        print(f"Warning: dashboard file not found: {mzdash}", file=sys.stderr)
+        return []
+    text = mzdash.read_text(encoding='utf-8', errors='replace')
+    urls = sorted(set(re.findall(r'v1/gameData/\w+', text)))
+    return urls
+
+
+def channel_name(url: str) -> str:
+    """Extract channel name from URL like v1/gameData/ABSActive -> ABSActive."""
+    return url.rsplit('/', 1)[-1] if '/' in url else url
+
+
+def format_timeline(entries: list[CatalogEntry], sessions: list[int], trace_path: Path) -> str:
+    """Format catalog timeline output."""
+    lines = []
+    lines.append(f"Trace: {trace_path.name}")
+    sess_str = ', '.join(f'0x{s:02X}' for s in sessions)
+    lines.append(f"Catalog: {len(entries)} entries from b2h sessions [{sess_str}]")
+    lines.append("")
+    lines.append("Timeline:")
+
+    if not entries:
+        lines.append("  (no catalog entries found)")
+        return '\n'.join(lines)
+
+    t0 = entries[0].timestamp
+    for e in entries:
+        lines.append(f"  +{e.timestamp:.2f}s  idx={e.idx}  {e.url}")
+
+    if len(entries) > 1:
+        duration = entries[-1].timestamp - entries[0].timestamp
+        lines.append(f"  Catalog complete at +{entries[-1].timestamp:.2f}s "
+                      f"({len(entries)} entries in {duration * 1000:.0f}ms)")
+
+    return '\n'.join(lines)
+
+
+def format_dashboard_xref(entries: list[CatalogEntry], dashboard_name: str,
+                          url_to_pkg: dict[str, int]) -> str:
+    """Format dashboard cross-reference output."""
+    dash_urls = load_dashboard_channels(dashboard_name)
+    if not dash_urls:
+        return f"\nDashboard cross-reference ({dashboard_name}): no channels found"
+
+    catalog_urls = {e.url: e for e in entries}
+    covered: list[tuple[str, CatalogEntry]] = []
+    missing: list[str] = []
+
+    for url in dash_urls:
+        if url in catalog_urls:
+            covered.append((url, catalog_urls[url]))
+        else:
+            missing.append(url)
+
+    total = len(dash_urls)
+    lines = []
+    lines.append(f"\nDashboard cross-reference ({dashboard_name}):")
+
+    # Group covered by package_level
+    lines.append(f"  Covered ({len(covered)}/{total}):")
+    if covered:
+        by_pkg: dict[int, list[tuple[str, CatalogEntry]]] = defaultdict(list)
+        for url, entry in covered:
+            pkg = url_to_pkg.get(url, 0)
+            by_pkg[pkg].append((url, entry))
+        for pkg in sorted(by_pkg.keys()):
+            items = by_pkg[pkg]
+            names = ' '.join(f"{channel_name(u)}(idx={e.idx})" for u, e in
+                             sorted(items, key=lambda x: x[1].idx))
+            lines.append(f"    [pkg={pkg:<5d}] {names}")
+    else:
+        lines.append("    none")
+
+    # Missing
+    lines.append(f"  Missing ({len(missing)}/{total}):")
+    if missing:
+        by_pkg_m: dict[int, list[str]] = defaultdict(list)
+        for url in missing:
+            pkg = url_to_pkg.get(url, 0)
+            by_pkg_m[pkg].append(url)
+        for pkg in sorted(by_pkg_m.keys()):
+            names = ' '.join(channel_name(u) for u in sorted(by_pkg_m[pkg]))
+            lines.append(f"    [pkg={pkg:<5d}] {names}")
+    else:
+        lines.append("    none")
+
+    return '\n'.join(lines)
+
+
+def format_comparison(entries1: list[CatalogEntry], sessions1: list[int], path1: Path,
+                      entries2: list[CatalogEntry], sessions2: list[int], path2: Path,
+                      dashboard_name: Optional[str], url_to_pkg: dict[str, int]) -> str:
+    """Format comparison between two traces."""
+    urls1 = {e.url for e in entries1}
+    urls2 = {e.url for e in entries2}
+    common = urls1 & urls2
+    only1 = urls1 - urls2
+    only2 = urls2 - urls1
+
+    lines = []
+    lines.append(f"Trace 1: {path1.name} ({len(entries1)} entries)")
+    lines.append(f"Trace 2: {path2.name} ({len(entries2)} entries)")
+    lines.append("")
+    lines.append(f"Common ({len(common)}):")
+    for url in sorted(common):
+        lines.append(f"  {url}")
+    lines.append(f"\nOnly in {path1.name} ({len(only1)}):")
+    for url in sorted(only1):
+        lines.append(f"  {url}")
+    lines.append(f"\nOnly in {path2.name} ({len(only2)}):")
+    for url in sorted(only2):
+        lines.append(f"  {url}")
+
+    if dashboard_name:
+        lines.append(format_dashboard_xref(entries1, dashboard_name, url_to_pkg))
+        lines.append("")
+        lines.append(f"--- Trace 2 ---")
+        lines.append(format_dashboard_xref(entries2, dashboard_name, url_to_pkg))
+
+    return '\n'.join(lines)
+
+
+def build_json_output(entries: list[CatalogEntry], sessions: list[int], trace_path: Path,
+                      dashboard_name: Optional[str], url_to_pkg: dict[str, int]) -> dict:
+    """Build JSON output."""
+    result: dict = {
+        "trace": str(trace_path),
+        "catalog_count": len(entries),
+        "sessions": [f"0x{s:02X}" for s in sessions],
+        "entries": [
+            {"idx": e.idx, "url": e.url, "timestamp": round(e.timestamp, 3),
+             "session": f"0x{e.session:02X}"}
+            for e in entries
+        ],
+    }
+    if dashboard_name:
+        dash_urls = load_dashboard_channels(dashboard_name)
+        catalog_url_set = {e.url for e in entries}
+        covered = [u for u in dash_urls if u in catalog_url_set]
+        missing = [u for u in dash_urls if u not in catalog_url_set]
+        result["dashboard"] = {
+            "name": dashboard_name,
+            "total_channels": len(dash_urls),
+            "covered": covered,
+            "missing": missing,
+            "coverage_pct": round(100 * len(covered) / len(dash_urls), 1) if dash_urls else 0,
+        }
+    return result
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Decode b2h channel catalog from MOZA wire-trace")
+    parser.add_argument("trace", nargs="?", default="latest",
+                        help="Trace path or 'latest'")
+    parser.add_argument("--dashboard", "-D", default=None,
+                        help="Dashboard name for cross-reference (e.g. 'Rally V3')")
+    parser.add_argument("--compare", "-c", default=None,
+                        help="Second trace path for comparison")
+    parser.add_argument("--json", action="store_true",
+                        help="Output as JSON")
+    args = parser.parse_args()
+
+    path1 = resolve_trace(args.trace)
+    entries1, sessions1, _ = decode_catalog(path1)
+
+    url_to_pkg = load_telemetry_json()
+
+    if args.compare:
+        path2 = resolve_trace(args.compare)
+        entries2, sessions2, _ = decode_catalog(path2)
+
+        if args.json:
+            out = {
+                "trace1": build_json_output(entries1, sessions1, path1, args.dashboard, url_to_pkg),
+                "trace2": build_json_output(entries2, sessions2, path2, args.dashboard, url_to_pkg),
+                "common": sorted({e.url for e in entries1} & {e.url for e in entries2}),
+                "only_trace1": sorted({e.url for e in entries1} - {e.url for e in entries2}),
+                "only_trace2": sorted({e.url for e in entries2} - {e.url for e in entries1}),
+            }
+            print(json.dumps(out, indent=2))
+        else:
+            print(format_comparison(entries1, sessions1, path1,
+                                    entries2, sessions2, path2,
+                                    args.dashboard, url_to_pkg))
+    else:
+        if args.json:
+            print(json.dumps(build_json_output(entries1, sessions1, path1,
+                                               args.dashboard, url_to_pkg), indent=2))
+        else:
+            print(format_timeline(entries1, sessions1, path1))
+            if args.dashboard:
+                print(format_dashboard_xref(entries1, args.dashboard, url_to_pkg))
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,292 @@
+#!/usr/bin/env python3
+"""Compare cold-start vs post-switch telemetry sessions in a wire trace.
+
+Splits the trace at each session close/open cycle and prints a structured
+diff of each "epoch": session lifecycle, FF records, tier-def chunks,
+catalog pushes, value frames, and timing.
+
+Usage:
+    tools/trace-switch-diff [TRACE]
+    tools/trace-switch-diff latest
+"""
+import argparse
+import struct
+import sys
+from collections import defaultdict
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from moza_trace import load_trace, resolve_trace, Frame
+
+TAG_NAMES = {
+    0x00: "ENABLE",
+    0x01: "TIER",
+    0x03: "FLAG_BASE",
+    0x06: "END_MARKER",
+    0x07: "PROTO_VER",
+}
+
+def find_epochs(frames):
+    """Split trace into epochs at each session 0x01 OPEN (h2b).
+    An epoch starts when the host opens session 0x01."""
+    epochs = []
+    current = []
+    for f in frames:
+        if f.dir == 'h2b' and f.is_open and f.session == 0x01 and current:
+            epochs.append(current)
+            current = []
+        current.append(f)
+    if current:
+        epochs.append(current)
+    return epochs
+
+
+def decode_tierdef_tlv(data):
+    """Parse tier-def TLV tags from reassembled session 0x01 data."""
+    tags = []
+    i = 0
+    while i < len(data):
+        if i + 5 > len(data):
+            break
+        tag = data[i]
+        length = struct.unpack_from('<I', data, i + 1)[0]
+        value = data[i + 5:i + 5 + length] if i + 5 + length <= len(data) else b''
+        tags.append((tag, length, value))
+        i += 5 + length
+    return tags
+
+
+def analyze_epoch(epoch_frames):
+    """Extract key events from an epoch's frames."""
+    info = {
+        'start_t': epoch_frames[0].t if epoch_frames else 0,
+        'end_t': epoch_frames[-1].t if epoch_frames else 0,
+        'opens': [],       # (t, session, port)
+        'closes': [],      # (t, session)
+        'ff_records': [],  # (t, kind, size, dir)
+        'tierdef_chunks_h2b': [],  # (t, session, seq, payload_hex)
+        'catalog_chunks_b2h': [], # (t, session, seq, payload_hex)
+        'value_frames_h2b': [],   # (t, flag, size, nonzero_bytes)
+        'value_frames_b2h': [],   # (t, flag, size)
+        'fc_acks': [],     # (t, session, seq, dir)
+        'first_value_t': None,
+        'last_value_t': None,
+        'total_frames': len(epoch_frames),
+    }
+
+    # Reassemble session 0x01 h2b data for tier-def decode
+    sess01_h2b_data = bytearray()
+    sess01_h2b_chunks = []
+
+    for f in epoch_frames:
+        if f.is_open:
+            info['opens'].append((f.t, f.session, f.port))
+        elif f.is_close:
+            info['closes'].append((f.t, f.session))
+        elif f.is_ff_record:
+            info['ff_records'].append((f.t, f.ff_kind, f.ff_size, f.dir))
+
+        if f.is_data and f.session == 0x01 and f.dir == 'h2b':
+            # Extract payload from raw frame
+            if f.raw[0] == 0x7E:
+                payload = f.raw[10:-5] if len(f.raw) > 15 else f.raw[10:]
+            else:
+                payload = f.raw[8:] if len(f.raw) > 8 else b''
+            sess01_h2b_chunks.append((f.t, f.seq, payload.hex()))
+            sess01_h2b_data.extend(payload)
+
+        if f.is_data and f.session == 0x01 and f.dir == 'b2h':
+            if f.raw[0] == 0xC3:
+                payload = f.raw[8:] if len(f.raw) > 8 else b''
+            else:
+                payload = f.raw[10:] if len(f.raw) > 10 else b''
+            info['catalog_chunks_b2h'].append((f.t, f.seq, payload.hex()))
+
+        if f.is_value_frame:
+            nz = sum(1 for b in f.vf_data if b != 0)
+            if f.dir == 'h2b':
+                info['value_frames_h2b'].append((f.t, f.vf_flag, len(f.vf_data), nz))
+                if info['first_value_t'] is None:
+                    info['first_value_t'] = f.t
+                info['last_value_t'] = f.t
+            else:
+                info['value_frames_b2h'].append((f.t, f.vf_flag, len(f.vf_data)))
+
+        if f.fc_cmd >= 0:
+            info['fc_acks'].append((f.t, f.fc_session, f.fc_seq, f.dir))
+
+    info['tierdef_chunks_h2b'] = sess01_h2b_chunks
+
+    # Decode tier-def TLV
+    if sess01_h2b_data:
+        tags = decode_tierdef_tlv(bytes(sess01_h2b_data))
+        info['tierdef_tags'] = tags
+    else:
+        info['tierdef_tags'] = []
+
+    return info
+
+
+def print_epoch(idx, info):
+    duration = info['end_t'] - info['start_t']
+    print(f"\n{'='*70}")
+    print(f"EPOCH {idx}: t={info['start_t']:.3f}s – {info['end_t']:.3f}s "
+          f"({duration:.1f}s, {info['total_frames']} frames)")
+    print(f"{'='*70}")
+
+    # Session lifecycle
+    print(f"\n  Session lifecycle:")
+    for t, sess, port in info['opens']:
+        print(f"    t={t:8.3f}s  OPEN  sess=0x{sess:02X} port={port}")
+    for t, sess in info['closes']:
+        print(f"    t={t:8.3f}s  CLOSE sess=0x{sess:02X}")
+
+    # FF records
+    if info['ff_records']:
+        print(f"\n  FF records:")
+        kind_names = {1: "INIT", 2: "TILE", 4: "DASH_SWITCH", 8: "CATALOG",
+                      9: "CONFIG_JSON", 11: "ACTION_CAT", 14: "HEARTBEAT"}
+        for t, kind, size, d in info['ff_records']:
+            arrow = "->" if d == 'h2b' else "<-"
+            name = kind_names.get(kind, f"kind={kind}")
+            print(f"    t={t:8.3f}s  {arrow} FF {name} size={size}")
+
+    # FC acks
+    if info['fc_acks']:
+        acks_by_sess = defaultdict(list)
+        for t, sess, seq, d in info['fc_acks']:
+            acks_by_sess[sess].append((t, seq, d))
+        print(f"\n  FC acks: {len(info['fc_acks'])} total")
+        for sess in sorted(acks_by_sess):
+            acks = acks_by_sess[sess]
+            print(f"    sess=0x{sess:02X}: {len(acks)}x "
+                  f"(first t={acks[0][0]:.3f}s seq={acks[0][1]})")
+
+    # Session 0x01 h2b (tier-def) chunks
+    if info['tierdef_chunks_h2b']:
+        chunks = info['tierdef_chunks_h2b']
+        print(f"\n  Tier-def chunks (sess=0x01 h2b): {len(chunks)} chunks")
+        for t, seq, hexd in chunks[:5]:
+            print(f"    t={t:8.3f}s  seq={seq:3d}  {hexd[:60]}{'...' if len(hexd)>60 else ''}")
+        if len(chunks) > 5:
+            print(f"    ... ({len(chunks)-5} more)")
+
+    # Decode tier-def TLV
+    if info['tierdef_tags']:
+        print(f"\n  Tier-def TLV decode:")
+        tiers = []
+        enables = []
+        proto_ver = None
+        flag_base_val = None
+        end_marker = None
+        for tag, length, value in info['tierdef_tags']:
+            name = TAG_NAMES.get(tag, f"0x{tag:02X}")
+            if tag == 0x07:  # PROTO_VER
+                ver = struct.unpack_from('<I', value, 0)[0] if len(value) >= 4 else -1
+                proto_ver = ver
+                print(f"    PROTO_VER = {ver}")
+            elif tag == 0x03:  # FLAG_BASE
+                fb = value[0] if value else -1
+                flag_base_val = fb
+                print(f"    FLAG_BASE = 0x{fb:02X}")
+            elif tag == 0x00:  # ENABLE
+                flag = value[0] if value else -1
+                enables.append(flag)
+            elif tag == 0x01:  # TIER
+                flag = value[0] if value else -1
+                n_ch = (length - 1) // 16
+                channels = []
+                for ci in range(n_ch):
+                    off = 1 + ci * 16
+                    if off + 16 <= len(value):
+                        ch_idx = struct.unpack_from('<I', value, off)[0]
+                        ch_comp = struct.unpack_from('<I', value, off + 4)[0]
+                        ch_bits = struct.unpack_from('<I', value, off + 8)[0]
+                        channels.append((ch_idx, ch_comp, ch_bits))
+                tiers.append((flag, channels))
+            elif tag == 0x06:  # END_MARKER
+                end_marker = struct.unpack_from('<I', value, 0)[0] if len(value) >= 4 else -1
+
+        if enables:
+            print(f"    ENABLEs: flags {[f'0x{e:02X}' for e in enables]}")
+        for flag, channels in tiers:
+            ch_str = ", ".join(f"idx={ci}:comp=0x{cc:02X}:{cb}b" for ci, cc, cb in channels)
+            print(f"    TIER flag=0x{flag:02X}: {len(channels)}ch [{ch_str}]")
+        if end_marker is not None:
+            print(f"    END_MARKER = {end_marker}")
+
+    # Catalog chunks from wheel
+    if info['catalog_chunks_b2h']:
+        chunks = info['catalog_chunks_b2h']
+        print(f"\n  Catalog chunks (sess=0x01 b2h): {len(chunks)} chunks")
+        for t, seq, hexd in chunks[:3]:
+            print(f"    t={t:8.3f}s  seq={seq:3d}  {hexd[:60]}{'...' if len(hexd)>60 else ''}")
+        if len(chunks) > 3:
+            print(f"    ... ({len(chunks)-3} more)")
+
+    # Value frames
+    vf = info['value_frames_h2b']
+    if vf:
+        flags = sorted(set(f for _, f, _, _ in vf))
+        first_t = info['first_value_t']
+        last_t = info['last_value_t']
+        total_nz = sum(nz for _, _, _, nz in vf)
+        total_bytes = sum(sz for _, _, sz, _ in vf)
+        print(f"\n  Value frames (h2b): {len(vf)} frames, "
+              f"flags={[f'0x{f:02X}' for f in flags]}")
+        print(f"    first at t={first_t:.3f}s, last at t={last_t:.3f}s")
+        print(f"    total payload: {total_bytes}B, non-zero: {total_nz}B "
+              f"({'ALL ZERO' if total_nz == 0 else f'{total_nz*100//total_bytes}% nonzero'})")
+        # Show first few by flag
+        by_flag = defaultdict(list)
+        for t, flag, sz, nz in vf:
+            by_flag[flag].append((t, sz, nz))
+        for flag in sorted(by_flag)[:4]:
+            flist = by_flag[flag]
+            first_nz = next((t for t, sz, nz in flist if nz > 0), None)
+            print(f"    flag=0x{flag:02X}: {len(flist)} frames, "
+                  f"size={flist[0][1]}B, "
+                  f"first={flist[0][0]:.3f}s"
+                  f"{f', first-nonzero={first_nz:.3f}s' if first_nz else ', ALL ZERO'}")
+    else:
+        print(f"\n  Value frames (h2b): NONE")
+
+    # Timing summary
+    opens = info['opens']
+    if opens:
+        sess_open_t = opens[0][0]
+        tierdef_t = info['tierdef_chunks_h2b'][0][0] if info['tierdef_chunks_h2b'] else None
+        first_vf_t = info['first_value_t']
+        print(f"\n  Timing summary:")
+        print(f"    session open:      t={sess_open_t:.3f}s")
+        if tierdef_t:
+            print(f"    first tier-def:    t={tierdef_t:.3f}s (+{tierdef_t-sess_open_t:.3f}s)")
+        else:
+            print(f"    first tier-def:    NONE")
+        if first_vf_t:
+            print(f"    first value frame: t={first_vf_t:.3f}s (+{first_vf_t-sess_open_t:.3f}s)")
+        else:
+            print(f"    first value frame: NONE")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("trace", nargs="?", default="latest")
+    args = parser.parse_args()
+
+    path = resolve_trace(args.trace)
+    print(f"Trace: {path.name}")
+    frames = load_trace(path)
+    print(f"Total frames: {len(frames)}, duration: {frames[-1].t:.1f}s")
+
+    epochs = find_epochs(frames)
+    print(f"Epochs (session restart cycles): {len(epochs)}")
+
+    for i, epoch in enumerate(epochs):
+        info = analyze_epoch(epoch)
+        print_epoch(i, info)
+
+
+if __name__ == "__main__":
+    main()

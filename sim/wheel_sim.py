@@ -6263,7 +6263,8 @@ def cmd_live(port: str, db: Dict[str, dict], replay: Optional[ResponseReplay] = 
              button_led_count: int = _DEFAULT_BUTTON_LED_COUNT,
              factory_state_file: Optional[str] = None,
              proactive_session09: bool = True,
-             configjson_session: int = 0x09):
+             configjson_session: int = 0x09,
+             wire_trace_path: Optional[str] = None):
     try:
         import serial
     except ImportError:
@@ -6283,6 +6284,16 @@ def cmd_live(port: str, db: Dict[str, dict], replay: Optional[ResponseReplay] = 
     log_fh = _open_session_log(log_path, port)
     print(f'[Logging to {log_path} (rotated last 5)]', file=sys.stderr)
 
+    # Optional parallel JSONL wire trace. Schema matches what tools/moza_trace.py
+    # and the bridge-*.jsonl captures expect: one object per line with {t, dir,
+    # hex, len}. Line-buffered so a tail-mode consumer sees frames immediately.
+    wire_trace_fh = None
+    if wire_trace_path:
+        wt = Path(wire_trace_path)
+        wt.parent.mkdir(parents=True, exist_ok=True)
+        wire_trace_fh = open(wt, 'w', buffering=1)
+        print(f'[Wire trace JSONL → {wt}]', file=sys.stderr)
+
     sim = WheelSimulator(db, replay, device_catalog,
                          rpm_led_count=rpm_led_count,
                          button_led_count=button_led_count,
@@ -6299,6 +6310,18 @@ def cmd_live(port: str, db: Dict[str, dict], replay: Optional[ResponseReplay] = 
     alive.set()
     write_lock = threading.Lock()
 
+    def _emit_wire_trace(direction: str, frame: bytes) -> None:
+        if wire_trace_fh is None:
+            return
+        # Frame here is the unescaped form (matches bridge-*.jsonl convention);
+        # decode_frame() in tools/moza_trace.py reads the leading 0x7E directly.
+        wire_trace_fh.write(json.dumps({
+            't': time.time(),
+            'dir': direction,
+            'hex': frame.hex(),
+            'len': len(frame),
+        }) + '\n')
+
     def _write(frame: bytes, tag: str):
         # Build the full escaped wire buffer first, then emit in ONE ser.write()
         # call. Per-byte ser.write (previous implementation) caused tty0tty /
@@ -6314,6 +6337,7 @@ def cmd_live(port: str, db: Dict[str, dict], replay: Optional[ResponseReplay] = 
                 body.append(MSG_START)
         ser.write(bytes(body))
         log_fh.write(f'{_ts()} TX [{tag:<13}] {frame.hex(" ")}\n')
+        _emit_wire_trace('b2h', frame)
 
     def read_loop():
         while alive.is_set():
@@ -6335,6 +6359,7 @@ def cmd_live(port: str, db: Dict[str, dict], replay: Optional[ResponseReplay] = 
                     label = ''
                 with write_lock:
                     log_fh.write(f'{_ts()} RX [{tag:<13}] {frame.hex(" ")}  | {label}\n')
+                    _emit_wire_trace('h2b', frame)
                     for rsp in responses:
                         _write(rsp, tag)
             except (OSError, serial.SerialException):
@@ -6500,6 +6525,11 @@ def main():
                         help='NDJSON output (implies --console)')
     parser.add_argument('--mcp', action='store_true',
                         help='Run as MCP server (stdio transport) with embedded simulator')
+    parser.add_argument('--wire-trace', metavar='PATH', default=None,
+                        help='Emit a parallel JSONL wire trace ({t,dir,hex,len} per line) '
+                             'consumable by tools/moza_trace.py and tools/tierdef-decode etc. '
+                             'dir is "h2b" for frames received from the host (plugin) and '
+                             '"b2h" for frames the sim sends. Live mode only.')
     args = parser.parse_args()
 
     if args.json:
@@ -6627,7 +6657,8 @@ def main():
                  button_led_count=int(model.get('button_led_count', _DEFAULT_BUTTON_LED_COUNT)),
                  factory_state_file=model.get('factory_state_file'),
                  proactive_session09=bool(model.get('proactive_session09', True)),
-                 configjson_session=int(model.get('configjson_session', 0x09)))
+                 configjson_session=int(model.get('configjson_session', 0x09)),
+                 wire_trace_path=args.wire_trace)
     else:
         parser.print_help()
         sys.exit(1)

@@ -1,0 +1,109 @@
+#!/usr/bin/env python3
+"""Decode tier-def TLV records from a PitHouse bridge capture.
+Reassembles session 0x01 h2b chunks by sequence number, then walks TLV."""
+import struct
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path.home() / "src/moza-simhub-plugin/tools"))
+from moza_bridge import load_bridge, resolve_bridge
+
+COMP_NAMES = {
+    0x01: "speed_1", 0x04: "boost_1", 0x07: "water_c_1",
+    0x0D: "throttle_pct_1", 0x0F: "clutch_pct_1",
+    0x10: "brake_pct_1", 0x11: "gear_1",
+    0xFFFF: "none",
+}
+
+path = resolve_bridge(sys.argv[1] if len(sys.argv) > 1 else None)
+frames = load_bridge(path)
+
+# Collect h2b sess=0x01 stype=0x01 chunks, dedup by seq
+chunks = {}
+for f in frames:
+    if f.is_session_data and f.sess_id == 0x01 and f.sess_type == 0x01 and f.dir == 'h2b':
+        seq = f.sess_seq
+        if seq not in chunks:
+            chunks[seq] = f
+
+print(f"Capture: {path.name}")
+print(f"Session 0x01 h2b: {len(chunks)} unique seqs\n")
+
+# Sort by seq and build canonical stream
+ordered = sorted(chunks.items())
+stream = bytearray()
+# Track emission boundaries (gaps in seq or timing)
+emissions = []
+cur_start = 0
+prev_seq = -1
+prev_t = -1
+for seq, f in ordered:
+    data = f.sess_data
+    # Strip 4-byte CRC trailer
+    if len(data) > 4:
+        net = data[:-4]
+    else:
+        net = data
+    if prev_seq >= 0 and (seq - prev_seq > 5 or (prev_t >= 0 and f.t_rel - prev_t > 2.0)):
+        emissions.append((cur_start, len(stream)))
+        cur_start = len(stream)
+    stream.extend(net)
+    prev_seq = seq
+    prev_t = f.t_rel
+emissions.append((cur_start, len(stream)))
+
+print(f"Canonical stream: {len(stream)}B in {len(emissions)} emission(s)\n")
+
+# Walk TLV
+TAG_NAMES = {
+    0x00: "ENABLE", 0x01: "TIER", 0x03: "FLAG_BASE",
+    0x06: "END", 0x07: "PROTO_VER",
+}
+
+pos = 0
+emission_idx = 0
+while pos < len(stream):
+    # Check emission boundary
+    while emission_idx < len(emissions) and pos >= emissions[emission_idx][1]:
+        emission_idx += 1
+    if emission_idx < len(emissions) and pos == emissions[emission_idx][0]:
+        print(f"\n--- Emission {emission_idx} (bytes {emissions[emission_idx][0]}..{emissions[emission_idx][1]}) ---")
+
+    if pos + 5 > len(stream):
+        break
+    tag = stream[pos]
+    size = struct.unpack_from('<I', stream, pos + 1)[0]
+    if pos + 5 + size > len(stream):
+        print(f"  [truncated at pos={pos}: tag=0x{tag:02X} size={size}]")
+        break
+    value = stream[pos+5:pos+5+size]
+    name = TAG_NAMES.get(tag, f"UNK-0x{tag:02X}")
+
+    if tag == 0x07:
+        ver = struct.unpack_from('<I', value, 0)[0] if len(value) >= 4 else -1
+        print(f"  PROTO_VER={ver}")
+    elif tag == 0x03:
+        print(f"  FLAG_BASE (size={size})")
+    elif tag == 0x00:
+        flag = value[0] if len(value) >= 1 else -1
+        print(f"  ENABLE 0x{flag:02X}")
+    elif tag == 0x01:
+        flag = value[0] if len(value) >= 1 else -1
+        nch = (size - 1) // 16
+        channels = []
+        for i in range(nch):
+            off = 1 + i * 16
+            if off + 16 <= len(value):
+                idx = struct.unpack_from('<I', value, off)[0]
+                comp = struct.unpack_from('<I', value, off + 4)[0]
+                bw = struct.unpack_from('<I', value, off + 8)[0]
+                comp_name = COMP_NAMES.get(comp, f"0x{comp:04X}")
+                channels.append(f"idx={idx}/{comp_name}/{bw}b")
+        print(f"  TIER flag=0x{flag:02X}  {nch}ch: {', '.join(channels)}")
+    elif tag == 0x06:
+        val = struct.unpack_from('<I', value, 0)[0] if len(value) >= 4 else -1
+        print(f"  END val={val}")
+    else:
+        print(f"  {name} size={size} value={value[:16].hex()}")
+
+    pos += 5 + size

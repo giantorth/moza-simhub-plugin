@@ -1,0 +1,502 @@
+#!/usr/bin/env python3
+"""Extract and decode the canonical TLV tier-def stream from MOZA wire-trace JSONL files.
+
+Builds the true canonical stream by deduplicating retransmits (same seq with
+identical bytes = keep first occurrence only), identifies emission boundaries,
+and decodes each emission as a complete section.
+
+Usage:
+    tools/tierdef-decode sim/logs/bridge-20260503-112940.jsonl
+    tools/tierdef-decode latest
+    tools/tierdef-decode latest --raw
+    tools/tierdef-decode latest --json
+    tools/tierdef-decode latest -s 0x01 -d h2b
+"""
+import argparse
+import json as json_mod
+import struct
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from moza_trace import load_trace, resolve_trace, Frame
+
+# ── TLV tag names ──────────────────────────────────────────────────────────
+
+TAG_NAMES = {
+    0x00: "ENABLE",
+    0x01: "TIER",
+    0x03: "FLAG_BASE",
+    0x04: "URL",
+    0x06: "END_MARKER",
+    0x07: "PROTO_VER",
+}
+
+COMP_NAMES = {
+    0x00: "none",
+    0x01: "speed_1",
+    0x02: "rpm_1",
+    0x03: "gear_1",
+    0x04: "boost_1",
+    0x05: "fuel_pct_1",
+    0x06: "fuel_l_1",
+    0x07: "water_c_1",
+    0x08: "oil_c_1",
+    0x09: "oil_kpa_1",
+    0x0A: "lap_time_ms",
+    0x0B: "lap_num_1",
+    0x0C: "position_1",
+    0x0D: "throttle_pct_1",
+    0x0E: "brake_pct_1",
+    0x0F: "clutch_pct_1",
+    0x10: "steer_deg_1",
+    0x11: "tc_level_1",
+    0x12: "abs_level_1",
+    0x13: "bb_pct_1",
+    0x14: "ers_pct_1",
+    0x15: "ers_mode_1",
+    0x16: "tyre_pressure_1",
+    0x17: "best_lap_ms",
+    0x18: "last_lap_ms",
+    0x19: "delta_ms",
+    0x1A: "drs_1",
+    0x1B: "pit_limiter_1",
+    0x1C: "flag_color_1",
+    0x1D: "brake_temp_1",
+}
+
+# ── Data chunk extraction ──────────────────────────────────────────────────
+
+
+def extract_data_chunks(frames: list[Frame], session: int, direction: str
+                        ) -> list[tuple[float, int, bytes]]:
+    """Return (time, seq, payload) for session data chunks in arrival order."""
+    chunks = []
+    for f in frames:
+        if f.dir != direction or f.session != session or f.stype != 0x01:
+            continue
+        if direction == 'h2b':
+            # h2b data: [7E][len][grp][dev][7C][00][sess][01][seqL][seqH][payload...][crc32(4)][chk(1)]
+            # Always strip the 5-byte trailer; for 15-byte frames this yields empty payload (correct).
+            payload = f.raw[10:-5] if len(f.raw) >= 15 else f.raw[10:]
+        else:
+            payload = f.raw[8:]
+        chunks.append((f.t, f.seq, payload))
+    return chunks
+
+
+# ── Canonical stream builder ───────────────────────────────────────────────
+
+
+def build_canonical(chunks: list[tuple[float, int, bytes]]
+                    ) -> tuple[dict[int, tuple[float, bytes]], list[str]]:
+    """Deduplicate retransmits, return seen_seqs dict and warnings."""
+    seen_seqs: dict[int, tuple[float, bytes]] = {}
+    warnings: list[str] = []
+    for t, seq, payload in chunks:
+        if seq not in seen_seqs:
+            seen_seqs[seq] = (t, payload)
+        else:
+            _, first_payload = seen_seqs[seq]
+            if first_payload != payload:
+                warnings.append(
+                    f"seq {seq}: retransmit mismatch! "
+                    f"first={len(first_payload)}B vs this={len(payload)}B"
+                )
+    return seen_seqs, warnings
+
+
+def canonical_stream(seen_seqs: dict[int, tuple[float, bytes]]) -> bytes:
+    """Concatenate payloads in seq order to produce the canonical byte stream."""
+    return b''.join(
+        payload for _, payload in
+        (seen_seqs[s] for s in sorted(seen_seqs))
+    )
+
+
+# ── Emission boundary detection ───────────────────────────────────────────
+
+
+def find_emissions(chunks: list[tuple[float, int, bytes]],
+                   seen_seqs: dict[int, tuple[float, bytes]],
+                   gap_ms: float = 500.0
+                   ) -> list[dict]:
+    """Identify emission boundaries from first-occurrence timestamps.
+
+    An emission is a group of consecutive new (first-seen) seqs whose first
+    occurrences arrive within gap_ms of each other.
+    """
+    # Build sorted list of (seq, first_time) for first occurrences
+    first_occurrences = sorted(
+        ((seq, t) for seq, (t, _) in seen_seqs.items()),
+        key=lambda x: x[0]
+    )
+    if not first_occurrences:
+        return []
+
+    # Build byte-offset map: seq -> (byte_start, byte_end) in canonical stream
+    sorted_seqs = sorted(seen_seqs.keys())
+    byte_offsets: dict[int, tuple[int, int]] = {}
+    offset = 0
+    for s in sorted_seqs:
+        plen = len(seen_seqs[s][1])
+        byte_offsets[s] = (offset, offset + plen)
+        offset += plen
+
+    # Group by time proximity: a new emission starts when there is a time gap
+    # > gap_ms from the previous first-occurrence, OR when the seq is not
+    # contiguous with the previous seq in the emission.
+    emissions = []
+    cur_seqs = [first_occurrences[0][0]]
+    cur_time = first_occurrences[0][1]
+
+    for i in range(1, len(first_occurrences)):
+        seq, t = first_occurrences[i]
+        prev_seq = cur_seqs[-1]
+        dt = (t - cur_time) * 1000  # ms since first in current group
+
+        if seq != prev_seq + 1 or dt > gap_ms:
+            # Close current emission
+            emissions.append(_make_emission(
+                len(emissions), cur_seqs, seen_seqs, byte_offsets))
+            cur_seqs = [seq]
+            cur_time = t
+        else:
+            cur_seqs.append(seq)
+
+    # Close last emission
+    emissions.append(_make_emission(
+        len(emissions), cur_seqs, seen_seqs, byte_offsets))
+    return emissions
+
+
+def _make_emission(idx: int, seqs: list[int],
+                   seen_seqs: dict[int, tuple[float, bytes]],
+                   byte_offsets: dict[int, tuple[int, int]]) -> dict:
+    first_seq, last_seq = seqs[0], seqs[-1]
+    first_t = seen_seqs[first_seq][0]
+    byte_start = byte_offsets[first_seq][0]
+    byte_end = byte_offsets[last_seq][1]
+    payload = b''.join(seen_seqs[s][1] for s in seqs)
+    return {
+        'index': idx,
+        'time': first_t,
+        'seq_start': first_seq,
+        'seq_end': last_seq,
+        'byte_start': byte_start,
+        'byte_end': byte_end,
+        'byte_count': byte_end - byte_start,
+        'payload': payload,
+    }
+
+
+# ── TLV decoding ──────────────────────────────────────────────────────────
+
+
+def decode_tlv(data: bytes) -> list[dict]:
+    """Parse TLV records from tier-def bytes."""
+    records = []
+    pos = 0
+    while pos + 5 <= len(data):
+        tag = data[pos]
+        size = struct.unpack_from('<I', data, pos + 1)[0]
+        if pos + 5 + size > len(data):
+            records.append({
+                'tag': tag,
+                'tag_name': TAG_NAMES.get(tag, f'UNK_0x{tag:02X}'),
+                'size': size,
+                'offset': pos,
+                'error': 'truncated',
+                'raw': data[pos:].hex(),
+            })
+            break
+        value = data[pos + 5:pos + 5 + size]
+        rec = {
+            'tag': tag,
+            'tag_name': TAG_NAMES.get(tag, f'UNK_0x{tag:02X}'),
+            'size': size,
+            'offset': pos,
+            'value_hex': value.hex(),
+        }
+
+        if tag == 0x07 and size >= 4:
+            rec['proto_version'] = struct.unpack_from('<I', value, 0)[0]
+
+        elif tag == 0x03:
+            pass  # FLAG_BASE has no value
+
+        elif tag == 0x00 and size == 1:
+            rec['enable_flag'] = value[0]
+
+        elif tag == 0x01 and size >= 1:
+            rec['tier_flag'] = value[0]
+            n_channels = (size - 1) // 16
+            channels = []
+            for ci in range(n_channels):
+                off = 1 + ci * 16
+                idx = struct.unpack_from('<I', value, off)[0]
+                comp = struct.unpack_from('<I', value, off + 4)[0]
+                bw = struct.unpack_from('<I', value, off + 8)[0]
+                reserved = struct.unpack_from('<I', value, off + 12)[0]
+                channels.append({
+                    'index': idx,
+                    'compression': comp,
+                    'comp_name': COMP_NAMES.get(comp, f'0x{comp:02X}'),
+                    'bit_width': bw,
+                    'reserved': reserved,
+                })
+            rec['channels'] = channels
+
+        elif tag == 0x06 and size == 4:
+            rec['end_marker'] = struct.unpack_from('<I', value, 0)[0]
+
+        records.append(rec)
+        pos += 5 + size
+    return records
+
+
+def _section_summary(records: list[dict]) -> dict:
+    """Summarize a set of TLV records for an emission."""
+    flags = []
+    end_val = None
+    for r in records:
+        if r['tag'] == 0x01:
+            flags.append(r.get('tier_flag', -1))
+        if r['tag'] == 0x06:
+            end_val = r.get('end_marker')
+    return {
+        'flags': flags,
+        'end_marker': end_val,
+    }
+
+
+# ── Output formatting ─────────────────────────────────────────────────────
+
+
+def print_emission(em: dict, records: list[dict], show_raw: bool = False):
+    idx = em['index']
+    t = em['time']
+    s0, s1 = em['seq_start'], em['seq_end']
+    b0, b1 = em['byte_start'], em['byte_end']
+    bc = em['byte_count']
+
+    summary = _section_summary(records)
+    flags = summary['flags']
+    end_val = summary['end_marker']
+
+    flag_str = ""
+    if flags:
+        flag_str = f"  flags=0x{min(flags):02X}..0x{max(flags):02X}"
+    end_str = f"  END={end_val}" if end_val is not None else ""
+
+    print(f"\nE{idx}  t=+{t:.2f}s  seqs={s0}..{s1}   "
+          f"bytes={b0}..{b1} ({bc}B){flag_str}{end_str}")
+
+    if show_raw and bc > 0:
+        hex_str = em['payload'].hex()
+        for i in range(0, len(hex_str), 64):
+            print(f"    {hex_str[i:i+64]}")
+
+    if not records:
+        if bc == 0:
+            print("  (empty payload)")
+        return
+
+    for rec in records:
+        tag = rec['tag']
+        tag_name = rec['tag_name']
+
+        if 'error' in rec:
+            print(f"  {tag_name} size={rec['size']} ** {rec['error']} **")
+            continue
+
+        if tag == 0x07:
+            ver = rec.get('proto_version', '?')
+            print(f"  PROTO_VER={ver}")
+
+        elif tag == 0x03:
+            print(f"  FLAG_BASE")
+
+        elif tag == 0x00:
+            print(f"  ENABLE 0x{rec['enable_flag']:02X}")
+
+        elif tag == 0x01:
+            flag = rec['tier_flag']
+            channels = rec.get('channels', [])
+            ch_strs = []
+            zero_idx_hits = 0
+            for ch in channels:
+                marker = ""
+                if ch['index'] == 0:
+                    marker = "!"
+                    zero_idx_hits += 1
+                ch_strs.append(
+                    f"idx={ch['index']}{marker}/comp={ch['comp_name']}/bw={ch['bit_width']}"
+                )
+            ch_list = ", ".join(ch_strs)
+            warn = ""
+            if zero_idx_hits:
+                warn = f"  [WARN: {zero_idx_hits} chIndex=0 — catalog lookup failed]"
+            print(f"  TIER flag=0x{flag:02X}  {len(channels)}ch: {ch_list}{warn}")
+
+        elif tag == 0x06:
+            print(f"  END_MARKER val={rec['end_marker']}")
+
+        else:
+            print(f"  {tag_name} size={rec['size']}")
+
+
+def output_json(path: Path, frames: list[Frame], session: int,
+                direction: str, emissions: list[dict],
+                seen_seqs: dict[int, tuple[float, bytes]],
+                stream: bytes, warnings: list[str]):
+    """Output machine-readable JSON."""
+    result = {
+        'trace': str(path),
+        'frame_count': len(frames),
+        'session': session,
+        'direction': direction,
+        'unique_seqs': len(seen_seqs),
+        'canonical_bytes': len(stream),
+        'warnings': warnings,
+        'emissions': [],
+    }
+    for em in emissions:
+        records = decode_tlv(em['payload'])
+        summary = _section_summary(records)
+        em_out = {
+            'index': em['index'],
+            'time': em['time'],
+            'seq_start': em['seq_start'],
+            'seq_end': em['seq_end'],
+            'byte_start': em['byte_start'],
+            'byte_end': em['byte_end'],
+            'byte_count': em['byte_count'],
+            'payload_hex': em['payload'].hex(),
+            'flags': summary['flags'],
+            'end_marker': summary['end_marker'],
+            'records': [],
+        }
+        for rec in records:
+            r = {k: v for k, v in rec.items() if k != 'value_hex'}
+            em_out['records'].append(r)
+        result['emissions'].append(em_out)
+
+    print(json_mod.dumps(result, indent=2))
+
+
+# ── Main ───────────────────────────────────────────────────────────────────
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Decode canonical TLV tier-def stream from MOZA wire traces")
+    parser.add_argument("trace", nargs="?", default="latest",
+                        help="Path to trace JSONL file, or 'latest'")
+    parser.add_argument("--session", "-s", type=lambda x: int(x, 0),
+                        default=0x01,
+                        help="Session number (default 0x01)")
+    parser.add_argument("--direction", "-d", choices=["h2b", "b2h"],
+                        default="h2b",
+                        help="Direction (default h2b)")
+    parser.add_argument("--raw", action="store_true",
+                        help="Show hex dump of each emission's bytes")
+    parser.add_argument("--json", action="store_true",
+                        help="Output as JSON for machine consumption")
+    args = parser.parse_args()
+
+    path = resolve_trace(args.trace)
+    frames = load_trace(path)
+
+    # Extract data chunks
+    chunks = extract_data_chunks(frames, args.session, args.direction)
+
+    # Build canonical stream
+    seen_seqs, warnings = build_canonical(chunks)
+    stream = canonical_stream(seen_seqs)
+
+    # Find emissions
+    emissions = find_emissions(chunks, seen_seqs)
+
+    if args.json:
+        output_json(path, frames, args.session, args.direction,
+                    emissions, seen_seqs, stream, warnings)
+        return
+
+    # Header
+    dir_label = "h2b" if args.direction == "h2b" else "b2h"
+    print(f"Trace: {path.name}  ({len(frames)} frames)")
+    print(f"Session 0x{args.session:02X} {dir_label}: "
+          f"{len(chunks)} data chunks -> "
+          f"{len(seen_seqs)} unique seqs -> "
+          f"{len(stream)}B canonical stream")
+
+    if warnings:
+        print(f"\nWarnings:")
+        for w in warnings:
+            print(f"  {w}")
+
+    # Emissions
+    print(f"\nEmissions:")
+    all_flags = []
+    max_end = None
+    content_emissions = 0
+
+    for em in emissions:
+        records = decode_tlv(em['payload'])
+        print_emission(em, records, show_raw=args.raw)
+
+        summary = _section_summary(records)
+        all_flags.extend(summary['flags'])
+        if summary['end_marker'] is not None:
+            if max_end is None or summary['end_marker'] > max_end:
+                max_end = summary['end_marker']
+        if em['byte_count'] > 0:
+            content_emissions += 1
+
+    # Summary
+    print(f"\nSummary:")
+    print(f"  {len(emissions)} emissions"
+          f" ({content_emissions} with content,"
+          f" {len(emissions) - content_emissions} empty)")
+    if all_flags:
+        print(f"  flags 0x{min(all_flags):02X}..0x{max(all_flags):02X}")
+    if max_end is not None:
+        print(f"  max END={max_end}")
+
+    # idx=0 audit across emissions
+    bad_emissions = []
+    for em in emissions:
+        recs = decode_tlv(em['payload'])
+        zeros = 0
+        total = 0
+        for r in recs:
+            if r['tag'] == 0x01:
+                for ch in r.get('channels', []):
+                    total += 1
+                    if ch['index'] == 0:
+                        zeros += 1
+        if zeros:
+            bad_emissions.append((em['index'], em['time'], zeros, total))
+    if bad_emissions:
+        print(f"\nWarnings: {len(bad_emissions)} emission(s) contain chIndex=0 channels (catalog lookup failed):")
+        for idx, t, zeros, total in bad_emissions:
+            print(f"  E{idx} t=+{t:.2f}s: {zeros}/{total} channels have idx=0")
+        print("  Cause: tier-def was built before the wheel pushed the new dashboard's catalog.")
+
+    # Detect broadcast pattern
+    if content_emissions >= 2:
+        e0_records = decode_tlv(emissions[0]['payload'])
+        e0_tiers = sum(1 for r in e0_records if r['tag'] == 0x01)
+        other_tiers = []
+        for em in emissions[1:]:
+            if em['byte_count'] > 0:
+                recs = decode_tlv(em['payload'])
+                other_tiers.append(sum(1 for r in recs if r['tag'] == 0x01))
+        if other_tiers and len(set(other_tiers)) == 1:
+            print(f"  Broadcast pattern: {e0_tiers}-tier warmup -> "
+                  f"{other_tiers[0]}-tier x {len(other_tiers)} broadcasts")
+
+
+if __name__ == "__main__":
+    main()

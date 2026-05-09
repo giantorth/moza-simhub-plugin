@@ -1,0 +1,62 @@
+#!/usr/bin/env python3
+"""Scan all bridge captures for dashboard switch indicators:
+   - Value frame flag transitions
+   - FF-record kind=4 (DASH_SWITCH)
+   - Multiple distinct flag values
+   - Session re-opens (sess open after first open)
+"""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path.home() / "src/moza-simhub-plugin/tools"))
+from moza_bridge import load_bridge, BRIDGE_DIR
+
+for capfile in sorted(BRIDGE_DIR.glob("bridge-*.jsonl")):
+    frames = load_bridge(capfile)
+    if not frames:
+        continue
+
+    duration = frames[-1].t_rel
+    vf_flags = set()
+    ff_kinds = set()
+    has_kind4 = False
+    sess_opens = {}
+    flag_timeline = []
+
+    for f in frames:
+        if f.is_value_frame:
+            flag = f.vf_flag
+            vf_flags.add(flag)
+            flag_timeline.append((f.t_rel, flag))
+        if f.ff_kind >= 0:
+            ff_kinds.add(f.ff_kind)
+            if f.ff_kind == 4:
+                has_kind4 = True
+        if f.is_session_data and f.sess_type == 0x81:
+            sid = f.sess_id
+            sess_opens[sid] = sess_opens.get(sid, 0) + 1
+
+    multi_open_sessions = {s: c for s, c in sess_opens.items() if c > 1}
+    interesting = len(vf_flags) > 1 or has_kind4 or multi_open_sessions
+
+    if interesting or len(vf_flags) > 0:
+        markers = []
+        if len(vf_flags) > 1:
+            markers.append(f"MULTI-FLAG({','.join(f'0x{f:02X}' for f in sorted(vf_flags))})")
+        if has_kind4:
+            markers.append("FF-KIND4-DASHSWITCH")
+        if multi_open_sessions:
+            markers.append(f"RE-OPENS({','.join(f's{s:02X}×{c}' for s,c in sorted(multi_open_sessions.items()))})")
+
+        vf_count = sum(1 for f in frames if f.is_value_frame)
+        print(f"{capfile.name}  dur={duration:.0f}s  vf={vf_count}  "
+              f"flags={{{','.join(f'0x{f:02X}' for f in sorted(vf_flags))}}}  "
+              f"{'  '.join(markers) if markers else 'single-flag'}")
+
+        # Show flag transition timeline for multi-flag captures
+        if len(vf_flags) > 1:
+            prev_flag = -1
+            for t, flag in flag_timeline:
+                if flag != prev_flag:
+                    print(f"    t={t:.3f}s  flag → 0x{flag:02X}")
+                    prev_flag = flag

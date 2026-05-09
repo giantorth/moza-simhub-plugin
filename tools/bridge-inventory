@@ -1,0 +1,158 @@
+#!/usr/bin/env python3
+"""Inventory a PitHouse bridge capture: traffic types, sessions, FF-records,
+value frame flag ranges, and command-level frames.
+
+Usage:
+    tools/bridge-inventory [CAPTURE]
+    tools/bridge-inventory sim/logs/bridge-20260429-201848.jsonl
+"""
+import argparse
+import sys
+from collections import defaultdict
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from moza_bridge import load_bridge, resolve_bridge, BFrame
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("capture", nargs="?", help="Bridge JSONL file (default: latest)")
+    args = ap.parse_args()
+
+    path = resolve_bridge(args.capture)
+    frames = load_bridge(path)
+    if not frames:
+        print("Empty capture.")
+        return
+
+    duration = frames[-1].t_rel
+    h2b = [f for f in frames if f.dir == 'h2b']
+    b2h = [f for f in frames if f.dir == 'b2h']
+
+    print(f"Capture: {path.name}")
+    print(f"Duration: {duration:.1f}s  |  {len(frames)} frames  (h2b={len(h2b)}, b2h={len(b2h)})")
+    print()
+
+    # --- Group/device summary ---
+    grp_dev: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    for f in frames:
+        key = f"0x{f.grp:02X}:0x{f.dev:02X}"
+        grp_dev[f.dir][key] += 1
+
+    print("=== Group:Device traffic ===")
+    for d in ('h2b', 'b2h'):
+        if d not in grp_dev:
+            continue
+        print(f"  {d}:")
+        for key in sorted(grp_dev[d]):
+            print(f"    {key}: {grp_dev[d][key]}")
+    print()
+
+    # --- Telemetry group (0x43/0xC3) breakdown ---
+    telem = [f for f in frames if f.is_telemetry]
+    if telem:
+        print(f"=== Telemetry group (grp=0x43/0xC3): {len(telem)} frames ===")
+        cats = defaultdict(int)
+        for f in telem:
+            if f.is_session_data:
+                cats[f"{f.dir} session-data sess=0x{f.sess_id:02X} stype=0x{f.sess_type:02X}"] += 1
+            elif f.is_value_frame:
+                cats[f"{f.dir} value-frame"] += 1
+            elif f.is_flow_control:
+                cats[f"{f.dir} flow-control"] += 1
+            elif f.is_command:
+                cmd = f.payload[0] if f.payload else -1
+                cats[f"{f.dir} cmd=0x{cmd:02X}"] += 1
+            else:
+                cats[f"{f.dir} other"] += 1
+        for key in sorted(cats):
+            print(f"  {key}: {cats[key]}")
+        print()
+
+    # --- FF-record inventory ---
+    ff_frames = [f for f in frames if f.ff_kind >= 0]
+    if ff_frames:
+        print(f"=== FF-records: {len(ff_frames)} chunks ===")
+        by_kind: dict[int, list[BFrame]] = defaultdict(list)
+        for f in ff_frames:
+            by_kind[f.ff_kind].append(f)
+        for kind in sorted(by_kind):
+            items = by_kind[kind]
+            t_first = items[0].t_rel
+            t_last = items[-1].t_rel
+            sizes = set(f.ff_size for f in items)
+            print(f"  kind={kind} ({len(items)} chunks)  t={t_first:.3f}..{t_last:.3f}s  sizes={sorted(sizes)}")
+        print()
+
+    # --- Value frame flag distribution ---
+    vf_frames = [f for f in frames if f.is_value_frame]
+    if vf_frames:
+        print(f"=== Value frames: {len(vf_frames)} ===")
+        flag_counts: dict[int, int] = defaultdict(int)
+        flag_sizes: dict[int, set[int]] = defaultdict(set)
+        for f in vf_frames:
+            flag = f.vf_flag
+            flag_counts[flag] += 1
+            flag_sizes[flag].add(len(f.vf_data))
+        for flag in sorted(flag_counts):
+            sizes = sorted(flag_sizes[flag])
+            print(f"  flag=0x{flag:02X}: {flag_counts[flag]} frames  data_sizes={sizes}")
+
+        # Detect flag transitions (potential dashboard switches)
+        prev_flag_set: set[int] = set()
+        transitions: list[tuple[float, set[int], set[int]]] = []
+        window: list[BFrame] = []
+        for f in vf_frames:
+            window.append(f)
+            if len(window) > 100:
+                window.pop(0)
+            current_flags = set(w.vf_flag for w in window[-20:])
+            if prev_flag_set and current_flags != prev_flag_set:
+                new_flags = current_flags - prev_flag_set
+                gone_flags = prev_flag_set - current_flags
+                if new_flags or gone_flags:
+                    transitions.append((f.t_rel, gone_flags, new_flags))
+            prev_flag_set = current_flags
+
+        if transitions:
+            print(f"\n  Flag transitions (potential switch points):")
+            seen = set()
+            for t, gone, new in transitions:
+                key = (frozenset(gone), frozenset(new))
+                if key in seen:
+                    continue
+                seen.add(key)
+                gone_s = ','.join(f'0x{f:02X}' for f in sorted(gone)) if gone else '-'
+                new_s = ','.join(f'0x{f:02X}' for f in sorted(new)) if new else '-'
+                print(f"    t={t:.3f}s  gone={{{gone_s}}}  new={{{new_s}}}")
+        print()
+
+    # --- Non-telemetry command frames ---
+    cmd_frames = [f for f in frames if f.is_command]
+    if cmd_frames:
+        print(f"=== Direct commands on telemetry group: {len(cmd_frames)} ===")
+        by_cmd: dict[int, list[BFrame]] = defaultdict(list)
+        for f in cmd_frames:
+            by_cmd[f.payload[0]].append(f)
+        for cmd in sorted(by_cmd):
+            items = by_cmd[cmd]
+            sizes = set(len(f.payload) for f in items)
+            print(f"  cmd=0x{cmd:02X}: {len(items)} frames  payload_sizes={sorted(sizes)}  "
+                  f"first_payload={items[0].payload[:16].hex()}")
+        print()
+
+    # --- Non-telemetry groups ---
+    non_telem = [f for f in frames if not f.is_telemetry]
+    if non_telem:
+        nt_grps: dict[str, int] = defaultdict(int)
+        for f in non_telem:
+            nt_grps[f"0x{f.grp:02X}:0x{f.dev:02X} ({f.dir})"] += 1
+        print(f"=== Non-telemetry traffic: {len(non_telem)} frames ===")
+        for key in sorted(nt_grps):
+            print(f"  {key}: {nt_grps[key]}")
+
+
+if __name__ == "__main__":
+    main()

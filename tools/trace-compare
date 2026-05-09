@@ -1,0 +1,162 @@
+#!/usr/bin/env python3
+"""Compare two MOZA wire traces side-by-side.
+
+Useful for diffing a working (v1) trace against a broken (v2) trace, or
+comparing before/after a code change. Reports differences in session layout,
+FF records, value frame stats, stream-slot usage, and timing.
+
+Usage:
+    tools/trace-compare TRACE_A TRACE_B
+    tools/trace-compare 20260505-143523 20260506-104929
+"""
+import argparse
+import struct
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from moza_trace import load_trace, resolve_trace, Frame
+
+
+def stats(frames: list[Frame], label: str) -> dict:
+    h2b = [f for f in frames if f.dir == 'h2b']
+    b2h = [f for f in frames if f.dir == 'b2h']
+    vfs = [f for f in frames if f.is_value_frame]
+    nonzero_vfs = [f for f in vfs if any(b != 0 for b in f.vf_data)]
+
+    # Session data counts
+    sess_data: dict[str, dict[int, int]] = {'h2b': {}, 'b2h': {}}
+    for f in frames:
+        if f.is_data:
+            sess_data[f.dir][f.session] = sess_data[f.dir].get(f.session, 0) + 1
+
+    # FF records by kind
+    ff: dict[str, dict[int, int]] = {'h2b': {}, 'b2h': {}}
+    for f in frames:
+        if f.is_ff_record:
+            ff[f.dir][f.ff_kind] = ff[f.dir].get(f.ff_kind, 0) + 1
+
+    # Stream-slot frames
+    ffb = sum(1 for f in h2b if len(f.raw) >= 6 and f.raw[2] == 0x43 and f.raw[4] == 0x60 and f.raw[5] == 0x00)
+    seq = sum(1 for f in h2b if len(f.raw) >= 6 and f.raw[2] == 0x43 and f.raw[4] == 0x7D and f.raw[5] == 0x00)
+    mode = sum(1 for f in h2b if len(f.raw) >= 8 and f.raw[2] == 0x40 and f.raw[4] == 0x28 and f.raw[5] == 0x02 and f.raw[6] == 0x01)
+
+    # Frame type distribution
+    grp_dist: dict[int, int] = {}
+    for f in h2b:
+        grp_dist[f.group] = grp_dist.get(f.group, 0) + 1
+
+    # Dashboard switches
+    switches = [f for f in frames if f.is_ff_record and f.ff_kind == 4 and f.dir == 'h2b']
+    echoes = [f for f in frames if f.is_ff_record and f.ff_kind == 4 and f.dir == 'b2h']
+
+    return {
+        'label': label,
+        'duration': frames[-1].t if frames else 0,
+        'total': len(frames),
+        'h2b': len(h2b),
+        'b2h': len(b2h),
+        'vf_total': len(vfs),
+        'vf_nonzero': len(nonzero_vfs),
+        'vf_first_nz_t': nonzero_vfs[0].t if nonzero_vfs else None,
+        'vf_rate': len(vfs) / (vfs[-1].t - vfs[0].t) if len(vfs) > 1 and vfs[-1].t > vfs[0].t else 0,
+        'sess_data': sess_data,
+        'ff': ff,
+        'ffb': ffb,
+        'seq': seq,
+        'mode': mode,
+        'grp_dist': grp_dist,
+        'switches': len(switches),
+        'echoes': len(echoes),
+    }
+
+
+def compare_row(label: str, a_val, b_val, fmt: str = "{}"):
+    a_str = fmt.format(a_val) if a_val is not None else "---"
+    b_str = fmt.format(b_val) if b_val is not None else "---"
+    marker = " *" if a_str != b_str else ""
+    print(f"  {label:30s}  {a_str:>12s}  {b_str:>12s}{marker}")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Compare two MOZA wire traces")
+    parser.add_argument("trace_a", help="First trace (path or partial name)")
+    parser.add_argument("trace_b", help="Second trace (path or partial name)")
+    args = parser.parse_args()
+
+    path_a = resolve_trace(args.trace_a)
+    path_b = resolve_trace(args.trace_b)
+    frames_a = load_trace(path_a)
+    frames_b = load_trace(path_b)
+    a = stats(frames_a, path_a.name)
+    b = stats(frames_b, path_b.name)
+
+    print(f"{'':30s}  {'A':>12s}  {'B':>12s}")
+    print(f"  {'Trace':30s}  {a['label'][-12:]:>12s}  {b['label'][-12:]:>12s}")
+    print()
+
+    print("=== Overview ===")
+    compare_row("Duration (s)", a['duration'], b['duration'], "{:.1f}")
+    compare_row("Total frames", a['total'], b['total'])
+    compare_row("h2b", a['h2b'], b['h2b'])
+    compare_row("b2h", a['b2h'], b['b2h'])
+    print()
+
+    print("=== Value Frames ===")
+    compare_row("Total", a['vf_total'], b['vf_total'])
+    compare_row("Non-zero", a['vf_nonzero'], b['vf_nonzero'])
+    compare_row("First non-zero (s)", a['vf_first_nz_t'], b['vf_first_nz_t'], "{:.3f}")
+    compare_row("Rate (frames/sec)", a['vf_rate'], b['vf_rate'], "{:.0f}")
+    print()
+
+    print("=== Stream Slots ===")
+    compare_row("FFB enable", a['ffb'], b['ffb'])
+    compare_row("Seq counter", a['seq'], b['seq'])
+    compare_row("Mode (28:02)", a['mode'], b['mode'])
+    print()
+
+    print("=== Dashboard Switches ===")
+    compare_row("h2b kind=4", a['switches'], b['switches'])
+    compare_row("b2h kind=4 echo", a['echoes'], b['echoes'])
+    print()
+
+    print("=== Session Data Chunks ===")
+    all_sessions = sorted(set(
+        list(a['sess_data']['h2b'].keys()) + list(a['sess_data']['b2h'].keys()) +
+        list(b['sess_data']['h2b'].keys()) + list(b['sess_data']['b2h'].keys())
+    ))
+    for sess in all_sessions:
+        for direction in ('h2b', 'b2h'):
+            compare_row(
+                f"{direction} sess=0x{sess:02X}",
+                a['sess_data'][direction].get(sess, 0),
+                b['sess_data'][direction].get(sess, 0),
+            )
+    print()
+
+    print("=== FF Records (by kind) ===")
+    all_kinds = sorted(set(
+        list(a['ff']['h2b'].keys()) + list(a['ff']['b2h'].keys()) +
+        list(b['ff']['h2b'].keys()) + list(b['ff']['b2h'].keys())
+    ))
+    for kind in all_kinds:
+        for direction in ('h2b', 'b2h'):
+            compare_row(
+                f"{direction} kind={kind}",
+                a['ff'][direction].get(kind, 0),
+                b['ff'][direction].get(kind, 0),
+            )
+    print()
+
+    print("=== h2b Group Distribution ===")
+    all_grps = sorted(set(list(a['grp_dist'].keys()) + list(b['grp_dist'].keys())))
+    for grp in all_grps:
+        compare_row(
+            f"grp=0x{grp:02X}",
+            a['grp_dist'].get(grp, 0),
+            b['grp_dist'].get(grp, 0),
+        )
+
+
+if __name__ == "__main__":
+    main()

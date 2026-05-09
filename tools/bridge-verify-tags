@@ -1,0 +1,53 @@
+#!/usr/bin/env python3
+"""For each h2b sess=0x01 frame within 5s after a switch, determine if the
+first byte is a REAL TLV tag (low seq, valid TLV size) or a chunk continuation
+(high seq, part of a multi-chunk tier-def blob)."""
+import struct
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path.home() / "src/moza-simhub-plugin/tools"))
+from moza_bridge import load_bridge, BRIDGE_DIR
+
+real_tags = {}
+chunk_cont = {}
+
+for capfile in sorted(BRIDGE_DIR.glob("bridge-*.jsonl")):
+    frames = load_bridge(capfile)
+    switches = [f for f in frames if f.ff_kind == 4 and f.dir == 'h2b']
+    if not switches:
+        continue
+
+    for sw in switches:
+        t_sw = sw.t_rel
+        for f in frames:
+            if f.t_rel <= t_sw or f.t_rel > t_sw + 5.0:
+                continue
+            if not f.is_session_data or f.sess_id != 0x01 or f.sess_type != 0x01:
+                continue
+            if f.dir != 'h2b':
+                continue
+            data = f.sess_data
+            if not data:
+                continue
+            tag = data[0]
+            if len(data) >= 5:
+                size = struct.unpack_from('<I', data, 1)[0]
+                # A real TLV has size < 200 and total TLV (1+4+size+4crc) ~= len(data)
+                expected_len = 5 + size + 4  # tag + size_field + value + crc
+                is_real = size < 200 and abs(expected_len - len(data)) <= 4
+            else:
+                is_real = len(data) <= 5  # very short — probably real
+
+            if is_real:
+                real_tags[tag] = real_tags.get(tag, 0) + 1
+            else:
+                chunk_cont[tag] = chunk_cont.get(tag, 0) + 1
+
+print("REAL standalone TLV records (h2b, post-switch):")
+for tag in sorted(real_tags):
+    print(f"  tag=0x{tag:02X}: {real_tags[tag]}")
+
+print(f"\nChunk continuations (NOT real tags):")
+for tag in sorted(chunk_cont):
+    print(f"  byte=0x{tag:02X}: {chunk_cont[tag]}")

@@ -54,10 +54,12 @@ class _SimSession:
     """Wraps serial port + read/proactive threads for one simulator run."""
 
     def __init__(self, ser, sim, log_fh, alive, write_lock,
-                 emits_7c23, frames_7c23, c7_23_reps):
+                 emits_7c23, frames_7c23, c7_23_reps,
+                 wire_trace_fh=None):
         self.ser = ser
         self.sim = sim
         self.log_fh = log_fh
+        self.wire_trace_fh = wire_trace_fh
         self.alive = alive
         self.write_lock = write_lock
         self._threads: list = []
@@ -71,8 +73,23 @@ class _SimSession:
         ser = self.ser
         sim = self.sim
         log_fh = self.log_fh
+        wire_trace_fh = self.wire_trace_fh
         alive = self.alive
         write_lock = self.write_lock
+
+        # Mirror of wheel_sim.cmd_live._emit_wire_trace — emit one JSONL line
+        # per frame in the same {t, dir, hex, len} schema as bridge-*.jsonl
+        # captures, so tools/moza_trace.py + tierdef-decode etc. consume MCP-
+        # launched sim runs the same way they consume cmd_live runs.
+        def _emit_wire_trace(direction: str, frame: bytes) -> None:
+            if wire_trace_fh is None:
+                return
+            wire_trace_fh.write(json.dumps({
+                't': time.time(),
+                'dir': direction,
+                'hex': frame.hex(),
+                'len': len(frame),
+            }) + '\n')
 
         def _write(frame: bytes, tag: str):
             ser.write(frame[:2])
@@ -81,6 +98,7 @@ class _SimSession:
                 if b == MSG_START:
                     ser.write(b'\x7e')
             log_fh.write(f'{_ts()} TX [{tag:<13}] {frame.hex(" ")}\n')
+            _emit_wire_trace('b2h', frame)
 
         def read_loop():
             import serial as _serial
@@ -98,6 +116,7 @@ class _SimSession:
                         label = ''
                     with write_lock:
                         log_fh.write(f'{_ts()} RX [{tag:<13}] {frame.hex(" ")}  | {label}\n')
+                        _emit_wire_trace('h2b', frame)
                         for rsp in responses:
                             _write(rsp, tag)
                 except (OSError, _serial.SerialException):
@@ -200,6 +219,12 @@ class _SimSession:
             self.log_fh.close()
         except Exception:
             pass
+        if self.wire_trace_fh is not None:
+            try:
+                self.wire_trace_fh.close()
+            except Exception:
+                pass
+            self.wire_trace_fh = None
         for t in self._threads:
             t.join(timeout=2.0)
 
@@ -426,9 +451,18 @@ def _apply_model(ws_mod, model_name: str) -> dict:
 
 
 @_server.tool()
-def sim_start(port: Optional[str] = None, model: Optional[str] = None) -> dict:
+def sim_start(port: Optional[str] = None, model: Optional[str] = None,
+              wire_trace: Optional[str] = None) -> dict:
     """Start the simulator on a serial port. Uses configured port/model if omitted.
-    Model choices: vgs, csp, ks."""
+    Model choices: vgs, csp, ks.
+
+    Args:
+      wire_trace: Optional path to a JSONL wire-trace file. When set, every RX
+        and TX frame is emitted as one JSON object per line ({t, dir, hex,
+        len}) in the same schema as bridge-*.jsonl captures, so tools/tierdef-
+        decode + tools/trace-sess02-decode + tools/bridge-decode-ff-init
+        consume it without modification. Mirrors the --wire-trace CLI flag on
+        wheel_sim.py's cmd_live."""
     global _sim, _session, _last_disconnect
 
     if _session is not None:
@@ -505,6 +539,21 @@ def sim_start(port: Optional[str] = None, model: Optional[str] = None) -> dict:
     model_name = use_model.get('friendly', use_model.get('name', 'unknown'))
     print(f'[MCP sim_start] model={model_name} port={use_port}', file=sys.stderr)
 
+    # Optional parallel JSONL wire trace. Schema matches bridge-*.jsonl /
+    # moza-wire-*.jsonl so tools/moza_trace.py decoders consume it directly.
+    wire_trace_fh = None
+    if wire_trace:
+        try:
+            wt_path = Path(wire_trace)
+            wt_path.parent.mkdir(parents=True, exist_ok=True)
+            wire_trace_fh = open(wt_path, 'w', buffering=1)
+            print(f'[MCP sim_start] wire trace JSONL → {wt_path}', file=sys.stderr)
+        except OSError as e:
+            ser.close()
+            log_fh.close()
+            _release_port_lock()
+            return {"error": f"Cannot open wire trace file '{wire_trace}': {e}"}
+
     sim = _ws.WheelSimulator(
         _config['db'],
         use_replay,
@@ -530,11 +579,15 @@ def sim_start(port: Optional[str] = None, model: Optional[str] = None) -> dict:
         use_emits_7c23,
         use_c7_23_frames,
         use_c7_23_reps,
+        wire_trace_fh=wire_trace_fh,
     )
     session.start()
     _session = session
 
-    return {"status": "running", "port": use_port, "model": model_name}
+    result = {"status": "running", "port": use_port, "model": model_name}
+    if wire_trace:
+        result["wire_trace"] = wire_trace
+    return result
 
 
 @_server.tool()

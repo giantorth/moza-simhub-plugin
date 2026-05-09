@@ -1,0 +1,225 @@
+#!/usr/bin/env python3
+"""Decode session 0x02 traffic (TLV records, FF records, raw payloads)
+in a MOZA wire-trace JSONL captured by the plugin.
+
+Mirror of `tools/bridge-decode-ff-init` but for our own wire traces. Use
+to verify whether our plugin engages the session 0x02 control protocol
+the same way PitHouse does — kind=2/7/8/11 init handshake, periodic
+kind=9/14/15, wheel state pushes (kind=10/16) on b2h.
+
+Usage:
+    tools/trace-sess02-decode                                  # latest trace
+    tools/trace-sess02-decode latest
+    tools/trace-sess02-decode <path>
+    tools/trace-sess02-decode <path> --direction h2b
+    tools/trace-sess02-decode <path> --until-switch
+"""
+from __future__ import annotations
+
+import argparse
+import struct
+import sys
+import zlib
+from collections import Counter
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from moza_trace import load_trace, resolve_trace, Frame
+
+
+KIND_NAMES = {
+    2: "init_nonce",
+    4: "DASH_SWITCH",
+    7: "init_enum",
+    8: "init_payload_a (channel catalog)",
+    9: "periodic",
+    10: "wheel_state_a",
+    11: "init_payload_b (ffb properties)",
+    14: "wheel_payload",
+    15: "host_setting",
+    16: "wheel_state_b",
+}
+
+TLV_TAG_NAMES = {
+    0x00: "ENABLE",
+    0x01: "TIER",
+    0x03: "FLAG_BASE",
+    0x04: "URL/CHANNEL_INFO",
+    0x06: "END_MARKER",
+    0x07: "PROTO_VER",
+}
+
+
+def find_first_switch_idx(frames: list[Frame]) -> int | None:
+    for i, f in enumerate(frames):
+        if f.dir == 'h2b' and f.is_session and f.is_data and f.session == 2:
+            payload = f.raw[10:-5] if len(f.raw) > 15 else f.raw[10:]
+            if len(payload) > 13 and payload[0] == 0xFF:
+                kind = struct.unpack_from('<I', payload, 9)[0]
+                if kind == 4:
+                    return i
+    return None
+
+
+def chunk_payload(f: Frame) -> bytes:
+    """Strip framing for a session-data chunk and return the payload
+    (without the 4-byte CRC suffix). Returns empty for non-data."""
+    if f.dir == 'h2b':
+        raw = f.raw[10:-5] if len(f.raw) > 15 else f.raw[10:]
+    else:
+        raw = f.raw[8:]
+    if len(raw) >= 4:
+        return bytes(raw[:-4])
+    return bytes(raw)
+
+
+def reassemble_session(frames: list[Frame], session: int, direction: str,
+                       cutoff: int | None) -> tuple[bytes, dict[int, Frame]]:
+    seen: dict[int, tuple[bytes, Frame]] = {}
+    for i, f in enumerate(frames):
+        if cutoff is not None and i >= cutoff:
+            break
+        if not (f.is_session and f.is_data and f.session == session and f.dir == direction):
+            continue
+        seq = f.seq
+        if seq < 0:
+            continue
+        body = chunk_payload(f)
+        if seq not in seen:
+            seen[seq] = (body, f)
+    stream = bytearray()
+    seq_to_frame: dict[int, Frame] = {}
+    for seq in sorted(seen):
+        body, fr = seen[seq]
+        seq_to_frame[seq] = fr
+        stream.extend(body)
+    return bytes(stream), seq_to_frame
+
+
+def parse_records(stream: bytes) -> list[dict]:
+    out = []
+    i = 0
+    n = len(stream)
+    while i < n:
+        b = stream[i]
+        if b == 0xFF and i + 13 <= n:
+            size = struct.unpack_from('<I', stream, i + 1)[0]
+            salt = struct.unpack_from('<I', stream, i + 5)[0]
+            kind = struct.unpack_from('<I', stream, i + 9)[0]
+            be = i + 13 + size
+            if 0 < size < 65536 and be <= n:
+                out.append({
+                    'kind': 'FF', 'offset': i, 'ff_kind': kind,
+                    'size': size, 'salt': salt,
+                    'body': bytes(stream[i + 13:be]),
+                })
+                i = be
+                continue
+        # TLV (tag/size_u32/value)
+        if i + 5 <= n:
+            tag = b
+            size = struct.unpack_from('<I', stream, i + 1)[0]
+            if size <= 65536 and i + 5 + size <= n:
+                out.append({
+                    'kind': 'TLV', 'offset': i, 'tag': tag,
+                    'size': size,
+                    'value': bytes(stream[i + 5:i + 5 + size]),
+                })
+                i += 5 + size
+                continue
+        i += 1
+    return out
+
+
+def print_records(records: list[dict], stream_label: str, limit: int = 0):
+    counts = Counter()
+    for r in records:
+        if r['kind'] == 'FF':
+            counts[('FF', r['ff_kind'])] += 1
+        else:
+            counts[('TLV', r['tag'])] += 1
+    print(f"\n--- {stream_label} ({len(records)} records) ---")
+    if not records:
+        print("  (no records)")
+        return
+    for k in sorted(counts):
+        if k[0] == 'FF':
+            name = KIND_NAMES.get(k[1], '?')
+            print(f"  FF  kind={k[1]:>4} ({name})  count={counts[k]}")
+        else:
+            tag = k[1]
+            name = TLV_TAG_NAMES.get(tag, f'UNK_0x{tag:02X}')
+            print(f"  TLV tag=0x{tag:02X} ({name})  count={counts[k]}")
+
+    print()
+    shown = 0
+    for r in records:
+        if limit and shown >= limit:
+            print(f"  ... ({len(records) - shown} more records suppressed; --limit to override)")
+            break
+        if r['kind'] == 'FF':
+            kind = r['ff_kind']
+            body = r['body']
+            preview = body[:24].hex()
+            print(f"  off={r['offset']:>5} FF  kind={kind} size={r['size']} "
+                  f"salt=0x{r['salt']:08X} body[:24]={preview}")
+            # decompress kind=8/11/14 if zlib-shaped
+            if kind in (8, 11, 14) and len(body) > 6 and body[4] == 0x78 and body[5] in (0x01, 0x9C, 0xDA):
+                try:
+                    dec = zlib.decompress(body[4:])
+                    print(f"    zlib OK: decompressed={len(dec)}B")
+                except zlib.error:
+                    pass
+        else:
+            tag = r['tag']
+            value = r['value']
+            preview = value[:24].hex()
+            print(f"  off={r['offset']:>5} TLV tag=0x{tag:02X} size={r['size']} "
+                  f"value[:24]={preview}")
+        shown += 1
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("trace", nargs="?", default="latest",
+                    help="trace JSONL path or 'latest'")
+    ap.add_argument("--session", "-s", type=lambda x: int(x, 0), default=0x02,
+                    help="session id (default 0x02)")
+    ap.add_argument("--direction", "-d", choices=("h2b", "b2h", "both"),
+                    default="both", help="default both")
+    ap.add_argument("--until-switch", action="store_true",
+                    help="stop at first DASH_SWITCH (kind=4 h2b sess=02)")
+    ap.add_argument("--limit", type=int, default=20,
+                    help="max records printed per stream (default 20; 0 = all)")
+    args = ap.parse_args()
+
+    path = resolve_trace(args.trace)
+    print(f"Trace: {path.name}")
+    frames = load_trace(path)
+    print(f"  {len(frames)} frames")
+
+    cutoff = None
+    if args.until_switch:
+        idx = find_first_switch_idx(frames)
+        if idx is not None:
+            cutoff = idx
+            t = frames[idx].t
+            print(f"  cutoff: first DASH_SWITCH at idx={idx} t={t:.3f}s")
+        else:
+            print("  no DASH_SWITCH found — scanning entire trace")
+
+    directions = (args.direction,) if args.direction != 'both' else ('h2b', 'b2h')
+    for d in directions:
+        stream, seq_map = reassemble_session(frames, args.session, d, cutoff)
+        if not stream:
+            print(f"\n--- {d} sess=0x{args.session:02X}: no chunks ---")
+            continue
+        print(f"\n=== {d} sess=0x{args.session:02X}: "
+              f"{len(seq_map)} unique-seq chunks → {len(stream)} bytes ===")
+        records = parse_records(stream)
+        print_records(records, f"{d} sess=0x{args.session:02X}", limit=args.limit)
+
+
+if __name__ == "__main__":
+    main()
