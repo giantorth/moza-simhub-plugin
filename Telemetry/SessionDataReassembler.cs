@@ -179,29 +179,44 @@ namespace MozaPlugin.Telemetry
         /// </summary>
         public static byte[] StripCrcTrailer(byte[] chunk)
         {
-            if (chunk.Length < 4) return chunk;
-            uint wire = (uint)(chunk[chunk.Length - 4]
-                              | (chunk[chunk.Length - 3] << 8)
-                              | (chunk[chunk.Length - 2] << 16)
-                              | (chunk[chunk.Length - 1] << 24));
-            uint crcFull = TierDefinitionBuilder.Crc32(chunk, 0, chunk.Length - 4);
-            if (crcFull == wire)
+            if (chunk.Length < 3) return chunk;
+
+            // Try **3-byte CRC** first (low 24 bits of CRC32 LE). Verified
+            // 2026-05-09 against captured wheel chunks across sess=0x01,
+            // 0x02, 0x09: 154/154 chunks matched 3-byte CRC, 0/154 matched
+            // 4-byte. The earlier 4-byte assumption stripped one extra byte
+            // per chunk and corrupted reassembly buffers (configJson zlib
+            // failures, garbled catalog URLs ending in stray 0x04 bytes
+            // from the next chunk's tag byte).
+            uint wire3 = (uint)(chunk[chunk.Length - 3]
+                              | (chunk[chunk.Length - 2] << 8)
+                              | (chunk[chunk.Length - 1] << 16));
+            uint crc3 = TierDefinitionBuilder.Crc32(chunk, 0, chunk.Length - 3) & 0xFFFFFFu;
+            if (crc3 == wire3)
             {
-                var o = new byte[chunk.Length - 4];
+                var o = new byte[chunk.Length - 3];
                 Array.Copy(chunk, 0, o, 0, o.Length);
                 return o;
             }
-            if (chunk.Length >= 5)
+
+            // Fallback: 4-byte CRC (older firmware variant or edge case).
+            if (chunk.Length >= 4)
             {
-                uint crcStrip1 = TierDefinitionBuilder.Crc32(chunk, 1, chunk.Length - 5);
-                if (crcStrip1 == wire)
+                uint wire4 = (uint)(chunk[chunk.Length - 4]
+                                  | (chunk[chunk.Length - 3] << 8)
+                                  | (chunk[chunk.Length - 2] << 16)
+                                  | (chunk[chunk.Length - 1] << 24));
+                uint crc4 = TierDefinitionBuilder.Crc32(chunk, 0, chunk.Length - 4);
+                if (crc4 == wire4)
                 {
-                    var o = new byte[chunk.Length - 5];
-                    Array.Copy(chunk, 1, o, 0, o.Length);
+                    var o = new byte[chunk.Length - 4];
+                    Array.Copy(chunk, 0, o, 0, o.Length);
                     return o;
                 }
             }
-            var fallback = new byte[chunk.Length - 4];
+
+            // Last resort: blind 3-byte strip (matches verified majority case).
+            var fallback = new byte[chunk.Length - 3];
             Array.Copy(chunk, 0, fallback, 0, fallback.Length);
             return fallback;
         }

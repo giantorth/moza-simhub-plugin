@@ -1380,14 +1380,51 @@ namespace MozaPlugin
 
         private string BuildWheelCatalogText()
         {
-            var catalog = _plugin.WheelChannelCatalogForDiagnostics;
-            if (catalog == null || catalog.Count == 0)
-                return "(no channel catalog received from wheel yet)";
             var sb = new System.Text.StringBuilder();
-            sb.AppendLine($"{catalog.Count} channels advertised by wheel:");
-            for (int i = 0; i < catalog.Count; i++)
-                sb.AppendLine($"  [{i + 1,2}]  {catalog[i]}");
-            return sb.ToString().TrimEnd();
+            var catalog = _plugin.WheelChannelCatalogForDiagnostics;
+            if (catalog != null && catalog.Count > 0)
+            {
+                sb.AppendLine($"{catalog.Count} channels advertised by wheel:");
+                for (int i = 0; i < catalog.Count; i++)
+                {
+                    string url = catalog[i] ?? "";
+                    sb.AppendLine($"  [{i + 1,2}]  {url}");
+                }
+                return sb.ToString().TrimEnd();
+            }
+
+            // Fallback: derive the catalog from the active subscription's
+            // channel list. The subscription was built with the wheel's
+            // catalog at emit time, so its URLs reflect the mapping we sent —
+            // robust against the catalog parser losing its in-memory state
+            // mid-session for any reason.
+            //
+            // The subscription's diag.Channels uses a SEQUENTIAL idx (1..N
+            // across all tiers/buckets) rather than the wheel-catalog idx,
+            // so a single URL appears multiple times when the host duplicates
+            // channels across page-broadcast buckets (Grids = 4 buckets ×
+            // 20 channels = 80 entries). Dedup by URL preserving first-seen
+            // order so the listed catalog matches the wheel-side count.
+            var sub = _plugin.SubscriptionForDiagnostics;
+            if (sub != null && sub.Channels != null && sub.Channels.Count > 0)
+            {
+                var seen = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var ordered = new System.Collections.Generic.List<string>();
+                foreach (var ch in sub.Channels)
+                {
+                    if (string.IsNullOrEmpty(ch.Url)) continue;
+                    if (seen.Add(ch.Url)) ordered.Add(ch.Url);
+                }
+                if (ordered.Count > 0)
+                {
+                    sb.AppendLine($"{ordered.Count} channels (from last subscription — catalog parser empty):");
+                    for (int i = 0; i < ordered.Count; i++)
+                        sb.AppendLine($"  [{i + 1,2}]  {ordered[i]}");
+                    return sb.ToString().TrimEnd();
+                }
+            }
+
+            return "(no channel catalog received from wheel yet)";
         }
 
         private string BuildSubscriptionText()
@@ -1542,9 +1579,11 @@ namespace MozaPlugin
             if (SerialTrafficCapture.Instance.Enabled) return;
 
             var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
+            var modelSlug = BuildWheelModelFilenameSlug(_data?.WheelModelName);
+            var prefix = string.IsNullOrEmpty(modelSlug) ? "" : modelSlug + "-";
             var dlg = new Microsoft.Win32.SaveFileDialog
             {
-                FileName = $"moza-diagnostics-bundle-{stamp}.zip",
+                FileName = $"{prefix}moza-diagnostics-bundle-{stamp}.zip",
                 Filter = "ZIP archive (*.zip)|*.zip",
                 DefaultExt = ".zip",
                 AddExtension = true,
@@ -1638,6 +1677,27 @@ namespace MozaPlugin
             using (var s = entry.Open())
             using (var w = new System.IO.StreamWriter(s, new System.Text.UTF8Encoding(false)))
                 w.Write(content);
+        }
+
+        // Build a filesystem-safe slug from the active wheel's firmware model name
+        // for use as a filename prefix on diagnostics bundles. Prefers the curated
+        // friendly name (e.g. "CS Pro" for firmware "W17"); falls back to the raw
+        // prefix for unknown wheels. Returns "" when no model is known yet so the
+        // caller can omit the prefix entirely rather than emit a leading dash.
+        private static string BuildWheelModelFilenameSlug(string? modelName)
+        {
+            if (string.IsNullOrWhiteSpace(modelName)) return "";
+            var friendly = WheelModelInfo.GetFriendlyName(WheelModelInfo.ExtractPrefix(modelName!));
+            if (string.IsNullOrWhiteSpace(friendly)) return "";
+
+            var sb = new System.Text.StringBuilder(friendly.Length);
+            foreach (var ch in friendly)
+            {
+                if (ch == ' ') sb.Append('-');
+                else if (char.IsLetterOrDigit(ch) || ch == '-' || ch == '_' || ch == '.') sb.Append(ch);
+                // anything else (path separators, punctuation, control chars) is dropped
+            }
+            return sb.ToString().Trim('-');
         }
 
         private static string GetPluginVersion()

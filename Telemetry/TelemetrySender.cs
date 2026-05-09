@@ -2534,14 +2534,15 @@ namespace MozaPlugin.Telemetry
                         // scan window and can either drop a real envelope
                         // or hit-spot a spurious sentinel. Silently drop
                         // mismatches; wheel will re-push if we don't ack.
-                        if (chunkPayload.Length >= 5)
+                        if (chunkPayload.Length >= 4)
                         {
-                            int netLen = chunkPayload.Length - 4;
+                            // 3-byte CRC trailer — see catalog feed above for
+                            // the full rationale (2026-05-09 firmware audit).
+                            int netLen = chunkPayload.Length - 3;
                             uint wireCrc = (uint)(chunkPayload[netLen]
                                                 | (chunkPayload[netLen + 1] << 8)
-                                                | (chunkPayload[netLen + 2] << 16)
-                                                | (chunkPayload[netLen + 3] << 24));
-                            uint calcCrc = TierDefinitionBuilder.Crc32(chunkPayload, 0, netLen);
+                                                | (chunkPayload[netLen + 2] << 16));
+                            uint calcCrc = TierDefinitionBuilder.Crc32(chunkPayload, 0, netLen) & 0xFFFFFFu;
                             if (calcCrc != wireCrc)
                             {
                                 Interlocked.Increment(ref _tileServerCrcRejects);
@@ -2549,7 +2550,7 @@ namespace MozaPlugin.Telemetry
                                 if (n <= 5 || n % 50 == 0)
                                     MozaLog.Debug(
                                         $"[Moza] Tile-server chunk CRC mismatch sess=0x{session:X2} " +
-                                        $"seq={seq}: calc=0x{calcCrc:X8} wire=0x{wireCrc:X8} (rejects={n})");
+                                        $"seq={seq}: calc=0x{calcCrc:X6} wire=0x{wireCrc:X6} (rejects={n})");
                             }
                             else
                             {
@@ -2601,14 +2602,27 @@ namespace MozaPlugin.Telemetry
                     // the chunk silently — the wheel will re-push it on its
                     // own retransmit cadence, and the parser stays clean.
                     bool isCatalogSession = session == FlagByte || session == 0x01;
-                    if (isCatalogSession && data.Length > 12 && chunkPayload.Length >= 5)
+                    if (isCatalogSession && data.Length > 12 && chunkPayload.Length >= 4)
                     {
-                        int netLen = chunkPayload.Length - 4;
+                        // Inbound chunks from this wheel firmware carry a
+                        // 3-byte CRC trailer (low 24 bits of CRC32 LE), not
+                        // 4 bytes. Verified 2026-05-09 against captured wheel
+                        // catalog/configJson/sess-02 chunks — 154/154 chunks
+                        // matched 3-byte CRC, 0/154 matched 4-byte. Stripping
+                        // 4 bytes (the prior assumption) chopped the last
+                        // data byte of every chunk, which explained the
+                        // deterministic `v1/gameDa???\x04` URL corruption:
+                        // each chunk-boundary lost the last URL char, and
+                        // the next chunk's first byte (0x04 = next record's
+                        // tag) bled into where that char should have been.
+                        // Outbound chunks (our `TierDefinitionBuilder.Chunk-
+                        // Message`) still emit 4-byte CRC and the wheel
+                        // accepts them, so the asymmetry is wheel-side.
+                        int netLen = chunkPayload.Length - 3;
                         uint wireCrc = (uint)(chunkPayload[netLen]
                                             | (chunkPayload[netLen + 1] << 8)
-                                            | (chunkPayload[netLen + 2] << 16)
-                                            | (chunkPayload[netLen + 3] << 24));
-                        uint calcCrc = TierDefinitionBuilder.Crc32(chunkPayload, 0, netLen);
+                                            | (chunkPayload[netLen + 2] << 16));
+                        uint calcCrc = TierDefinitionBuilder.Crc32(chunkPayload, 0, netLen) & 0xFFFFFFu;
                         if (calcCrc == wireCrc)
                         {
                             // Seq-aware append: dedup retransmits per session
@@ -2630,7 +2644,7 @@ namespace MozaPlugin.Telemetry
                             {
                                 MozaLog.Debug(
                                     $"[Moza] Catalog chunk CRC mismatch sess=0x{session:X2} " +
-                                    $"seq={seq}: calc=0x{calcCrc:X8} wire=0x{wireCrc:X8} " +
+                                    $"seq={seq}: calc=0x{calcCrc:X6} wire=0x{wireCrc:X6} " +
                                     $"(total rejects: {rejCount})");
                             }
                         }
