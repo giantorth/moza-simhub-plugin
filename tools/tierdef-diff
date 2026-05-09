@@ -1,0 +1,591 @@
+#!/usr/bin/env python3
+"""Compare tier-def TLV streams from two MOZA wire-trace JSONL files.
+
+Extracts canonical TLV bytes from session 0x01 h2b data chunks, groups them
+into emissions (by 500ms gap), parses sections (ENABLE* + TIER+ + END), and
+reports structural divergences.
+
+Usage:
+    tools/tierdef-diff trace_a trace_b
+    tools/tierdef-diff bridge-20260503-112940.jsonl moza-wire-20260506-130114.jsonl
+    tools/tierdef-diff trace_a trace_b --brief
+"""
+import argparse
+import struct
+import sys
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Optional
+
+sys.path.insert(0, str(Path(__file__).parent))
+from moza_trace import load_trace, resolve_trace, Frame
+
+TAG_NAMES = {
+    0x00: "ENABLE_PREV",
+    0x01: "TIER",
+    0x03: "FLAG_BASE",
+    0x04: "URL",
+    0x06: "END_MARKER",
+    0x07: "PROTO_VER",
+}
+
+COMP_NAMES = {
+    0x00: "none", 0x01: "speed_1", 0x02: "rpm_1", 0x03: "gear_1",
+    0x04: "boost_1", 0x05: "fuel_pct_1", 0x06: "fuel_l_1", 0x07: "water_c_1",
+    0x08: "oil_c_1", 0x09: "oil_kpa_1", 0x0A: "lap_time_ms", 0x0B: "lap_num_1",
+    0x0C: "position_1", 0x0D: "throttle_pct_1", 0x0E: "brake_pct_1",
+    0x0F: "clutch_pct_1", 0x10: "steer_deg_1", 0x11: "tc_level_1",
+    0x12: "abs_level_1", 0x13: "bb_pct_1", 0x14: "ers_pct_1", 0x15: "ers_mode_1",
+    0x16: "tyre_pressure_1", 0x17: "best_lap_ms", 0x18: "last_lap_ms",
+    0x19: "delta_ms", 0x1A: "drs_1", 0x1B: "pit_limiter_1", 0x1C: "flag_color_1",
+    0x1D: "brake_temp_1",
+}
+
+EMISSION_GAP_MS = 500
+
+
+# ---------------------------------------------------------------------------
+# Data structures
+# ---------------------------------------------------------------------------
+
+@dataclass
+class Channel:
+    idx: int
+    compression: int
+    bit_width: int
+    reserved: int = 0
+
+    def comp_name(self) -> str:
+        return COMP_NAMES.get(self.compression, f"0x{self.compression:02X}")
+
+    def summary(self) -> str:
+        return f"idx={self.idx}/comp=0x{self.compression:02X}/bw={self.bit_width}"
+
+    def __eq__(self, other):
+        if not isinstance(other, Channel):
+            return False
+        return (self.idx == other.idx and
+                self.compression == other.compression and
+                self.bit_width == other.bit_width)
+
+
+@dataclass
+class Tier:
+    flag: int
+    channels: list[Channel] = field(default_factory=list)
+
+    def summary(self) -> str:
+        return f"0x{self.flag:02X}:{len(self.channels)}ch"
+
+    def __eq__(self, other):
+        if not isinstance(other, Tier):
+            return False
+        return self.flag == other.flag and self.channels == other.channels
+
+
+@dataclass
+class Section:
+    enables: list[int] = field(default_factory=list)
+    tiers: list[Tier] = field(default_factory=list)
+    end_value: Optional[int] = None
+
+    def summary(self) -> str:
+        parts = []
+        if self.enables:
+            parts.append("ENABLE " + ",".join(f"0x{e:02X}" for e in self.enables))
+        tier_strs = [t.summary() for t in self.tiers]
+        parts.append(f"{len(self.tiers)} TIER ({', '.join(tier_strs)})")
+        if self.end_value is not None:
+            parts.append(f"END={self.end_value}")
+        return " + ".join(parts)
+
+
+@dataclass
+class Preamble:
+    proto_version: Optional[int] = None
+    proto_extra: Optional[int] = None
+    has_flag_base: bool = False
+
+    def summary(self) -> str:
+        parts = []
+        if self.proto_version is not None:
+            parts.append(f"PROTO_VER={self.proto_version}")
+        if self.has_flag_base:
+            parts.append("FLAG_BASE")
+        return "PREAMBLE(" + ", ".join(parts) + ")" if parts else "(no preamble)"
+
+
+@dataclass
+class Emission:
+    index: int
+    preamble: Optional[Preamble] = None
+    sections: list[Section] = field(default_factory=list)
+    first_t: float = 0.0
+    last_t: float = 0.0
+
+    def flag_range(self) -> str:
+        flags = []
+        for s in self.sections:
+            for t in s.tiers:
+                flags.append(t.flag)
+        if not flags:
+            return "none"
+        return f"0x{min(flags):02X}..0x{max(flags):02X}"
+
+    def summary(self) -> str:
+        parts = []
+        if self.preamble:
+            parts.append("PREAMBLE")
+        total_tiers = sum(len(s.tiers) for s in self.sections)
+        all_tier_summaries = []
+        for s in self.sections:
+            all_tier_summaries.extend(t.summary() for t in s.tiers)
+        parts.append(f"{total_tiers} TIER ({', '.join(all_tier_summaries)})")
+        ends = [s.end_value for s in self.sections if s.end_value is not None]
+        if ends:
+            parts.append(f"END={ends[-1]}")
+        return " + ".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# TLV parsing
+# ---------------------------------------------------------------------------
+
+def parse_tlv_records(data: bytes) -> list[dict]:
+    """Parse TLV records from reassembled tier-def bytes."""
+    records = []
+    pos = 0
+    while pos + 5 <= len(data):
+        tag = data[pos]
+        size = struct.unpack_from('<I', data, pos + 1)[0]
+        if pos + 5 + size > len(data):
+            break
+        value = data[pos + 5:pos + 5 + size]
+        rec = {'tag': tag, 'size': size, 'offset': pos, 'value': value}
+
+        if tag == 0x07 and size >= 4:
+            rec['proto_version'] = struct.unpack_from('<I', value, 0)[0]
+            if size >= 8:
+                rec['proto_extra'] = struct.unpack_from('<I', value, 4)[0]
+        elif tag == 0x00 and size == 1:
+            rec['enable_flag'] = value[0]
+        elif tag == 0x01 and size >= 1:
+            rec['tier_flag'] = value[0]
+            n_channels = (size - 1) // 16
+            channels = []
+            for ci in range(n_channels):
+                off = 1 + ci * 16
+                channels.append(Channel(
+                    idx=struct.unpack_from('<I', value, off)[0],
+                    compression=struct.unpack_from('<I', value, off + 4)[0],
+                    bit_width=struct.unpack_from('<I', value, off + 8)[0],
+                    reserved=struct.unpack_from('<I', value, off + 12)[0],
+                ))
+            rec['channels'] = channels
+        elif tag == 0x06 and size == 4:
+            rec['end_marker'] = struct.unpack_from('<I', value, 0)[0]
+
+        records.append(rec)
+        pos += 5 + size
+    return records
+
+
+# ---------------------------------------------------------------------------
+# Canonical stream extraction
+# ---------------------------------------------------------------------------
+
+def extract_canonical_stream(frames: list[Frame], session: int) -> list[tuple[float, int, bytes]]:
+    """Extract deduplicated (time, seq, payload) tuples for h2b data chunks
+    on the given session, ordered by seq."""
+    seen = {}  # seq -> bytes
+    result = []
+    for f in frames:
+        if f.dir != 'h2b' or f.session != session or f.stype != 0x01:
+            continue
+        payload = f.raw[10:-5] if len(f.raw) > 15 else f.raw[10:]
+        key = (f.seq, payload)
+        if f.seq in seen and seen[f.seq] == payload:
+            continue  # retransmit duplicate
+        seen[f.seq] = payload
+        result.append((f.t, f.seq, payload))
+    result.sort(key=lambda x: x[1])
+    # Deduplicate by seq (keep first occurrence)
+    deduped = {}
+    for t, seq, payload in result:
+        if seq not in deduped:
+            deduped[seq] = (t, seq, payload)
+    return sorted(deduped.values(), key=lambda x: x[1])
+
+
+def group_into_emissions(chunks: list[tuple[float, int, bytes]]) -> list[list[tuple[float, int, bytes]]]:
+    """Group consecutive new seqs into emissions by time gap (500ms)."""
+    if not chunks:
+        return []
+    emissions = []
+    current = [chunks[0]]
+    for i in range(1, len(chunks)):
+        gap_ms = (chunks[i][0] - chunks[i - 1][0]) * 1000
+        if gap_ms > EMISSION_GAP_MS:
+            emissions.append(current)
+            current = [chunks[i]]
+        else:
+            current.append(chunks[i])
+    emissions.append(current)
+    return emissions
+
+
+def emission_to_bytes(chunks: list[tuple[float, int, bytes]]) -> bytes:
+    """Concatenate payloads from an emission into a single byte stream."""
+    return b''.join(p for _, _, p in chunks)
+
+
+# ---------------------------------------------------------------------------
+# Section parsing from TLV records
+# ---------------------------------------------------------------------------
+
+def records_to_emission(records: list[dict], emission_idx: int) -> Emission:
+    """Parse a list of TLV records into a structured Emission."""
+    emission = Emission(index=emission_idx)
+
+    # Extract preamble (PROTO_VER, FLAG_BASE) from the start
+    rec_idx = 0
+    preamble = None
+    while rec_idx < len(records):
+        tag = records[rec_idx]['tag']
+        if tag == 0x07:
+            if preamble is None:
+                preamble = Preamble()
+            preamble.proto_version = records[rec_idx].get('proto_version')
+            preamble.proto_extra = records[rec_idx].get('proto_extra')
+            rec_idx += 1
+        elif tag == 0x03:
+            if preamble is None:
+                preamble = Preamble()
+            preamble.has_flag_base = True
+            rec_idx += 1
+        else:
+            break
+    emission.preamble = preamble
+
+    # Parse sections: each section = ENABLE* + TIER+ + END_MARKER
+    current_section = Section()
+    in_section = False
+
+    while rec_idx < len(records):
+        tag = records[rec_idx]['tag']
+        if tag == 0x00:  # ENABLE
+            if in_section and current_section.tiers:
+                # We hit an ENABLE after TIERs without END - flush section
+                emission.sections.append(current_section)
+                current_section = Section()
+            current_section.enables.append(records[rec_idx]['enable_flag'])
+            in_section = True
+        elif tag == 0x01:  # TIER
+            tier = Tier(flag=records[rec_idx]['tier_flag'],
+                        channels=records[rec_idx].get('channels', []))
+            current_section.tiers.append(tier)
+            in_section = True
+        elif tag == 0x06:  # END_MARKER
+            current_section.end_value = records[rec_idx].get('end_marker')
+            emission.sections.append(current_section)
+            current_section = Section()
+            in_section = False
+        else:
+            # Unknown tag inside section - skip
+            pass
+        rec_idx += 1
+
+    # Flush trailing section if present (no END_MARKER)
+    if in_section and (current_section.enables or current_section.tiers):
+        emission.sections.append(current_section)
+
+    return emission
+
+
+# ---------------------------------------------------------------------------
+# Comparison logic
+# ---------------------------------------------------------------------------
+
+@dataclass
+class Divergence:
+    emission: str  # e.g. "E0", "E1", "overall"
+    detail: str
+
+    def __str__(self):
+        return f"[{self.emission}] {self.detail}"
+
+
+def compare_channels(a_channels: list[Channel], b_channels: list[Channel],
+                     ctx: str) -> list[Divergence]:
+    divs = []
+    if len(a_channels) != len(b_channels):
+        divs.append(Divergence(ctx, f"channel count: A={len(a_channels)}, B={len(b_channels)}"))
+    n = min(len(a_channels), len(b_channels))
+    for i in range(n):
+        ca, cb = a_channels[i], b_channels[i]
+        diffs = []
+        if ca.idx != cb.idx:
+            diffs.append(f"idx A={ca.idx} B={cb.idx}")
+        if ca.compression != cb.compression:
+            diffs.append(f"comp A=0x{ca.compression:02X}({ca.comp_name()}) B=0x{cb.compression:02X}({cb.comp_name()})")
+        if ca.bit_width != cb.bit_width:
+            diffs.append(f"bw A={ca.bit_width} B={cb.bit_width}")
+        if diffs:
+            divs.append(Divergence(ctx, f"channel[{i}]: {', '.join(diffs)}"))
+    return divs
+
+
+def compare_tiers(a_tiers: list[Tier], b_tiers: list[Tier],
+                  ctx: str) -> list[Divergence]:
+    divs = []
+    if len(a_tiers) != len(b_tiers):
+        divs.append(Divergence(ctx, f"tier count: A={len(a_tiers)}, B={len(b_tiers)}"))
+    n = min(len(a_tiers), len(b_tiers))
+    for i in range(n):
+        ta, tb = a_tiers[i], b_tiers[i]
+        tier_ctx = f"{ctx}.TIER[{i}]"
+        if ta.flag != tb.flag:
+            divs.append(Divergence(tier_ctx, f"flag: A=0x{ta.flag:02X}, B=0x{tb.flag:02X}"))
+        if len(ta.channels) != len(tb.channels):
+            divs.append(Divergence(tier_ctx, f"channel count: A={len(ta.channels)}, B={len(tb.channels)}"))
+        divs.extend(compare_channels(ta.channels, tb.channels, tier_ctx))
+    return divs
+
+
+def compare_sections(a_sections: list[Section], b_sections: list[Section],
+                     ctx: str) -> list[Divergence]:
+    divs = []
+    if len(a_sections) != len(b_sections):
+        divs.append(Divergence(ctx, f"section count: A={len(a_sections)}, B={len(b_sections)}"))
+    n = min(len(a_sections), len(b_sections))
+    for i in range(n):
+        sa, sb = a_sections[i], b_sections[i]
+        sec_ctx = f"{ctx}.S{i}"
+        # Compare ENABLEs
+        if sa.enables != sb.enables:
+            divs.append(Divergence(sec_ctx,
+                f"ENABLE flags: A=[{','.join(f'0x{e:02X}' for e in sa.enables)}] "
+                f"B=[{','.join(f'0x{e:02X}' for e in sb.enables)}]"))
+        # Compare TIERs
+        divs.extend(compare_tiers(sa.tiers, sb.tiers, sec_ctx))
+        # Compare END
+        if sa.end_value != sb.end_value:
+            divs.append(Divergence(sec_ctx,
+                f"END_MARKER: A={sa.end_value}, B={sb.end_value}"))
+    return divs
+
+
+def compare_emissions(a_em: Emission, b_em: Emission) -> list[Divergence]:
+    divs = []
+    ctx = f"E{a_em.index}"
+
+    # Preamble
+    a_has = a_em.preamble is not None
+    b_has = b_em.preamble is not None
+    if a_has != b_has:
+        divs.append(Divergence(ctx, f"preamble: A={'present' if a_has else 'absent'}, B={'present' if b_has else 'absent'}"))
+    elif a_has and b_has:
+        ap, bp = a_em.preamble, b_em.preamble
+        if ap.proto_version != bp.proto_version:
+            divs.append(Divergence(ctx, f"preamble PROTO_VER: A={ap.proto_version}, B={bp.proto_version}"))
+        if ap.has_flag_base != bp.has_flag_base:
+            divs.append(Divergence(ctx, f"preamble FLAG_BASE: A={ap.has_flag_base}, B={bp.has_flag_base}"))
+
+    # Sections
+    divs.extend(compare_sections(a_em.sections, b_em.sections, ctx))
+
+    return divs
+
+
+# ---------------------------------------------------------------------------
+# Processing pipeline
+# ---------------------------------------------------------------------------
+
+def process_trace(path: Path, session: int) -> tuple[list[Emission], list[list[tuple[float, int, bytes]]]]:
+    """Load trace, extract canonical stream, group into emissions, parse each."""
+    frames = load_trace(path)
+    chunks = extract_canonical_stream(frames, session)
+    raw_emissions = group_into_emissions(chunks)
+    emissions = []
+    for i, em_chunks in enumerate(raw_emissions):
+        data = emission_to_bytes(em_chunks)
+        records = parse_tlv_records(data)
+        emission = records_to_emission(records, i)
+        emission.first_t = em_chunks[0][0]
+        emission.last_t = em_chunks[-1][0]
+        emissions.append(emission)
+    return emissions, raw_emissions
+
+
+# ---------------------------------------------------------------------------
+# Reporting
+# ---------------------------------------------------------------------------
+
+def report_full(path_a: Path, path_b: Path,
+                a_emissions: list[Emission], b_emissions: list[Emission],
+                a_raw: list[list[tuple[float, int, bytes]]],
+                b_raw: list[list[tuple[float, int, bytes]]]):
+    """Produce the full comparison report."""
+    # Header
+    a_flags = set()
+    b_flags = set()
+    for em in a_emissions:
+        for s in em.sections:
+            for t in s.tiers:
+                a_flags.add(t.flag)
+    for em in b_emissions:
+        for s in em.sections:
+            for t in s.tiers:
+                b_flags.add(t.flag)
+    a_flag_range = f"0x{min(a_flags):02X}..0x{max(a_flags):02X}" if a_flags else "none"
+    b_flag_range = f"0x{min(b_flags):02X}..0x{max(b_flags):02X}" if b_flags else "none"
+
+    print("Comparing:")
+    print(f"  A: {path_a.name} ({len(a_emissions)} emissions, flags {a_flag_range})")
+    print(f"  B: {path_b.name} ({len(b_emissions)} emissions, flags {b_flag_range})")
+    print()
+
+    all_divergences = []
+    n_max = max(len(a_emissions), len(b_emissions))
+    total_channel_comparisons = 0
+    matching_channel_comparisons = 0
+
+    for i in range(n_max):
+        a_em = a_emissions[i] if i < len(a_emissions) else None
+        b_em = b_emissions[i] if i < len(b_emissions) else None
+
+        label = f"E{i}"
+        if i == 0 and a_em and a_em.preamble:
+            label = f"E{i} [warmup]"
+
+        print(f"{label}:")
+
+        if a_em is None:
+            print(f"  A: (no E{i})")
+            print(f"  B: {b_em.summary()}")
+            all_divergences.append(Divergence(f"E{i}", f"A missing emission E{i}"))
+            print(f"  DIVERGENCE: A has no E{i}")
+            print()
+            continue
+        if b_em is None:
+            print(f"  A: {a_em.summary()}")
+            print(f"  B: (no E{i})")
+            all_divergences.append(Divergence(f"E{i}", f"B missing emission E{i}"))
+            print(f"  DIVERGENCE: B has no E{i}")
+            print()
+            continue
+
+        print(f"  A: {a_em.summary()}")
+        print(f"  B: {b_em.summary()}")
+
+        divs = compare_emissions(a_em, b_em)
+        if divs:
+            for d in divs:
+                print(f"  DIVERGENCE: {d.detail}")
+            all_divergences.extend(divs)
+        else:
+            print(f"  OK (identical structure)")
+
+        # Channel-level detail for each comparable tier pair
+        a_all_tiers = []
+        b_all_tiers = []
+        for s in a_em.sections:
+            a_all_tiers.extend(s.tiers)
+        for s in b_em.sections:
+            b_all_tiers.extend(s.tiers)
+
+        n_tiers = min(len(a_all_tiers), len(b_all_tiers))
+        for ti in range(n_tiers):
+            ta = a_all_tiers[ti]
+            tb = b_all_tiers[ti]
+            total_channel_comparisons += 1
+            a_ch_str = ", ".join(c.summary() for c in ta.channels)
+            b_ch_str = ", ".join(c.summary() for c in tb.channels)
+            if ta == tb:
+                matching_channel_comparisons += 1
+                print(f"\n  Channel diff (TIER 0x{ta.flag:02X} vs 0x{tb.flag:02X}):")
+                print(f"    A: {a_ch_str}")
+                print(f"    B: {b_ch_str}")
+                print(f"    OK (identical)")
+            else:
+                print(f"\n  Channel diff (TIER 0x{ta.flag:02X} vs 0x{tb.flag:02X}):")
+                print(f"    A: {a_ch_str}")
+                print(f"    B: {b_ch_str}")
+                print(f"    DIVERGENT")
+
+        print()
+
+    # Summary
+    print("Summary:")
+    print(f"  Structural divergences: {len(all_divergences)}")
+    if all_divergences:
+        for d in all_divergences:
+            print(f"  - {d}")
+    if total_channel_comparisons > 0:
+        pct = matching_channel_comparisons / total_channel_comparisons * 100
+        print(f"  Channel-level matches: {pct:.0f}% ({matching_channel_comparisons}/{total_channel_comparisons} where comparable)")
+    else:
+        print("  Channel-level matches: N/A (no comparable tiers)")
+
+
+def report_brief(path_a: Path, path_b: Path,
+                 a_emissions: list[Emission], b_emissions: list[Emission]):
+    """Produce one-line-per-divergence summary."""
+    print(f"A={path_a.name}  B={path_b.name}")
+
+    all_divergences = []
+    n_max = max(len(a_emissions), len(b_emissions))
+
+    if len(a_emissions) != len(b_emissions):
+        all_divergences.append(Divergence("overall",
+            f"emission count: A={len(a_emissions)}, B={len(b_emissions)}"))
+
+    for i in range(n_max):
+        a_em = a_emissions[i] if i < len(a_emissions) else None
+        b_em = b_emissions[i] if i < len(b_emissions) else None
+        if a_em is None:
+            all_divergences.append(Divergence(f"E{i}", "A missing"))
+            continue
+        if b_em is None:
+            all_divergences.append(Divergence(f"E{i}", "B missing"))
+            continue
+        divs = compare_emissions(a_em, b_em)
+        all_divergences.extend(divs)
+
+    if all_divergences:
+        for d in all_divergences:
+            print(str(d))
+        print(f"Total: {len(all_divergences)} divergence(s)")
+    else:
+        print("No divergences")
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Compare tier-def TLV streams from two MOZA wire traces")
+    parser.add_argument("trace_a", help="First trace (path, partial name, or 'latest')")
+    parser.add_argument("trace_b", help="Second trace (path, partial name, or 'latest')")
+    parser.add_argument("--session", "-s", type=lambda x: int(x, 0), default=0x01,
+                        help="Session number to compare (default 0x01)")
+    parser.add_argument("--brief", action="store_true",
+                        help="One-line-per-divergence summary")
+    args = parser.parse_args()
+
+    path_a = resolve_trace(args.trace_a)
+    path_b = resolve_trace(args.trace_b)
+
+    a_emissions, a_raw = process_trace(path_a, args.session)
+    b_emissions, b_raw = process_trace(path_b, args.session)
+
+    if args.brief:
+        report_brief(path_a, path_b, a_emissions, b_emissions)
+    else:
+        report_full(path_a, path_b, a_emissions, b_emissions, a_raw, b_raw)
+
+
+if __name__ == "__main__":
+    main()

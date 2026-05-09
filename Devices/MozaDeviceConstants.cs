@@ -62,6 +62,7 @@ namespace MozaPlugin.Devices
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
         private static bool _registryInitialized;
+        private static readonly object _registryLock = new object();
         private static string? _registryPath;
 
         /// <summary>
@@ -72,25 +73,28 @@ namespace MozaPlugin.Devices
         /// </summary>
         public static void InitializeRegistry()
         {
-            if (_registryInitialized) return;
-            _registryInitialized = true;
-
-            _registryPath = Path.Combine(
-                AppDomain.CurrentDomain.BaseDirectory,
-                "DevicesDefinitions", "User", "moza-wheel-guids.json");
-
-            // 1. Load persistent registry (may contain unknown-model GUIDs from prior runs)
-            LoadRegistryFile();
-
-            // 2. Register backward-compat GUIDs (overwrite any stale file entries)
-            foreach (var kvp in BackwardCompatGuids)
-                Register(kvp.Key, kvp.Value);
-
-            // 3. Register UUID v5 GUIDs for known models that don't have backward-compat GUIDs
-            foreach (var (prefix, _, _) in WheelModelInfo.KnownModels)
+            lock (_registryLock)
             {
-                if (!PrefixToGuid.ContainsKey(prefix))
-                    Register(prefix, GenerateUuidV5(prefix));
+                if (_registryInitialized) return;
+                _registryInitialized = true;
+
+                _registryPath = Path.Combine(
+                    AppDomain.CurrentDomain.BaseDirectory,
+                    "DevicesDefinitions", "User", "moza-wheel-guids.json");
+
+                // 1. Load persistent registry (may contain unknown-model GUIDs from prior runs)
+                LoadRegistryFile();
+
+                // 2. Register backward-compat GUIDs (overwrite any stale file entries)
+                foreach (var kvp in BackwardCompatGuids)
+                    Register(kvp.Key, kvp.Value);
+
+                // 3. Register UUID v5 GUIDs for known models that don't have backward-compat GUIDs
+                foreach (var (prefix, _, _) in WheelModelInfo.KnownModels)
+                {
+                    if (!PrefixToGuid.ContainsKey(prefix))
+                        Register(prefix, GenerateUuidV5(prefix));
+                }
             }
         }
 
@@ -101,14 +105,17 @@ namespace MozaPlugin.Devices
         /// </summary>
         public static string ResolveWheelGuid(string modelPrefix)
         {
-            if (PrefixToGuid.TryGetValue(modelPrefix, out var existing))
-                return existing;
+            lock (_registryLock)
+            {
+                if (PrefixToGuid.TryGetValue(modelPrefix, out var existing))
+                    return existing;
 
-            // New model — generate and persist
-            var guid = GenerateUuidV5(modelPrefix);
-            Register(modelPrefix, guid);
-            SaveRegistryFile();
-            return guid;
+                // New model — generate and persist
+                var guid = GenerateUuidV5(modelPrefix);
+                Register(modelPrefix, guid);
+                SaveRegistryFile();
+                return guid;
+            }
         }
 
         /// <summary>

@@ -21,23 +21,22 @@ namespace MozaPlugin.Devices
         public int WheelButtonsIdleEffect { get; set; } = -1;
 
         // Brightness (new wheels 0-100, ES wheels 0-15)
-        public int WheelRpmBrightness { get; set; } = 100;
-        public int WheelButtonsBrightness { get; set; } = 100;
-        public int WheelFlagsBrightness { get; set; } = 100;
-        public int WheelESRpmBrightness { get; set; } = 15;
+        public int WheelRpmBrightness { get; set; } = -1;
+        public int WheelButtonsBrightness { get; set; } = -1;
+        public int WheelFlagsBrightness { get; set; } = -1;
+        public int WheelESRpmBrightness { get; set; } = -1;
 
         // ES/Old wheel
         public int WheelRpmIndicatorMode { get; set; } = -1;
         public int WheelRpmDisplayMode { get; set; } = -1;
 
         // Dashboard telemetry (per-wheel-profile).
-        // NOTE: TelemetryEnabled intentionally NOT persisted here — the enable
-        // toggle is a global plugin setting on MozaPluginSettings. Persisting it
-        // per-wheel-profile caused the checkbox to always restore to the last
-        // captured value on startup, ignoring the user's runtime unchecks.
+        // NOTE: TelemetryEnabled / TelemetryProfileName / TelemetryMzdashPath
+        // intentionally NOT persisted here — they are global plugin settings on
+        // MozaPluginSettings. Persisting them per-wheel-profile caused stale
+        // extension JSON to clobber the freshly-loaded global value on startup
+        // (e.g. user picks a .mzdash file, restart, path resets to empty).
         public bool TelemetrySettingsPresent { get; set; } = false;
-        public string TelemetryProfileName { get; set; } = "";
-        public string TelemetryMzdashPath { get; set; } = "";
 
         // Color arrays (packed as R<<16 | G<<8 | B)
         public int[]? WheelRpmColors { get; set; }
@@ -49,6 +48,10 @@ namespace MozaPlugin.Devices
         public int[]? WheelESRpmColors { get; set; }
         public int[]? WheelKnobBackgroundColors { get; set; }
         public int[]? WheelKnobPrimaryColors { get; set; }
+
+        // Group 3 per-LED ring colors (packed R<<16|G<<8|B per LED, up to 56)
+        public int[]? WheelKnobRingColors { get; set; }
+        public int WheelKnobRingBrightness { get; set; } = -1;
 
         /// <summary>
         /// Capture current wheel state from the plugin.
@@ -69,8 +72,6 @@ namespace MozaPlugin.Devices
             WheelRpmDisplayMode = settings.WheelRpmDisplayMode;
 
             TelemetrySettingsPresent = true;
-            TelemetryProfileName = settings.TelemetryProfileName;
-            TelemetryMzdashPath = settings.TelemetryMzdashPath;
 
             WheelRpmColors = MozaProfile.PackColors(data.WheelRpmColors);
             WheelRpmBlinkColors = MozaProfile.PackColors(data.WheelRpmBlinkColors);
@@ -81,6 +82,8 @@ namespace MozaPlugin.Devices
             WheelESRpmColors = MozaProfile.PackColors(data.WheelESRpmColors);
             WheelKnobBackgroundColors = MozaProfile.PackColors(data.WheelKnobBackgroundColors);
             WheelKnobPrimaryColors = MozaProfile.PackColors(data.WheelKnobPrimaryColors);
+            WheelKnobRingColors = MozaProfile.PackColors(data.KnobRingColors);
+            WheelKnobRingBrightness = data.KnobRingBrightness;
         }
 
         /// <summary>
@@ -129,14 +132,6 @@ namespace MozaPlugin.Devices
                 if (WheelRpmDisplayMode    >= 0) settings.WheelRpmDisplayMode    = WheelRpmDisplayMode;
             }
 
-            // Telemetry profile name/path stay global (user picks one dashboard
-            // per game regardless of which wheel instance is saving).
-            if (TelemetrySettingsPresent)
-            {
-                settings.TelemetryProfileName = TelemetryProfileName;
-                settings.TelemetryMzdashPath = TelemetryMzdashPath;
-            }
-
             MozaProfile.UnpackColorsInto(WheelRpmColors, data.WheelRpmColors);
             MozaProfile.UnpackColorsInto(WheelRpmBlinkColors, data.WheelRpmBlinkColors);
             MozaProfile.UnpackColorsInto(WheelButtonColors, data.WheelButtonColors);
@@ -155,6 +150,8 @@ namespace MozaPlugin.Devices
             MozaProfile.UnpackColorsInto(WheelESRpmColors, data.WheelESRpmColors);
             MozaProfile.UnpackColorsInto(WheelKnobBackgroundColors, data.WheelKnobBackgroundColors);
             MozaProfile.UnpackColorsInto(WheelKnobPrimaryColors, data.WheelKnobPrimaryColors);
+            MozaProfile.UnpackColorsInto(WheelKnobRingColors, data.KnobRingColors);
+            if (WheelKnobRingBrightness >= 0) data.KnobRingBrightness = WheelKnobRingBrightness;
 
             // Knob colours are wheel-model-scoped (only W17/W18 expose them) and the
             // wire is write-only, so the plugin-level persisted slot needs the same
@@ -165,11 +162,15 @@ namespace MozaPlugin.Devices
                 var slot = settings.GetOrCreateSlot(extModel);
                 slot.WheelKnobBackgroundColors = WheelKnobBackgroundColors;
                 slot.WheelKnobPrimaryColors    = WheelKnobPrimaryColors;
+                slot.WheelKnobRingColors       = WheelKnobRingColors;
+                slot.WheelKnobRingBrightness   = WheelKnobRingBrightness;
             }
             if (writeFlat)
             {
                 settings.WheelKnobBackgroundColors = WheelKnobBackgroundColors;
                 settings.WheelKnobPrimaryColors    = WheelKnobPrimaryColors;
+                settings.WheelKnobRingColors       = WheelKnobRingColors;
+                settings.WheelKnobRingBrightness   = WheelKnobRingBrightness;
             }
         }
     }

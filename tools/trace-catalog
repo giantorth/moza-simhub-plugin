@@ -1,0 +1,180 @@
+#!/usr/bin/env python3
+"""Decode wheel catalog announcements (tag=0x04) from b2h session data.
+
+Scans b2h session data for tag=0x04 URL records, matching the
+WheelCatalogParser's logic. Also shows other TLV tags and FF records
+to understand the full wheel response.
+
+Usage:
+    tools/trace-catalog [TRACE]
+    tools/trace-catalog 20260506-114354
+"""
+import argparse
+import struct
+import sys
+from collections import defaultdict
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from moza_trace import load_trace, resolve_trace, Frame
+
+
+def strip_crc(payload: bytes) -> bytes:
+    """Strip 4-byte CRC32 trailer if it matches the preceding payload."""
+    if len(payload) < 5:
+        return payload
+    wire_crc = struct.unpack_from('<I', payload, len(payload) - 4)[0]
+    # zlib crc32
+    import zlib
+    actual = zlib.crc32(payload[:-4]) & 0xFFFFFFFF
+    if actual == wire_crc:
+        return payload[:-4]
+    return payload
+
+
+def extract_b2h_payloads(frames: list[Frame]) -> dict[int, list[tuple[float, int, bytes]]]:
+    """Extract b2h data chunk payloads by session, CRC-stripped."""
+    by_session: dict[int, list[tuple[float, int, bytes]]] = defaultdict(list)
+    for f in frames:
+        if f.dir != 'b2h' or f.session < 0 or f.stype != 0x01:
+            continue
+        payload = strip_crc(f.raw[8:])
+        by_session[f.session].append((f.t, f.seq, payload))
+    return by_session
+
+
+def reassemble(chunks: list[tuple[float, int, bytes]]) -> bytes:
+    """Reassemble payloads in seq order."""
+    chunks.sort(key=lambda x: x[1])
+    return b''.join(p for _, _, p in chunks)
+
+
+def scan_records(data: bytes) -> list[dict]:
+    """Scan reassembled data for TLV records and FF records."""
+    records = []
+    i = 0
+    while i < len(data):
+        # FF record: [0xFF][size:u32LE][crc:u32LE][kind:u32LE][value...]
+        if data[i] == 0xFF and i + 13 <= len(data):
+            size = struct.unpack_from('<I', data, i + 1)[0]
+            if 4 <= size <= 100000 and i + 1 + 4 + 4 + size <= len(data):
+                kind = struct.unpack_from('<I', data, i + 9)[0]
+                value_len = size - 4
+                records.append({
+                    'type': 'FF',
+                    'offset': i,
+                    'kind': kind,
+                    'value_len': value_len,
+                })
+                i += 1 + 4 + 4 + size
+                continue
+
+        # TLV record: [tag:u8][size:u32LE][value...]
+        if i + 5 <= len(data):
+            tag = data[i]
+            tlv_size = struct.unpack_from('<I', data, i + 1)[0]
+            if tlv_size < 500 and i + 5 + tlv_size <= len(data):
+                value = data[i + 5:i + 5 + tlv_size]
+                rec = {
+                    'type': 'TLV',
+                    'offset': i,
+                    'tag': tag,
+                    'size': tlv_size,
+                }
+
+                if tag == 0x04 and tlv_size >= 1:
+                    idx = value[0]
+                    url_bytes = value[1:]
+                    try:
+                        url = url_bytes.decode('ascii')
+                        if all(0x20 <= b < 0x7F for b in url_bytes):
+                            rec['idx'] = idx
+                            rec['url'] = url
+                    except:
+                        rec['idx'] = idx
+                        rec['url_hex'] = url_bytes.hex()
+
+                elif tag == 0x03:
+                    rec['name'] = 'FLAG_BASE'
+                elif tag == 0x06 and tlv_size == 4:
+                    rec['name'] = 'END_MARKER'
+                    rec['value'] = struct.unpack_from('<I', value, 0)[0]
+                elif tag == 0x07 and tlv_size >= 4:
+                    rec['name'] = 'PROTO_VER'
+                    rec['value'] = struct.unpack_from('<I', value, 0)[0]
+                elif tag == 0x01:
+                    rec['name'] = 'TIER'
+                elif tag == 0x00 and tlv_size == 1:
+                    rec['name'] = 'ENABLE'
+                    rec['flag'] = value[0]
+
+                records.append(rec)
+                i += 5 + tlv_size
+                continue
+
+        i += 1
+    return records
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Decode wheel catalog from b2h data")
+    parser.add_argument("trace", nargs="?", default="latest")
+    parser.add_argument("--session", "-s", type=lambda x: int(x, 0), default=None)
+    args = parser.parse_args()
+
+    path = resolve_trace(args.trace)
+    frames = load_trace(path)
+    print(f"Trace: {path.name}  ({len(frames)} frames)")
+
+    by_session = extract_b2h_payloads(frames)
+
+    sessions = [args.session] if args.session is not None else sorted(by_session.keys())
+
+    catalog_urls: dict[int, str] = {}
+
+    for sid in sessions:
+        if sid not in by_session:
+            continue
+        chunks = by_session[sid]
+        data = reassemble(chunks)
+        print(f"\n{'='*60}")
+        print(f"b2h sess=0x{sid:02X}: {len(chunks)} data chunks, {len(data)} bytes reassembled")
+
+        records = scan_records(data)
+        url_count = 0
+        for rec in records:
+            if rec['type'] == 'FF':
+                print(f"  [{rec['offset']:4d}] FF  kind={rec['kind']:<4d} value_len={rec['value_len']}")
+            elif rec['type'] == 'TLV':
+                tag = rec['tag']
+                if tag == 0x04 and 'url' in rec:
+                    url_count += 1
+                    idx = rec['idx']
+                    url = rec['url']
+                    catalog_urls[idx] = url
+                    print(f"  [{rec['offset']:4d}] URL idx={idx:3d}  {url}")
+                elif tag == 0x04 and 'idx' in rec:
+                    # backref or invalid
+                    print(f"  [{rec['offset']:4d}] URL idx={rec['idx']:3d}  (backref/empty, size={rec['size']})")
+                elif 'name' in rec:
+                    name = rec['name']
+                    extra = ""
+                    if 'value' in rec:
+                        extra = f"  value={rec['value']}"
+                    elif 'flag' in rec:
+                        extra = f"  flag=0x{rec['flag']:02X}"
+                    print(f"  [{rec['offset']:4d}] {name:<12s} size={rec['size']}{extra}")
+                else:
+                    print(f"  [{rec['offset']:4d}] tag=0x{tag:02X}  size={rec['size']}")
+
+        print(f"\n  → {url_count} URL records found in this session")
+
+    if catalog_urls:
+        print(f"\n{'='*60}")
+        print(f"Combined catalog ({len(catalog_urls)} entries):")
+        for idx in sorted(catalog_urls.keys()):
+            print(f"  idx={idx:3d}  {catalog_urls[idx]}")
+
+
+if __name__ == "__main__":
+    main()

@@ -809,44 +809,69 @@
 
                         <TextBlock Text="Wheel LED Output (RPM / Buttons)" Style="{StaticResource SectionHeader}"/>
                         <TextBlock TextWrapping="Wrap" Foreground="Gray" FontSize="11" Margin="0,0,0,8"
-                                   Text="Recommended: leave all three options below OFF unless you hit LED issues. These are legacy defensive toggles from before the protocol was reverse-engineered; current firmware does not require them."/>
+                                   Text="Recommended: leave LED options below OFF unless you experience LED issues."/>
                         <StackPanel Orientation="Horizontal" Margin="0,8">
                             <TextBlock Text="Limit updates to wheel" Style="{StaticResource SliderLabel}"/>
                             <CheckBox x:Name="LimitWheelUpdatesCheck" VerticalAlignment="Center"
                                       Checked="LimitWheelUpdatesCheck_Changed" Unchecked="LimitWheelUpdatesCheck_Changed"/>
                         </StackPanel>
-                        <TextBlock Text="Only send LED data when it actually changes. Disable if your wheel stops responding to LED effects."
-                                   Foreground="Gray" FontSize="11" Margin="0,4,0,0" TextWrapping="Wrap"/>
-                        <StackPanel Orientation="Horizontal" Margin="0,8">
-                            <TextBlock Text="Periodic LED keepalive" Style="{StaticResource SliderLabel}"/>
-                            <CheckBox x:Name="WheelKeepaliveCheck" VerticalAlignment="Center"
-                                      Checked="WheelKeepaliveCheck_Changed" Unchecked="WheelKeepaliveCheck_Changed"/>
-                        </StackPanel>
-                        <TextBlock Text="Resend LED state every second. Some ES wheels need this to stay in telemetry mode. Disable if you see flickering."
+                        <TextBlock Text="Only send LED data when it actually changes."
                                    Foreground="Gray" FontSize="11" Margin="0,4,0,0" TextWrapping="Wrap"/>
                         <StackPanel Orientation="Horizontal" Margin="0,8">
                             <TextBlock Text="Always resend bitmask" Style="{StaticResource SliderLabel}"/>
                             <CheckBox x:Name="AlwaysResendBitmaskCheck" VerticalAlignment="Center"
                                       Checked="AlwaysResendBitmaskCheck_Changed" Unchecked="AlwaysResendBitmaskCheck_Changed"/>
                         </StackPanel>
-                        <TextBlock Text="Always send the LED bitmask with color updates, even if unchanged. Enable if your wheel ignores color changes when the same LEDs stay lit."
+                        <TextBlock Text="Always send the LED bitmask with color updates, even if unchanged. Causes extra traffic so do not use unless required."
+                                   Foreground="Gray" FontSize="11" Margin="0,4,0,0" TextWrapping="Wrap"/>
+
+                        <TextBlock Text="AB9 Shifter" Style="{StaticResource SectionHeader}"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,8">
+                            <TextBlock Text="Enable AB9 shifter detection" Style="{StaticResource SliderLabel}"/>
+                            <CheckBox x:Name="EnableAb9Check" VerticalAlignment="Center"
+                                      Checked="EnableAb9Check_Changed" Unchecked="EnableAb9Check_Changed"/>
+                        </StackPanel>
+                        <TextBlock Text="Enable only if you have an AB9 shifter."
                                    Foreground="Gray" FontSize="11" Margin="0,4,0,0" TextWrapping="Wrap"/>
 
                         <TextBlock Text="Dashboard Telemetry" Style="{StaticResource SectionHeader}"/>
-                        <CheckBox x:Name="UploadDashboardCheck" Content="Upload dashboard on connect"
-                                  Margin="0,8,0,4" Checked="UploadDashboard_Changed" Unchecked="UploadDashboard_Changed"/>
-                        <TextBlock TextWrapping="Wrap" Foreground="Gray" FontSize="11" Margin="0,0,0,8"
-                                   Text="Attempt to upload selected mzdash file.  Experimental."/>
+                        <!-- Hidden: dashboard upload/download UI is collapsed while the feature is in
+                             development. Runtime values are forced off in MozaPlugin (Init cache wiring
+                             and ApplyTelemetrySettings); underlying settings, handlers, and the
+                             upload/download scaffolding are intentionally preserved. Un-collapse this
+                             StackPanel and revert the forced-false consumption sites to re-enable. -->
+                        <StackPanel Visibility="Collapsed">
+                            <CheckBox x:Name="UploadDashboardCheck" Content="Upload dashboard on connect"
+                                      Margin="0,8,0,4" Checked="UploadDashboard_Changed" Unchecked="UploadDashboard_Changed"/>
+                            <TextBlock TextWrapping="Wrap" Foreground="Gray" FontSize="11" Margin="0,0,0,8"
+                                       Text="Attempt to upload selected mzdash file.  Experimental."/>
+                            <CheckBox x:Name="DownloadDashboardCheck" Content="Download dashboards from wheel"
+                                      Margin="0,8,0,4" Checked="DownloadDashboard_Changed" Unchecked="DownloadDashboard_Changed"/>
+                            <TextBlock TextWrapping="Wrap" Foreground="Gray" FontSize="11" Margin="0,0,0,8"
+                                       Text="Download dashboard files stored on the wheel.  Experimental."/>
+                        </StackPanel>
                         <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
-                            <TextBlock Text="Protocol version:" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                            <ComboBox x:Name="ProtocolVersionCombo" Width="320"
-                                      SelectionChanged="ProtocolVersion_Changed">
-                                <ComboBoxItem Content="0 — URL subscription (CSP-style)"/>
-                                <ComboBoxItem Content="2 — Compact numeric (VGS-style)"/>
+                            <TextBlock Text="Wheel firmware era:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                            <ComboBox x:Name="FirmwareEraCombo" Width="500"
+                                      SelectionChanged="FirmwareEra_Changed">
+                                <ComboBoxItem Content="Auto — Attempt to detect from wheel handshake"/>
+                                <ComboBoxItem Content="2024 era — (URL subscription)"/>
+                                <ComboBoxItem Content="2025 era — VGS"/>
+                                <ComboBoxItem Content="2026 era — CSP/KSP"/>
                             </ComboBox>
                         </StackPanel>
                         <TextBlock TextWrapping="Wrap" Foreground="Gray" FontSize="11" Margin="0,2,0,8"
-                                   Text="Tier definition format. Version 2 (default) is single-batch compact numeric; 0 sends URLs for the wheel to resolve. Telemetry restarts automatically on change."/>
+                                   Text="Auto detects the wheel's firmware era from its handshake (catalog push and identity) and picks the matching wire protocol. Override only if telemetry stays broken — pick the era that matches your wheel hardware. Telemetry restarts automatically on change."/>
+
+                        <!-- Hidden for now: v2 telemetry pipeline not ready for general use
+                        <CheckBox x:Name="UseNewTelemetryPipelineCheck"
+                                  Content="Use greenfield Telemetry2 pipeline (experimental)"
+                                  Margin="0,8,0,4"
+                                  Checked="UseNewTelemetryPipeline_Changed"
+                                  Unchecked="UseNewTelemetryPipeline_Changed"/>
+                        <TextBlock TextWrapping="Wrap" Foreground="Gray" FontSize="11" Margin="0,0,0,8"
+                                   Text="Switch to the new layered telemetry pipeline (Telemetry2). Restart SimHub or toggle telemetry off/on to apply. Disable if you hit issues; the old pipeline stays the default until live verification clears."/>
+                        -->
 
                         <TextBlock Text="Reset" Style="{StaticResource SectionHeader}"/>
                         <StackPanel Orientation="Horizontal" Margin="0,8">
@@ -892,7 +917,7 @@
                                    Foreground="Gray" FontSize="11" Text="—"/>
                     </StackPanel>
                     <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" Foreground="Gray" FontSize="11" Margin="0,0,0,8"
-                               Text="Dashboards the wheel reports via session 0x09 configJson state. Select a row and click Delete to issue a `completelyRemove` RPC on session 0x0a. List refreshes after every upload + on connect."/>
+                               Text="Dashboards the wheel reports via session 0x09 configJson state. Delete is temporarily disabled — the `completelyRemove` RPC currently wedges firmware until the wheelbase is power-cycled. List refreshes after every upload + on connect."/>
                     <DataGrid x:Name="WheelFilesGrid" AutoGenerateColumns="False" IsReadOnly="True"
                               CanUserAddRows="False" CanUserDeleteRows="False" CanUserResizeRows="False"
                               SelectionMode="Single" HeadersVisibility="Column" GridLinesVisibility="Horizontal"
@@ -908,7 +933,9 @@
                                     <DataTemplate>
                                         <Button Content="Delete" Padding="6,1"
                                                 Click="WheelFilesDelete_Click"
-                                                Tag="{Binding}"/>
+                                                Tag="{Binding}"
+                                                IsEnabled="False"
+                                                ToolTip="Disabled — completelyRemove RPC currently wedges wheel firmware until the wheelbase is power-cycled."/>
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
@@ -995,6 +1022,25 @@
                         <!-- Session / connection -->
                         <TextBlock Text="Session state" FontWeight="SemiBold" Margin="0,0,0,6"/>
                         <TextBlock x:Name="DiagSessionBox" FontFamily="Consolas" FontSize="11"
+                                   TextWrapping="Wrap" Text="—" Margin="0,0,0,10"/>
+
+                        <Separator Margin="0,4,0,8"/>
+
+                        <TextBlock Text="Wheel channel catalog" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                        <TextBlock x:Name="DiagWheelCatalogBox" FontFamily="Consolas" FontSize="11"
+                                   TextWrapping="Wrap" Text="—" Margin="0,0,0,10"/>
+
+                        <Separator Margin="0,4,0,8"/>
+
+                        <TextBlock Text="Last subscription sent" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                        <TextBlock x:Name="DiagSubscriptionBox" FontFamily="Consolas" FontSize="11"
+                                   TextWrapping="Wrap" Text="—" Margin="0,0,0,10"/>
+
+                        <Separator Margin="0,4,0,8"/>
+
+                        <TextBlock Text="Wheel response on session 0x02 (5s window after subscription)"
+                                   FontWeight="SemiBold" Margin="0,0,0,6"/>
+                        <TextBlock x:Name="DiagSubscriptionResponseBox" FontFamily="Consolas" FontSize="11"
                                    TextWrapping="Wrap" Text="—" Margin="0,0,0,10"/>
 
                         <Button Content="Copy all to clipboard" Padding="6,2"

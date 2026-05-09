@@ -1,7 +1,7 @@
 namespace MozaPlugin.Protocol
 {
     /// <summary>
-    /// Constants from the MOZA Racing serial protocol (docs/serial.md).
+    /// Constants from the MOZA Racing serial protocol (docs/protocol/, device tables in docs/protocol/devices/).
     /// </summary>
     public static class MozaProtocol
     {
@@ -51,26 +51,6 @@ namespace MozaPlugin.Protocol
         // Dashboard telemetry (pithouse-re.md § 4)
         public const byte TelemetrySendGroup = 0x43;  // Group for telemetry data frames
         public const byte TelemetryModeGroup = 0x40;  // Group for telemetry mode config (28:02)
-
-        public static byte CalculateChecksum(byte[] data)
-        {
-            int sum = MagicValue;
-            for (int i = 0; i < data.Length; i++)
-                sum += data[i];
-            return (byte)(sum % 256);
-        }
-
-        /// <summary>
-        /// Calculate checksum over the first <paramref name="length"/> bytes of <paramref name="data"/>.
-        /// Useful for patching the checksum in a pre-allocated frame buffer.
-        /// </summary>
-        public static byte CalculateChecksum(byte[] data, int length)
-        {
-            int sum = MagicValue;
-            for (int i = 0; i < length; i++)
-                sum += data[i];
-            return (byte)(sum % 256);
-        }
 
         /// <summary>
         /// Wire-level checksum over a decoded frame. Per doc § 54, each `0x7E`
@@ -164,12 +144,11 @@ namespace MozaPlugin.Protocol
             new byte[] { 0x3F, 0x17, 0x1c, 0x00 }, // page config
             new byte[] { 0x3F, 0x17, 0x1d, 0x00 },
             new byte[] { 0x3F, 0x17, 0x1d, 0x01 },
-            new byte[] { 0x3F, 0x17, 0x27, 0x00 }, // LED display config page 0 (RPM)
-            new byte[] { 0x3F, 0x17, 0x27, 0x01 }, // knob 1 bg/primary
-            new byte[] { 0x3F, 0x17, 0x27, 0x02 }, // knob 2 bg/primary
-            new byte[] { 0x3F, 0x17, 0x27, 0x03 }, // knob 3 bg/primary
-            new byte[] { 0x3F, 0x17, 0x27, 0x04 }, // knob 4 bg/primary (CS Pro / KS Pro)
-            new byte[] { 0x3F, 0x17, 0x27, 0x05 }, // knob 5 bg/primary (KS Pro)
+            new byte[] { 0x3F, 0x17, 0x27, 0x00 }, // knob 1 bg/primary
+            new byte[] { 0x3F, 0x17, 0x27, 0x01 }, // knob 2 bg/primary
+            new byte[] { 0x3F, 0x17, 0x27, 0x02 }, // knob 3 bg/primary
+            new byte[] { 0x3F, 0x17, 0x27, 0x03 }, // knob 4 bg/primary (CS Pro / KS Pro)
+            new byte[] { 0x3F, 0x17, 0x27, 0x04 }, // knob 5 bg/primary (KS Pro)
             new byte[] { 0x3F, 0x17, 0x2a, 0x00 },
             new byte[] { 0x3F, 0x17, 0x2a, 0x01 },
             new byte[] { 0x3F, 0x17, 0x2a, 0x02 },
@@ -180,6 +159,8 @@ namespace MozaPlugin.Protocol
             new byte[] { 0x3F, 0x17, 0x1a, 0x00 }, // RPM LED telemetry write
             new byte[] { 0x3F, 0x17, 0x19, 0x00 }, // RPM LED color write
             new byte[] { 0x3F, 0x17, 0x19, 0x01 }, // button LED color write
+            new byte[] { 0x3F, 0x17, 0x1a, 0x03 }, // knob bitmask telemetry write
+            new byte[] { 0x3F, 0x17, 0x19, 0x03 }, // knob LED color write
             new byte[] { 0x3E, 0x17, 0x0b },       // newer-wheel LED cmd (1-byte prefix)
         };
 

@@ -26,25 +26,47 @@ namespace MozaPlugin
         private MozaData _data = null!;
         private MozaDeviceManager _deviceManager = null!;
         private MozaAb9DeviceManager _ab9Manager = null!;
+        internal global::MozaPlugin.Protocol.PendingResponseTracker PendingResponses { get; }
+            = new global::MozaPlugin.Protocol.PendingResponseTracker();
         private MozaPluginSettings _settings = null!;
         private Timer _pollTimer = null!;
+        private Timer _retryTimer = null!;
         private Timer _reconnectTimer = null!;
         private int _connectingFlag;
         private MozaHidReader _hidReader = null!;
         private PluginManager _pluginManager = null!;
-        private TelemetrySender _telemetrySender = null!;
-        internal DashboardProfileStore DashProfileStore { get; } = new DashboardProfileStore();
+        private TelemetrySender? _telemetrySender;
+        // Greenfield Telemetry2 pipeline. Constructed in Init() when
+        // _settings.UseNewTelemetryPipeline is true; otherwise null and the old
+        // _telemetrySender path runs. Both implement IMozaTelemetry; lifecycle
+        // dispatch goes through the _activeTelemetry accessor below.
+        private global::MozaPlugin.Telemetry2.MozaTelemetryHost? _telemetryHost;
+        private global::MozaPlugin.Telemetry2.IMozaTelemetry? _activeTelemetry =>
+            (global::MozaPlugin.Telemetry2.IMozaTelemetry?)_telemetryHost ?? _telemetrySender;
 
-        // Device detection state
-        private bool _baseDetected;
-        private bool _dashDetected;
-        private bool _newWheelDetected;
-        private bool _oldWheelDetected;
-        private bool _handbrakeDetected;
-        private bool _pedalsDetected;
-        private bool _hubDetected;
-        private bool _ab9Detected;
-        private bool _ab9SettingsApplied;
+        // V2-side auto-test instance (pipeline-agnostic harness driven via IMozaTelemetry).
+        // The old pipeline owns its own _autoTest field on TelemetrySender; v2 carries it
+        // here because MozaTelemetryHost has no pollable internal-loop equivalent — the
+        // tick fires from MozaPlugin.DataUpdate.
+        private global::MozaPlugin.Telemetry.DashboardSwitchAutoTest? _hostAutoTest;
+        private long _hostAutoTestLastTickUtc;
+        internal DashboardProfileStore DashProfileStore { get; } = new DashboardProfileStore();
+        internal DashboardCache DashCache { get; private set; } = null!;
+
+        // Device detection state. Written from serial-reader thread
+        // (OnMessageReceived → DetectDevices) and read from the poll timer,
+        // UI thread, and TelemetrySender.StartTelemetryIfReady — without
+        // volatile, readers can stay stuck on stale `false` after detect
+        // and never start telemetry / refresh UI.
+        private volatile bool _baseDetected;
+        private volatile bool _dashDetected;
+        private volatile bool _newWheelDetected;
+        private volatile bool _oldWheelDetected;
+        private volatile bool _handbrakeDetected;
+        private volatile bool _pedalsDetected;
+        private volatile bool _hubDetected;
+        private volatile bool _ab9Detected;
+        private volatile bool _ab9SettingsApplied;
 
         // Guard against concurrent/duplicate telemetry Start() dispatch
         private int _telemetryStartRequested;
@@ -192,6 +214,7 @@ namespace MozaPlugin
         // serial-message thread (which sets bits as group probes respond) and
         // any reader (UI, device extensions, poll timer).
         private int _wheelLedGroupMask;
+        private volatile bool _group3ColorsRead;
         internal bool IsWheelLedGroupPresent(int group)
         {
             if (group < 2 || group > 4) return false;
@@ -279,9 +302,14 @@ namespace MozaPlugin
         /// answered — independent of whether <see cref="TelemetrySender"/> has started.
         /// The dashboard-telemetry UI section is gated on this flag, so detection must
         /// happen BEFORE the user can pick a profile (otherwise the section stays hidden
-        /// and there's no way to opt in to telemetry).</summary>
+        /// and there's no way to opt in to telemetry).
+        /// Some wheels (e.g. W17) populate display HW/SW/MCU identity fields but return
+        /// an empty model-name string — accept any populated identity field as detection.</summary>
         internal bool IsDisplayDetected =>
             !string.IsNullOrEmpty(_data?.DisplayModelName)
+            || !string.IsNullOrEmpty(_data?.DisplayHwVersion)
+            || !string.IsNullOrEmpty(_data?.DisplaySwVersion)
+            || (_data?.DisplayMcuUid?.Length ?? 0) > 0
             || (_telemetrySender?.DisplayDetected ?? false);
 
         /// <summary>Display sub-device model name (e.g. "W18 Display"), or empty.</summary>
@@ -293,9 +321,25 @@ namespace MozaPlugin
 
         public void Init(PluginManager pluginManager)
         {
+            // Defensive: if Init() is called twice without End() (host reload path
+            // or upgrade-in-place), tear down any live resources from the prior
+            // init before re-creating them. CleanupPartialInit is idempotent and
+            // tolerates already-disposed objects, so calling it on a fully-set-up
+            // plugin is safe — the next allocations below replace the now-disposed
+            // references with fresh instances.
+            if (_connection != null || _telemetrySender != null || _hidReader != null)
+            {
+                MozaLog.Warn("[Moza] Init() called with prior state still live — tearing down before re-init");
+                try { CleanupPartialInit(); } catch { }
+            }
+
             // Clear shutdown flag from any previous plugin instance in this process.
             // SimHub may load+unload plugins without restarting, leaving this true.
             IsShuttingDown = false;
+            Interlocked.Exchange(ref _telemetryStartRequested, 0);
+            // Reset detection flags so a plugin reload doesn't carry over stale
+            // "device detected" state from the prior session.
+            ResetDetectionFlags();
             _pluginManager = pluginManager;
 
             try
@@ -314,6 +358,27 @@ namespace MozaPlugin
 
                 MozaLog.Info("[Moza] Initializing plugin");
 
+                // Bridge-format JSONL wire trace at SimHub/Logs/moza-wire-*.jsonl.
+                // Off by default; opt-in via _settings.EnableWireTraceFileSink for
+                // PitHouse-vs-plugin diff work (see sim/diff_captures.py). Each
+                // launch opens a fresh file when enabled.
+                if (_settings.EnableWireTraceFileSink)
+                {
+                    try
+                    {
+                        string ts = DateTime.Now.ToString("yyyyMMdd-HHmmss");
+                        string baseDir = AppDomain.CurrentDomain.BaseDirectory ?? ".";
+                        string logsDir = System.IO.Path.Combine(baseDir, "Logs");
+                        string sinkPath = System.IO.Path.Combine(logsDir, $"moza-wire-{ts}.jsonl");
+                        global::MozaPlugin.Diagnostics.SerialTrafficCapture.Instance.StartFileSink(sinkPath);
+                        MozaLog.Debug($"[Moza] Wire trace sink → {sinkPath}");
+                    }
+                    catch (Exception ex)
+                    {
+                        MozaLog.Warn($"[Moza] Wire trace sink open failed: {ex.GetType().Name}: {ex.Message}");
+                    }
+                }
+
                 // Consume one-shot "start capture on next launch" arm flag. Done before
                 // any device connect / probe traffic so the capture covers the full
                 // connect handshake. Flag is cleared and persisted immediately so a
@@ -323,7 +388,7 @@ namespace MozaPlugin
                     _settings.StartCaptureOnNextLaunch = false;
                     try { this.SaveCommonSettings("MozaPluginSettings", _settings); } catch { }
                     global::MozaPlugin.Diagnostics.SerialTrafficCapture.Instance.Start();
-                    MozaLog.Info("[Moza] Serial traffic capture armed from previous session — capturing now");
+                    MozaLog.Debug("[Moza] Serial traffic capture armed from previous session — capturing now");
                 }
 
                 MozaDeviceConstants.InitializeRegistry();
@@ -331,7 +396,7 @@ namespace MozaPlugin
                 // Read SimHub's global temperature unit preference (set at first launch)
                 var tempUnit = pluginManager.GetPropertyValue("DataCorePlugin.GameData.TemperatureUnit");
                 _data.UseFahrenheit = string.Equals(tempUnit as string, "Fahrenheit", StringComparison.OrdinalIgnoreCase);
-                MozaLog.Info($"[Moza] Temperature unit: {(_data.UseFahrenheit ? "Fahrenheit" : "Celsius")}");
+                MozaLog.Debug($"[Moza] Temperature unit: {(_data.UseFahrenheit ? "Fahrenheit" : "Celsius")}");
 
                 // Initialize the native profile system (detects current game, selects profile)
                 InitProfileSystem();
@@ -344,24 +409,48 @@ namespace MozaPlugin
                 // wheelbase code path can grab the AB9 port and stall on probes.
                 // Probe-based discovery (PID = null, Wine/Proton) still works.
                 _connection = new MozaSerialConnection(pid => !MozaUsbIds.IsAb9Pid(pid));
+                if (!string.IsNullOrEmpty(_settings.LastWheelbasePort))
+                    _connection.LastPortName = _settings.LastWheelbasePort;
                 _connection.MessageReceived += OnMessageReceived;
+                _connection.Disconnected += OnSerialDisconnected;
 
                 _deviceManager = new MozaDeviceManager(_connection);
 
                 _ab9Manager = new MozaAb9DeviceManager();
+                if (!string.IsNullOrEmpty(_settings.LastAb9Port))
+                    _ab9Manager.Connection.LastPortName = _settings.LastAb9Port;
                 _ab9Manager.MessageReceived += OnAb9MessageReceived;
 
-                _pollTimer = new Timer(2000);
+                // 5 s poll interval. Was 2 s, but the diagnostic reads it issues
+                // (base-state, mcu/mosfet/motor temp via 0x2B/0x13 cmd 1/4/5/6 +
+                // hub/dash/handbrake/pedal probes) generated ~6 frames/s of plugin-
+                // only wire noise vs PitHouse. Slowing to 5 s halves the impact
+                // while keeping hot-swap and temperature UI responsive enough.
+                _pollTimer = new Timer(5000);
                 _pollTimer.Elapsed += PollStatus;
                 _pollTimer.AutoReset = true;
                 _pollTimer.Start();
 
+                // 250ms < shortest ReadRetryBackoffMs (200) so a dropped probe
+                // gets retried within ~one backoff window.
+                _retryTimer = new Timer(250);
+                _retryTimer.Elapsed += (s, e) =>
+                {
+                    if (IsShuttingDown) return;
+                    if (!_connection.IsConnected) return;
+                    try { PendingResponses.TickRetransmits(_connection.Send); }
+                    catch (Exception ex) { MozaLog.Warn($"[Moza] PendingResponseTracker tick failed: {ex.Message}"); }
+                };
+                _retryTimer.AutoReset = true;
+                _retryTimer.Start();
+
                 _reconnectTimer = new Timer(5000);
                 _reconnectTimer.Elapsed += (s, e) =>
                 {
+                    if (IsShuttingDown) return;
                     if (!_connection.IsConnected)
                         TryConnect();
-                    if (!_ab9Manager.IsConnected)
+                    if (_settings.EnableAb9 && !_ab9Manager.IsConnected)
                         TryConnectAb9();
                 };
                 _reconnectTimer.AutoReset = true;
@@ -371,7 +460,56 @@ namespace MozaPlugin
                 _hidReader = new MozaHidReader(_data);
                 _hidReader.Start();
 
-                _telemetrySender = new TelemetrySender(_connection);
+                if (_settings.UseNewTelemetryPipeline)
+                {
+                    Action<byte[]> send = _connection.Send;
+                    Action<int, byte[]> sendStream = (kind, frame) =>
+                        _connection.SendStream((global::MozaPlugin.Protocol.StreamKind)kind, frame);
+                    if (_settings.EnableWireTraceFileSink)
+                    {
+                        InitTelemetry2WireTrace();
+                        Action<byte[]> origSend = send;
+                        send = (frame) =>
+                        {
+                            origSend(frame);
+                            try { WriteTelemetry2WireTrace("h2b", frame); } catch { }
+                        };
+                        Action<int, byte[]> origStream = sendStream;
+                        sendStream = (kind, frame) =>
+                        {
+                            origStream(kind, frame);
+                            try { WriteTelemetry2WireTrace("h2b", frame); } catch { }
+                        };
+                    }
+                    _telemetryHost = new global::MozaPlugin.Telemetry2.MozaTelemetryHost(send: send, sendStream: sendStream);
+                    _telemetryHost.CatalogProfileBuilder = (catalog, name) =>
+                        DashProfileStore.BuildProfileFromCatalog(catalog, name);
+                    _connection.MessageReceived += OnInboundForHost;
+                    SimHub.Logging.Current.Info("[Moza] Telemetry pipeline: NEW (Telemetry2 greenfield)");
+                }
+                else
+                {
+                    _telemetrySender = new TelemetrySender(_connection);
+                }
+
+                // Initialize dashboard cache for download-on-connect.
+                string cacheDir = System.IO.Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "MozaSimHubPlugin", "DashboardCache");
+                DashCache = new DashboardCache(cacheDir, DashProfileStore);
+                DashCache.LoadFromDisk();
+                if (!string.IsNullOrEmpty(_settings.TelemetryMzdashFolder))
+                    DashCache.LoadFromFolder(_settings.TelemetryMzdashFolder);
+                if (_telemetrySender != null)
+                {
+                    _telemetrySender.DashCache = DashCache;
+                    // UI for dashboard upload/download is hidden in SettingsControl.xaml while the
+                    // feature is in development; force the download path off regardless of the
+                    // saved setting. Setting is preserved on disk so re-enabling the UI restores
+                    // the user's prior preference automatically.
+                    _telemetrySender.SetDownloadEnabled(false);
+                }
+
                 ApplyTelemetrySettings();
                 // Don't start telemetry here — defer until wheel is detected.
                 // The session open probe requires the wheel to be present and responsive.
@@ -397,13 +535,19 @@ namespace MozaPlugin
         private void CleanupPartialInit()
         {
             try { _pollTimer?.Stop(); } catch { }
+            try { _retryTimer?.Stop(); } catch { }
             try { _reconnectTimer?.Stop(); } catch { }
             try { _saveDebounceTimer?.Stop(); } catch { }
             try { _telemetrySender?.Stop(); } catch { }
+            try { _telemetryHost?.Stop(); } catch { }
             try
             {
                 if (_connection != null)
+                {
                     _connection.MessageReceived -= OnMessageReceived;
+                    _connection.MessageReceived -= OnInboundForHost;
+                    _connection.Disconnected -= OnSerialDisconnected;
+                }
             }
             catch { }
             try
@@ -415,8 +559,12 @@ namespace MozaPlugin
                 }
             }
             catch { }
+            try { _deviceManager?.Dispose(); } catch { }
             try { _hidReader?.Dispose(); } catch { }
             try { _telemetrySender?.Dispose(); } catch { }
+            CloseTelemetry2WireTrace();
+            try { global::MozaPlugin.Diagnostics.SerialTrafficCapture.Instance.StopFileSink(); } catch { }
+            try { global::MozaPlugin.Diagnostics.SerialTrafficCapture.Instance.Stop(); } catch { }
             try { _connection?.Dispose(); } catch { }
             try
             {
@@ -426,6 +574,7 @@ namespace MozaPlugin
             catch { }
             try { _ab9Manager?.Dispose(); } catch { }
             try { _pollTimer?.Dispose(); } catch { }
+            try { _retryTimer?.Dispose(); } catch { }
             try { _reconnectTimer?.Dispose(); } catch { }
             try { _saveDebounceTimer?.Dispose(); } catch { }
             _saveDebounceTimer = null;
@@ -434,7 +583,45 @@ namespace MozaPlugin
         public void DataUpdate(PluginManager pluginManager, ref GameData data)
         {
             if (IsShuttingDown) return;
-            _telemetrySender?.UpdateGameData(data.NewData);
+            _activeTelemetry?.UpdateGameData(data.NewData);
+            _activeTelemetry?.SetGameRunning(data.GameRunning);
+            // Drive the new pipeline's tick — pumps tier-def emissions, heartbeat cadence,
+            // and value-frame bursts. The old TelemetrySender uses its own internal timer
+            // and doesn't need a tick driver here.
+            _telemetryHost?.Tick(System.DateTime.UtcNow.Ticks);
+
+            // Drive the v2-side auto-test (if armed). Computes a real tick-ms delta from
+            // last invocation since DataUpdate cadence varies with game data rate.
+            if (_hostAutoTest != null)
+            {
+                long nowUtc = System.DateTime.UtcNow.Ticks;
+                int dtMs = _hostAutoTestLastTickUtc == 0
+                    ? 16
+                    : (int)((nowUtc - _hostAutoTestLastTickUtc) / System.TimeSpan.TicksPerMillisecond);
+                _hostAutoTestLastTickUtc = nowUtc;
+                if (dtMs > 0 && dtMs < 1000) _hostAutoTest.Tick(dtMs);
+            }
+        }
+
+        // Resolve a dashboard name to its parsed MultiStreamProfile without firing
+        // the ApplyTelemetrySettings full-stack reload (which sets Profile + Mzdash
+        // bytes synchronously, racing the renegotiate state machine when used to
+        // trigger a switch). Mirror of the resolution precedence in
+        // ApplyTelemetrySettings (cache → builtin), minus the mzdash-bytes loading.
+        // Used by DashboardSwitchAutoTest to atomically pass a profile through
+        // SwitchToProfile without touching telemetry.Profile beforehand.
+        internal MultiStreamProfile? ResolveDashboardProfileByName(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return null;
+            if (DashCache != null)
+            {
+                var p = DashCache.TryGetByName(name);
+                if (p != null) return p;
+            }
+            var builtins = DashProfileStore.BuiltinProfiles;
+            if (builtins.Count > 0)
+                return FindProfile(builtins, name);
+            return null;
         }
 
         public void End(PluginManager pluginManager)
@@ -445,7 +632,13 @@ namespace MozaPlugin
             // 1. Stop timers first so no new callbacks fire against disposed state.
             _saveDebounceTimer?.Stop();
             _pollTimer?.Stop();
+            _retryTimer?.Stop();
             _reconnectTimer?.Stop();
+
+            // Clear detection flags up-front. If SimHub re-uses this plugin instance
+            // across load/unload, the next Init() also clears them — together this
+            // makes detection state deterministic on a fresh start.
+            ResetDetectionFlags();
 
             // 2. Persist settings and clear LEDs while connection is still alive.
             try { this.SaveCommonSettings("MozaPluginSettings", _settings); } catch { }
@@ -456,7 +649,11 @@ namespace MozaPlugin
             try
             {
                 if (_connection != null)
+                {
                     _connection.MessageReceived -= OnMessageReceived;
+                    _connection.MessageReceived -= OnInboundForHost;
+                    _connection.Disconnected -= OnSerialDisconnected;
+                }
             }
             catch { }
             try
@@ -469,8 +666,20 @@ namespace MozaPlugin
 
             // 4. Stop telemetry send loop before tearing down connection.
             _telemetrySender?.Stop();
+            try { _telemetryHost?.Stop(); } catch { }
+            try { _telemetryHost?.Dispose(); } catch { }
+            CloseTelemetry2WireTrace();
 
-            // 5. Dispose I/O sources before dropping Instance so late callbacks
+            // Stop the wire-traffic capture singleton so its file handle is
+            // released and the ring stops accumulating across plugin reloads.
+            try { global::MozaPlugin.Diagnostics.SerialTrafficCapture.Instance.StopFileSink(); } catch { }
+            try { global::MozaPlugin.Diagnostics.SerialTrafficCapture.Instance.Stop(); } catch { }
+
+            // 5. Cancel paced setting-read tasks so they bail out of their
+            //    inter-read sleeps instead of running ~300 ms past teardown.
+            try { _deviceManager?.Dispose(); } catch { }
+
+            // 6. Dispose I/O sources before dropping Instance so late callbacks
             //    see a live (but shutting-down) instance, not null.
             _hidReader?.Dispose();
             _telemetrySender?.Dispose();
@@ -483,13 +692,14 @@ namespace MozaPlugin
             catch { }
             _ab9Manager?.Dispose();
 
-            // 6. Dispose timers after I/O is gone.
+            // 7. Dispose timers after I/O is gone.
             _saveDebounceTimer?.Dispose();
             _saveDebounceTimer = null;
             _pollTimer?.Dispose();
+            _retryTimer?.Dispose();
             _reconnectTimer?.Dispose();
 
-            // 7. Null Instance last so any straggler callback can still no-op via IsShuttingDown.
+            // 8. Null Instance last so any straggler callback can still no-op via IsShuttingDown.
             Instance = null;
         }
 
@@ -536,6 +746,8 @@ namespace MozaPlugin
 
         internal void ClearSettings()
         {
+            _telemetrySender?.Stop();
+            _telemetryHost?.Stop();
             _settings = new MozaPluginSettings();
             this.SaveCommonSettings("MozaPluginSettings", _settings);
             InitProfileSystem();
@@ -555,7 +767,8 @@ namespace MozaPlugin
             {
                 _reconnectTimer.Stop();
                 ClearLedsOnHardware();
-                _telemetrySender.Stop();
+                _telemetrySender?.Stop();
+                _telemetryHost?.Stop();
                 _connection?.Disconnect();
                 _data.IsBaseConnected = false;
                 _data.IsHubConnected = false;
@@ -572,13 +785,38 @@ namespace MozaPlugin
                 _ab9Detected = false;
                 _ab9SettingsApplied = false;
                 _ab9Manager?.Disconnect();
-                if (_telemetrySender != null) _telemetrySender.HubPresent = false;
+                if (_telemetrySender != null)
+                {
+                    _telemetrySender.DetectedDeviceMask = 0;
+                }
                 _deviceManager.ResetWheelDetection();
-                _telemetrySender.DetectedDeviceMask = 0;
                 Interlocked.Exchange(ref _telemetryStartRequested, 0);
                 _wheelPollMisses = 0;
                 _lastKnownWheelModel = "";
                 MozaLog.Info("[Moza] Connection disabled");
+            }
+        }
+
+        /// <summary>
+        /// Toggle AB9 shifter detection at runtime. When disabled, disconnect
+        /// any active AB9 connection and clear detection state so the device
+        /// extension UI hides cleanly. When re-enabled, the reconnect timer
+        /// (5 s cadence) picks it up automatically — no explicit start needed.
+        /// </summary>
+        internal void SetAb9Enabled(bool enabled)
+        {
+            _settings.EnableAb9 = enabled;
+            SaveSettings();
+            if (enabled)
+            {
+                MozaLog.Info("[Moza] AB9 detection enabled — next reconnect tick will probe");
+            }
+            else
+            {
+                _ab9Detected = false;
+                _ab9SettingsApplied = false;
+                try { _ab9Manager?.Disconnect(); } catch { }
+                MozaLog.Info("[Moza] AB9 detection disabled — disconnected");
             }
         }
 
@@ -613,7 +851,7 @@ namespace MozaPlugin
             this.AddAction("Moza.ClearLeds", (a, b) =>
             {
                 ClearLedsOnHardware();
-                MozaLog.Info("[Moza] LEDs cleared via action");
+                MozaLog.Debug("[Moza] LEDs cleared via action");
             });
         }
 
@@ -633,21 +871,231 @@ namespace MozaPlugin
 
         // ===== Telemetry =====
 
-        internal TelemetrySender TelemetrySender => _telemetrySender;
+        internal TelemetrySender? TelemetrySender => _telemetrySender;
+
+        // Pipeline-agnostic accessor for UI controls that need to call into the active
+        // telemetry implementation (e.g. SendDashboardSwitch from the wheel-settings combo).
+        // Returns whichever pipeline is currently instantiated; null if neither is up yet.
+        internal global::MozaPlugin.Telemetry2.IMozaTelemetry? ActiveTelemetry =>
+            (global::MozaPlugin.Telemetry2.IMozaTelemetry?)_telemetryHost ?? _telemetrySender;
+
+        // Surface configJson wheel state from whichever pipeline is active, so the
+        // Diagnostics tab populates regardless of UseNewTelemetryPipeline. Old pipeline:
+        // _telemetrySender.WheelState. New pipeline: _telemetryHost.LastWheelState
+        // (populated by ConfigJsonOp from b2h session 0x09 chunks).
+        internal WheelDashboardState? WheelStateForDiagnostics =>
+            _telemetrySender?.WheelState ?? _telemetryHost?.LastWheelState;
+
+        // Tile-server state (b2h session 0x03 parse) routed from whichever pipeline is active.
+        internal TileServerState? TileServerStateForDiagnostics =>
+            _telemetrySender?.TileServerState ?? _telemetryHost?.TileServerState;
+
+        // Wheel channel catalog (host side: collected by CatalogConsumer from tag=0x04 records).
+        internal System.Collections.Generic.IReadOnlyList<string>? WheelChannelCatalogForDiagnostics =>
+            _telemetrySender?.WheelChannelCatalog ?? _telemetryHost?.WheelChannelCatalog;
+
+        // Catalog-parser internals for the diag tab. Surfaces buffer/parse/CRC
+        // counters so we can tell at a glance why a missing catalog is missing.
+        // Old pipeline only — new pipeline uses CatalogConsumer with a different
+        // shape, which already surfaces its state via WheelChannelCatalog above.
+        internal (int BufferBytes, int LastParsedBufferBytes, int CrcRejects, int LastActivityMsAgo)
+            CatalogParserDiagnostics
+        {
+            get
+            {
+                var s = _telemetrySender;
+                if (s == null) return (0, 0, 0, -1);
+                int lastAct = s.CatalogLastActivityTickMs;
+                int ago = lastAct == 0 ? -1 : Environment.TickCount - lastAct;
+                return (s.CatalogBufferLength, s.CatalogLastParsedBufferLen,
+                        s.CatalogCrcRejects, ago);
+            }
+        }
+
+        // Per-session traffic counters (in/out chunk counts).
+        internal System.Collections.Generic.IReadOnlyDictionary<byte, (int In, int Out)>? SessionCountsForDiagnostics =>
+            (System.Collections.Generic.IReadOnlyDictionary<byte, (int In, int Out)>?)_telemetrySender?.SessionCounts
+            ?? _telemetryHost?.SessionCounts;
+
+        // Active telemetry running flag — true if either pipeline reports Enabled.
+        internal bool TelemetryEnabledForDiagnostics =>
+            (_telemetrySender?.Enabled ?? false) || (_telemetryHost?.Enabled ?? false);
+
+        // Frame-counter readout from active pipeline.
+        internal int FramesSentForDiagnostics =>
+            _telemetrySender?.FramesSent ?? _telemetryHost?.FramesSent ?? 0;
+
+        // Bandwidth + wire-error counters from the serial connection. Surfaced
+        // in the Diagnostics tab so the user can see when the link approaches
+        // saturation, and how many parse failures the read path is shedding.
+        internal global::MozaPlugin.Protocol.WriteBudget.Snapshot SerialBudgetForDiagnostics
+            => _connection?.CurrentBudget ?? default;
+        internal global::MozaPlugin.Protocol.MozaSerialConnection.WireErrorCounters SerialWireErrorsForDiagnostics
+            => _connection?.WireErrors ?? default;
+
+        // Subscription diagnostics for the "Subscription" section of the Diagnostics tab.
+        // Old pipeline returns its TelemetrySender.SubscriptionDiagnostics directly. New
+        // pipeline materialises an equivalent from MozaTelemetryHost.LastSubscriptionRaw +
+        // ActiveSubscription (channels). Reverse-resolves wheel-catalog idx → URL for the
+        // Channels list display.
+        internal TelemetrySender.SubscriptionDiagnostics? SubscriptionForDiagnostics
+        {
+            get
+            {
+                if (_telemetrySender != null) return _telemetrySender.LastSubscription;
+                if (_telemetryHost == null) return null;
+                var raw = _telemetryHost.LastSubscriptionRaw;
+                if (raw == null) return null;
+                var (bytes, capturedAt) = raw.Value;
+                // Find preamble end: first 14 bytes are preamble (PROTO_VER + FLAG_BASE)
+                // when present; otherwise the message starts straight in section ENABLEs.
+                int preambleLen = 0;
+                if (bytes.Length >= 14 && bytes[0] == 0x07 && bytes[5] == 0x02 && bytes[9] == 0x03)
+                    preambleLen = 14;
+                byte[] preamble = new byte[preambleLen];
+                if (preambleLen > 0) Array.Copy(bytes, 0, preamble, 0, preambleLen);
+                byte[] body = new byte[bytes.Length - preambleLen];
+                Array.Copy(bytes, preambleLen, body, 0, body.Length);
+
+                // Reverse catalog: idx → URL.
+                var catalog = _telemetryHost.WheelChannelCatalog;
+                string LookupUrl(uint idx)
+                {
+                    if (catalog == null || idx == 0 || idx > catalog.Count) return "";
+                    return catalog[(int)idx - 1] ?? "";
+                }
+
+                // Parse TIER records to extract channel list.
+                var channels = new System.Collections.Generic.List<(int Idx, string Url, uint Comp, uint Width)>();
+                int pos = preambleLen;
+                while (pos + 5 <= bytes.Length)
+                {
+                    byte tag = bytes[pos];
+                    uint size = (uint)(bytes[pos + 1] | (bytes[pos + 2] << 8) | (bytes[pos + 3] << 16) | (bytes[pos + 4] << 24));
+                    if (size > (uint)(bytes.Length - pos - 5)) break;
+                    if (tag == 0x01 && size >= 1) // TIER
+                    {
+                        int n = ((int)size - 1) / 16;
+                        for (int c = 0; c < n; c++)
+                        {
+                            int off = pos + 5 + 1 + c * 16;
+                            uint idx = (uint)(bytes[off] | (bytes[off + 1] << 8) | (bytes[off + 2] << 16) | (bytes[off + 3] << 24));
+                            uint comp = (uint)(bytes[off + 4] | (bytes[off + 5] << 8) | (bytes[off + 6] << 16) | (bytes[off + 7] << 24));
+                            uint bw = (uint)(bytes[off + 8] | (bytes[off + 9] << 8) | (bytes[off + 10] << 16) | (bytes[off + 11] << 24));
+                            channels.Add(((int)idx, LookupUrl(idx), comp, bw));
+                        }
+                    }
+                    pos += 5 + (int)size;
+                }
+
+                return new TelemetrySender.SubscriptionDiagnostics
+                {
+                    SessionByte = "0x01",
+                    Format = "v2-type02",
+                    PreambleBytes = preamble,
+                    BodyBytes = body,
+                    Channels = channels,
+                    CapturedAt = capturedAt,
+                };
+            }
+        }
+
+        // Inbound s02 chunks captured in 5s window after last subscription send.
+        internal System.Collections.Generic.IReadOnlyList<byte[]>? SubscriptionResponseForDiagnostics =>
+            _telemetrySender?.LastSubscriptionResponse ?? _telemetryHost?.LastSubscriptionResponse;
 
         /// <summary>Apply settings from MozaPluginSettings to the TelemetrySender.</summary>
         internal void ApplyTelemetrySettings()
         {
-            if (_telemetrySender == null) return;
+            if (_activeTelemetry == null) return;
             var s = _settings;
 
-            // Legacy v3 (dropped — crashed some wheels) migrates to v2.
-            if (s.TelemetryProtocolVersion != 0 && s.TelemetryProtocolVersion != 2)
-                s.TelemetryProtocolVersion = 2;
-            _telemetrySender.ProtocolVersion = s.TelemetryProtocolVersion;
-            _telemetrySender.UploadDashboard = s.TelemetryUploadDashboard;
+            // One-shot legacy migration drainers. Both run only when the
+            // current TelemetryWheelEra is still Auto (= no explicit pick) so
+            // a user who has already chosen an era doesn't get reset.
+            if (s.TelemetryWheelEra == MozaWheelEra.Auto)
+            {
+                // Old MozaFirmwareEra integer values, captured by the
+                // [JsonProperty("TelemetryFirmwareEra")] mapping on
+                // TelemetryFirmwareEraLegacy. -1 = sentinel (no legacy value).
+                if (s.TelemetryFirmwareEraLegacy >= 0)
+                {
+                    s.TelemetryWheelEra = s.TelemetryFirmwareEraLegacy switch
+                    {
+                        1 /* TierDefV2_Upload8B */ => MozaWheelEra.Era2025,
+                        2 /* TierDefV2_Upload6B */ => MozaWheelEra.Era2025,
+                        4 /* TierDefV0_Upload6B */ => MozaWheelEra.Era2024,
+                        5 /* TierDefV2_Type02   */ => MozaWheelEra.Era2026,
+                        _ /* 0 Auto or unknown  */ => MozaWheelEra.Auto,
+                    };
+                    s.TelemetryFirmwareEraLegacy = -1;
+                }
+                // Even older saved settings used the int property
+                // TelemetryProtocolVersion (0=URL, 2=compact). The plan
+                // corrects the prior 6B mapping so 0.8.0 VGS users land on
+                // Era2025 (working) instead of Era2026 (broken).
+                else if (s.TelemetryProtocolVersion != -1)
+                {
+                    s.TelemetryWheelEra = s.TelemetryProtocolVersion == 0
+                        ? MozaWheelEra.Era2024
+                        : MozaWheelEra.Era2025;
+                    s.TelemetryProtocolVersion = -1;
+                }
+            }
 
-            // Resolve the active multi-stream profile and raw mzdash content
+            // Build the per-era policy and hand it to the v1 telemetry sender.
+            // EraPolicy.For carries every wire-protocol axis (tier-def session,
+            // encoding, preamble policy, blind-retransmit, upload header,
+            // protocol version). Auto returns a provisional Era2026 policy
+            // with IsAuto=true; TelemetrySender.ResolveAutoPolicy at session
+            // start replaces it once the wheel reveals itself.
+            if (_telemetrySender != null)
+            {
+                _telemetrySender.Policy = EraPolicy.For(s.TelemetryWheelEra);
+                // UI for dashboard upload/download is hidden in SettingsControl.xaml while the
+                // feature is in development; force both off regardless of the saved settings.
+                // Saved values (s.TelemetryUploadDashboard / s.TelemetryDownloadDashboard) are
+                // preserved on disk so re-enabling the UI restores the user's prior preference.
+                _telemetrySender.UploadDashboard = false;
+                _telemetrySender.SetDownloadEnabled(false);
+                if (s.EnableAutoTestOnConnect)
+                    _telemetrySender.EnableAutoTest(this);
+            }
+
+            // V2-side auto-test wiring. Old pipeline owns its own auto-test on
+            // TelemetrySender; v2 lives here because the host has no internal pollable
+            // loop. Construct lazily on first ApplyTelemetrySettings, reset on
+            // subsequent calls so the harness re-arms after each settings reload.
+            if (_telemetryHost != null && s.EnableAutoTestOnConnect)
+            {
+                if (_hostAutoTest == null)
+                {
+                    _hostAutoTest = new global::MozaPlugin.Telemetry.DashboardSwitchAutoTest(
+                        _telemetryHost,
+                        ResolveDashboardProfileByName,
+                        () => DashCache,
+                        name => { _settings.TelemetryProfileName = name; });
+                    MozaLog.Info("[Moza] Telemetry2 host: auto-test armed");
+                }
+                else
+                {
+                    _hostAutoTest.Reset();
+                    MozaLog.Debug("[Moza] Telemetry2 host: auto-test re-armed");
+                }
+            }
+
+            // Resolve the active multi-stream profile and raw mzdash content.
+            //
+            // Precedence:
+            //   1. User picked a custom mzdash file (TelemetryMzdashPath set
+            //      and exists) → parse it, use its channel list + bytes.
+            //   2. User picked a dashboard by name → look up in DashboardCache
+            //      (populated from wheel download via session 0x0B), then fall
+            //      back to builtin embedded profiles.
+            //   3. Default → leave profile null. TelemetrySender's
+            //      MaybeSwapProfileForCatalog builds a synthetic
+            //      "WheelCatalog" profile from the wheel's session-0x02
+            //      catalog push.
             MultiStreamProfile? profile = null;
             byte[]? mzdashContent = null;
             string mzdashName = "";
@@ -658,40 +1106,63 @@ namespace MozaPlugin
                 mzdashContent = System.IO.File.ReadAllBytes(s.TelemetryMzdashPath);
                 mzdashName = System.IO.Path.GetFileNameWithoutExtension(s.TelemetryMzdashPath);
             }
-
-            if (profile == null)
+            else if (!string.IsNullOrEmpty(s.TelemetryProfileName))
             {
-                var builtins = DashProfileStore.BuiltinProfiles;
-                if (builtins.Count > 0)
+                // Try cache first (populated from wheel download or disk).
+                if (DashCache != null)
                 {
-                    if (!string.IsNullOrEmpty(s.TelemetryProfileName))
-                        profile = FindProfile(builtins, s.TelemetryProfileName);
-                    profile ??= builtins[0];
+                    profile = DashCache.TryGetByName(s.TelemetryProfileName);
+                    if (profile != null)
+                    {
+                        mzdashName = profile.Name;
+                        mzdashContent = DashCache.TryGetRawContent(s.TelemetryProfileName);
+                        MozaLog.Debug($"[Moza] ApplyTelemetrySettings: found '{s.TelemetryProfileName}' in cache as '{mzdashName}'");
+                    }
+                    else
+                    {
+                        MozaLog.Debug($"[Moza] ApplyTelemetrySettings: '{s.TelemetryProfileName}' NOT found in cache (folder={DashCache.FolderProfileCount} wheel={DashCache.WheelCacheCount})");
+                    }
                 }
 
-                // Load raw mzdash content from embedded resource for upload
-                if (profile != null && mzdashContent == null)
+                // Fall back to builtin embedded profiles when cache misses.
+                if (profile == null)
                 {
-                    mzdashName = profile.Name;
-                    string resourceName = $"MozaPlugin.Data.Dashes.{profile.Name.Replace(" ", "_")}.mzdash";
-                    var assembly = System.Reflection.Assembly.GetExecutingAssembly();
-                    using var stream = assembly.GetManifestResourceStream(resourceName);
-                    if (stream != null)
+                    var builtins = DashProfileStore.BuiltinProfiles;
+                    if (builtins.Count > 0)
                     {
-                        using var ms = new System.IO.MemoryStream();
-                        stream.CopyTo(ms);
-                        mzdashContent = ms.ToArray();
+                        profile = FindProfile(builtins, s.TelemetryProfileName);
+                        if (profile != null && mzdashContent == null)
+                        {
+                            mzdashName = profile.Name;
+                            string resourceName = $"MozaPlugin.Data.Dashes.{profile.Name.Replace(" ", "_")}.mzdash";
+                            var assembly = System.Reflection.Assembly.GetExecutingAssembly();
+                            using var stream = assembly.GetManifestResourceStream(resourceName);
+                            if (stream != null)
+                            {
+                                using var ms = new System.IO.MemoryStream();
+                                stream.CopyTo(ms);
+                                mzdashContent = ms.ToArray();
+                            }
+                        }
                     }
                 }
             }
+            // else: catalog-only mode — profile stays null, sender will
+            // synthesise from wheel-advertised channels post-preamble.
 
             // Apply user channel mappings for the selected dashboard (overrides
             // each channel's SimHubProperty string by URL). Must run before
             // assigning Profile so the frame builder binds resolvers correctly.
             if (profile != null)
             {
+                // Resolve the file path for GetDashboardKey — single-file override,
+                // folder library, or null (builtin).
+                string? keyPath = s.TelemetryMzdashPath;
+                if (string.IsNullOrEmpty(keyPath) && DashCache != null)
+                    keyPath = DashCache.TryGetFolderFilePath(profile.Name);
+
                 string dashboardKey = DashboardProfileStore.GetDashboardKey(
-                    s.TelemetryMzdashPath, profile);
+                    keyPath, profile);
                 if (s.TelemetryChannelMappings != null &&
                     s.TelemetryChannelMappings.TryGetValue(dashboardKey, out var overrides))
                 {
@@ -699,21 +1170,40 @@ namespace MozaPlugin
                 }
             }
 
-            _telemetrySender.PropertyResolver = ResolvePropertyAsDouble;
-            _telemetrySender.Profile = profile;
-            _telemetrySender.MzdashContent = mzdashContent;
-            _telemetrySender.MzdashName = mzdashName;
+            _activeTelemetry.PropertyResolver = ResolvePropertyAsDouble;
+            int tierCount = profile?.Tiers?.Count ?? 0;
+            int chCount = 0;
+            if (profile != null)
+                foreach (var t in profile.Tiers) chCount += t.Channels.Count;
+            MozaLog.Debug(
+                $"[Moza] ApplyTelemetrySettings: setting profile=" +
+                $"{profile?.Name ?? "null"} tiers={tierCount} channels={chCount} " +
+                $"mzdash={mzdashName} settingName={s.TelemetryProfileName}");
+            _activeTelemetry.Profile = profile;
+            _activeTelemetry.MzdashContent = mzdashContent;
+            _activeTelemetry.MzdashName = mzdashName;
 
-            // Advertise our built-in dashboard library to the wheel on session
-            // 0x09. Wheel echoes these names in its next configJson state blob
-            // (seen in usb-capture/latestcaps); PitHouse reads them for UI
-            // filtering. List matches the plugin's built-in profile set.
+
+
+            // Advertise dashboard library to the wheel on session 0x09.
+            // Wheel echoes names in its next configJson state blob.
+            // Use cached dashboard names (from wheel download) plus any
+            // builtin profiles, with cache winning on overlap.
             var libraryNames = new System.Collections.Generic.List<string>();
+            if (DashCache != null)
+            {
+                foreach (var name in DashCache.CachedNames)
+                    libraryNames.Add(name);
+            }
             foreach (var p in DashProfileStore.BuiltinProfiles)
-                libraryNames.Add(p.Name);
+            {
+                if (!libraryNames.Contains(p.Name))
+                    libraryNames.Add(p.Name);
+            }
             if (!string.IsNullOrEmpty(mzdashName) && !libraryNames.Contains(mzdashName))
                 libraryNames.Add(mzdashName);
-            _telemetrySender.CanonicalDashboardList = libraryNames;
+            if (_telemetrySender != null)
+                _telemetrySender.CanonicalDashboardList = libraryNames;
         }
 
         /// <summary>
@@ -753,10 +1243,12 @@ namespace MozaPlugin
         /// <summary>Stable identity key for the currently-loaded dashboard.</summary>
         internal string CurrentDashboardKey()
         {
-            var profile = _telemetrySender?.Profile;
+            var profile = _activeTelemetry?.Profile;
             if (profile == null) return "";
-            return DashboardProfileStore.GetDashboardKey(
-                _settings.TelemetryMzdashPath, profile);
+            string? keyPath = _settings.TelemetryMzdashPath;
+            if (string.IsNullOrEmpty(keyPath) && DashCache != null)
+                keyPath = DashCache.TryGetFolderFilePath(profile.Name);
+            return DashboardProfileStore.GetDashboardKey(keyPath, profile);
         }
 
         /// <summary>Set or clear a per-channel SimHub property override for the current dashboard.</summary>
@@ -803,12 +1295,76 @@ namespace MozaPlugin
         /// </summary>
         internal void RestartTelemetry()
         {
-            if (_telemetrySender == null) return;
-            _telemetrySender.Stop();
+            var t = _activeTelemetry;
+            if (t == null) return;
             Interlocked.Exchange(ref _telemetryStartRequested, 0);
             ApplyTelemetrySettings();
-            if (_settings.TelemetryEnabled)
-                StartTelemetryIfReady();
+            if (!_settings.TelemetryEnabled) return;
+            // Bypass StartTelemetryIfReady() — its FramesSent > 0 guard
+            // rejects restarts when the sender is already running.
+            // StartInner() calls Stop() as its first action, resetting all
+            // state (sessions, flag base, preamble) for a true cold-start.
+            if (Interlocked.CompareExchange(ref _telemetryStartRequested, 1, 0) != 0) return;
+            MozaLog.Info("[Moza] Restarting telemetry sender (full cold-start)");
+            ThreadPool.QueueUserWorkItem(_ => t.Start());
+        }
+
+        internal void OnActiveDashboardChanged()
+        {
+            var sender = _telemetrySender;
+            if (sender != null && sender.Enabled)
+            {
+                MozaLog.Debug("[Moza] OnActiveDashboardChanged: scheduling Stop+Start pipeline cycle");
+
+                // Same pattern as OnDashboardSwitched. Builtin-profile fallback
+                // path (user picked "(none)" or a non-Custom profile name with
+                // no wheel-state available) — re-stage settings and cycle the
+                // pipeline. Silence gate inside StartInner enforces the
+                // ~11s wheel sess=0x09 timeout wait automatically.
+                ApplyTelemetrySettings();
+                sender.RestartForSwitch();
+                return;
+            }
+
+            var host = _telemetryHost;
+            if (host != null && host.Enabled)
+            {
+                MozaLog.Debug("[Moza] OnActiveDashboardChanged (v2): applying telemetry settings");
+                ApplyTelemetrySettings();
+            }
+        }
+
+        internal void OnDashboardSwitched()
+        {
+            var sender = _telemetrySender;
+            if (sender != null && sender.Enabled)
+            {
+                MozaLog.Debug("[Moza] OnDashboardSwitched: scheduling Stop+Start pipeline cycle");
+
+                // Stage the new dashboard's profile + mzdash content INTO the
+                // sender first so the post-Start cold-start sequence builds
+                // tier-def from the right channels. ApplyTelemetrySettings
+                // sets Profile + MzdashContent + MzdashName as side effects.
+                ApplyTelemetrySettings();
+
+                // Cycle the pipeline. RestartForSwitch handles the kind=4 drain
+                // wait (so the UI knob's just-emitted FF kind=4 actually lands
+                // before Stop discards the queue), then Stop+Start. The
+                // ~10–14s wheel sess=0x09 timeout is enforced inside StartInner
+                // via _lastStopUtcTicks, so we don't need an explicit settle
+                // here — Start automatically waits the right amount before
+                // opening sessions. Don't re-send FF kind=4 here; the wheel-UI
+                // knob already did.
+                sender.RestartForSwitch();
+                return;
+            }
+
+            var host = _telemetryHost;
+            if (host != null && host.Enabled)
+            {
+                MozaLog.Debug("[Moza] OnDashboardSwitched (v2): applying telemetry settings");
+                ApplyTelemetrySettings();
+            }
         }
 
         internal void SetTelemetryEnabled(bool enabled)
@@ -823,6 +1379,7 @@ namespace MozaPlugin
             else
             {
                 _telemetrySender?.Stop();
+                _telemetryHost?.Stop();
                 // Reset guards so re-enable can start a fresh session.
                 // Without this, FramesSent > 0 and _telemetryStartRequested == 1
                 // cause StartTelemetryIfReady() to bail out on re-enable.
@@ -843,21 +1400,29 @@ namespace MozaPlugin
         /// </summary>
         private void StartTelemetryIfReady()
         {
-            if (_telemetrySender == null) return;
+            var t = _activeTelemetry;
+            if (t == null) return;
             if (!_settings.TelemetryEnabled) return;
             if (!_connection.IsConnected) return;
             if (!_newWheelDetected && !_oldWheelDetected) return;
-            if (_telemetrySender.Profile == null) return;
+            // Profile may be null when no .mzdash is loaded and no builtin
+            // profiles are bundled. Sender starts anyway; preamble parses the
+            // wheel-advertised catalog (Type02 firmware pushes it unconditionally)
+            // and MaybeSwapProfileForCatalog synthesises a WheelCatalog profile
+            // post-preamble.
 
-            // Already running — don't restart (avoids re-probing ports mid-session)
-            if (_telemetrySender.FramesSent > 0) return;
+            // Already running — don't restart (avoids re-probing ports mid-session).
+            // For the new pipeline, t.FramesSent only counts value frames, but the
+            // host's Tick may have produced some before Start fires. Skip the gate
+            // and rely on the host's own re-entry guard (state != Disconnected).
+            if (_telemetryHost == null && t.FramesSent > 0) return;
 
             // Prevent duplicate dispatch (multiple callers may pass the guards above
             // before the background thread increments FramesSent)
             if (Interlocked.CompareExchange(ref _telemetryStartRequested, 1, 0) != 0) return;
 
             MozaLog.Info("[Moza] Wheel detected and telemetry enabled — starting telemetry sender");
-            ThreadPool.QueueUserWorkItem(_ => _telemetrySender.Start());
+            ThreadPool.QueueUserWorkItem(_ => t.Start());
         }
 
         private static MultiStreamProfile? FindProfile(
@@ -891,6 +1456,26 @@ namespace MozaPlugin
                     _deviceManager.ReadSetting("handbrake-direction");
                     _deviceManager.ReadSetting("pedals-throttle-dir");
                     _deviceManager.ReadSetting("hub-port1-power");
+
+                    // Persist successful port for next launch
+                    var port = _connection.LastPortName;
+                    if (!string.IsNullOrEmpty(port) && _settings.LastWheelbasePort != port)
+                    {
+                        _settings.LastWheelbasePort = port!;
+                        ScheduleSave();
+                    }
+                }
+                else if (!string.IsNullOrEmpty(_settings.LastWheelbasePort)
+                         && string.IsNullOrEmpty(_connection.LastPortName))
+                {
+                    // Connect() cleared the cached port (stale / wrong
+                    // device after USB port change). Wipe the persisted
+                    // setting so we don't repeat the stale-port check on
+                    // every reconnect tick.
+                    MozaLog.Info(
+                        $"[Moza] Cleared stale saved port {_settings.LastWheelbasePort}");
+                    _settings.LastWheelbasePort = "";
+                    ScheduleSave();
                 }
             }
             finally
@@ -909,6 +1494,11 @@ namespace MozaPlugin
         private void TryConnectAb9()
         {
             if (_ab9Manager == null) return;
+            // Defense-in-depth: skip if AB9 detection has been disabled by
+            // the user. The reconnect-timer gate at line 422 should already
+            // prevent the call, but guard here too in case future callers
+            // bypass that check.
+            if (!_settings.EnableAb9) return;
             if (_ab9Detected)
             {
                 // Connection dropped after a successful detection — clear so the
@@ -920,6 +1510,22 @@ namespace MozaPlugin
             {
                 _ab9Manager.SendIdentityProbe();
                 _ab9Manager.RequestAllStoredSettings();
+
+                // Persist successful port for next launch
+                var port = _ab9Manager.Connection.LastPortName;
+                if (!string.IsNullOrEmpty(port) && _settings.LastAb9Port != port)
+                {
+                    _settings.LastAb9Port = port!;
+                    ScheduleSave();
+                }
+            }
+            else if (!string.IsNullOrEmpty(_settings.LastAb9Port)
+                     && string.IsNullOrEmpty(_ab9Manager.Connection.LastPortName))
+            {
+                MozaLog.Info(
+                    $"[Moza/AB9] Cleared stale saved port {_settings.LastAb9Port}");
+                _settings.LastAb9Port = "";
+                ScheduleSave();
             }
         }
 
@@ -927,22 +1533,66 @@ namespace MozaPlugin
         private const int WheelMissThreshold = 3;
         private volatile string _lastKnownWheelModel = "";
 
+        // Fires from MozaSerialConnection.HandleIoFailure on the read or
+        // write thread once the port has been force-closed. Pause telemetry
+        // and reset wheel detection right now rather than waiting for the
+        // next reconnect-timer tick — otherwise the sender keeps firing and
+        // accumulating ack waiters / catalog state for ~5 s.
+        private void OnSerialDisconnected()
+        {
+            if (IsShuttingDown) return;
+            // Pause first so the sender's next tick sees the timer stopped
+            // before ResetWheelDetection issues its full Stop().
+            try { _telemetrySender?.Pause(); } catch { }
+            // Drop pending response watches — the wheel/port we sent to is
+            // gone; their pending responses will never arrive on this
+            // connection. They'd otherwise keep retrying after reconnect
+            // against a fresh wheel that may not even speak the same protocol.
+            try { PendingResponses.Clear(); } catch { }
+            if (_newWheelDetected || _oldWheelDetected || _dashDetected)
+                ResetWheelDetection("Serial disconnect — resetting wheel detection");
+        }
+
+        /// <summary>
+        /// Clear ALL device-detection flags. Called at the top of both Init() and
+        /// End() so a plugin reload (load → unload → load same process) doesn't
+        /// carry over stale "device detected" state from a prior session. Differs
+        /// from <see cref="ResetWheelDetection"/> which is scoped to wheel hot-swap
+        /// recovery and intentionally preserves base/hub/handbrake/pedals state.
+        /// </summary>
+        private void ResetDetectionFlags()
+        {
+            _baseDetected = false;
+            _dashDetected = false;
+            _newWheelDetected = false;
+            _oldWheelDetected = false;
+            _handbrakeDetected = false;
+            _pedalsDetected = false;
+            _hubDetected = false;
+            _ab9Detected = false;
+            _ab9SettingsApplied = false;
+        }
+
         private void ResetWheelDetection(string reason)
         {
-            MozaLog.Info($"[Moza] {reason}");
-            _telemetrySender.Stop();
+            MozaLog.Debug($"[Moza] {reason}");
+            _telemetrySender?.Stop();
+            _telemetryHost?.Stop();
             _newWheelDetected = false;
             _oldWheelDetected = false;
             _dashDetected = false;
             WheelModelInfo = null;
             Interlocked.Exchange(ref _wheelLedGroupMask, 0);
+            _group3ColorsRead = false;
             _data.ClearWheelIdentity();
             _deviceManager.ResetWheelDetection();
-            _telemetrySender.DetectedDeviceMask = 0;
+            if (_telemetrySender != null)
+                _telemetrySender.DetectedDeviceMask = 0;
             Interlocked.Exchange(ref _telemetryStartRequested, 0);
             _wheelPollMisses = 0;
             _lastKnownWheelModel = "";
         }
+
 
         private void PollStatus(object sender, ElapsedEventArgs e)
         {
@@ -990,12 +1640,122 @@ namespace MozaPlugin
             if (!_hubDetected)
                 _deviceManager.ReadSetting("hub-port1-power");
 
+            // Re-probe wheel display sub-device until detected. The initial
+            // probe at wheel-detect time can race wheel-side power-up and
+            // return only partial identity (presence + identity-11 with
+            // model/HW/FW/MCU still empty), which leaves IsDisplayDetected
+            // false and hides the dashboard-telemetry UI section. PitHouse
+            // re-probes periodically until the display answers fully — mirror
+            // that here so the section auto-appears once the display is awake.
+            if (_newWheelDetected && !IsDisplayDetected)
+                _deviceManager.SendDisplayProbe();
+
+            // Read Group 3 ring LED colors once after group detected + model resolved
+            if (!_group3ColorsRead && _newWheelDetected && IsWheelLedGroupPresent(3))
+            {
+                var model = WheelModelInfo;
+                if (model?.KnobRingLeds != null && model.KnobRingLedTotal > 0)
+                {
+                    _group3ColorsRead = true;
+                    int total = model.KnobRingLedTotal;
+                    var cmds = new string[total + 1];
+                    cmds[0] = "wheel-group3-brightness";
+                    for (int i = 0; i < total; i++)
+                        cmds[i + 1] = $"wheel-group3-color{i + 1}";
+                    _deviceManager.ReadSettingsPaced(cmds);
+                    MozaLog.Debug($"[Moza] Reading Group 3 ring LED colors ({total} LEDs)");
+                }
+            }
+
             // Poll hub port status while hub is connected (read-only, no settings to save)
             if (_hubDetected)
                 _deviceManager.ReadSettings(HubReadCommands);
         }
 
         private volatile int _unmatched;
+
+        // Inbound frame router for the new Telemetry2 pipeline. Parses session-data
+        // chunks from raw frames (grp=0xC3 dev=0x71 7C 00 [ses] [typ] [seq] [body])
+        // and forwards them to the host. Old pipeline does its own subscription
+        // inside TelemetrySender.Start, so this handler runs only when the new
+        // pipeline is active (subscribed in Init when _telemetryHost != null).
+        private void OnInboundForHost(byte[] data)
+        {
+            if (IsShuttingDown || _telemetryHost == null) return;
+            if (data == null || data.Length < 4) return;
+            if (data[0] != 0xC3 || data[1] != 0x71) return;
+
+            // Wire-trace tee: capture ALL 0xC3/0x71 frames (session data + FC acks).
+            if (_telemetry2WireTracePath != null)
+            {
+                try { WriteTelemetry2WireTrace("b2h", data); } catch { }
+            }
+
+            // Session-layer dispatch: 7C 00 prefix = session data/open/close.
+            if (data.Length < 9 || data[2] != 0x7C || data[3] != 0x00) return;
+            byte session = data[4];
+            byte type = data[5];
+            int seq = data[6] | (data[7] << 8);
+            int bodyLen = data.Length - 8;
+            byte[] payload = new byte[bodyLen];
+            Array.Copy(data, 8, payload, 0, bodyLen);
+            try { _telemetryHost.OnInboundChunk(session, type, seq, payload); }
+            catch { /* never let inbound routing crash the read thread */ }
+        }
+
+        // Telemetry2 wire trace state. Path resolved at host construction; appends
+        // one JSONL line per emitted/received frame so post-mortem can diff against
+        // PitHouse bridge captures.
+        private string? _telemetry2WireTracePath;
+        private readonly object _telemetry2WireTraceLock = new object();
+        private System.IO.StreamWriter? _telemetry2WireTraceWriter;
+
+        private void InitTelemetry2WireTrace()
+        {
+            try
+            {
+                string dir = System.IO.Path.Combine(
+                    System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location) ?? ".",
+                    "Logs");
+                System.IO.Directory.CreateDirectory(dir);
+                string ts = DateTime.Now.ToString("yyyyMMdd-HHmmss");
+                _telemetry2WireTracePath = System.IO.Path.Combine(dir, $"moza-wire-{ts}.jsonl");
+                _telemetry2WireTraceWriter = new System.IO.StreamWriter(
+                    _telemetry2WireTracePath, append: true, System.Text.Encoding.UTF8)
+                { AutoFlush = true };
+                MozaLog.Info($"[Moza] Telemetry2 wire trace → {_telemetry2WireTracePath}");
+            }
+            catch
+            {
+                _telemetry2WireTracePath = null;
+                _telemetry2WireTraceWriter = null;
+            }
+        }
+
+        private void CloseTelemetry2WireTrace()
+        {
+            lock (_telemetry2WireTraceLock)
+            {
+                _telemetry2WireTraceWriter?.Dispose();
+                _telemetry2WireTraceWriter = null;
+            }
+        }
+
+        private void WriteTelemetry2WireTrace(string dir, byte[] frame)
+        {
+            if (frame == null || frame.Length == 0) return;
+            var sb = new System.Text.StringBuilder(frame.Length * 2 + 64);
+            double t = (DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds;
+            sb.Append("{\"t\":").Append(t.ToString("F6", System.Globalization.CultureInfo.InvariantCulture));
+            sb.Append(",\"dir\":\"").Append(dir).Append("\",\"len\":").Append(frame.Length);
+            sb.Append(",\"hex\":\"");
+            for (int i = 0; i < frame.Length; i++) sb.Append(frame[i].ToString("x2"));
+            sb.Append("\"}");
+            lock (_telemetry2WireTraceLock)
+            {
+                _telemetry2WireTraceWriter?.WriteLine(sb.ToString());
+            }
+        }
 
         private void OnMessageReceived(byte[] data)
         {
@@ -1034,6 +1794,27 @@ namespace MozaPlugin
             if (data.Length >= 4 && data[0] == 0xC0 && data[1] == 0x71 &&
                 (data[2] == 0x1E || data[2] == 0x28))
             {
+                // Capture raw 28:00 / 28:01 reply bytes before swallowing.
+                // PitHouse polls these at ~1 Hz across all four bridge captures
+                // (sim/logs/bridge-20260503-*.jsonl). Semantics not yet decoded
+                // — store raw so future controlled experiments can correlate
+                // values against game state.
+                if (data.Length >= 6 && data[2] == 0x28)
+                {
+                    if (data[3] == 0x00 && _data != null)
+                    {
+                        _data.Last28x00Byte5 = data[5];
+                        _data.Last28x00ByteValid = true;
+                        _data.Last28xReplyTickMs = Environment.TickCount;
+                    }
+                    else if (data[3] == 0x01 && _data != null)
+                    {
+                        _data.Last28x01Byte4 = data[4];
+                        _data.Last28x01Byte5 = data[5];
+                        _data.Last28x01BytesValid = true;
+                        _data.Last28xReplyTickMs = Environment.TickCount;
+                    }
+                }
                 _deviceManager.MarkWheelResponse(MozaProtocol.SwapNibbles(data[1]));
                 return;
             }
@@ -1056,7 +1837,7 @@ namespace MozaPlugin
                 {
                     byte grp = MozaProtocol.ToggleBit7(data[0]);
                     byte dev = MozaProtocol.SwapNibbles(data[1]);
-                    MozaLog.Info(
+                    MozaLog.Debug(
                         $"[Moza] Unmatched #{_unmatched}: rawGroup=0x{data[0]:X2} group=0x{grp:X2} " +
                         $"rawDev=0x{data[1]:X2} dev={dev} len={data.Length} " +
                         $"payload={BitConverter.ToString(data, 2, Math.Min(data.Length - 2, 8))}");
@@ -1065,6 +1846,8 @@ namespace MozaPlugin
             }
 
             var r = result.Value;
+
+            PendingResponses.NoteResponse(r.Name);
 
             // Normalize stick-mode: old firmware sends 2-byte value (0 or 256),
             // new firmware sends 1-byte enum (0=none, 1=left, 2=right, 3=both).
@@ -1100,7 +1883,7 @@ namespace MozaPlugin
                         if ((prev & bit) != 0) break;
                     } while (Interlocked.CompareExchange(ref _wheelLedGroupMask, prev | bit, prev) != prev);
                     if ((prev & bit) == 0)
-                        MozaLog.Info($"[Moza] Wheel LED group {g} detected");
+                        MozaLog.Debug($"[Moza] Wheel LED group {g} detected");
                 }
             }
 
@@ -1156,7 +1939,7 @@ namespace MozaPlugin
                 return;
             }
 
-            MozaLog.Info("[Moza/AB9] Applying saved AB9 settings");
+            MozaLog.Debug("[Moza/AB9] Applying saved AB9 settings");
             _ab9Manager.SendMode(ab9.Mode);
             _ab9Manager.SendSlider(Devices.Ab9Slider.MechanicalResistance, ab9.MechanicalResistance);
             _ab9Manager.SendSlider(Devices.Ab9Slider.Spring, ab9.Spring);
@@ -1179,14 +1962,35 @@ namespace MozaPlugin
             // below, because UpdateFromArray has already stored the raw 12 bytes.
             if (commandName == "wheel-mcu-uid" && _data.WheelMcuUid.Length > 0)
             {
-                MozaLog.Info(
+                MozaLog.Debug(
                     $"[Moza] Wheel MCU UID ({_data.WheelMcuUid.Length}B): " +
                     MozaLog.RedactBytesHex(_data.WheelMcuUid));
+
+                // Per-wheel mzdash folder auto-switch (mapping populated by the
+                // Auto-detect button). Runs on the serial-reader thread; never
+                // touch WPF here — the 500 ms RefreshWheel tick repopulates the
+                // settings UI. Telemetry restart is unnecessary; dash-detection
+                // below triggers ApplyTelemetrySettings on the new folder.
+                if (_data.WheelMcuUid.Length == 12 && _settings.WheelMzdashFolderByUid != null)
+                {
+                    string uidHex = BitConverter.ToString(_data.WheelMcuUid).Replace("-", "").ToLowerInvariant();
+                    if (_settings.WheelMzdashFolderByUid.TryGetValue(uidHex, out var mappedFolder)
+                        && !string.IsNullOrEmpty(mappedFolder)
+                        && System.IO.Directory.Exists(mappedFolder)
+                        && !string.Equals(mappedFolder, _settings.TelemetryMzdashFolder, StringComparison.OrdinalIgnoreCase))
+                    {
+                        MozaLog.Debug($"[Moza] Auto-switching mzdash folder for wheel {uidHex}: {mappedFolder}");
+                        _settings.TelemetryMzdashFolder = mappedFolder;
+                        SaveSettings();
+                        DashCache?.LoadFromFolder(mappedFolder);
+                    }
+                }
+
                 return;
             }
             if (commandName == "display-mcu-uid" && _data.DisplayMcuUid.Length > 0)
             {
-                MozaLog.Info(
+                MozaLog.Debug(
                     $"[Moza] Display MCU UID ({_data.DisplayMcuUid.Length}B): " +
                     MozaLog.RedactBytesHex(_data.DisplayMcuUid));
                 return;
@@ -1194,8 +1998,10 @@ namespace MozaPlugin
 
             if (value < 0) return; // No valid response
 
-            // Update telemetry sender's heartbeat mask so it only pings detected devices
-            if (deviceId >= 18 && deviceId <= 30)
+            // Update telemetry sender's heartbeat mask so it only pings detected devices.
+            // (DetectedDeviceMask is a TelemetrySender-only field — new pipeline doesn't
+            // use the same heartbeat-gating; it sends keepalives unconditionally.)
+            if (deviceId >= 18 && deviceId <= 30 && _telemetrySender != null)
                 _telemetrySender.DetectedDeviceMask |= (1 << (deviceId - 18));
 
             // Base detection: IsBaseConnected was just set to true by UpdateFromCommand.
@@ -1288,7 +2094,7 @@ namespace MozaPlugin
                         {
                             _lastKnownWheelModel = currentModel;
                             WheelModelInfo = Devices.WheelModelInfo.FromModelName(currentModel);
-                            MozaLog.Info(
+                            MozaLog.Debug(
                                 $"[Moza] Wheel model: {currentModel} " +
                                 $"(rpm={WheelModelInfo.RpmLedCount}, buttons={WheelModelInfo.ButtonLedCount}, flags={WheelModelInfo.HasFlagLeds}, knobs={WheelModelInfo.KnobCount})");
                             // Load this wheel model's persisted slot (brightness/modes/inputs)
@@ -1305,102 +2111,103 @@ namespace MozaPlugin
                             MozaProfile.UnpackColorsInto(_settings.WheelKnobBackgroundColors, _data.WheelKnobBackgroundColors);
                             MozaProfile.UnpackColorsInto(_settings.WheelKnobPrimaryColors,    _data.WheelKnobPrimaryColors);
                             WriteKnobColors(_settings.WheelKnobBackgroundColors, _settings.WheelKnobPrimaryColors);
+                            // Ring colors pushed after Group 3 is detected (via PollStatus read trigger)
                         }
                     }
                     else
                     {
-                        MozaLog.Info(
+                        MozaLog.Debug(
                             $"[Moza] Wheel model (ES/base): {_data.WheelModelName}");
                     }
                     break;
 
                 case "wheel-sw-version":
-                    MozaLog.Info($"[Moza] Wheel FW: {_data.WheelSwVersion}");
+                    MozaLog.Debug($"[Moza] Wheel FW: {_data.WheelSwVersion}");
                     break;
 
                 case "wheel-serial-b":
                     if (!string.IsNullOrEmpty(_data.WheelSerialNumber))
-                        MozaLog.Info($"[Moza] Wheel serial: {MozaLog.RedactId(_data.WheelSerialNumber)}");
+                        MozaLog.Debug($"[Moza] Wheel serial: {MozaLog.RedactId(_data.WheelSerialNumber)}");
                     break;
 
                 case "wheel-hw-sub":
                     if (!string.IsNullOrEmpty(_data.WheelHwSubVersion))
-                        MozaLog.Info($"[Moza] Wheel HW sub: {_data.WheelHwSubVersion}");
+                        MozaLog.Debug($"[Moza] Wheel HW sub: {_data.WheelHwSubVersion}");
                     break;
 
                 case "wheel-mcu-uid":
                     if (_data.WheelMcuUid.Length > 0)
-                        MozaLog.Info(
+                        MozaLog.Debug(
                             $"[Moza] Wheel MCU UID ({_data.WheelMcuUid.Length}B): " +
                             MozaLog.RedactBytesHex(_data.WheelMcuUid));
                     break;
 
                 case "wheel-device-type":
                     if (_data.WheelDeviceType.Length > 0)
-                        MozaLog.Info(
+                        MozaLog.Debug(
                             $"[Moza] Wheel device type: {BitConverter.ToString(_data.WheelDeviceType)}");
                     break;
 
                 case "wheel-capabilities":
                     if (_data.WheelCapabilities.Length > 0)
-                        MozaLog.Info(
+                        MozaLog.Debug(
                             $"[Moza] Wheel capabilities: {BitConverter.ToString(_data.WheelCapabilities)}");
                     break;
 
                 case "wheel-presence":
-                    MozaLog.Info(
+                    MozaLog.Debug(
                         $"[Moza] Wheel presence/ready: sub_device_count={_data.WheelSubDeviceCount}");
                     break;
 
                 case "wheel-device-presence":
-                    MozaLog.Info(
+                    MozaLog.Debug(
                         $"[Moza] Wheel device presence byte: 0x{_data.WheelDevicePresence:X2}");
                     break;
 
                 case "wheel-identity-11":
                     if (_data.WheelIdentity11.Length > 0)
-                        MozaLog.Info(
+                        MozaLog.Debug(
                             $"[Moza] Wheel identity-11: {BitConverter.ToString(_data.WheelIdentity11)}");
                     break;
 
                 // Display sub-device identity responses (wrapped via 0x43)
                 case "display-model-name":
                     if (!string.IsNullOrEmpty(_data.DisplayModelName))
-                        MozaLog.Info($"[Moza] Display model: {_data.DisplayModelName}");
+                        MozaLog.Debug($"[Moza] Display model: {_data.DisplayModelName}");
                     break;
                 case "display-hw-version":
                     if (!string.IsNullOrEmpty(_data.DisplayHwVersion))
-                        MozaLog.Info($"[Moza] Display HW: {_data.DisplayHwVersion}");
+                        MozaLog.Debug($"[Moza] Display HW: {_data.DisplayHwVersion}");
                     break;
                 case "display-sw-version":
                     if (!string.IsNullOrEmpty(_data.DisplaySwVersion))
-                        MozaLog.Info($"[Moza] Display FW: {_data.DisplaySwVersion}");
+                        MozaLog.Debug($"[Moza] Display FW: {_data.DisplaySwVersion}");
                     break;
                 case "display-serial":
                     if (!string.IsNullOrEmpty(_data.DisplaySerialNumber))
-                        MozaLog.Info($"[Moza] Display serial: {MozaLog.RedactId(_data.DisplaySerialNumber)}");
+                        MozaLog.Debug($"[Moza] Display serial: {MozaLog.RedactId(_data.DisplaySerialNumber)}");
                     break;
                 case "display-presence":
-                    MozaLog.Info(
+                    MozaLog.Debug(
                         $"[Moza] Display presence/ready: sub_device_count={_data.DisplaySubDeviceCount}");
                     break;
                 case "display-device-presence":
-                    MozaLog.Info(
+                    MozaLog.Debug(
                         $"[Moza] Display device presence byte: 0x{_data.DisplayDevicePresence:X2}");
                     break;
                 case "display-device-type":
                     if (_data.DisplayDeviceType.Length > 0)
-                        MozaLog.Info(
+                        MozaLog.Debug(
                             $"[Moza] Display device type: {BitConverter.ToString(_data.DisplayDeviceType)}");
                     break;
                 case "display-capabilities":
                     if (_data.DisplayCapabilities.Length > 0)
-                        MozaLog.Info(
+                        MozaLog.Debug(
                             $"[Moza] Display capabilities: {BitConverter.ToString(_data.DisplayCapabilities)}");
                     break;
                 case "display-identity-11":
                     if (_data.DisplayIdentity11.Length > 0)
-                        MozaLog.Info(
+                        MozaLog.Debug(
                             $"[Moza] Display identity-11: {BitConverter.ToString(_data.DisplayIdentity11)}");
                     break;
                 case "display-mcu-uid":
@@ -1456,7 +2263,6 @@ namespace MozaPlugin
                     if (!_hubDetected)
                     {
                         _hubDetected = true;
-                        if (_telemetrySender != null) _telemetrySender.HubPresent = true;
                         _deviceManager.ReadSettings(HubReadCommands);
                         MozaLog.Info("[Moza] Universal Hub detected");
                     }
@@ -1469,7 +2275,7 @@ namespace MozaPlugin
         /// </summary>
         private void ApplySavedWheelSettings()
         {
-            MozaLog.Info("[Moza] Applying saved wheel settings");
+            MozaLog.Debug("[Moza] Applying saved wheel settings");
 
             // Pre-populate _data from saved settings so the UI shows correct values
             // immediately, before device responses arrive.
@@ -1533,15 +2339,22 @@ namespace MozaPlugin
         /// </summary>
         private void ApplySavedDashSettings()
         {
-            MozaLog.Info("[Moza] Applying saved dash settings");
+            MozaLog.Debug("[Moza] Applying saved dash settings");
 
             // Pre-populate _data from saved settings so the UI shows correct values
             _data.DashRpmBrightness = _settings.DashRpmBrightness;
             _data.DashFlagsBrightness = _settings.DashFlagsBrightness;
+            _data.DashDisplayBrightness = _settings.DashDisplayBrightness;
+            _data.DashDisplayStandbyMin = _settings.DashDisplayStandbyMin;
 
             // Brightness
             _deviceManager.WriteSetting("dash-rpm-brightness", _settings.DashRpmBrightness);
             _deviceManager.WriteSetting("dash-flags-brightness", _settings.DashFlagsBrightness);
+
+            // Wheel-integrated display brightness + standby ride session-0x01
+            // ff-record property push (see findings/2026-04-29-session-01-property-push.md).
+            _telemetrySender?.SendDashDisplayBrightness(_settings.DashDisplayBrightness);
+            _telemetrySender?.SendDashDisplayStandbyMinutes(_settings.DashDisplayStandbyMin);
 
             // Enable flag indicator mode (0=Off, 1=Flags, 2=On). Firmware default is 0,
             // which silently drops all flag colour/bitmask writes. Set to 1 so the plugin's
@@ -1559,7 +2372,7 @@ namespace MozaPlugin
         {
             var profile = _settings.ProfileStore.CurrentProfile;
             if (profile == null) return;
-            MozaLog.Info("[Moza] Applying saved handbrake settings");
+            MozaLog.Debug("[Moza] Applying saved handbrake settings");
 
             if (profile.HandbrakeMode >= 0)
             {
@@ -1603,7 +2416,7 @@ namespace MozaPlugin
         {
             var profile = _settings.ProfileStore.CurrentProfile;
             if (profile == null) return;
-            MozaLog.Info("[Moza] Applying saved pedal settings");
+            MozaLog.Debug("[Moza] Applying saved pedal settings");
 
             if (profile.PedalsThrottleDir >= 0)
             {
@@ -1663,11 +2476,11 @@ namespace MozaPlugin
             // Apply the initially selected profile
             if (store.CurrentProfile != null)
             {
-                MozaLog.Info($"[Moza] Initial profile: {store.CurrentProfile.Name}");
+                MozaLog.Debug($"[Moza] Initial profile: {store.CurrentProfile.Name}");
                 if (_settings.AutoApplyProfileOnLaunch)
                     ApplyProfile(store.CurrentProfile);
                 else
-                    MozaLog.Info("[Moza] Skipping auto-apply (disabled in Options)");
+                    MozaLog.Debug("[Moza] Skipping auto-apply (disabled in Options)");
             }
         }
 
@@ -1686,7 +2499,7 @@ namespace MozaPlugin
         /// </summary>
         internal void ApplyProfile(MozaProfile profile)
         {
-            MozaLog.Info($"[Moza] Applying profile: {profile.Name}");
+            MozaLog.Debug($"[Moza] Applying profile: {profile.Name}");
 
             // Guard: a profile with all core base settings at zero was captured from
             // uninitialized device data (first-launch race condition). Reset them to
@@ -1794,6 +2607,16 @@ namespace MozaPlugin
                 _settings.DashFlagsBrightness = profile.DashFlagsBrightness;
                 _data.DashFlagsBrightness = profile.DashFlagsBrightness;
             }
+            if (profile.DashDisplayBrightness >= 0)
+            {
+                _settings.DashDisplayBrightness = profile.DashDisplayBrightness;
+                _data.DashDisplayBrightness = profile.DashDisplayBrightness;
+            }
+            if (profile.DashDisplayStandbyMin >= 0)
+            {
+                _settings.DashDisplayStandbyMin = profile.DashDisplayStandbyMin;
+                _data.DashDisplayStandbyMin = profile.DashDisplayStandbyMin;
+            }
 
             // --- FFB Equalizer ---
             // Equalizer uses -1000 as sentinel (valid range is 0 to 400, where 100 = default/flat)
@@ -1807,7 +2630,7 @@ namespace MozaPlugin
 
             // --- FFB Curve (X breakpoints always fixed at 20/40/60/80) ---
             // Always write fixed X breakpoints when base is connected (device may not persist them)
-            MozaLog.Info($"[Moza] ApplyProfile curve: IsBaseConnected={_data.IsBaseConnected} Y1={profile.FfbCurveY1} Y2={profile.FfbCurveY2} Y3={profile.FfbCurveY3} Y4={profile.FfbCurveY4} Y5={profile.FfbCurveY5}");
+            MozaLog.Debug($"[Moza] ApplyProfile curve: IsBaseConnected={_data.IsBaseConnected} Y1={profile.FfbCurveY1} Y2={profile.FfbCurveY2} Y3={profile.FfbCurveY3} Y4={profile.FfbCurveY4} Y5={profile.FfbCurveY5}");
             if (_data.IsBaseConnected)
             {
                 _deviceManager.WriteSetting("base-ffb-curve-x1", 20);
@@ -1995,6 +2818,10 @@ namespace MozaPlugin
                     _deviceManager.WriteSetting("dash-rpm-brightness", profile.DashRpmBrightness);
                 if (profile.DashFlagsBrightness >= 0)
                     _deviceManager.WriteSetting("dash-flags-brightness", profile.DashFlagsBrightness);
+                if (profile.DashDisplayBrightness >= 0)
+                    _telemetrySender?.SendDashDisplayBrightness(profile.DashDisplayBrightness);
+                if (profile.DashDisplayStandbyMin >= 0)
+                    _telemetrySender?.SendDashDisplayStandbyMinutes(profile.DashDisplayStandbyMin);
             }
         }
 
@@ -2015,6 +2842,7 @@ namespace MozaPlugin
                     _deviceManager.WriteColor("wheel-idle-color", rgb[0], rgb[1], rgb[2]);
                 }
                 WriteKnobColors(profile.WheelKnobBackgroundColors, profile.WheelKnobPrimaryColors);
+                WriteKnobRingColors(profile.WheelKnobRingColors, profile.WheelKnobRingBrightness);
             }
 
             // Old-protocol (ES) wheel colors
@@ -2068,12 +2896,31 @@ namespace MozaPlugin
         }
 
         /// <summary>
+        /// Push Group 3 per-LED ring colors to the wheel. No-op unless the active
+        /// wheel model has KnobRingLeds and Group 3 is present.
+        /// </summary>
+        private void WriteKnobRingColors(int[]? packedColors, int brightness)
+        {
+            var model = WheelModelInfo;
+            if (model?.KnobRingLeds == null || !IsWheelLedGroupPresent(3)) return;
+            if (brightness >= 0)
+                _deviceManager.WriteSetting("wheel-group3-brightness", brightness);
+            if (packedColors == null) return;
+            int total = Math.Min(packedColors.Length, model.KnobRingLedTotal);
+            for (int i = 0; i < total; i++)
+            {
+                var rgb = MozaProfile.UnpackColor(packedColors[i]);
+                _deviceManager.WriteColor($"wheel-group3-color{i + 1}", rgb[0], rgb[1], rgb[2]);
+            }
+        }
+
+        /// <summary>
         /// Apply wheel settings from the SimHub device extension profile system.
         /// Updates _settings, _data, and writes to hardware if connected.
         /// </summary>
         internal void ApplyWheelExtensionSettings(MozaWheelExtensionSettings extSettings)
         {
-            MozaLog.Info("[Moza] Applying wheel device extension settings");
+            MozaLog.Debug("[Moza] Applying wheel device extension settings");
 
             // Update _settings and _data in-memory. ApplyTo already routes into
             // the correct per-model slot and only updates flat fields when this
@@ -2138,6 +2985,7 @@ namespace MozaPlugin
                 }
                 WriteColorArray(extSettings.WheelESRpmColors, "wheel-old-rpm-color", 10);
                 WriteKnobColors(extSettings.WheelKnobBackgroundColors, extSettings.WheelKnobPrimaryColors);
+                WriteKnobRingColors(extSettings.WheelKnobRingColors, extSettings.WheelKnobRingBrightness);
             }
 
             PersistSettings();
@@ -2153,6 +3001,7 @@ namespace MozaPlugin
                 else
                 {
                     _telemetrySender?.Stop();
+                    _telemetryHost?.Stop();
                 }
             }
         }
@@ -2163,7 +3012,7 @@ namespace MozaPlugin
         /// </summary>
         internal void ApplyDashExtensionSettings(MozaDashExtensionSettings extSettings)
         {
-            MozaLog.Info("[Moza] Applying dash device extension settings");
+            MozaLog.Debug("[Moza] Applying dash device extension settings");
 
             // Update _settings and _data in-memory
             extSettings.ApplyTo(_settings, _data);
@@ -2178,6 +3027,10 @@ namespace MozaPlugin
                     _deviceManager.WriteSetting("dash-rpm-brightness", extSettings.DashRpmBrightness);
                 if (extSettings.DashFlagsBrightness >= 0)
                     _deviceManager.WriteSetting("dash-flags-brightness", extSettings.DashFlagsBrightness);
+                if (extSettings.DashDisplayBrightness >= 0)
+                    _telemetrySender?.SendDashDisplayBrightness(extSettings.DashDisplayBrightness);
+                if (extSettings.DashDisplayStandbyMin >= 0)
+                    _telemetrySender?.SendDashDisplayStandbyMinutes(extSettings.DashDisplayStandbyMin);
                 if (extSettings.DashRpmIndicatorMode >= 0)
                     _deviceManager.WriteSetting("dash-rpm-indicator-mode", extSettings.DashRpmIndicatorMode);
                 if (extSettings.DashFlagsIndicatorMode >= 0)
@@ -2208,10 +3061,10 @@ namespace MozaPlugin
             var modelInfo = WheelModelInfo.FromModelName(modelName);
             var deviceName = "MOZA " + friendlyName;
 
-            DeployGeneratedWheelDefinition(deviceName, guid, friendlyName, modelInfo.RpmLedCount, modelInfo.HasFlagLeds, modelInfo.ButtonLedCount);
+            DeployGeneratedWheelDefinition(deviceName, guid, friendlyName, modelInfo.RpmLedCount, modelInfo.HasFlagLeds, modelInfo.ButtonLedCount, modelInfo.KnobCount);
         }
 
-        private void DeployGeneratedWheelDefinition(string deviceName, string guid, string productName, int rpmCount, bool hasFlagLeds, int buttonCount)
+        private void DeployGeneratedWheelDefinition(string deviceName, string guid, string productName, int rpmCount, bool hasFlagLeds, int buttonCount, int knobCount)
         {
             try
             {
@@ -2233,7 +3086,8 @@ namespace MozaPlugin
                         var existing = JObject.Parse(File.ReadAllText(deviceJsonPath));
                         int existingLed = existing.SelectToken("LedsFeature.LogicalTelemetryLeds.LedCount")?.Value<int>() ?? -1;
                         int existingButtons = (existing.SelectToken("LedsFeature.LogicalButtonsSection.Items") as JArray)?.Count ?? -1;
-                        stale = existingLed != expectedTelemetryCount || existingButtons != buttonCount;
+                        int existingExtra = existing.SelectToken("LedsFeature.LogicalExtraSection.LedCount")?.Value<int>() ?? 0;
+                        stale = existingLed != expectedTelemetryCount || existingButtons != buttonCount || existingExtra != knobCount;
                     }
                     catch (Exception parseEx)
                     {
@@ -2249,15 +3103,15 @@ namespace MozaPlugin
                 Directory.CreateDirectory(deviceDir);
 
                 var pid = _connection.DiscoveredPid ?? "0x0004";
-                var json = GenerateWheelDeviceJson(guid, productName, rpmCount, hasFlagLeds, buttonCount, pid);
+                var json = GenerateWheelDeviceJson(guid, productName, rpmCount, hasFlagLeds, buttonCount, knobCount, pid);
                 File.WriteAllText(deviceJsonPath, json);
 
                 DeviceDefinitionDeployed = true;
                 string action = stale ? "Refreshed" : "Deployed";
-                MozaLog.Info(
+                MozaLog.Debug(
                     $"[Moza] {action} device definition: {deviceName} " +
                     $"(guid={guid}, telemetryLeds={expectedTelemetryCount}, rpm={rpmCount}, flags={hasFlagLeds}, " +
-                    $"buttons={buttonCount}, pid={pid}, restart SimHub to pick up changes)");
+                    $"buttons={buttonCount}, knobs={knobCount}, pid={pid}, restart SimHub to pick up changes)");
             }
             catch (Exception ex)
             {
@@ -2265,7 +3119,7 @@ namespace MozaPlugin
             }
         }
 
-        private static string GenerateWheelDeviceJson(string guid, string productName, int rpmCount, bool hasFlagLeds, int buttonCount, string pid)
+        private static string GenerateWheelDeviceJson(string guid, string productName, int rpmCount, bool hasFlagLeds, int buttonCount, int knobCount, string pid)
         {
             var physItems = new JArray();
 
@@ -2293,6 +3147,20 @@ namespace MozaPlugin
             });
             for (int i = 1; i < buttonCount; i++)
                 physItems.Add(new JObject());
+
+            // Knob indicator LEDs (Extra/encoders channel): one per rotary knob
+            if (knobCount > 0)
+            {
+                physItems.Add(new JObject
+                {
+                    ["SourceRole"] = 3,
+                    ["SourceIndex"] = 0,
+                    ["RepeatCount"] = knobCount,
+                    ["RepeatMode"] = 1
+                });
+                for (int i = 1; i < knobCount; i++)
+                    physItems.Add(new JObject());
+            }
 
             var buttonItems = new JArray();
             for (int i = 0; i < buttonCount; i++)
@@ -2333,6 +3201,14 @@ namespace MozaPlugin
                         ["Items"] = buttonItems,
                         ["IsEnabled"] = true
                     },
+                    ["LogicalExtraSection"] = knobCount > 0
+                        ? new JObject
+                        {
+                            ["LedCount"] = knobCount,
+                            ["TitleOverride"] = "Knob Indicators",
+                            ["IsEnabled"] = true
+                        }
+                        : new JObject { ["IsEnabled"] = false },
                     ["IsEnabled"] = true
                 },
                 ["HardwareInterface"] = new JObject
@@ -2400,14 +3276,14 @@ namespace MozaPlugin
                     if (discoveredPid != null)
                     {
                         json = json.Replace("__DETECT_PID__", discoveredPid);
-                        MozaLog.Info($"[Moza] Patched device PID to {discoveredPid} for {deviceName}");
+                        MozaLog.Debug($"[Moza] Patched device PID to {discoveredPid} for {deviceName}");
                     }
                     else
                     {
                         // Fallback: no PID discovered (e.g. probe-based discovery under Wine).
                         // Use 0x0004 as a reasonable default.
                         json = json.Replace("__DETECT_PID__", "0x0004");
-                        MozaLog.Info($"[Moza] No PID discovered, using fallback 0x0004 for {deviceName}");
+                        MozaLog.Debug($"[Moza] No PID discovered, using fallback 0x0004 for {deviceName}");
                     }
 
                     File.WriteAllText(deviceJsonPath, json);

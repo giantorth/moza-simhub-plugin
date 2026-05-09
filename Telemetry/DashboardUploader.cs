@@ -67,7 +67,11 @@ namespace MozaPlugin.Telemetry
             byte[] md5 = FileTransferBuilder.ComputeMd5(mzdashContent);
             string md5Hex = FileTransferBuilder.Md5Hex(md5);
             string localTemp = FileTransferBuilder.BuildLocalTempPath(timestampMs);
-            string remoteStaging = FileTransferBuilder.BuildRemoteStagingPath(md5Hex);
+            // New2026_04_Type02 firmware drops the `/home/root` prefix from
+            // staging paths — confirmed in PitHouse capture against W17.
+            string remoteStaging = format == FileTransferWireFormat.New2026_04_Type02
+                ? FileTransferBuilder.BuildRemoteStagingPathType02(md5Hex)
+                : FileTransferBuilder.BuildRemoteStagingPath(md5Hex);
             string destPath = FileTransferBuilder.BuildDashboardDestPath(dashboardName);
             var subMsg2Chunks = FileTransferBuilder.BuildFileContentChunked(
                 localTemp, remoteStaging, md5, token, destPath, mzdashContent, format);

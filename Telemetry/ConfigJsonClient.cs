@@ -26,6 +26,20 @@ namespace MozaPlugin.Telemetry
         /// <summary>Most recent dashboard state parsed from the device.</summary>
         public WheelDashboardState? LastState => _lastState;
 
+        /// <summary>Result of a seq-aware <see cref="OnChunk(int, byte[])"/> call.</summary>
+        public enum ChunkResult
+        {
+            /// <summary>Chunk accepted; no complete state yet (more chunks expected).</summary>
+            Buffered,
+            /// <summary>State decoded — caller can read <see cref="LastState"/>.</summary>
+            StateReady,
+            /// <summary>Seq gap detected: a prior chunk was dropped on the wire.
+            /// Buffer has been cleared. Caller must re-issue the configJson open
+            /// request so the wheel re-emits its state burst — otherwise the
+            /// handshake is permanently broken for this session lifetime.</summary>
+            GapDetected,
+        }
+
         /// <summary>Feed one session 0x09 device→host chunk payload.</summary>
         public WheelDashboardState? OnChunk(byte[] chunkPayload)
         {
@@ -41,7 +55,7 @@ namespace MozaPlugin.Telemetry
                 _deviceInbox.Clear();
                 try
                 {
-                    MozaLog.Info(
+                    MozaLog.Debug(
                         $"[Moza] configJson state received: TitleId={state.TitleId} " +
                         $"displayVersion={state.DisplayVersion} resetVersion={state.ResetVersion} " +
                         $"configJsonList={state.ConfigJsonList.Count} " +
@@ -62,7 +76,7 @@ namespace MozaPlugin.Telemetry
                         _lastMissingShape = shape;
                         try
                         {
-                            MozaLog.Info(
+                            MozaLog.Debug(
                                 $"[Moza] configJson state missing {missing.Count} expected top-level field(s): {shape}. " +
                                 "Firmware may be older than 2025-11 or schema has drifted.");
                         }
@@ -74,6 +88,94 @@ namespace MozaPlugin.Telemetry
         }
 
         private string _lastMissingShape = "";
+
+        /// <summary>
+        /// Seq-aware variant. Detects when a chunk seq is missing and signals the
+        /// caller to re-handshake — without this, a single dropped chunk under
+        /// Wine SerialPort R/W contention silently corrupts the zlib stream and
+        /// the configJson handshake fails for the lifetime of the session.
+        /// Returns <see cref="ChunkResult.GapDetected"/> on missing seq, in which
+        /// case the buffer has already been cleared and the caller should re-
+        /// issue the configJson open request to make the wheel re-emit its burst.
+        /// </summary>
+        public ChunkResult OnChunk(int seq, byte[] chunkPayload, string tag = "sess=0x09")
+        {
+            if (!_deviceInbox.AddChunk(seq, chunkPayload, tag))
+                return ChunkResult.GapDetected;
+            byte[]? decomp = _deviceInbox.TryDecompress();
+            if (decomp == null) return ChunkResult.Buffered;
+            var state = WheelStateParser.Parse(decomp, out var missing);
+            if (state == null) return ChunkResult.Buffered;
+            _lastState = state;
+            _deviceInbox.Clear();
+            try
+            {
+                MozaLog.Debug(
+                    $"[Moza] configJson state received: TitleId={state.TitleId} " +
+                    $"displayVersion={state.DisplayVersion} resetVersion={state.ResetVersion} " +
+                    $"configJsonList={state.ConfigJsonList.Count} " +
+                    $"enabled={state.EnabledDashboards.Count} disabled={state.DisabledDashboards.Count} " +
+                    $"imageRefMap={state.ImageRefMap.Count} imagePath={state.ImagePath.Count} " +
+                    $"rootDirPath='{state.RootDirPath}'");
+            }
+            catch { /* logging optional in unit tests */ }
+            if (missing.Count > 0)
+            {
+                string shape = string.Join(",", missing);
+                if (shape != _lastMissingShape)
+                {
+                    _lastMissingShape = shape;
+                    try
+                    {
+                        MozaLog.Debug(
+                            $"[Moza] configJson state missing {missing.Count} expected top-level field(s): {shape}. " +
+                            "Firmware may be older than 2025-11 or schema has drifted.");
+                    }
+                    catch { /* logging optional in unit tests */ }
+                }
+            }
+            return ChunkResult.StateReady;
+        }
+
+        /// <summary>
+        /// Clear the in-progress reassembly buffer ONLY. <see cref="LastState"/>
+        /// is preserved so a Stop/Start cycle (e.g. dashboard switch) doesn't
+        /// drop the dashboard library cache while we're waiting for the wheel
+        /// to re-burst. Wire-trace evidence (2026-05-09) showed that a single
+        /// b2h chunk drop on sess=0x09 during the post-Start re-burst left the
+        /// plugin with no state for the rest of the session — the wheel does
+        /// NOT re-burst on a re-issued OpenRequest once it considers the
+        /// session initialised, so the only way to repopulate state was a
+        /// full plugin restart. Caching the last-good state across Stop/Start
+        /// removes that failure mode for any session that has seen at least
+        /// one successful burst.
+        ///
+        /// Use <see cref="HardReset"/> for the full lifecycle reset (plugin
+        /// instance dispose / wheel hot-swap).
+        /// </summary>
+        public void ClearBuffer()
+        {
+            _deviceInbox.Clear();
+        }
+
+        /// <summary>
+        /// Full reset: clears reassembly buffer AND <see cref="LastState"/>.
+        /// Call only when the cached state is known stale (wheel hot-swap,
+        /// plugin instance dispose, mzdash library replacement). Routine
+        /// Stop/Start should use <see cref="ClearBuffer"/>.
+        /// </summary>
+        public void HardReset()
+        {
+            _deviceInbox.Clear();
+            _lastState = null;
+            _lastMissingShape = "";
+        }
+
+        /// <summary>Backwards-compatible alias for <see cref="ClearBuffer"/>.
+        /// Old call sites assumed Reset() also cleared LastState; the buffer-
+        /// only behaviour is now the safer default. Callers wanting the full
+        /// clear should switch to <see cref="HardReset"/>.</summary>
+        public void Reset() => ClearBuffer();
 
         /// <summary>
         /// Build the host's `configJson()` reply. Pass the library names the

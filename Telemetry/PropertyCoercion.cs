@@ -11,7 +11,10 @@ namespace MozaPlugin.Telemetry
     public static class PropertyCoercion
     {
         // Tracks paths that have already emitted a null/unsupported warning so
-        // a bad mapping doesn't flood the log at 20+ Hz.
+        // a bad mapping doesn't flood the log at 20+ Hz. Bounded at MaxWarned so a
+        // pathological game with thousands of distinct bad properties can't grow
+        // this set indefinitely (each entry is a string heap allocation).
+        private const int MaxWarned = 256;
         private static readonly ConcurrentDictionary<string, byte> _warnedPaths = new();
 
         /// <summary>
@@ -71,6 +74,12 @@ namespace MozaPlugin.Telemetry
 
         private static void WarnOnce(string path, string detail)
         {
+            // Cap before TryAdd: the size guard is best-effort under contention
+            // (multiple threads can race past this point), but a few extra
+            // entries above the cap is acceptable. Once full, silently drop —
+            // re-checking later won't help, and logging the suppression once
+            // per excess path would defeat the rate-limit it exists for.
+            if (_warnedPaths.Count >= MaxWarned) return;
             if (_warnedPaths.TryAdd(path, 0))
             {
                 try

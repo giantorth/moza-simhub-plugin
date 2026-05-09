@@ -33,168 +33,258 @@
         </Style>
     </UserControl.Resources>
 
-    <ScrollViewer VerticalScrollBarVisibility="Auto">
-        <StackPanel Margin="5">
-            <TextBlock Text="MOZA Wheel" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,12"/>
+    <DockPanel>
+        <!-- Header (always visible) -->
+        <StackPanel DockPanel.Dock="Top" Margin="5">
 
             <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
                 <Ellipse x:Name="StatusDot" Width="12" Height="12" Margin="0,0,8,0"/>
                 <TextBlock x:Name="StatusText" VerticalAlignment="Center" FontSize="14"/>
             </StackPanel>
 
-            <TextBlock x:Name="WheelTypeText" Margin="0,4,0,2" Foreground="Gray"/>
-            <TextBlock x:Name="WheelFwText" Margin="0,0,0,8" Foreground="Gray" FontSize="11"/>
-
             <!-- Detection status -->
             <StackPanel x:Name="WheelNotDetectedPanel">
                 <TextBlock Text="Searching for wheel..." Foreground="Gray" FontStyle="Italic" Margin="0,10"/>
             </StackPanel>
-
-            <!-- ===== DASHBOARD TELEMETRY (new-protocol wheels only) ===== -->
-            <StackPanel x:Name="TelemetrySection">
-                <TextBlock Text="Dashboard Telemetry" Style="{StaticResource SectionHeader}"/>
-                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-                    <CheckBox x:Name="TelemetryEnabledCheck" Content="Enable dashboard telemetry"
-                              VerticalAlignment="Center" Click="TelemetryEnabledCheck_Click"/>
-                </StackPanel>
-                <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
-                    <TextBlock Text="Dashboard:" Width="180" VerticalAlignment="Center"/>
-                    <ComboBox x:Name="TelemetryProfileCombo" Width="200" Margin="0,0,8,0"
-                              SelectionChanged="TelemetryProfileCombo_SelectionChanged"/>
-                    <Button Content="Load .mzdash…" Click="TelemetryLoadMzdash_Click" Padding="6,2"/>
-                </StackPanel>
-                <TextBlock x:Name="TelemetryProfileInfo" Foreground="Gray" FontSize="11"
-                           Margin="180,0,0,8" Text="—"/>
-                <StackPanel Orientation="Horizontal" Margin="0,4,0,4">
-                    <Button x:Name="TelemetryTestStartBtn" Content="▶ Send Test Pattern"
-                            Padding="6,2" Margin="0,0,8,0" Click="TelemetryTestStart_Click"/>
-                    <Button x:Name="TelemetryTestStopBtn" Content="■ Stop"
-                            Padding="6,2" Click="TelemetryTestStop_Click" IsEnabled="False"/>
-                    <TextBlock x:Name="TelemetryStatusLabel" Foreground="Gray" FontSize="11"
-                               VerticalAlignment="Center" Margin="12,0,0,0" Text="Disabled"/>
-                </StackPanel>
-                <Expander x:Name="TelemetryMappingsExpander" Header="Channel mappings"
-                          IsExpanded="False" Margin="0,4,0,0"
-                          Expanded="TelemetryMappingsExpander_Expanded">
-                    <StackPanel Margin="0,8,0,0">
-                        <TextBlock Text="Assign SimHub properties to each dashboard channel. Blank falls back to the URL default."
-                                   Foreground="Gray" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,6"/>
-                        <DataGrid x:Name="TelemetryChannelGrid" AutoGenerateColumns="False"
-                                  HeadersVisibility="Column" CanUserAddRows="False" CanUserDeleteRows="False"
-                                  GridLinesVisibility="Horizontal" MaxHeight="400" Margin="0,0,0,6">
-                            <DataGrid.Columns>
-                                <DataGridTextColumn Header="Channel"     Binding="{Binding Name}"         IsReadOnly="True" Width="120"/>
-                                <DataGridTextColumn Header="URL"         Binding="{Binding Url}"          IsReadOnly="True" Width="*"/>
-                                <DataGridTextColumn Header="Tier (ms)"   Binding="{Binding PackageLevel}" IsReadOnly="True" Width="70"/>
-                                <DataGridTemplateColumn Header="SimHub property" Width="2*">
-                                    <DataGridTemplateColumn.CellTemplate>
-                                        <DataTemplate>
-                                            <ComboBox IsEditable="True"
-                                                      ItemsSource="{Binding KnownProperties}"
-                                                      Text="{Binding SimHubProperty, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay}"/>
-                                        </DataTemplate>
-                                    </DataGridTemplateColumn.CellTemplate>
-                                </DataGridTemplateColumn>
-                            </DataGrid.Columns>
-                        </DataGrid>
-                        <StackPanel Orientation="Horizontal">
-                            <Button Content="Apply mappings"    Click="TelemetryApplyMappings_Click" Padding="6,2" Margin="0,0,8,0"/>
-                            <Button Content="Reset to defaults" Click="TelemetryResetMappings_Click" Padding="6,2"/>
-                            <TextBlock x:Name="TelemetryMappingStatus" Foreground="Gray" FontSize="11"
-                                       VerticalAlignment="Center" Margin="12,0,0,0"/>
-                        </StackPanel>
-                    </StackPanel>
-                </Expander>
-            </StackPanel>
-
-            <!-- ===== NEW WHEEL (GS/FSR/CS/RS/TSW) ===== -->
-            <StackPanel x:Name="NewWheelPanel" Visibility="Collapsed">
-                <TextBlock Text="RPM LED Mode" Style="{StaticResource SectionHeader}"/>
-                <StackPanel Orientation="Horizontal" Margin="0,4">
-                    <TextBlock Text="RPM LED Mode" Style="{StaticResource SliderLabel}"/>
-                    <ComboBox x:Name="WheelTelemetryModeCombo" Width="140" SelectionChanged="WheelTelemetryModeCombo_Changed">
-                        <ComboBoxItem Content="Off"/>
-                        <ComboBoxItem Content="SimHub Mode"/>
-                        <ComboBoxItem Content="Static"/>
-                    </ComboBox>
-                </StackPanel>
-                <StackPanel Orientation="Horizontal" Margin="0,4">
-                    <TextBlock Text="RPM Idle Effect" Style="{StaticResource SliderLabel}"/>
-                    <ComboBox x:Name="WheelIdleEffectCombo" Width="140" SelectionChanged="WheelIdleEffectCombo_Changed">
-                        <ComboBoxItem Content="Off"/>
-                        <ComboBoxItem Content="Constant"/>
-                        <ComboBoxItem Content="Breathing"/>
-                        <ComboBoxItem Content="Color Cycle"/>
-                        <ComboBoxItem Content="Rainbow"/>
-                        <ComboBoxItem Content="Sand Flow"/>
-                    </ComboBox>
-                </StackPanel>
-
-                <StackPanel x:Name="WheelRpmColorSection">
-                    <TextBlock Text="RPM LED Colors (Static)" Style="{StaticResource SectionHeader}"/>
-                    <TextBlock Text="Colors used when telemetry is not sending."
-                               Foreground="Gray" FontSize="11" Margin="0,0,0,4" TextWrapping="Wrap"/>
-                    <StackPanel x:Name="WheelRpmIndexPanel" Orientation="Horizontal" Margin="0,0,0,2"/>
-                    <StackPanel x:Name="WheelRpmColorPanel" Orientation="Horizontal" Margin="0,0,0,10"/>
-                </StackPanel>
-
-                <StackPanel x:Name="WheelFlagSection">
-                    <TextBlock Text="Flag LED Colors" Style="{StaticResource SectionHeader}"/>
-                    <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
-                        <TextBlock Style="{StaticResource LedIndex}" Text="1"/><TextBlock Style="{StaticResource LedIndex}" Text="2"/>
-                        <TextBlock Style="{StaticResource LedIndex}" Text="3"/><TextBlock Style="{StaticResource LedIndex}" Text="4"/>
-                        <TextBlock Style="{StaticResource LedIndex}" Text="5"/><TextBlock Style="{StaticResource LedIndex}" Text="6"/>
-                    </StackPanel>
-                    <StackPanel x:Name="WheelFlagColorPanel" Orientation="Horizontal" Margin="0,0,0,10"/>
-                </StackPanel>
-
-                <StackPanel x:Name="WheelKnobSection" Visibility="Collapsed">
-                    <TextBlock Text="Knob LED Colors" Style="{StaticResource SectionHeader}"/>
-                    <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
-                        <TextBlock Width="70"/>
-                        <TextBlock Width="60" TextAlignment="Center" Foreground="Gray" FontSize="11" Text="Color"/>
-                        <TextBlock Width="60" TextAlignment="Center" Foreground="Gray" FontSize="11" Text="Active"/>
-                    </StackPanel>
-                    <StackPanel x:Name="WheelKnobPanel" Margin="0,0,0,10"/>
-                </StackPanel>
-
-                <TextBlock Text="Button LED Colors" Style="{StaticResource SectionHeader}"/>
-                <TextBlock Text="Check 'default during telemetry' to replace any 'off' button with this color while SimHub is sending telemetry."
-                           Foreground="Gray" FontSize="11" Margin="0,0,0,4" TextWrapping="Wrap"/>
-                <StackPanel x:Name="WheelButtonColorPanel" Orientation="Horizontal" Margin="0,0,0,10"/>
-                <StackPanel Orientation="Horizontal" Margin="0,4">
-                    <TextBlock Text="Button Idle Effect" Style="{StaticResource SliderLabel}"/>
-                    <ComboBox x:Name="WheelButtonIdleEffectCombo" Width="140" SelectionChanged="WheelButtonIdleEffectCombo_Changed">
-                        <ComboBoxItem Content="Off"/><ComboBoxItem Content="Constant"/>
-                        <ComboBoxItem Content="Breathing"/><ComboBoxItem Content="Color Cycle"/>
-                        <ComboBoxItem Content="Rainbow"/><ComboBoxItem Content="Sand Flow"/>
-                    </ComboBox>
-                </StackPanel>
-
-            </StackPanel>
-
-            <!-- ===== ES WHEEL (Old Protocol) ===== -->
-            <StackPanel x:Name="EsWheelPanel" Visibility="Collapsed">
-                <TextBlock Text="ES Wheel" FontSize="14" FontWeight="SemiBold" Foreground="CornflowerBlue" Margin="0,0,0,5"/>
-
-                <TextBlock Text="RPM Indicator" Style="{StaticResource SectionHeader}"/>
-                <StackPanel Orientation="Horizontal" Margin="0,4">
-                    <TextBlock Text="Indicator Mode" Style="{StaticResource SliderLabel}"/>
-                    <ComboBox x:Name="EsRpmIndicatorCombo" Width="140" SelectionChanged="EsRpmIndicatorCombo_Changed">
-                        <ComboBoxItem Content="SimHub Mode"/>
-                        <ComboBoxItem Content="Always On"/>
-                        <ComboBoxItem Content="Off"/>
-                    </ComboBox>
-                </StackPanel>
-                <StackPanel Orientation="Horizontal" Margin="0,4">
-                    <TextBlock Text="Display Mode" Style="{StaticResource SliderLabel}"/>
-                    <ComboBox x:Name="EsRpmDisplayCombo" Width="140" SelectionChanged="EsRpmDisplayCombo_Changed">
-                        <ComboBoxItem Content="Mode 1"/>
-                        <ComboBoxItem Content="Mode 2"/>
-                    </ComboBox>
-                </StackPanel>
-            </StackPanel>
-
         </StackPanel>
-    </ScrollViewer>
+
+        <!-- Capability-driven tabs -->
+        <TabControl x:Name="WheelTabs" Margin="0,4,0,0">
+
+            <!-- ==================== DASHBOARD TAB ==================== -->
+            <TabItem x:Name="DashboardTab" Header="Dashboard" Visibility="Collapsed">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="10">
+                    <StackPanel Margin="5">
+
+                        <TextBlock Text="Dashboard Telemetry" Style="{StaticResource SectionHeader}"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                            <CheckBox x:Name="TelemetryEnabledCheck" Content="Enable dashboard telemetry"
+                                      VerticalAlignment="Center" Click="TelemetryEnabledCheck_Click"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                            <TextBlock Text="Dashboard:" Width="180" VerticalAlignment="Center"/>
+                            <ComboBox x:Name="TelemetryProfileCombo" Width="200" Margin="0,0,8,0"
+                                      SelectionChanged="TelemetryProfileCombo_SelectionChanged"/>
+                            <Button Content="Load .mzdash…" Click="TelemetryLoadMzdash_Click" Padding="6,2" Margin="0,0,4,0"
+                                    ToolTip="Load a local .mzdash file for tier-def channel matching"/>
+                            <Button Content="Set Folder…" Click="TelemetrySetFolder_Click" Padding="6,2" Margin="0,0,4,0"
+                                    ToolTip="Set a folder of .mzdash files as a dashboard library"/>
+                            <Button Content="Auto-detect" Click="TelemetryAutoDetect_Click" Padding="6,2" Margin="0,0,4,0"
+                                    ToolTip="Auto-detect the dashboard folder for the connected wheel"/>
+                        </StackPanel>
+                        <TextBlock x:Name="TelemetryProfileInfo" Foreground="Gray" FontSize="11"
+                                   Margin="180,0,0,4" Text="—"/>
+                        <TextBlock x:Name="TelemetryFolderInfo" Foreground="Gray" FontSize="11"
+                                   Margin="180,0,0,8"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,4,0,4">
+                            <Button x:Name="TelemetryTestStartBtn" Content="▶ Send Test Pattern"
+                                    Padding="6,2" Margin="0,0,8,0" Click="TelemetryTestStart_Click"/>
+                            <Button x:Name="TelemetryTestStopBtn" Content="■ Stop"
+                                    Padding="6,2" Click="TelemetryTestStop_Click" IsEnabled="False"/>
+                            <TextBlock x:Name="TelemetryStatusLabel" Foreground="Gray" FontSize="11"
+                                       VerticalAlignment="Center" Margin="12,0,0,0" Text="Disabled"/>
+                        </StackPanel>
+                        <Expander x:Name="TelemetryMappingsExpander" Header="Channel mappings"
+                                  IsExpanded="False" Margin="0,4,0,0"
+                                  Expanded="TelemetryMappingsExpander_Expanded">
+                            <StackPanel Margin="0,8,0,0">
+                                <TextBlock Text="Assign SimHub properties to each dashboard channel. Blank falls back to the URL default."
+                                           Foreground="Gray" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,6"/>
+                                <DataGrid x:Name="TelemetryChannelGrid" AutoGenerateColumns="False"
+                                          HeadersVisibility="Column" CanUserAddRows="False" CanUserDeleteRows="False"
+                                          GridLinesVisibility="Horizontal" MaxHeight="400" Margin="0,0,0,6">
+                                    <DataGrid.Columns>
+                                        <DataGridTextColumn Header="Channel"     Binding="{Binding Name}"         IsReadOnly="True" Width="120"/>
+                                        <DataGridTextColumn Header="URL"         Binding="{Binding Url}"          IsReadOnly="True" Width="*"/>
+                                        <DataGridTextColumn Header="Tier (ms)"   Binding="{Binding PackageLevel}" IsReadOnly="True" Width="70"/>
+                                        <DataGridTemplateColumn Header="SimHub property" Width="2*">
+                                            <DataGridTemplateColumn.CellTemplate>
+                                                <DataTemplate>
+                                                    <ComboBox IsEditable="True"
+                                                              ItemsSource="{Binding KnownProperties}"
+                                                              Text="{Binding SimHubProperty, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay}"/>
+                                                </DataTemplate>
+                                            </DataGridTemplateColumn.CellTemplate>
+                                        </DataGridTemplateColumn>
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                                <StackPanel Orientation="Horizontal">
+                                    <Button Content="Apply mappings"    Click="TelemetryApplyMappings_Click" Padding="6,2" Margin="0,0,8,0"/>
+                                    <Button Content="Reset to defaults" Click="TelemetryResetMappings_Click" Padding="6,2"/>
+                                    <TextBlock x:Name="TelemetryMappingStatus" Foreground="Gray" FontSize="11"
+                                               VerticalAlignment="Center" Margin="12,0,0,0"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </Expander>
+
+                        <TextBlock Text="Display" Style="{StaticResource SectionHeader}"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Display Brightness" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="WheelDisplayBrightnessSlider" Style="{StaticResource SettingSlider}"
+                                    Minimum="0" Maximum="100" TickFrequency="1"
+                                    ValueChanged="WheelDisplayBrightnessSlider_ValueChanged"/>
+                            <TextBlock x:Name="WheelDisplayBrightnessValue" Style="{StaticResource SliderValue}" Text="100"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Standby Time" Style="{StaticResource SliderLabel}"/>
+                            <ComboBox x:Name="WheelDisplayStandbyCombo" Width="140"
+                                      SelectionChanged="WheelDisplayStandbyCombo_Changed">
+                                <ComboBoxItem Tag="1">1 minute</ComboBoxItem>
+                                <ComboBoxItem Tag="2">2 minutes</ComboBoxItem>
+                                <ComboBoxItem Tag="3">3 minutes</ComboBoxItem>
+                                <ComboBoxItem Tag="4">4 minutes</ComboBoxItem>
+                                <ComboBoxItem Tag="5">5 minutes</ComboBoxItem>
+                                <ComboBoxItem Tag="10">10 minutes</ComboBoxItem>
+                                <ComboBoxItem Tag="15">15 minutes</ComboBoxItem>
+                                <ComboBoxItem Tag="20">20 minutes</ComboBoxItem>
+                                <ComboBoxItem Tag="25">25 minutes</ComboBoxItem>
+                                <ComboBoxItem Tag="30">30 minutes</ComboBoxItem>
+                                <ComboBoxItem Tag="35">35 minutes</ComboBoxItem>
+                                <ComboBoxItem Tag="40">40 minutes</ComboBoxItem>
+                                <ComboBoxItem Tag="45">45 minutes</ComboBoxItem>
+                                <ComboBoxItem Tag="60">1 hour</ComboBoxItem>
+                                <ComboBoxItem Tag="120">2 hours</ComboBoxItem>
+                                <ComboBoxItem Tag="180">3 hours</ComboBoxItem>
+                                <ComboBoxItem Tag="240">4 hours</ComboBoxItem>
+                                <ComboBoxItem Tag="300">5 hours</ComboBoxItem>
+                            </ComboBox>
+                        </StackPanel>
+
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <!-- ==================== RPM TAB ==================== -->
+            <TabItem x:Name="RpmTab" Header="RPM" Visibility="Collapsed">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="10">
+                    <StackPanel Margin="5">
+
+                        <!-- New-protocol wheel content -->
+                        <StackPanel x:Name="RpmNewContent" Visibility="Collapsed">
+                            <TextBlock Text="RPM LED Mode" Style="{StaticResource SectionHeader}"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,4">
+                                <TextBlock Text="RPM LED Mode" Style="{StaticResource SliderLabel}"/>
+                                <ComboBox x:Name="WheelTelemetryModeCombo" Width="140" SelectionChanged="WheelTelemetryModeCombo_Changed">
+                                    <ComboBoxItem Content="Off"/>
+                                    <ComboBoxItem Content="SimHub Mode"/>
+                                    <ComboBoxItem Content="Static"/>
+                                </ComboBox>
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,4">
+                                <TextBlock Text="RPM Idle Effect" Style="{StaticResource SliderLabel}"/>
+                                <ComboBox x:Name="WheelIdleEffectCombo" Width="140" SelectionChanged="WheelIdleEffectCombo_Changed">
+                                    <ComboBoxItem Content="Off"/>
+                                    <ComboBoxItem Content="Constant"/>
+                                    <ComboBoxItem Content="Breathing"/>
+                                    <ComboBoxItem Content="Color Cycle"/>
+                                    <ComboBoxItem Content="Rainbow"/>
+                                    <ComboBoxItem Content="Sand Flow"/>
+                                </ComboBox>
+                            </StackPanel>
+
+                            <StackPanel x:Name="WheelRpmColorSection">
+                                <TextBlock Text="RPM LED Colors (Static)" Style="{StaticResource SectionHeader}"/>
+                                <TextBlock Text="Colors used when telemetry is not sending."
+                                           Foreground="Gray" FontSize="11" Margin="0,0,0,4" TextWrapping="Wrap"/>
+                                <StackPanel x:Name="WheelRpmIndexPanel" Orientation="Horizontal" Margin="0,0,0,2"/>
+                                <StackPanel x:Name="WheelRpmColorPanel" Orientation="Horizontal" Margin="0,0,0,10"/>
+                            </StackPanel>
+
+                            <StackPanel x:Name="WheelFlagSection">
+                                <TextBlock Text="Flag LED Colors" Style="{StaticResource SectionHeader}"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
+                                    <TextBlock Style="{StaticResource LedIndex}" Text="1"/><TextBlock Style="{StaticResource LedIndex}" Text="2"/>
+                                    <TextBlock Style="{StaticResource LedIndex}" Text="3"/><TextBlock Style="{StaticResource LedIndex}" Text="4"/>
+                                    <TextBlock Style="{StaticResource LedIndex}" Text="5"/><TextBlock Style="{StaticResource LedIndex}" Text="6"/>
+                                </StackPanel>
+                                <StackPanel x:Name="WheelFlagColorPanel" Orientation="Horizontal" Margin="0,0,0,10"/>
+                            </StackPanel>
+                        </StackPanel>
+
+                        <!-- ES (old-protocol) wheel content -->
+                        <StackPanel x:Name="RpmEsContent" Visibility="Collapsed">
+                            <TextBlock Text="ES Wheel" FontSize="14" FontWeight="SemiBold" Foreground="CornflowerBlue" Margin="0,0,0,5"/>
+
+                            <TextBlock Text="RPM Indicator" Style="{StaticResource SectionHeader}"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,4">
+                                <TextBlock Text="Indicator Mode" Style="{StaticResource SliderLabel}"/>
+                                <ComboBox x:Name="EsRpmIndicatorCombo" Width="140" SelectionChanged="EsRpmIndicatorCombo_Changed">
+                                    <ComboBoxItem Content="SimHub Mode"/>
+                                    <ComboBoxItem Content="Always On"/>
+                                    <ComboBoxItem Content="Off"/>
+                                </ComboBox>
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,4">
+                                <TextBlock Text="Display Mode" Style="{StaticResource SliderLabel}"/>
+                                <ComboBox x:Name="EsRpmDisplayCombo" Width="140" SelectionChanged="EsRpmDisplayCombo_Changed">
+                                    <ComboBoxItem Content="Mode 1"/>
+                                    <ComboBoxItem Content="Mode 2"/>
+                                </ComboBox>
+                            </StackPanel>
+                        </StackPanel>
+
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <!-- ==================== BUTTONS TAB ==================== -->
+            <TabItem x:Name="ButtonsTab" Header="Buttons" Visibility="Collapsed">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="10">
+                    <StackPanel Margin="5">
+
+                        <TextBlock Text="Button LED Mode" Style="{StaticResource SectionHeader}"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Button Idle Effect" Style="{StaticResource SliderLabel}"/>
+                            <ComboBox x:Name="WheelButtonIdleEffectCombo" Width="140" SelectionChanged="WheelButtonIdleEffectCombo_Changed">
+                                <ComboBoxItem Content="Off"/><ComboBoxItem Content="Constant"/>
+                                <ComboBoxItem Content="Breathing"/><ComboBoxItem Content="Color Cycle"/>
+                                <ComboBoxItem Content="Rainbow"/><ComboBoxItem Content="Sand Flow"/>
+                            </ComboBox>
+                        </StackPanel>
+
+                        <TextBlock Text="Button LED Colors" Style="{StaticResource SectionHeader}"/>
+                        <TextBlock Text="Check 'default during telemetry' to replace any 'off' button with this color while SimHub is sending telemetry."
+                                   Foreground="Gray" FontSize="11" Margin="0,0,0,4" TextWrapping="Wrap"/>
+                        <StackPanel x:Name="WheelButtonColorPanel" Orientation="Horizontal" Margin="0,0,0,10"/>
+
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <!-- ==================== KNOBS TAB ==================== -->
+            <TabItem x:Name="KnobsTab" Header="Knobs" Visibility="Collapsed">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="10">
+                    <StackPanel Margin="5">
+
+                        <StackPanel x:Name="WheelKnobSection" Visibility="Collapsed">
+                            <TextBlock Text="Knob LED Colors" Style="{StaticResource SectionHeader}"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
+                                <TextBlock Width="70"/>
+                                <TextBlock Width="60" TextAlignment="Center" Foreground="Gray" FontSize="11" Text="Active"/>
+                                <TextBlock Width="60" TextAlignment="Center" Foreground="Gray" FontSize="11" Text="Inactive"/>
+                            </StackPanel>
+                            <StackPanel x:Name="WheelKnobPanel" Margin="0,0,0,10"/>
+                        </StackPanel>
+
+                        <StackPanel x:Name="WheelKnobRingSection" Visibility="Collapsed">
+                            <TextBlock Text="Knob Ring LEDs" Style="{StaticResource SectionHeader}"/>
+                            <TextBlock Text="Per-LED colors for each knob's rotary ring."
+                                       Foreground="Gray" FontSize="11" Margin="0,0,0,4" TextWrapping="Wrap"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,4,0,8">
+                                <TextBlock Text="Ring Brightness" Style="{StaticResource SliderLabel}"/>
+                                <Slider x:Name="KnobRingBrightnessSlider" Width="160"
+                                        Minimum="0" Maximum="100" TickFrequency="1" IsSnapToTickEnabled="True"
+                                        ValueChanged="KnobRingBrightnessSlider_ValueChanged"/>
+                                <TextBlock x:Name="KnobRingBrightnessValue" Width="30" Margin="4,0,0,0"
+                                           VerticalAlignment="Center" Text="100"/>
+                            </StackPanel>
+                            <StackPanel x:Name="WheelKnobRingPanel" Margin="0,0,0,10"/>
+                        </StackPanel>
+
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+        </TabControl>
+    </DockPanel>
 </UserControl>

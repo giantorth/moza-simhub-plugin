@@ -6,6 +6,7 @@ using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
+using MozaPlugin.Telemetry2.Protocol;
 using Newtonsoft.Json.Linq;
 
 namespace MozaPlugin.Telemetry
@@ -15,7 +16,7 @@ namespace MozaPlugin.Telemetry
     /// </summary>
     public class DashboardProfileStore
     {
-        private Dictionary<string, TelemetryChannelInfo>? _telemetryMap;
+        private volatile Dictionary<string, TelemetryChannelInfo>? _telemetryMap;
         private volatile List<MultiStreamProfile>? _builtinProfiles;
         private readonly object _builtinLock = new object();
 
@@ -25,53 +26,186 @@ namespace MozaPlugin.Telemetry
             new Regex(@"Telemetry\.get\(\\?[""'](v1/gameData/[^""'\\]+)\\?[""']\)",
                 RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
+        // Newer mzdash format (Core, AMG-GT3 KS) embeds URL as a bare string in
+        // binding/methods entries (no Telemetry.get() wrapper). Match raw
+        // `v1/gameData/<name>` so we don't miss those channels.
+        private static readonly Regex RawUrlRegex =
+            new Regex(@"v1/gameData/[A-Za-z0-9_]+",
+                RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
         /// <summary>URL suffix → SimHub field mapping.</summary>
-        private static readonly Dictionary<string, SimHubField> UrlFieldMap =
-            new Dictionary<string, SimHubField>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["SpeedKmh"]           = SimHubField.SpeedKmh,
-            ["Rpm"]                = SimHubField.Rpms,
-            ["Gear"]               = SimHubField.Gear,
-            ["Throttle"]           = SimHubField.Throttle,
-            ["Brake"]              = SimHubField.Brake,
-            ["BestLapTime"]        = SimHubField.BestLapTimeSeconds,
-            ["CurrentLapTime"]     = SimHubField.CurrentLapTimeSeconds,
-            ["LastLapTime"]        = SimHubField.LastLapTimeSeconds,
-            ["GAP"]                = SimHubField.DeltaToSessionBest,
-            ["FuelRemainder"]      = SimHubField.FuelPercent,
-            ["DrsState"]           = SimHubField.DrsEnabled,
-            ["ErsState"]           = SimHubField.ErsPercent,
-            ["TyreWearFrontLeft"]  = SimHubField.TyreWearFrontLeft,
-            ["TyreWearFrontRight"] = SimHubField.TyreWearFrontRight,
-            ["TyreWearRearLeft"]   = SimHubField.TyreWearRearLeft,
-            ["TyreWearRearRight"]  = SimHubField.TyreWearRearRight,
-        };
+        // URL → SimHubField, property path, and scale all live in
+        // Data/Telemetry.json (simhub_field, simhub_property, simhub_scale).
+        // The earlier hardcoded UrlFieldMap + DefaultPropertyPaths duplicated
+        // that data; kept removed so the JSON stays authoritative.
 
         /// <summary>
-        /// Canonical SimHub property path for each built-in field. Used to seed
-        /// the UI's channel mapping so defaults route through the same
-        /// <c>GetPropertyValue</c> path as user overrides.
+        /// Build a multi-tier <see cref="MultiStreamProfile"/> from the wheel's
+        /// advertised channel catalog. Eliminates the mzdash dependency for
+        /// telemetry — plugin subscribes to whatever channels the wheel
+        /// declared and pulls per-channel metadata (compression, SimHub
+        /// property, scale, package_level) from the bundled
+        /// <c>Data/Telemetry.json</c> resource. Channels group into tiers by
+        /// their declared <c>package_level</c> (2000/500/30 ms) so the wire
+        /// subscription matches PitHouse's slow/medium/fast layout.
+        ///
+        /// Falls back to heuristic compression / SimHub field mapping for URLs
+        /// the JSON doesn't declare (e.g. firmware-only channels).
         /// </summary>
-        public static readonly IReadOnlyDictionary<SimHubField, string> DefaultPropertyPaths =
-            new Dictionary<SimHubField, string>
+        public MultiStreamProfile BuildProfileFromCatalog(
+            IReadOnlyList<string> catalog,
+            string profileName = "WheelCatalog")
         {
-            [SimHubField.SpeedKmh]              = "DataCorePlugin.GameData.SpeedKmh",
-            [SimHubField.Rpms]                  = "DataCorePlugin.GameData.Rpms",
-            [SimHubField.Gear]                  = "DataCorePlugin.GameData.Gear",
-            [SimHubField.Throttle]              = "DataCorePlugin.GameData.Throttle",
-            [SimHubField.Brake]                 = "DataCorePlugin.GameData.Brake",
-            [SimHubField.BestLapTimeSeconds]    = "DataCorePlugin.GameData.BestLapTime",
-            [SimHubField.CurrentLapTimeSeconds] = "DataCorePlugin.GameData.CurrentLapTime",
-            [SimHubField.LastLapTimeSeconds]    = "DataCorePlugin.GameData.LastLapTime",
-            [SimHubField.DeltaToSessionBest]    = "DataCorePlugin.GameData.DeltaToSessionBest",
-            [SimHubField.FuelPercent]           = "DataCorePlugin.GameData.FuelPercent",
-            [SimHubField.DrsEnabled]            = "DataCorePlugin.GameData.DRSEnabled",
-            [SimHubField.ErsPercent]            = "DataCorePlugin.GameData.ERSPercent",
-            [SimHubField.TyreWearFrontLeft]     = "DataCorePlugin.GameData.TyreWearFrontLeft",
-            [SimHubField.TyreWearFrontRight]    = "DataCorePlugin.GameData.TyreWearFrontRight",
-            [SimHubField.TyreWearRearLeft]      = "DataCorePlugin.GameData.TyreWearRearLeft",
-            [SimHubField.TyreWearRearRight]     = "DataCorePlugin.GameData.TyreWearRearRight",
-        };
+            var telemetryMap = GetTelemetryMap();
+            // Build a ChannelDefinition per catalog URL, looking up each
+            // channel's compression / package_level / SimHub property in
+            // Telemetry.json. URLs not in the JSON fall back to heuristic
+            // compression and SimHubField mapping.
+            var perTier = new Dictionary<int, List<ChannelDefinition>>();
+            foreach (var url in catalog)
+            {
+                if (string.IsNullOrEmpty(url)) continue;
+                string suffix = url.Substring(url.LastIndexOf('/') + 1);
+                ChannelDefinition ch;
+                int packageLevel;
+                if (telemetryMap.TryGetValue(url, out var info))
+                {
+                    packageLevel = info.PackageLevel;
+                    int bitWidth = CompressionTable.TryGetByName(info.Compression, out var ct) ? ct.BitWidth : 32;
+                    double scale = info.SimHubPropertyScale == 0 ? 1.0 : info.SimHubPropertyScale;
+                    ch = new ChannelDefinition
+                    {
+                        Name = info.Name,
+                        Url = url,
+                        Compression = info.Compression,
+                        BitWidth = bitWidth,
+                        SimHubField = info.Field,
+                        SimHubProperty = info.SimHubProperty,
+                        SimHubPropertyScale = scale,
+                        PackageLevel = packageLevel,
+                    };
+                }
+                else
+                {
+                    // Fallback: URL not in Telemetry.json — heuristic compression
+                    // only. No SimHubField / property mapping (those live in
+                    // Telemetry.json now); user can manually map via UI.
+                    string compression = PickCompressionForUrl(suffix);
+                    int bitWidth = CompressionTable.TryGetByName(compression, out var ct2) ? ct2.BitWidth : 32;
+                    packageLevel = 30;
+                    ch = new ChannelDefinition
+                    {
+                        Name = suffix,
+                        Url = url,
+                        Compression = compression,
+                        BitWidth = bitWidth,
+                        SimHubField = SimHubField.Zero,
+                        SimHubProperty = "",
+                        SimHubPropertyScale = 1.0,
+                        PackageLevel = packageLevel,
+                    };
+                }
+                if (!perTier.TryGetValue(packageLevel, out var list))
+                {
+                    list = new List<ChannelDefinition>();
+                    perTier[packageLevel] = list;
+                }
+                list.Add(ch);
+            }
+
+            // Sort tiers by package_level descending so flag=0 is the slowest
+            // tier (PitHouse convention: slowest tier first, fastest last).
+            //
+            // KNOWN INCONSISTENCY: BuildMultiStreamProfile (this same file,
+            // l. ~590) sorts ascending — opposite ordering. docs/protocol/
+            // telemetry/live-stream.md table also contradicts this comment
+            // (claims base = pl 30 = fastest). Live R5 capture 2026-04-29 saw
+            // flag base ≈ 0x0c (not 0x00), so the absolute base byte is per-
+            // connection. Tracked: docs/protocol/open-questions.md "Tier-flag
+            // → package_level mapping inverted".
+            var sortedLevels = new List<int>(perTier.Keys);
+            sortedLevels.Sort((a, b) => b.CompareTo(a));
+
+            var tiers = new List<DashboardProfile>();
+            foreach (var level in sortedLevels)
+            {
+                var chs = perTier[level];
+                int bits = chs.Sum(c => c.BitWidth);
+                tiers.Add(new DashboardProfile
+                {
+                    Name = $"L{level}",
+                    Channels = chs,
+                    PackageLevel = level,
+                    TotalBits = bits,
+                    TotalBytes = (bits + 7) / 8,
+                });
+            }
+
+            // Always emit at least one tier (firmware expects subscription).
+            if (tiers.Count == 0)
+            {
+                tiers.Add(new DashboardProfile
+                {
+                    Name = profileName,
+                    Channels = new List<ChannelDefinition>(),
+                    PackageLevel = 30,
+                });
+            }
+
+            return new MultiStreamProfile
+            {
+                Name = profileName,
+                PageCount = 1,
+                Tiers = tiers,
+            };
+        }
+
+        /// <summary>
+        /// Heuristic compression picker. Wheel firmware ultimately decides;
+        /// these defaults match what the host is most likely to send for
+        /// standard simracing channels and align with codes confirmed by
+        /// PitHouse captures (e.g. CurrentLapTime → float, ABSActive → bool).
+        /// </summary>
+        public static string PickCompressionForUrl(string suffix)
+        {
+            // Boolean state flags
+            if (suffix.EndsWith("Active", StringComparison.OrdinalIgnoreCase)
+                || suffix.EndsWith("Enabled", StringComparison.OrdinalIgnoreCase)
+                || suffix.Equals("ABSActive", StringComparison.OrdinalIgnoreCase)
+                || suffix.Equals("TCActive", StringComparison.OrdinalIgnoreCase)
+                || suffix.Equals("DrsState", StringComparison.OrdinalIgnoreCase))
+                return "bool";
+            if (suffix.Equals("Gear", StringComparison.OrdinalIgnoreCase))
+                return "uint30"; // PitHouse capture: comp=0x0d width=5 — covers reverse (-1=31)
+            if (suffix.EndsWith("Level", StringComparison.OrdinalIgnoreCase))
+                return "uint8";
+            if (suffix.Equals("Rpm", StringComparison.OrdinalIgnoreCase)
+                || suffix.Equals("Rpms", StringComparison.OrdinalIgnoreCase))
+                return "uint16_t";
+            if (suffix.Equals("CurrentLap", StringComparison.OrdinalIgnoreCase)
+                || suffix.EndsWith("LapNumber", StringComparison.OrdinalIgnoreCase)
+                || suffix.EndsWith("LapCount", StringComparison.OrdinalIgnoreCase))
+                return "uint16_t";
+            if (suffix.EndsWith("LapTime", StringComparison.OrdinalIgnoreCase)
+                || suffix.Equals("GAP", StringComparison.OrdinalIgnoreCase))
+                return "float";
+            if (suffix.Equals("SpeedKmh", StringComparison.OrdinalIgnoreCase))
+                return "float_6000_1";
+            if (suffix.StartsWith("TyreTemp", StringComparison.OrdinalIgnoreCase))
+                return "tyre_temp_1";
+            if (suffix.StartsWith("TyrePressure", StringComparison.OrdinalIgnoreCase))
+                return "tyre_pressure_1";
+            if (suffix.StartsWith("TyreWear", StringComparison.OrdinalIgnoreCase))
+                return "percent_1";
+            if (suffix.EndsWith("Percent", StringComparison.OrdinalIgnoreCase)
+                || suffix.EndsWith("Throttle", StringComparison.OrdinalIgnoreCase)
+                || suffix.EndsWith("Brake", StringComparison.OrdinalIgnoreCase))
+                return "percent_1";
+            // Fallback — float covers most signed continuous values
+            return "float";
+        }
+
+
 
         public IReadOnlyList<MultiStreamProfile> BuiltinProfiles
         {
@@ -140,34 +274,191 @@ namespace MozaPlugin.Telemetry
             }
         }
 
-        private MultiStreamProfile? ParseMzdashContent(string name, string content)
+        internal MultiStreamProfile? ParseMzdashContent(string name, string content)
         {
-            // Extract all Telemetry.get() URLs, deduplicate
-            var urls = TelemetryGetRegex.Matches(content)
-                .Cast<Match>()
-                .Select(m => m.Groups[1].Value)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
+            // Extract Telemetry.get() URLs (legacy format, e.g. F1 mzdash)
+            var allUrls = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (Match m in TelemetryGetRegex.Matches(content))
+                allUrls.Add(m.Groups[1].Value);
+            // Also extract raw `v1/gameData/...` refs (newer format like Core
+            // and AMG GT3 KS — URL is a plain string in binding/methods,
+            // no Telemetry.get() wrapper).
+            foreach (Match m in RawUrlRegex.Matches(content))
+                allUrls.Add(m.Value);
 
-            if (urls.Count == 0)
+            if (allUrls.Count == 0)
                 return null;
 
-            var profile = BuildMultiStreamProfile(name, urls);
+            // Tier emission strategy: pkg_level grouping (matches PitHouse
+            // in-game capture 2026-04-29: 3 tiers × N channels each, one tier
+            // per update rate 30/500/2000 ms). Earlier per-widget strategy
+            // generated 1-channel-per-tier malformed for the wheel parser —
+            // wheel expects channels of same package_level packed in a single
+            // 0x01 record. Falls back to per-widget only when pkg_level
+            // grouping yields no tiers (no channels found in widget walk).
+            MultiStreamProfile? profile = BuildMultiStreamProfile(name, allUrls);
 
-            // Extract page count from mzdash children array
+            if (profile == null || profile.Tiers.Count == 0)
+            {
+                try
+                {
+                    var json = JObject.Parse(content);
+                    var perWidget = BuildPerWidgetProfile(name, json);
+                    if (perWidget != null && perWidget.Tiers.Count > 0)
+                        profile = perWidget;
+                }
+                catch (Exception ex)
+                {
+                    MozaLog.Debug($"[Moza] mzdash widget-tree parse failed for '{name}': {ex.Message}");
+                }
+            }
+
             try
             {
                 var json = JObject.Parse(content);
                 var children = json["children"] as JArray;
-                if (children != null && children.Count > 0)
+                if (children != null && children.Count > 0 && profile != null)
                     profile.PageCount = children.Count;
             }
             catch (Exception ex)
             {
-                MozaLog.Info($"[Moza] mzdash page-count parse failed for '{name}': {ex.Message}");
+                MozaLog.Debug($"[Moza] mzdash page-count parse failed for '{name}': {ex.Message}");
             }
 
             return profile;
+        }
+
+        /// <summary>
+        /// Walk mzdash JSON children tree, emit one DashboardProfile per widget
+        /// that binds telemetry URLs. Tier flag bytes assigned sequentially in
+        /// walk order (0..N-1, no gaps — gaps crashed real W17 display in
+        /// 2026-04-29 testing). Channel order within tier follows the URL
+        /// discovery order in widget JSON (matches PitHouse capture; not
+        /// alphabetic).
+        /// </summary>
+        private MultiStreamProfile? BuildPerWidgetProfile(string name, JObject root)
+        {
+            var widgetTiers = new List<DashboardProfile>();
+            var telemetryMap = GetTelemetryMap();
+
+            void Walk(JToken node)
+            {
+                if (node is JObject obj)
+                {
+                    var localText = new StringBuilder();
+                    foreach (var prop in obj.Properties())
+                    {
+                        if (prop.Name == "children") continue;
+                        if (prop.Value is JValue v && v.Type == JTokenType.String)
+                            localText.Append((string?)v.Value).Append('\n');
+                        else if (prop.Value is JObject || prop.Value is JArray)
+                            localText.Append(prop.Value.ToString(Newtonsoft.Json.Formatting.None)).Append('\n');
+                    }
+                    string text = localText.ToString();
+
+                    // Preserve discovery order; dedupe within widget only.
+                    var urls = new List<string>();
+                    var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (Match m in TelemetryGetRegex.Matches(text))
+                    {
+                        var u = m.Groups[1].Value;
+                        if (seen.Add(u)) urls.Add(u);
+                    }
+                    foreach (Match m in RawUrlRegex.Matches(text))
+                    {
+                        if (seen.Add(m.Value)) urls.Add(m.Value);
+                    }
+
+                    if (urls.Count > 0)
+                    {
+                        var channels = new List<ChannelDefinition>();
+                        int packageLevel = 30;
+                        foreach (var url in urls)
+                        {
+                            string suffix = url.Contains('/') ? url.Substring(url.LastIndexOf('/') + 1) : url;
+                            int bitWidth;
+                            string compression;
+                            string property = "";
+                            SimHubField field = SimHubField.Zero;
+                            int level = 30;
+                            string chName = suffix;
+                            double scale = 1.0;
+                            if (telemetryMap.TryGetValue(url, out var info))
+                            {
+                                compression = info.Compression;
+                                bitWidth = CompressionTable.TryGetByName(compression, out var ct3) ? ct3.BitWidth : 32;
+                                field = info.Field;
+                                property = info.SimHubProperty ?? "";
+                                level = info.PackageLevel;
+                                chName = info.Name;
+                                scale = info.SimHubPropertyScale == 0 ? 1.0 : info.SimHubPropertyScale;
+                            }
+                            else
+                            {
+                                compression = PickCompressionForUrl(suffix);
+                                bitWidth = CompressionTable.TryGetByName(compression, out var ct4) ? ct4.BitWidth : 32;
+                            }
+                            // Tier's package_level = fastest (lowest) of its
+                            // channels — drives plugin tick scheduling.
+                            if (level < packageLevel) packageLevel = level;
+                            channels.Add(new ChannelDefinition
+                            {
+                                Name = chName,
+                                Url = url,
+                                Compression = compression,
+                                BitWidth = bitWidth,
+                                SimHubField = field,
+                                SimHubProperty = property,
+                                SimHubPropertyScale = scale,
+                                PackageLevel = level,
+                            });
+                        }
+
+                        int totalBits = channels.Sum(c => c.BitWidth);
+                        widgetTiers.Add(new DashboardProfile
+                        {
+                            Name = name,
+                            Channels = channels,  // preserve binding order, do NOT sort
+                            PackageLevel = packageLevel,
+                            TotalBits = totalBits,
+                            TotalBytes = (totalBits + 7) / 8,
+                        });
+                    }
+
+                    if (obj["children"] is JArray childArr)
+                        foreach (var c in childArr) Walk(c);
+                }
+                else if (node is JArray arr)
+                {
+                    foreach (var c in arr) Walk(c);
+                }
+            }
+
+            Walk(root);
+            if (widgetTiers.Count == 0) return null;
+
+            // Dedupe tiers with identical channel-URL sequences and sort by
+            // first-channel URL so flag bytes 0..N-1 follow wheel-catalog
+            // alphabetic order (CurrentLap=flag0, CurrentLapTime=flag1, ...).
+            var unique = new List<DashboardProfile>();
+            var seenSets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var tier in widgetTiers)
+            {
+                var key = string.Join("|", tier.Channels.Select(c => c.Url));
+                if (seenSets.Add(key)) unique.Add(tier);
+            }
+            unique.Sort((a, b) =>
+            {
+                string ua = a.Channels.Count > 0 ? a.Channels[0].Url : "";
+                string ub = b.Channels.Count > 0 ? b.Channels[0].Url : "";
+                return string.Compare(ua, ub, StringComparison.OrdinalIgnoreCase);
+            });
+
+            return new MultiStreamProfile
+            {
+                Name = name,
+                Tiers = unique,
+            };
         }
 
         /// <summary>
@@ -201,6 +492,15 @@ namespace MozaPlugin.Telemetry
             => !string.IsNullOrEmpty(simHubProperty)
                && simHubProperty!.StartsWith("@internal/", StringComparison.Ordinal);
 
+        // Cache of file path → (lastWriteTime, key) so repeated ApplyTelemetrySettings
+        // calls don't re-hash multi-KB mzdash files. Invalidated by mtime change. LRU-
+        // bounded so swapping among many dashboards doesn't grow forever.
+        private static readonly Dictionary<string, (long writeTimeTicks, string key)> _keyCache
+            = new Dictionary<string, (long, string)>(StringComparer.OrdinalIgnoreCase);
+        private static readonly LinkedList<string> _keyCacheLru = new LinkedList<string>();
+        private static readonly object _keyCacheLock = new object();
+        private const int KeyCacheMax = 100;
+
         /// <summary>
         /// Build a stable identity for a dashboard so mappings can be keyed per-dashboard.
         /// Builtin profiles (no file path) use <c>"builtin:&lt;name&gt;"</c>. User-loaded
@@ -211,6 +511,23 @@ namespace MozaPlugin.Telemetry
         {
             if (string.IsNullOrEmpty(loadedPath))
                 return "builtin:" + (profile?.Name ?? "");
+
+            long mtime;
+            try { mtime = File.GetLastWriteTimeUtc(loadedPath!).Ticks; }
+            catch { mtime = 0; }
+
+            if (mtime != 0)
+            {
+                lock (_keyCacheLock)
+                {
+                    if (_keyCache.TryGetValue(loadedPath!, out var hit) && hit.writeTimeTicks == mtime)
+                    {
+                        var node = _keyCacheLru.Find(loadedPath!);
+                        if (node != null) { _keyCacheLru.Remove(node); _keyCacheLru.AddFirst(node); }
+                        return hit.key;
+                    }
+                }
+            }
 
             string filename = Path.GetFileName(loadedPath);
             string hash;
@@ -226,7 +543,28 @@ namespace MozaPlugin.Telemetry
             {
                 hash = "nohash";
             }
-            return "file:" + filename + ":" + hash;
+            string result = "file:" + filename + ":" + hash;
+
+            if (mtime != 0)
+            {
+                lock (_keyCacheLock)
+                {
+                    if (_keyCache.ContainsKey(loadedPath!))
+                    {
+                        var existing = _keyCacheLru.Find(loadedPath!);
+                        if (existing != null) _keyCacheLru.Remove(existing);
+                    }
+                    _keyCache[loadedPath!] = (mtime, result);
+                    _keyCacheLru.AddFirst(loadedPath!);
+                    while (_keyCacheLru.Count > KeyCacheMax)
+                    {
+                        var stale = _keyCacheLru.Last!.Value;
+                        _keyCacheLru.RemoveLast();
+                        _keyCache.Remove(stale);
+                    }
+                }
+            }
+            return result;
         }
 
         /// <summary>
@@ -244,25 +582,24 @@ namespace MozaPlugin.Telemetry
                 if (!map.TryGetValue(url, out var info))
                     continue;
 
-                if (!TelemetryEncoder.BitWidths.TryGetValue(info.Compression, out int bits))
+                if (!CompressionTable.TryGetByName(info.Compression, out var ct5))
                     continue;
-
-                string suffix = url.Contains('/') ? url.Substring(url.LastIndexOf('/') + 1) : url;
-                UrlFieldMap.TryGetValue(suffix, out SimHubField field);
+                int bits = ct5.BitWidth;
 
                 int level = info.PackageLevel;
                 if (!byLevel.ContainsKey(level))
                     byLevel[level] = new List<ChannelDefinition>();
 
+                double scale = info.SimHubPropertyScale == 0 ? 1.0 : info.SimHubPropertyScale;
                 byLevel[level].Add(new ChannelDefinition
                 {
                     Name                = info.Name,
                     Url                 = url,
                     Compression         = info.Compression,
                     BitWidth            = bits,
-                    SimHubField         = field,
+                    SimHubField         = info.Field,
                     SimHubProperty      = info.SimHubProperty ?? "",
-                    SimHubPropertyScale = info.SimHubPropertyScale == 0 ? 1.0 : info.SimHubPropertyScale,
+                    SimHubPropertyScale = scale,
                     PackageLevel        = level,
                 });
             }
@@ -300,9 +637,13 @@ namespace MozaPlugin.Telemetry
 
         private Dictionary<string, TelemetryChannelInfo> GetTelemetryMap()
         {
-            if (_telemetryMap == null)
-                _telemetryMap = LoadTelemetryJson();
-            return _telemetryMap;
+            var map = _telemetryMap;
+            if (map == null)
+            {
+                map = LoadTelemetryJson();
+                _telemetryMap = map;
+            }
+            return map;
         }
 
         private Dictionary<string, TelemetryChannelInfo> LoadTelemetryJson()
@@ -332,10 +673,14 @@ namespace MozaPlugin.Telemetry
                     int packageLevel    = sector["package_level"]?.Value<int>() ?? 30;
                     string? simHubProp  = sector["simhub_property"]?.ToString();
                     double scale        = sector["simhub_scale"]?.Value<double>() ?? 1.0;
+                    string? fieldStr    = sector["simhub_field"]?.ToString();
+                    SimHubField field = SimHubField.Zero;
+                    if (!string.IsNullOrEmpty(fieldStr))
+                        Enum.TryParse(fieldStr, ignoreCase: true, out field);
 
                     if (url == null || compression == null) continue;
                     result[url] = new TelemetryChannelInfo(
-                        name ?? url, compression, packageLevel, simHubProp ?? "", scale);
+                        name ?? url, compression, packageLevel, simHubProp ?? "", scale, field);
                 }
             }
             catch (Exception ex)
@@ -353,15 +698,17 @@ namespace MozaPlugin.Telemetry
             public int    PackageLevel;
             public string SimHubProperty;
             public double SimHubPropertyScale;
+            public SimHubField Field;
 
             public TelemetryChannelInfo(string name, string compression, int packageLevel,
-                string simHubProperty, double simHubPropertyScale)
+                string simHubProperty, double simHubPropertyScale, SimHubField field)
             {
                 Name                = name;
                 Compression         = compression;
                 PackageLevel        = packageLevel;
                 SimHubProperty      = simHubProperty;
                 SimHubPropertyScale = simHubPropertyScale;
+                Field               = field;
             }
         }
     }

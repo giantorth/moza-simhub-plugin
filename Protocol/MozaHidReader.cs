@@ -46,12 +46,21 @@ namespace MozaPlugin.Protocol
         private volatile bool _stop;
         private long _hidParseErrorCount;
 
+        // Tracks every HidStream that ReadDevice has currently open so Dispose can
+        // forcibly close them. Without this, a device that goes silent leaves the
+        // HidSharp internal reader blocked in stream.Read indefinitely; closing
+        // the stream from outside makes those reads throw and lets ReadDevice
+        // observe `_stop` and exit. Per-thread `finally` removes the stream
+        // before disposing locally, so steady-state size matches active devices.
+        private readonly object _streamsLock = new object();
+        private readonly List<HidStream> _liveStreams = new List<HidStream>();
+
         public MozaHidReader(MozaData data)
         {
             _data = data;
         }
 
-        private bool _disposed;
+        private volatile bool _disposed;
 
         public void Start()
         {
@@ -71,6 +80,17 @@ namespace MozaPlugin.Protocol
             if (_disposed) return;
             _disposed = true;
             _stop = true;
+
+            // Force-close every live stream so any HidSharp internal reader
+            // wedged in stream.Read throws and the owning ReadDevice thread
+            // exits its wait loop.
+            HidStream[] snapshot;
+            lock (_streamsLock) snapshot = _liveStreams.ToArray();
+            foreach (var s in snapshot)
+            {
+                try { s.Close(); } catch { }
+            }
+
             try { _thread?.Join(2000); } catch { }
             _thread = null;
             _data.IsHidConnected = false;
@@ -112,17 +132,28 @@ namespace MozaPlugin.Protocol
                     foreach (var (device, usages) in devices)
                     {
                         if (!device.TryOpen(out HidStream stream)) continue;
-                        openCount++;
-
-                        bool isHandbrake = HandbrakePattern.IsMatch(device.GetFriendlyName() ?? "");
-                        // ReadDevice owns `stream` and disposes it before returning.
-                        var t = new Thread(() => ReadDevice(device, stream, usages, isHandbrake))
+                        try
                         {
-                            IsBackground = true,
-                            Name = $"MozaHid_{device.ProductID:X4}",
-                        };
-                        threads.Add(t);
-                        t.Start();
+                            openCount++;
+                            // Register so Dispose() can force-close on shutdown.
+                            lock (_streamsLock) _liveStreams.Add(stream);
+
+                            bool isHandbrake = HandbrakePattern.IsMatch(device.GetFriendlyName() ?? "");
+                            // ReadDevice owns `stream` and disposes it before returning.
+                            var t = new Thread(() => ReadDevice(device, stream, usages, isHandbrake))
+                            {
+                                IsBackground = true,
+                                Name = $"MozaHid_{device.ProductID:X4}",
+                            };
+                            threads.Add(t);
+                            t.Start();
+                        }
+                        catch
+                        {
+                            lock (_streamsLock) _liveStreams.Remove(stream);
+                            try { stream.Dispose(); } catch { }
+                            throw;
+                        }
                     }
 
                     if (openCount > 0)
@@ -144,7 +175,7 @@ namespace MozaPlugin.Protocol
                 }
                 catch (Exception ex)
                 {
-                    MozaLog.Info($"[Moza] HID error: {ex.Message}");
+                    MozaLog.Debug($"[Moza] HID error: {ex.Message}");
                 }
 
                 _data.IsHidConnected = false;
@@ -319,7 +350,7 @@ namespace MozaPlugin.Protocol
                 try
                 {
                     receiver.Start(stream);
-                    MozaLog.Info(
+                    MozaLog.Debug(
                         $"[Moza] HID device opened: {device.GetFriendlyName()} " +
                         $"(VID {device.VendorID:X4} PID {device.ProductID:X4}, " +
                         $"usages: {string.Join(", ", usages.Keys.Select(u => $"0x{u:X8}"))})");
@@ -328,6 +359,9 @@ namespace MozaPlugin.Protocol
                 }
                 finally
                 {
+                    // De-register before dispose so Dispose() doesn't try to close
+                    // a stream that's already on its way out.
+                    lock (_streamsLock) _liveStreams.Remove(stream);
                     // Dispose stream here so Stopped fires while `stopped` is still alive.
                     try { stream.Dispose(); } catch { }
                     // Give receiver a chance to drain Stopped before disposing the event.
@@ -337,7 +371,7 @@ namespace MozaPlugin.Protocol
             }
             catch (Exception ex)
             {
-                MozaLog.Info($"[Moza] HID device read error ({device.GetFriendlyName()}): {ex.Message}");
+                MozaLog.Debug($"[Moza] HID device read error ({device.GetFriendlyName()}): {ex.Message}");
             }
         }
 

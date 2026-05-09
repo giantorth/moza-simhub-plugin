@@ -25,8 +25,16 @@ namespace MozaPlugin.Telemetry
     {
         /// <summary>2025-11 firmware: 8-byte role/max_chunk/type/5×reserved header.</summary>
         Legacy2025_11 = 0,
-        /// <summary>2026-04 firmware: 6-byte type/size_LE/3×reserved header.</summary>
+        /// <summary>2026-04 firmware: 6-byte type/size_LE/3×reserved header.
+        /// First sub-msg uses type=0x01 (path-registration) with paired LOCAL+REMOTE TLVs.</summary>
         New2026_04 = 1,
+        /// <summary>Post-2026-04 CSP firmware: 6-byte header, but first sub-msg
+        /// uses type=0x02 (METADATA) with 2-byte body pad, only LOCAL TLV pair
+        /// (no REMOTE), trailing 1-byte XOR status. Content sub-msg uses 0x70 REMOTE
+        /// marker and BE size fields. Verified from PitHouse capture
+        /// `wireshark/csp/upload-asdf-dash.pcapng` against W17 wheel firmware
+        /// `RS21-W17-MC SW` (2026-04-28).</summary>
+        New2026_04_Type02 = 2,
     }
 
     /// <summary>
@@ -65,8 +73,8 @@ namespace MozaPlugin.Telemetry
     ///
     /// Legacy wire format confirmed by decoding usb-capture/09-04-26/dash-upload.pcapng
     /// session 0x04 host→device reassembly. New format documented in
-    /// <c>docs/moza-protocol.md</c> §§ "6-byte sub-msg header", "Per-chunk
-    /// metadata trailer".
+    /// <c>docs/protocol/dashboard-upload/6-byte-submsg-header.md</c> and
+    /// <c>docs/protocol/dashboard-upload/per-chunk-trailer.md</c>.
     /// </summary>
     public static class FileTransferBuilder
     {
@@ -107,6 +115,13 @@ namespace MozaPlugin.Telemetry
         {
             if (md5 == null || md5.Length != 16)
                 throw new ArgumentException("md5 must be 16 bytes", nameof(md5));
+
+            if (format == FileTransferWireFormat.New2026_04_Type02)
+            {
+                byte[] metaBody = BuildMetadataBodyType02(localTempPath, md5, token);
+                return Compose(0x02, metaBody, format);
+            }
+
             byte[] body = BuildPathRegistrationBody(localTempPath, remoteStagingPath, md5, token);
             return Compose(0x01, body, format);
         }
@@ -138,6 +153,14 @@ namespace MozaPlugin.Telemetry
         {
             if (md5 == null || md5.Length != 16)
                 throw new ArgumentException("md5 must be 16 bytes", nameof(md5));
+
+            if (format == FileTransferWireFormat.New2026_04_Type02)
+            {
+                byte[] type02Body = BuildFileContentBodyType02(localTempPath,
+                    remoteStagingPath, md5, destPath, mzdashContent);
+                return Compose(0x03, type02Body, format);
+            }
+
             byte[] body = BuildFileContentBody(localTempPath, remoteStagingPath, md5, token,
                 destPath, mzdashContent);
             return Compose(0x03, body, format);
@@ -151,8 +174,8 @@ namespace MozaPlugin.Telemetry
         /// MVP scope: returns a single-element list for both wire formats when the
         /// total body fits in <c>0xFFFF</c> bytes, which covers typical mzdash files
         /// (≤ ~50 KB compressed). Larger uploads need true multi-sub-msg splitting
-        /// per <c>docs/moza-protocol.md § "Per-chunk metadata trailer (continuation
-        /// chunks)"</c> — the per-chunk counter semantics at body[281..283] and the
+        /// per <c>docs/protocol/dashboard-upload/per-chunk-trailer.md</c>
+        /// (continuation chunks) — the per-chunk counter semantics at body[281..283] and the
         /// 7B constant at body[284..290] still need a clean PitHouse capture to
         /// reverse-engineer. Until then, oversized uploads will throw at
         /// <see cref="BuildSubMsgHeader"/>.
@@ -217,6 +240,110 @@ namespace MozaPlugin.Telemetry
             return ms.ToArray();
         }
 
+        // ── New2026_04_Type02 body builders ─────────────────────────────────
+        // Layout reverse-engineered from PitHouse capture
+        // `wireshark/csp/upload-asdf-dash.pcapng` against W17 firmware
+        // `RS21-W17-MC SW`. Differences vs <see cref="FileTransferWireFormat.New2026_04"/>:
+        //   * METADATA sub-msg uses type=0x02 (was 0x01) with no REMOTE TLVs.
+        //   * Body starts with 2-byte `00 00` pad before first TLV.
+        //   * REMOTE TLV marker = 0x70 (was 0x84).
+        //   * Remote staging path = `/_moza_filetransfer_md5_<hex>` (no `/home/root` prefix).
+        //   * Size fields after MD5 are big-endian.
+        //   * Body trailer: `[reserved 4B][token 4B LE][ff ff ff ff sentinel][1B XOR status]`.
+
+        private static byte[] BuildMetadataBodyType02(string localTempPath, byte[] md5, uint token)
+        {
+            using var ms = new MemoryStream();
+            using var w = new BinaryWriter(ms);
+            w.Write((byte)0); w.Write((byte)0);            // 2B body pad
+            WritePathTlv(w, TlvLocalPath, localTempPath);
+            WritePathTlv(w, TlvLocalPath, localTempPath);
+            w.Write((byte)0x10);
+            w.Write(md5);
+            w.Write((uint)0);                              // reserved
+            w.Write(token);                                // 4B token (LE)
+            w.Write(NoContentSentinel);                    // ff ff ff ff
+            byte[] body = ms.ToArray();
+            byte xor = XorBody(body, 0, body.Length);
+            byte[] result = new byte[body.Length + 1];
+            Buffer.BlockCopy(body, 0, result, 0, body.Length);
+            result[body.Length] = xor;
+            return result;
+        }
+
+        private static byte[] BuildFileContentBodyType02(string localTempPath,
+                                                          string remoteStagingPath,
+                                                          byte[] md5,
+                                                          string destPath,
+                                                          byte[] mzdashContent)
+        {
+            byte[] zlib = CompressZlib(mzdashContent);
+            byte[] cmpHdr = BuildCompressedHeaderType02(mzdashContent, zlib.Length);
+
+            using var ms = new MemoryStream();
+            using var w = new BinaryWriter(ms);
+            w.Write((byte)0); w.Write((byte)0);            // 2B body pad
+            WritePathTlv(w, TlvLocalPath, localTempPath);
+            WritePathTlv(w, TlvRemotePathNew, remoteStagingPath);
+            w.Write((byte)0x10);
+            w.Write(md5);
+            w.Write((uint)0);                              // reserved 4B
+            // file_count = 1 (single-file dashboard upload). Big-endian per
+            // observed capture; PitHouse multi-file uploads (dash + image)
+            // would set this to 2 with paired dest_path entries.
+            WriteUInt32BE(w, 1);
+            byte[] destBytes = Encoding.BigEndianUnicode.GetBytes(destPath);
+            WriteUInt32BE(w, (uint)destBytes.Length);
+            w.Write(destBytes);
+            w.Write(cmpHdr);
+            w.Write(zlib);
+            byte[] body = ms.ToArray();
+            byte xor = XorBody(body, 0, body.Length);
+            byte[] result = new byte[body.Length + 1];
+            Buffer.BlockCopy(body, 0, result, 0, body.Length);
+            result[body.Length] = xor;
+            return result;
+        }
+
+        /// <summary>
+        /// 12-byte compressed header for type-02 wire format:
+        /// <c>[uncompressed_size BE 4B][compressed_size BE 4B][CRC32 LE 4B]</c>.
+        /// Differs from legacy/<see cref="FileTransferWireFormat.New2026_04"/>
+        /// header which packs `[CRC LE][08 00 00 00][uLen BE]`.
+        /// </summary>
+        public static byte[] BuildCompressedHeaderType02(byte[] uncompressed, int compressedLen)
+        {
+            uint crc = TierDefinitionBuilder.Crc32(uncompressed, 0, uncompressed.Length);
+            var hdr = new byte[12];
+            uint uLen = (uint)uncompressed.Length;
+            hdr[0] = (byte)((uLen >> 24) & 0xFF);
+            hdr[1] = (byte)((uLen >> 16) & 0xFF);
+            hdr[2] = (byte)((uLen >> 8) & 0xFF);
+            hdr[3] = (byte)(uLen & 0xFF);
+            uint cLen = (uint)compressedLen;
+            hdr[4] = (byte)((cLen >> 24) & 0xFF);
+            hdr[5] = (byte)((cLen >> 16) & 0xFF);
+            hdr[6] = (byte)((cLen >> 8) & 0xFF);
+            hdr[7] = (byte)(cLen & 0xFF);
+            hdr[8] = (byte)(crc & 0xFF);
+            hdr[9] = (byte)((crc >> 8) & 0xFF);
+            hdr[10] = (byte)((crc >> 16) & 0xFF);
+            hdr[11] = (byte)((crc >> 24) & 0xFF);
+            return hdr;
+        }
+
+        private static void WriteUInt32BE(BinaryWriter w, uint v)
+        {
+            w.Write((byte)((v >> 24) & 0xFF));
+            w.Write((byte)((v >> 16) & 0xFF));
+            w.Write((byte)((v >> 8) & 0xFF));
+            w.Write((byte)(v & 0xFF));
+        }
+
+        /// <summary>TLV marker for a remote (device-side) path entry in
+        /// <see cref="FileTransferWireFormat.New2026_04_Type02"/>. UTF-16LE.</summary>
+        public const byte TlvRemotePathNew = 0x70;
+
         private static byte[] Compose(byte transferType, byte[] body, FileTransferWireFormat format)
         {
             byte[] header = BuildSubMsgHeader(transferType, body.Length, format);
@@ -224,6 +351,23 @@ namespace MozaPlugin.Telemetry
             Buffer.BlockCopy(header, 0, result, 0, header.Length);
             Buffer.BlockCopy(body, 0, result, header.Length, body.Length);
             return result;
+        }
+
+        /// <summary>
+        /// 8-bit XOR over body bytes — message integrity status appended as the
+        /// final byte of <see cref="FileTransferWireFormat.New2026_04_Type02"/>
+        /// sub-msg bodies. The XOR is computed over every body byte preceding the
+        /// status (the status byte is itself the last entry, so excluded). See
+        /// <c>docs/protocol/dashboard-upload/upload-handshake-2026-04.md</c> §
+        /// "1-byte XOR status after `ff*4` sentinel".
+        /// </summary>
+        public static byte XorBody(byte[] body, int offset, int length)
+        {
+            byte x = 0;
+            int end = offset + length;
+            for (int i = offset; i < end; i++)
+                x ^= body[i];
+            return x;
         }
 
         /// <summary>
@@ -236,7 +380,7 @@ namespace MozaPlugin.Telemetry
         /// New: <c>[type][size_LE_2B][pad×3]</c> = 6 bytes, where size_LE is the
         /// body byte count. Body size capped at 65535 (firmware splits larger
         /// uploads across multiple sub-msgs each &lt;= 4384 bytes; see
-        /// docs/moza-protocol.md § "Per-chunk metadata trailer").
+        /// docs/protocol/dashboard-upload/per-chunk-trailer.md).
         /// </remarks>
         public static byte[] BuildSubMsgHeader(byte transferType, int bodyLength,
             FileTransferWireFormat format)
@@ -244,7 +388,8 @@ namespace MozaPlugin.Telemetry
             if (bodyLength < 0) throw new ArgumentOutOfRangeException(nameof(bodyLength));
             if (format == FileTransferWireFormat.Legacy2025_11)
                 return new byte[] { HeaderRoleHost, HeaderMaxChunkHost, transferType, 0, 0, 0, 0, 0 };
-            if (format == FileTransferWireFormat.New2026_04)
+            if (format == FileTransferWireFormat.New2026_04
+                || format == FileTransferWireFormat.New2026_04_Type02)
             {
                 if (bodyLength > 0xFFFF)
                     throw new ArgumentOutOfRangeException(nameof(bodyLength),
@@ -325,6 +470,10 @@ namespace MozaPlugin.Telemetry
         /// <summary>Device staging path the wheel uses for in-flight files.</summary>
         public static string BuildRemoteStagingPath(string md5Hex)
             => $"/home/root/_moza_filetransfer_md5_{md5Hex}";
+
+        /// <summary>Staging path used by post-2026-04 CSP firmware: no `/home/root` prefix.</summary>
+        public static string BuildRemoteStagingPathType02(string md5Hex)
+            => $"/_moza_filetransfer_md5_{md5Hex}";
 
         /// <summary>Final destination path under the wheel's dashboard resource tree.</summary>
         public static string BuildDashboardDestPath(string dashboardName)

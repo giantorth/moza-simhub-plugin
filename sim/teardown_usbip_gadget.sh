@@ -12,14 +12,15 @@ fi
 GADGET=/sys/kernel/config/usb_gadget/moza
 FAIL=0
 
-# Step 0: kill any wheel_sim.py holding /dev/ttyGS0. Open fds on the gadget
-# tty cause `echo "" > UDC` (step 3) to block forever waiting for hangup.
-pkill -f 'wheel_sim\.py' 2>/dev/null || true
+# Step 0: kill any wheel_sim.py / bridge.py holding /dev/ttyGS0. Open fds on
+# the gadget tty cause `echo "" > UDC` (step 3) to block forever waiting for
+# hangup.
+pkill -f 'wheel_sim\.py|bridge\.py' 2>/dev/null || true
 for _ in 1 2 3 4 5; do
-    pgrep -f 'wheel_sim\.py' >/dev/null || break
+    pgrep -f 'wheel_sim\.py|bridge\.py' >/dev/null || break
     sleep 0.2
 done
-pkill -9 -f 'wheel_sim\.py' 2>/dev/null || true
+pkill -9 -f 'wheel_sim\.py|bridge\.py' 2>/dev/null || true
 
 # Wait for /dev/ttyGS0 to disappear — gadget driver tears it down async after
 # the last close. UDC unbind in step 3 races against this cleanup if we don't

@@ -1,0 +1,172 @@
+## RPM and button LED color commands
+
+Live LED color frames for the wheel's RPM strip and button matrix. Sent at
+SimHub's update cadence (typically 60 Hz when telemetry is active). Two
+companion commands per group: a **20-byte color chunk** and a **bitmask
+selector** that picks which indices are lit. See
+[`../devices/wheel-0x17.md` § Group `0x3F` Live Telemetry](../devices/wheel-0x17.md)
+for the per-command rows.
+
+### Frame layouts
+
+**RPM color chunk** (`wheel-telemetry-rpm-colors`):
+
+```
+7E 14 3F 17 19 00 [20 bytes: 5 × (idx, R, G, B)] [checksum]
+```
+
+**RPM active-LED bitmask** (`wheel-send-rpm-telemetry`):
+
+```
+7E [N] 3F 17 1A 00 [active_mask LE] [window_mask LE] [checksum]
+```
+
+Three observed widths:
+- `[bitmask:u16] [u16 zeros]` — 2-byte form (older / small bars)
+- `[bitmask:u32]` — 4-byte form (≥17-LED bars)
+- `[active_mask:u32] [window_mask:u32]` — **8-byte form** observed live on R5 base + W17 wheel (2026-04-29 capture). `window_mask` defines which LEDs are addressable (e.g. `0x00001ff8` = 13-LED RPM strip, `0x0000ffff` = 16-LED extended) and `active_mask` is the subset currently lit. Different dashboards swap `window_mask` on the fly: `f81f00 00` → 13-LED RPM bar; `ffff0000` → 16-LED redline / wide-zone mode.
+
+Mask progression with rising RPM (8-byte form, `window_mask = 0x00001ff8`):
+```
+00 00 00 00  f8 1f 00 00   ← idle (no LEDs lit)
+00 08 00 00  f8 1f 00 00   ← stage 1 (bit 3)
+00 18 00 00  f8 1f 00 00   ← stage 2
+00 38 00 00  f8 1f 00 00   ← stage 3
+00 78 00 00  f8 1f 00 00   ← stage 4
+00 f8 03 00  f8 1f 00 00   ← stage 5
+00 f8 0f 00  f8 1f 00 00   ← stage 6
+00 f8 1f 00  f8 1f 00 00   ← full bar
+00 07 e0 00  ff ff 00 00   ← redline-zone-only mode (different window)
+```
+
+`1A 01 ff …` is a scene-reset / mode-toggle variant emitted at dashboard switch and game-state transitions.
+
+**Knob color chunk** (`wheel-telemetry-knob-colors`):
+
+```
+7E 16 3F 17 19 03 [20 bytes: 5 × (idx, R, G, B)] [checksum]
+```
+
+**Knob active-LED bitmask** (`wheel-send-knob-telemetry`):
+
+```
+7E 0C 3F 17 1A 03 [active_mask:u32 LE] [window_mask:u32 LE] [checksum]
+```
+
+8-byte form only (same as RPM 8-byte form). `window_mask` = `0x0000000F`
+(4 knobs, CS Pro) or `0x0000001F` (5 knobs, KS Pro). Each bit = one
+rotary knob indicator.
+
+Mask progression (CS Pro, 4 knobs, RPM-synced effect):
+```
+00 00 00 00  0f 00 00 00   ← idle (no knobs lit)
+01 00 00 00  0f 00 00 00   ← 1 knob
+03 00 00 00  0f 00 00 00   ← 2 knobs
+07 00 00 00  0f 00 00 00   ← 3 knobs
+0f 00 00 00  0f 00 00 00   ← all 4 knobs lit
+```
+
+Companion color writes set per-knob RGB (gradient from blue → purple → red):
+```
+19 03  00 00 00 FF   01 3F 00 C0   02 7F 00 80   03 BF 00 40   FF 00 00 00
+       knob 0=blue   knob 1        knob 2        knob 3=red    (padding)
+```
+
+**Button color chunk** (`wheel-telemetry-button-colors`):
+
+```
+7E 14 3F 17 19 01 [20 bytes: 5 × (idx, R, G, B)] [checksum]
+```
+
+**Button active-LED bitmask** (`wheel-send-buttons-telemetry`):
+
+```
+7E 03 3F 17 1A 01 [bitmask LE: 2 bytes] [checksum]
+```
+
+| Byte | Value | Meaning |
+|------|-------|---------|
+| 0 | `0x7E` | Frame start |
+| 1 | `[N]` | Payload length (0x14 = 20 for color chunk; 4 for 16-LED bitmask, 6 for 17+) |
+| 2 | `0x3F` | Wheel-config write group |
+| 3 | `0x17` | Device wheel |
+| 4 | `0x19` (color) / `0x1A` (bitmask) | Cmd ID byte 1 |
+| 5 | `0x00` (RPM) / `0x01` (button) / `0x03` (knob) | Cmd ID byte 2 — selects LED group |
+| 6.. | LED entries / bitmask | See per-command sections below |
+
+### 20-byte color chunk format
+
+Each chunk packs **5 LEDs × 4 bytes**:
+
+| Offset within chunk | Field | Notes |
+|---------------------|-------|-------|
+| `0` | LED index | Physical LED position (`0xFF` = unused padding) |
+| `1` | R | Red 0..255 |
+| `2` | G | Green 0..255 |
+| `3` | B | Blue 0..255 |
+| `4..7` | Next LED | …repeats five times |
+
+Chunks per group:
+
+| Group | LED count | Chunks needed |
+|-------|-----------|---------------|
+| RPM (`0x19 00`) | 10 LEDs (legacy), 16 LEDs (CS Pro), 18 LEDs (KS Pro) | 2 chunks for ≤10, 4 chunks for 16 (last padded), 4 chunks for 18 (last padded) |
+| Button (`0x19 01`) | 14 (VGS) / 8 (CS V2.1, CS Pro) / varies | 3 chunks (last padded) |
+| Knob (`0x19 03`) | 4 (CS Pro) / 5 (KS Pro) | 1 chunk (last padded) |
+
+**Padding rule:** unused entries within a chunk MUST use index `0xFF`. Zero
+padding (`00 00 00 00`) is interpreted as "set LED 0 to black" by firmware,
+causing button 0 to flicker on every frame. See
+[`Devices/MozaLedDeviceManager.cs:472`](../../../Devices/MozaLedDeviceManager.cs)
+(`SendColorChunks`).
+
+### Bitmask format
+
+Selects which LEDs are currently lit. Builder logic in
+[`Devices/MozaLedDeviceManager.cs:450`](../../../Devices/MozaLedDeviceManager.cs)
+(`BuildRpmBitmaskBytes`):
+
+| LED count | Bitmask size | Wire bytes |
+|-----------|--------------|------------|
+| ≤16 | 2 bytes (LE u16) | `[lo, hi]` |
+| 17+ (CS Pro, KS Pro) | 4 bytes (LE u32) | `[b0, b1, b2, b3]` |
+
+Bit `i` lit ↔ LED `i` has non-black color in the chunk write. Plugin sends
+the bitmask only when it changes (or every frame when
+`AlwaysResendBitmask` is set), regardless of color-chunk cadence.
+
+### Example (CS V2.1 — 10 RPM LEDs, alternating red/blue)
+
+Color chunks (2 × 20-byte):
+
+```
+chunk 0 (LEDs 0..4):
+  7E 14 3F 17 19 00
+    00 FF 00 00   01 00 00 FF   02 FF 00 00   03 00 00 FF   04 FF 00 00
+  [chk]
+chunk 1 (LEDs 5..9):
+  7E 14 3F 17 19 00
+    05 00 00 FF   06 FF 00 00   07 00 00 FF   08 FF 00 00   09 00 00 FF
+  [chk]
+```
+
+Bitmask (all 10 lit):
+
+```
+7E 04 3F 17 1A 00 FF 03 [chk]      # 0x03FF = 10 bits set
+```
+
+### Wheel echo
+
+Both write commands echo verbatim — see
+[`../wire/wheel-write-echoes.md`](../wire/wheel-write-echoes.md) entries for
+prefixes `19 00`, `19 01`, `19 03`, `1A 00`, `1A 01`, `1A 03` (group `0x3F`, dev `0x17`).
+
+### Static (settings) vs live (telemetry) paths
+
+Groups `0x19`/`0x1A` are the **live** path: per-frame writes that render
+only while telemetry is active (`wheel-telemetry-mode != 2`). The static
+path uses cmd `0x1F [G] FF [N]` to persist a per-LED color in EEPROM (see
+[`../devices/wheel-0x17.md` § Extended LED Group Architecture](../devices/wheel-0x17.md)).
+The two pipelines coexist: static colors render in idle mode; live colors
+override while a frame is feeding the bitmask.

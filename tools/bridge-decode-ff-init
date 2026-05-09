@@ -1,0 +1,352 @@
+#!/usr/bin/env python3
+"""Decode the host-side init handshake and wheel-side state pushes that
+PitHouse exchanges on session 0x02 before the first dashboard switch.
+
+Background: bridge captures show that PitHouse sends a sequence of FF
+records on session 0x02 (kinds 2/7/8/11) shortly after open, and the
+wheel pushes its own FF records back (kinds 9/10/14/15/16). The plugin
+sends NONE of these and receives NONE. This tool decodes each kind so we
+can match PitHouse's behaviour.
+
+FF record format on session-data chunks:
+    [0xFF][size:u32 LE][salt:u32 LE][kind:u32 LE][body... len=size][crc:u32 LE]
+
+kind=8 / kind=11 bodies start with 4 reserved bytes followed by zlib
+(`78 da` magic). Decompressed payloads appear to be JSON / mzdash data.
+
+Usage:
+    tools/bridge-decode-ff-init                         # latest bridge capture
+    tools/bridge-decode-ff-init bridge-20260429-163951.jsonl
+    tools/bridge-decode-ff-init <path> --kind 8 --max 1
+    tools/bridge-decode-ff-init <path> --session 0x02 --direction h2b
+    tools/bridge-decode-ff-init <path> --until-switch
+"""
+from __future__ import annotations
+
+import argparse
+import struct
+import sys
+import zlib
+from collections import Counter
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from moza_bridge import load_bridge, resolve_bridge, BFrame
+
+
+KIND_NAMES = {
+    2: "init_nonce",
+    4: "DASH_SWITCH",
+    7: "init_enum",
+    8: "init_payload_a",
+    9: "periodic",
+    10: "wheel_state_a",
+    11: "init_payload_b",
+    14: "wheel_payload",
+    15: "host_setting",
+    16: "wheel_state_b",
+}
+
+
+def decode_ff(sess_data: bytes) -> dict | None:
+    """Return a dict describing the FF record, or None if not a valid FF
+    record. Mirrors the layout decoded in `moza_bridge.BFrame.ff_kind` /
+    `ff_size` but exposes the salt and body too."""
+    if len(sess_data) < 14:
+        return None
+    if sess_data[0] != 0xFF:
+        return None
+    size = struct.unpack_from('<I', sess_data, 1)[0]
+    salt = struct.unpack_from('<I', sess_data, 5)[0]
+    kind = struct.unpack_from('<I', sess_data, 9)[0]
+    body_end = 13 + size
+    body = sess_data[13:body_end] if body_end <= len(sess_data) else sess_data[13:]
+    return {
+        'size': size,
+        'salt': salt,
+        'kind': kind,
+        'body': bytes(body),
+        'truncated': body_end > len(sess_data),
+    }
+
+
+def reassemble_session_stream(frames: list[BFrame], session: int, direction: str,
+                              cutoff_idx: int | None = None
+                              ) -> tuple[list[tuple[int, int, BFrame]], bytes]:
+    """Walk session-data chunks for (session, direction) in seq order;
+    return the per-chunk records plus the concatenated bytes. Uses each
+    chunk's seq for ordering and de-duplicates retransmits (same seq with
+    identical body kept once).
+
+    Returns:
+      records: list of (seq, byte_offset_in_stream, originating_frame)
+      stream: concatenated chunk bodies (per-chunk CRC suffix is stripped)
+    """
+    seen: dict[int, tuple[bytes, BFrame]] = {}
+    for i, f in enumerate(frames):
+        if cutoff_idx is not None and i >= cutoff_idx:
+            break
+        if not f.is_session_data or f.sess_type != 0x01:
+            continue
+        if f.sess_id != session or f.dir != direction:
+            continue
+        d = bytes(f.sess_data)
+        if not d:
+            continue
+        # Strip the 4-byte CRC suffix carried at the end of every chunk's
+        # session-data payload. This is what bridge-tierdef-decode does and
+        # what produces a clean concatenated TLV/FF stream.
+        if len(d) >= 4:
+            d_strip = d[:-4]
+        else:
+            d_strip = d
+        seq = f.sess_seq
+        if seq < 0:
+            continue
+        if seq not in seen:
+            seen[seq] = (d_strip, f)
+    records: list[tuple[int, int, BFrame]] = []
+    stream = bytearray()
+    for seq in sorted(seen):
+        body, frame = seen[seq]
+        records.append((seq, len(stream), frame))
+        stream.extend(body)
+    return records, bytes(stream)
+
+
+def parse_ff_records(stream: bytes) -> list[dict]:
+    """Walk a reassembled session-0x01-style stream and pull FF records
+    (records starting with 0xFF). Each FF record consumes 13 + size bytes.
+    Anything between FF records is reported as 'gap' for visibility (these
+    are usually TLV records with non-FF tags coexisting on the same
+    session, e.g. tag=0x07/0x01/0x04/0x06 mixed in)."""
+    out: list[dict] = []
+    i = 0
+    n = len(stream)
+    while i < n:
+        b = stream[i]
+        if b == 0xFF and i + 13 <= n:
+            size = struct.unpack_from('<I', stream, i + 1)[0]
+            salt = struct.unpack_from('<I', stream, i + 5)[0]
+            kind = struct.unpack_from('<I', stream, i + 9)[0]
+            body_end = i + 13 + size
+            if size > 65536 or body_end > n:
+                # Looks like a misalignment; resync by skipping a byte.
+                out.append({'kind': '__misaligned__', 'offset': i, 'size': size})
+                i += 1
+                continue
+            body = bytes(stream[i + 13:body_end])
+            out.append({
+                'offset': i,
+                'kind': kind,
+                'size': size,
+                'salt': salt,
+                'body': body,
+            })
+            i = body_end
+            continue
+        # Non-FF byte: treat as TLV-ish; skip ahead to the next FF or
+        # parse a single TLV (tag/size4/value) if it looks reasonable.
+        if i + 5 <= n:
+            tlv_size = struct.unpack_from('<I', stream, i + 1)[0]
+            if tlv_size <= 65536 and i + 5 + tlv_size <= n:
+                out.append({
+                    'kind': '__tlv__',
+                    'offset': i,
+                    'tlv_tag': b,
+                    'tlv_size': tlv_size,
+                })
+                i += 5 + tlv_size
+                continue
+        # Fallback: skip a byte
+        i += 1
+    return out
+
+
+def looks_zlib(b: bytes) -> bool:
+    return len(b) >= 2 and b[0] == 0x78 and b[1] in (0x01, 0x9C, 0xDA)
+
+
+def try_decompress(body: bytes) -> tuple[bytes, str] | None:
+    """Try several decompression strategies on the body.
+    Returns (decompressed, strategy_name) or None.
+    """
+    candidates = []
+    if looks_zlib(body):
+        candidates.append(("raw", body))
+    if len(body) >= 4 and looks_zlib(body[4:]):
+        candidates.append(("skip4", body[4:]))
+    if len(body) >= 6 and looks_zlib(body[6:]):
+        candidates.append(("skip6", body[6:]))
+    for name, blob in candidates:
+        try:
+            return zlib.decompress(blob), name
+        except zlib.error:
+            continue
+    return None
+
+
+def first_text_preview(b: bytes, n: int = 240) -> str:
+    """Return up to n chars of the body interpreted as UTF-8, replacing
+    non-printables with '.'."""
+    out = []
+    for c in b[:n]:
+        if 32 <= c < 127:
+            out.append(chr(c))
+        elif c in (9, 10, 13):
+            out.append({9: '\\t', 10: '\\n', 13: '\\r'}[c])
+        else:
+            out.append('.')
+    s = ''.join(out)
+    if len(b) > n:
+        s += '...'
+    return s
+
+
+def find_first_switch_idx(frames: list[BFrame]) -> int | None:
+    for i, f in enumerate(frames):
+        if f.is_session_data and f.sess_type == 0x01 and f.dir == 'h2b':
+            d = f.sess_data
+            if d and d[0] == 0xFF and len(d) > 13:
+                k = struct.unpack_from('<I', d, 9)[0]
+                if k == 4:
+                    return i
+    return None
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("capture", nargs="?", default=None,
+                    help="bridge capture path or 'latest' (default: latest)")
+    ap.add_argument("--session", "-s", type=lambda x: int(x, 0), default=None,
+                    help="filter by session id (e.g. 0x02). Default: all sessions")
+    ap.add_argument("--direction", "-d", choices=("h2b", "b2h", "both"), default="both",
+                    help="filter by direction (default: both)")
+    ap.add_argument("--kind", "-k", action="append", type=lambda x: int(x, 0),
+                    help="filter to specific kind(s); may be repeated")
+    ap.add_argument("--until-switch", action="store_true",
+                    help="only consider records before the first DASH_SWITCH (kind=4 h2b)")
+    ap.add_argument("--max", type=int, default=3,
+                    help="max records to dump per (dir,sess,kind) tuple (default 3)")
+    ap.add_argument("--full", action="store_true",
+                    help="dump full body hex/decompressed text (default: first 240 chars)")
+    args = ap.parse_args()
+
+    path = resolve_bridge(args.capture)
+    print(f"Capture: {path.name}")
+    frames = load_bridge(path)
+    print(f"  {len(frames)} frames")
+
+    cutoff = None
+    if args.until_switch:
+        idx = find_first_switch_idx(frames)
+        if idx is not None:
+            cutoff = idx
+            t = frames[idx].t_rel
+            print(f"  cutoff: first DASH_SWITCH at idx={idx} t_rel={t:.3f}s")
+
+    # Reassemble per (dir, sess) so multi-chunk FF records (kind=8/11/14
+    # carry 1-3 KB bodies that span 30+ chunks) are decoded fully.
+    sess_dirs: list[tuple[str, int]] = []
+    if args.session is not None:
+        if args.direction == "both":
+            sess_dirs = [('h2b', args.session), ('b2h', args.session)]
+        else:
+            sess_dirs = [(args.direction, args.session)]
+    else:
+        # Default: try sess=0x01 and sess=0x02 in both directions.
+        for s in (0x01, 0x02):
+            for d in (('h2b', 'b2h') if args.direction == 'both' else (args.direction,)):
+                sess_dirs.append((d, s))
+
+    inv: Counter = Counter()
+    examples: dict[tuple[str, int, int], list[dict]] = {}
+
+    for direction, session in sess_dirs:
+        records, stream = reassemble_session_stream(frames, session, direction, cutoff)
+        if not stream:
+            continue
+        # Map byte offset back to (seq, frame) for record provenance.
+        offset_to_record = sorted((off, seq, fr) for seq, off, fr in records)
+
+        def find_provenance(off: int) -> tuple[int, BFrame] | None:
+            best = None
+            for o, seq, fr in offset_to_record:
+                if o <= off:
+                    best = (seq, fr)
+                else:
+                    break
+            return best
+
+        ff_recs = parse_ff_records(stream)
+        for r in ff_recs:
+            kind = r['kind']
+            if isinstance(kind, str):
+                continue
+            if kind > 0xFFFF:
+                continue
+            if args.kind and kind not in args.kind:
+                continue
+            key = (direction, session, kind)
+            inv[key] += 1
+            examples.setdefault(key, [])
+            if len(examples[key]) < args.max:
+                prov = find_provenance(r['offset'])
+                seq, fr = prov if prov else (-1, None)
+                examples[key].append({
+                    **r,
+                    'direction': direction,
+                    'session': session,
+                    'seq': seq,
+                    't_rel': fr.t_rel if fr else -1.0,
+                })
+
+    if not inv:
+        print("  no matching FF records")
+        return
+
+    print()
+    print(f"{'dir':>4} {'sess':>5} {'kind':>5} {'name':<18} {'count':>6}")
+    for (d, s, k) in sorted(inv.keys()):
+        print(f"{d:>4} 0x{s:02X}  {k:>5} {KIND_NAMES.get(k,'?'):<18} {inv[(d,s,k)]:>6}")
+
+    print("\n--- Sample records (full bodies via cross-chunk reassembly) ---")
+    for (d, s, k) in sorted(examples.keys()):
+        for ex in examples[(d, s, k)]:
+            body = ex['body']
+            seq = ex.get('seq', -1)
+            t_rel = ex.get('t_rel', -1.0)
+            print(f"\n{d} sess=0x{s:02X} seq={seq} t_rel={t_rel:.3f}s "
+                  f"kind={k} ({KIND_NAMES.get(k,'?')}) "
+                  f"size={ex['size']} salt=0x{ex['salt']:08X} body_len={len(body)}")
+
+            # Try decompression on full reassembled body
+            dec = try_decompress(body)
+            if dec is not None:
+                blob, strat = dec
+                print(f"  zlib OK ({strat}, decompressed={len(blob)}B)")
+                if args.full:
+                    # Try to print as text if mostly printable
+                    printable = sum(1 for c in blob[:1024] if 32 <= c < 127 or c in (9, 10, 13))
+                    if printable > 0.8 * min(len(blob), 1024):
+                        try:
+                            print("  decompressed text:")
+                            print(blob.decode('utf-8', errors='replace'))
+                        except Exception:
+                            print(f"  decompressed hex: {blob.hex()}")
+                    else:
+                        print(f"  decompressed hex (first 256B): {blob[:256].hex()}")
+                else:
+                    print(f"  preview: {first_text_preview(blob)}")
+                continue
+
+            # Plain dump (no zlib)
+            preview_len = len(body) if args.full else min(64, len(body))
+            print(f"  body[:{preview_len}]={body[:preview_len].hex()}")
+            if not args.full and len(body) > preview_len:
+                print(f"  ({len(body) - preview_len} more bytes)")
+
+
+if __name__ == "__main__":
+    main()

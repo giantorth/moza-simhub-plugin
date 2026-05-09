@@ -1,0 +1,423 @@
+#!/usr/bin/env python3
+"""Side-by-side comparison of cold-start vs post-switch epochs.
+
+Focuses on the DIFFERENCES that matter: tier-def structure, catalog
+content, value frame coverage, and timing gaps. Filters out blind
+retransmit noise by only decoding the FIRST tier-def emission per epoch.
+
+Usage:
+    tools/trace-epoch-compare [TRACE]
+    tools/trace-epoch-compare latest
+"""
+import argparse
+import struct
+import sys
+from collections import defaultdict
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from moza_trace import load_trace, resolve_trace, Frame
+
+TAG_NAMES = {0x00: "ENABLE", 0x01: "TIER", 0x03: "FLAG_BASE",
+             0x06: "END_MARKER", 0x07: "PROTO_VER"}
+
+
+def find_epochs(frames):
+    epochs, current = [], []
+    for f in frames:
+        if f.dir == 'h2b' and f.is_open and f.session == 0x01 and current:
+            epochs.append(current)
+            current = []
+        current.append(f)
+    if current:
+        epochs.append(current)
+    return epochs
+
+
+def decode_tierdef_tlv(data):
+    tags = []
+    i = 0
+    while i < len(data):
+        if i + 5 > len(data):
+            break
+        tag = data[i]
+        length = struct.unpack_from('<I', data, i + 1)[0]
+        value = data[i + 5:i + 5 + length] if i + 5 + length <= len(data) else b''
+        tags.append((tag, length, value))
+        i += 5 + length
+    return tags
+
+
+def extract_first_tierdef(epoch_frames):
+    """Reassemble ONLY the first tier-def emission (before any blind retransmit gap)."""
+    chunks = []
+    last_t = None
+    for f in epoch_frames:
+        if f.is_data and f.session == 0x01 and f.dir == 'h2b':
+            if f.raw[0] == 0x7E:
+                payload = f.raw[10:-5] if len(f.raw) > 15 else f.raw[10:]
+            else:
+                payload = f.raw[8:] if len(f.raw) > 8 else b''
+            if last_t is not None and f.t - last_t > 0.15:
+                break
+            chunks.append(payload)
+            last_t = f.t
+    return b''.join(chunks)
+
+
+def extract_catalog(epoch_frames):
+    """Reassemble catalog from b2h session 0x01 data."""
+    chunks = []
+    for f in epoch_frames:
+        if f.is_data and f.session == 0x01 and f.dir == 'b2h':
+            if f.raw[0] == 0xC3:
+                payload = f.raw[8:] if len(f.raw) > 8 else b''
+            else:
+                payload = f.raw[10:] if len(f.raw) > 10 else b''
+            chunks.append((f.t, f.seq, payload))
+    return chunks
+
+
+def parse_catalog_urls(chunks):
+    """Parse catalog URL records from reassembled data."""
+    data = b''.join(payload for _, _, payload in chunks)
+    urls = {}
+    i = 0
+    while i < len(data):
+        if i + 5 > len(data):
+            break
+        tag = data[i]
+        length = struct.unpack_from('<I', data, i + 1)[0]
+        value = data[i + 5:i + 5 + length] if i + 5 + length <= len(data) else b''
+        if tag == 0x04 and length >= 5:
+            idx = struct.unpack_from('<I', value, 0)[0]
+            url = value[4:].rstrip(b'\x00').decode('utf-8', errors='replace')
+            urls[idx] = url
+        elif tag == 0x06:
+            break
+        i += 5 + length
+    return urls
+
+
+def analyze_epoch(idx, epoch_frames):
+    info = {}
+    info['start_t'] = epoch_frames[0].t
+    info['end_t'] = epoch_frames[-1].t
+
+    # Session lifecycle
+    info['opens'] = [(f.t, f.session, f.port) for f in epoch_frames if f.is_open]
+    info['closes'] = [(f.t, f.session) for f in epoch_frames if f.is_close]
+
+    # FF records
+    kind_names = {1: "INIT", 2: "TILE", 4: "DASH_SWITCH", 8: "CATALOG",
+                  9: "CONFIG_JSON", 11: "ACTION_CAT", 14: "HEARTBEAT"}
+    info['ff_records'] = []
+    for f in epoch_frames:
+        if f.is_ff_record:
+            name = kind_names.get(f.ff_kind, f"kind={f.ff_kind}")
+            info['ff_records'].append((f.t, name, f.ff_size, f.dir))
+
+    # First tier-def only (skip blind retransmit)
+    td_data = extract_first_tierdef(epoch_frames)
+    if td_data:
+        tags = decode_tierdef_tlv(td_data)
+        tiers = []
+        enables = []
+        proto_ver = flag_base = end_marker = None
+        for tag, length, value in tags:
+            if tag == 0x07:
+                proto_ver = struct.unpack_from('<I', value, 0)[0] if len(value) >= 4 else -1
+            elif tag == 0x03:
+                flag_base = value[0] if value else -1
+            elif tag == 0x00:
+                enables.append(value[0] if value else -1)
+            elif tag == 0x01:
+                flag = value[0] if value else -1
+                n_ch = (length - 1) // 16
+                channels = []
+                for ci in range(n_ch):
+                    off = 1 + ci * 16
+                    if off + 16 <= len(value):
+                        ch_idx = struct.unpack_from('<I', value, off)[0]
+                        ch_comp = struct.unpack_from('<I', value, off + 4)[0]
+                        ch_bits = struct.unpack_from('<I', value, off + 8)[0]
+                        channels.append((ch_idx, ch_comp, ch_bits))
+                tiers.append((flag, channels))
+            elif tag == 0x06:
+                end_marker = struct.unpack_from('<I', value, 0)[0] if len(value) >= 4 else -1
+        info['tierdef'] = {
+            'proto_ver': proto_ver, 'flag_base': flag_base,
+            'enables': enables, 'tiers': tiers, 'end_marker': end_marker,
+            'raw_size': len(td_data),
+        }
+        # First tier-def chunk time
+        for f in epoch_frames:
+            if f.is_data and f.session == 0x01 and f.dir == 'h2b':
+                info['tierdef_t'] = f.t
+                break
+    else:
+        info['tierdef'] = None
+        info['tierdef_t'] = None
+
+    # Catalog from wheel
+    cat_chunks = extract_catalog(epoch_frames)
+    info['catalog_urls'] = parse_catalog_urls(cat_chunks)
+    info['catalog_chunk_count'] = len(cat_chunks)
+    info['catalog_t'] = cat_chunks[0][0] if cat_chunks else None
+
+    # Value frames
+    vf_h2b = []
+    for f in epoch_frames:
+        if f.is_value_frame and f.dir == 'h2b':
+            nz = sum(1 for b in f.vf_data if b != 0)
+            vf_h2b.append((f.t, f.vf_flag, len(f.vf_data), nz))
+    info['vf_h2b'] = vf_h2b
+
+    flags = sorted(set(f for _, f, _, _ in vf_h2b)) if vf_h2b else []
+    info['vf_flags'] = flags
+    info['vf_count'] = len(vf_h2b)
+    info['vf_first_t'] = vf_h2b[0][0] if vf_h2b else None
+    info['vf_last_t'] = vf_h2b[-1][0] if vf_h2b else None
+    info['vf_total_bytes'] = sum(sz for _, _, sz, _ in vf_h2b)
+    info['vf_total_nz'] = sum(nz for _, _, _, nz in vf_h2b)
+
+    # Per-flag breakdown
+    info['vf_by_flag'] = {}
+    by_flag = defaultdict(list)
+    for t, flag, sz, nz in vf_h2b:
+        by_flag[flag].append((t, sz, nz))
+    for flag in sorted(by_flag):
+        flist = by_flag[flag]
+        first_nz_t = next((t for t, sz, nz in flist if nz > 0), None)
+        info['vf_by_flag'][flag] = {
+            'count': len(flist), 'size': flist[0][1],
+            'first_t': flist[0][0], 'first_nz_t': first_nz_t,
+        }
+
+    # Count blind retransmit rounds
+    retransmit_count = 0
+    in_gap = False
+    last_td_t = None
+    for f in epoch_frames:
+        if f.is_data and f.session == 0x01 and f.dir == 'h2b':
+            if last_td_t is not None and f.t - last_td_t > 0.15:
+                retransmit_count += 1
+            last_td_t = f.t
+    info['blind_retransmit_rounds'] = retransmit_count
+
+    return info
+
+
+def print_comparison(epochs_info):
+    n = len(epochs_info)
+    print(f"\n{'='*80}")
+    print(f"EPOCH COMPARISON: {n} epochs")
+    print(f"{'='*80}")
+
+    # Header
+    labels = []
+    for i, info in enumerate(epochs_info):
+        dur = info['end_t'] - info['start_t']
+        label = "COLD-START" if i == 0 else f"SWITCH-{i}"
+        labels.append(label)
+        print(f"\n  EPOCH {i} ({label}): t={info['start_t']:.3f}s–{info['end_t']:.3f}s ({dur:.1f}s)")
+
+    # Session lifecycle comparison
+    print(f"\n{'─'*80}")
+    print("SESSION LIFECYCLE")
+    print(f"{'─'*80}")
+    for i, info in enumerate(epochs_info):
+        print(f"\n  [{labels[i]}]")
+        for t, sess, port in info['opens']:
+            rt = t - info['start_t']
+            print(f"    +{rt:6.3f}s  OPEN  sess=0x{sess:02X} port={port}")
+        for t, sess in info['closes']:
+            rt = t - info['start_t']
+            print(f"    +{rt:6.3f}s  CLOSE sess=0x{sess:02X}")
+
+    # FF records comparison
+    print(f"\n{'─'*80}")
+    print("FF RECORDS")
+    print(f"{'─'*80}")
+    for i, info in enumerate(epochs_info):
+        print(f"\n  [{labels[i]}]")
+        if info['ff_records']:
+            for t, name, size, d in info['ff_records']:
+                rt = t - info['start_t']
+                arrow = "→" if d == 'h2b' else "←"
+                print(f"    +{rt:6.3f}s  {arrow} {name} size={size}")
+        else:
+            print(f"    (none)")
+
+    # Tier-def comparison (FIRST emission only)
+    print(f"\n{'─'*80}")
+    print("TIER DEFINITION (first emission only, blind retransmits filtered)")
+    print(f"{'─'*80}")
+    for i, info in enumerate(epochs_info):
+        td = info['tierdef']
+        print(f"\n  [{labels[i]}]")
+        if td is None:
+            print(f"    NO TIER-DEF SENT")
+            continue
+        rt = info['tierdef_t'] - info['start_t'] if info['tierdef_t'] else 0
+        print(f"    Sent at: +{rt:.3f}s, raw size: {td['raw_size']}B")
+        print(f"    PROTO_VER={td['proto_ver']}, FLAG_BASE=0x{td['flag_base']:02X}")
+        print(f"    ENABLEs: {[f'0x{e:02X}' for e in td['enables']]}")
+        print(f"    {len(td['tiers'])} TIER records:")
+        for flag, channels in td['tiers']:
+            ch_str = ", ".join(f"idx={ci}:0x{cc:02X}:{cb}b" for ci, cc, cb in channels)
+            print(f"      flag=0x{flag:02X}: {len(channels)}ch [{ch_str}]")
+        if td['end_marker'] is not None:
+            print(f"    END_MARKER={td['end_marker']}")
+        print(f"    Blind retransmit rounds: {info['blind_retransmit_rounds']}")
+
+    # Catalog comparison
+    print(f"\n{'─'*80}")
+    print("WHEEL CATALOG (b2h)")
+    print(f"{'─'*80}")
+    for i, info in enumerate(epochs_info):
+        print(f"\n  [{labels[i]}]")
+        print(f"    Chunks: {info['catalog_chunk_count']}")
+        if info['catalog_t']:
+            rt = info['catalog_t'] - info['start_t']
+            print(f"    First chunk at: +{rt:.3f}s")
+        urls = info['catalog_urls']
+        if urls:
+            print(f"    URLs ({len(urls)}):")
+            for idx in sorted(urls):
+                print(f"      idx={idx}: {urls[idx]}")
+        else:
+            print(f"    NO URLs parsed (end-marker only?)")
+
+    # Value frame comparison
+    print(f"\n{'─'*80}")
+    print("VALUE FRAMES (h2b)")
+    print(f"{'─'*80}")
+    for i, info in enumerate(epochs_info):
+        print(f"\n  [{labels[i]}]")
+        if not info['vf_h2b']:
+            print(f"    NONE")
+            continue
+        pct = info['vf_total_nz'] * 100 // info['vf_total_bytes'] if info['vf_total_bytes'] else 0
+        print(f"    Count: {info['vf_count']}, flags: {[f'0x{f:02X}' for f in info['vf_flags']]}")
+        print(f"    Payload: {info['vf_total_bytes']}B, nonzero: {info['vf_total_nz']}B ({pct}%)")
+        for flag in sorted(info['vf_by_flag']):
+            fb = info['vf_by_flag'][flag]
+            nz_str = f"first-nz=+{fb['first_nz_t'] - info['start_t']:.3f}s" if fb['first_nz_t'] else "ALL ZERO"
+            print(f"      flag=0x{flag:02X}: {fb['count']}x, {fb['size']}B, "
+                  f"first=+{fb['first_t'] - info['start_t']:.3f}s, {nz_str}")
+
+    # Timing comparison
+    print(f"\n{'─'*80}")
+    print("TIMING COMPARISON")
+    print(f"{'─'*80}")
+    header = f"{'Metric':<30}"
+    for l in labels:
+        header += f"  {l:>14}"
+    print(f"  {header}")
+    print(f"  {'─'*30}" + f"  {'─'*14}" * n)
+
+    metrics = [
+        ("Session open", lambda i: epochs_info[i]['opens'][0][0] - epochs_info[i]['start_t'] if epochs_info[i]['opens'] else None),
+        ("First FF record", lambda i: (epochs_info[i]['ff_records'][0][0] - epochs_info[i]['start_t']) if epochs_info[i]['ff_records'] else None),
+        ("First catalog chunk", lambda i: (epochs_info[i]['catalog_t'] - epochs_info[i]['start_t']) if epochs_info[i]['catalog_t'] else None),
+        ("First tier-def", lambda i: (epochs_info[i]['tierdef_t'] - epochs_info[i]['start_t']) if epochs_info[i]['tierdef_t'] else None),
+        ("First value frame", lambda i: (epochs_info[i]['vf_first_t'] - epochs_info[i]['start_t']) if epochs_info[i]['vf_first_t'] else None),
+        ("First nonzero VF", lambda i: min((fb['first_nz_t'] - epochs_info[i]['start_t'] for fb in epochs_info[i]['vf_by_flag'].values() if fb['first_nz_t']), default=None)),
+        ("Catalog→tier-def gap", lambda i: (epochs_info[i]['tierdef_t'] - epochs_info[i]['catalog_t']) if epochs_info[i]['tierdef_t'] and epochs_info[i]['catalog_t'] else None),
+        ("Tier-def→first VF gap", lambda i: (epochs_info[i]['vf_first_t'] - epochs_info[i]['tierdef_t']) if epochs_info[i]['vf_first_t'] and epochs_info[i]['tierdef_t'] else None),
+    ]
+
+    for name, fn in metrics:
+        row = f"  {name:<30}"
+        for i in range(n):
+            val = fn(i)
+            if val is not None:
+                row += f"  {val:>11.3f}s"
+            else:
+                row += f"  {'—':>14}"
+        print(row)
+
+    # DIFF section — highlight mismatches
+    if n >= 2:
+        print(f"\n{'─'*80}")
+        print("DIFFERENCES (COLD-START vs SWITCH-1)")
+        print(f"{'─'*80}")
+        e0, e1 = epochs_info[0], epochs_info[1]
+        diffs = []
+
+        # Flag count
+        if e0['vf_flags'] != e1['vf_flags']:
+            diffs.append(f"  VF flags: {[f'0x{f:02X}' for f in e0['vf_flags']]} vs {[f'0x{f:02X}' for f in e1['vf_flags']]}")
+
+        # Tier count
+        td0, td1 = e0['tierdef'], e1['tierdef']
+        if td0 and td1:
+            if len(td0['tiers']) != len(td1['tiers']):
+                diffs.append(f"  Tier count: {len(td0['tiers'])} vs {len(td1['tiers'])}")
+            if td0['flag_base'] != td1['flag_base']:
+                diffs.append(f"  FLAG_BASE: 0x{td0['flag_base']:02X} vs 0x{td1['flag_base']:02X}")
+            if td0['enables'] != td1['enables']:
+                diffs.append(f"  ENABLEs: {td0['enables']} vs {td1['enables']}")
+            # Compare tier channel indices
+            for ti in range(min(len(td0['tiers']), len(td1['tiers']))):
+                f0, ch0 = td0['tiers'][ti]
+                f1, ch1 = td1['tiers'][ti]
+                if ch0 != ch1:
+                    diffs.append(f"  Tier flag=0x{f0:02X} channels differ:")
+                    diffs.append(f"    cold:   {[(ci, f'0x{cc:02X}', cb) for ci, cc, cb in ch0]}")
+                    diffs.append(f"    switch: {[(ci, f'0x{cc:02X}', cb) for ci, cc, cb in ch1]}")
+
+        # Catalog URL count
+        if len(e0['catalog_urls']) != len(e1['catalog_urls']):
+            diffs.append(f"  Catalog URLs: {len(e0['catalog_urls'])} vs {len(e1['catalog_urls'])}")
+
+        # Catalog URL content
+        all_idx = sorted(set(e0['catalog_urls'].keys()) | set(e1['catalog_urls'].keys()))
+        for idx in all_idx:
+            u0 = e0['catalog_urls'].get(idx)
+            u1 = e1['catalog_urls'].get(idx)
+            if u0 != u1:
+                diffs.append(f"  Catalog idx={idx}: '{u0}' vs '{u1}'")
+
+        # VF size per flag
+        for flag in sorted(set(e0['vf_by_flag'].keys()) | set(e1['vf_by_flag'].keys())):
+            fb0 = e0['vf_by_flag'].get(flag)
+            fb1 = e1['vf_by_flag'].get(flag)
+            if fb0 and fb1 and fb0['size'] != fb1['size']:
+                diffs.append(f"  VF flag=0x{flag:02X} payload size: {fb0['size']}B vs {fb1['size']}B")
+
+        # FF record types
+        ff0 = set(name for _, name, _, _ in e0['ff_records'])
+        ff1 = set(name for _, name, _, _ in e1['ff_records'])
+        if ff0 != ff1:
+            diffs.append(f"  FF record types: {ff0} vs {ff1}")
+
+        if diffs:
+            print(f"\n  Found {len(diffs)} differences:\n")
+            for d in diffs:
+                print(d)
+        else:
+            print(f"\n  No structural differences found — epochs are identical!")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("trace", nargs="?", default="latest")
+    args = parser.parse_args()
+
+    path = resolve_trace(args.trace)
+    print(f"Trace: {path.name}")
+    frames = load_trace(path)
+    print(f"Total frames: {len(frames)}, duration: {frames[-1].t:.1f}s")
+
+    epochs = find_epochs(frames)
+    print(f"Epochs: {len(epochs)}")
+
+    epochs_info = [analyze_epoch(i, epoch) for i, epoch in enumerate(epochs)]
+    print_comparison(epochs_info)
+
+
+if __name__ == "__main__":
+    main()

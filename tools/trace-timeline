@@ -1,0 +1,109 @@
+#!/usr/bin/env python3
+"""Print a chronological timeline of significant events in a MOZA wire trace.
+
+Filters out high-frequency noise (value frames, keepalives, polls) and shows
+session lifecycle, FF records, dashboard switches, tier-def chunks, FC acks,
+and state transitions.
+
+Usage:
+    tools/trace-timeline [TRACE] [--window START-END] [--all]
+    tools/trace-timeline latest --window 0-5        # first 5 seconds
+    tools/trace-timeline latest --window 12.5-16    # around a dash switch
+    tools/trace-timeline latest --all               # include high-freq frames
+"""
+import argparse
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from moza_trace import load_trace, resolve_trace, Frame
+
+
+def format_frame(f: Frame) -> str | None:
+    arrow = "->" if f.dir == 'h2b' else "<-"
+
+    # Session open/close
+    if f.is_open:
+        return f"  t={f.t:8.3f}s {arrow} OPEN  sess=0x{f.session:02X} port={f.port}"
+    if f.is_close:
+        return f"  t={f.t:8.3f}s {arrow} CLOSE sess=0x{f.session:02X} seq={f.seq}"
+
+    # FF records
+    if f.is_ff_record:
+        kind_names = {
+            1: "INIT_STATE", 2: "TILE_DATA", 4: "DASH_SWITCH",
+            8: "CHAN_CATALOG", 9: "CONFIG_JSON", 11: "ACTION_CATALOG",
+            14: "HEARTBEAT", 15: "HB_REPLY",
+        }
+        name = kind_names.get(f.ff_kind, f"kind={f.ff_kind}")
+        return f"  t={f.t:8.3f}s {arrow} FF {name:14s} sess=0x{f.session:02X} seq={f.seq:3d} size={f.ff_size}"
+
+    # Session data chunks (non-FF)
+    if f.is_data and f.session in (0x01, 0x02, 0x03):
+        return f"  t={f.t:8.3f}s {arrow} DATA  sess=0x{f.session:02X} seq={f.seq:3d} len={len(f.raw)}"
+
+    # FC acks
+    if f.fc_cmd >= 0:
+        return f"  t={f.t:8.3f}s {arrow} FC:{f.fc_cmd:02X} sess=0x{f.fc_session:02X} seq={f.fc_seq}"
+
+    return None
+
+
+def format_all(f: Frame) -> str:
+    arrow = "->" if f.dir == 'h2b' else "<-"
+    sig = format_frame(f)
+    if sig:
+        return sig
+
+    if f.is_value_frame:
+        nz = "NZ" if any(b != 0 for b in f.vf_data) else "00"
+        return f"  t={f.t:8.3f}s {arrow} VALUE flag=0x{f.vf_flag:02X} {nz} len={len(f.vf_data)}"
+
+    if len(f.raw) >= 5:
+        return f"  t={f.t:8.3f}s {arrow} grp=0x{f.group:02X} dev=0x{f.dev:02X} len={len(f.raw)} hex={f.raw[:16].hex()}"
+
+    return f"  t={f.t:8.3f}s {arrow} raw={f.raw.hex()}"
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Timeline of significant events in a MOZA wire trace")
+    parser.add_argument("trace", nargs="?", default="latest",
+                        help="Path or partial name (default: latest)")
+    parser.add_argument("--window", "-w", type=str, default=None,
+                        help="Time window as START-END in seconds (e.g. 0-5, 12.5-16)")
+    parser.add_argument("--all", "-a", action="store_true",
+                        help="Include high-frequency frames (value, keepalive, polls)")
+    args = parser.parse_args()
+
+    path = resolve_trace(args.trace)
+    frames = load_trace(path)
+
+    t_start, t_end = 0.0, float('inf')
+    if args.window:
+        parts = args.window.split("-", 1)
+        t_start = float(parts[0])
+        t_end = float(parts[1]) if len(parts) > 1 else float('inf')
+
+    print(f"Timeline: {path.name} [{t_start:.1f}s - {t_end:.1f}s]")
+    print()
+
+    count = 0
+    for f in frames:
+        if f.t < t_start:
+            continue
+        if f.t > t_end:
+            break
+        if args.all:
+            print(format_all(f))
+            count += 1
+        else:
+            line = format_frame(f)
+            if line:
+                print(line)
+                count += 1
+
+    print(f"\n({count} events shown)")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,132 @@
+#!/usr/bin/env python3
+"""Show context around each FF kind=4 dashboard switch in a wire trace:
+- The kind=4 record's hex (12-byte body to compare flag bytes per switch)
+- The kind=2/kind=7 init handshake state — was it sent again before this switch?
+- Value frame flag transitions and nonzero pattern across the switch
+- Sess 0x01 h2b tier-def reload activity in the seconds following each switch
+
+Usage:
+    tools/trace-switch-context [TRACE]
+"""
+import argparse
+import json
+import struct
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from moza_trace import load_trace, resolve_trace, Frame
+
+
+def kind4_body(f: Frame) -> bytes:
+    """Pull 12-byte FF kind=4 body from h2b session-data frame."""
+    raw = f.raw
+    # h2b session data: [0x7E][N][grp=43][dev][7c][00][sess][stype=01][seq_lo][seq_hi][FF][size:4][salt:4][kind:4][body...][crc:4][chk]
+    payload = raw[10:]
+    if not payload or payload[0] != 0xFF:
+        return b''
+    if len(payload) < 13:
+        return b''
+    size = struct.unpack_from('<I', payload, 1)[0]
+    body = payload[13:13 + size]
+    return body
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("trace", nargs="?", default="latest")
+    args = ap.parse_args()
+
+    path = resolve_trace(args.trace)
+    print(f"Trace: {path.name}")
+    frames = load_trace(path)
+    print(f"  {len(frames)} frames over {frames[-1].t:.1f}s\n")
+
+    switches = [f for f in frames if f.is_ff_record and f.ff_kind == 4 and f.dir == 'h2b']
+    if not switches:
+        print("No FF kind=4 switches in trace.")
+        return
+
+    inits = [(f.t, f.ff_kind) for f in frames
+             if f.is_ff_record and f.dir == 'h2b'
+             and f.session == 0x02 and f.ff_kind in (2, 7)]
+    closes_h2b = [(f.t, f.session) for f in frames
+                  if f.dir == 'h2b' and f.is_close and f.session in (0x01, 0x02, 0x03)]
+    opens_h2b = [(f.t, f.session, f.port) for f in frames
+                 if f.dir == 'h2b' and f.is_open and f.session in (0x01, 0x02, 0x03)]
+
+    print(f"Switches: {len(switches)}")
+    print(f"Init handshake events (sess=02 h2b kind=2/7): {len(inits)}")
+    print(f"Sess 0x01/02/03 closes h2b: {len(closes_h2b)}")
+    print(f"Sess 0x01/02/03 opens  h2b: {len(opens_h2b)}\n")
+
+    for i, sw in enumerate(switches):
+        body = kind4_body(sw)
+        print(f"{'='*70}")
+        print(f"SWITCH {i+1}: t={sw.t:.3f}s sess=0x{sw.session:02X} seq={sw.seq} body_hex={body.hex()}")
+        print(f"{'='*70}")
+
+        prev_inits = [(t, k) for t, k in inits if t < sw.t]
+        if prev_inits:
+            last_t, last_k = prev_inits[-1]
+            dt = sw.t - last_t
+            print(f"  Last init kind=2/7 BEFORE switch: t={last_t:.3f}s kind={last_k} (Δ={dt:.2f}s ago)")
+        else:
+            print(f"  Last init kind=2/7 BEFORE switch: NONE")
+
+        recent_closes = [(t, s) for t, s in closes_h2b if sw.t - 30 < t < sw.t]
+        recent_opens = [(t, s, p) for t, s, p in opens_h2b if sw.t - 30 < t < sw.t]
+        if recent_closes:
+            print(f"  Recent (within 30s pre-switch) closes: {len(recent_closes)}")
+            for t, s in recent_closes:
+                print(f"    t={t:.3f}s CLOSE sess=0x{s:02X}")
+        if recent_opens:
+            print(f"  Recent (within 30s pre-switch) opens: {len(recent_opens)}")
+            for t, s, p in recent_opens:
+                print(f"    t={t:.3f}s OPEN  sess=0x{s:02X} port={p}")
+
+        post_window_end = sw.t + 5.0
+        post_chunks = [f for f in frames
+                       if sw.t < f.t < post_window_end
+                       and f.dir == 'h2b' and f.session == 0x01 and f.is_data]
+        print(f"  Sess 0x01 h2b chunks in 5s post-switch: {len(post_chunks)}")
+        if post_chunks:
+            first = post_chunks[0]
+            print(f"    First: t={first.t:.3f}s (Δ={first.t - sw.t:.3f}s) seq={first.seq} len={len(first.raw)}")
+            print(f"    Last:  t={post_chunks[-1].t:.3f}s seq={post_chunks[-1].seq} len={len(post_chunks[-1].raw)}")
+
+        # Pre-switch 2s: VFs by flag with nonzero count
+        pre_vf = [f for f in frames if sw.t - 2.0 < f.t < sw.t and f.is_value_frame and f.dir == 'h2b']
+        post_vf = [f for f in frames if sw.t < f.t < sw.t + 5.0 and f.is_value_frame and f.dir == 'h2b']
+
+        def vf_summary(vfs, label):
+            if not vfs:
+                print(f"  {label}: NONE")
+                return set()
+            from collections import defaultdict
+            byflag = defaultdict(list)
+            for v in vfs:
+                byflag[v.vf_flag].append(v)
+            flags = sorted(byflag.keys())
+            print(f"  {label}: {len(vfs)} VFs, flags={[f'0x{x:02X}' for x in flags]}")
+            for flag in flags:
+                fl = byflag[flag]
+                nz = sum(1 for v in fl if any(b != 0 for b in v.vf_data))
+                first_nz_t = next((v.t for v in fl if any(b != 0 for b in v.vf_data)), None)
+                first_nz_str = f", first_nz={first_nz_t:.3f}s" if first_nz_t else ", ALL ZERO"
+                print(f"    flag=0x{flag:02X}: {len(fl)} VFs, len={len(fl[0].vf_data)}, "
+                      f"nonzero={nz}{first_nz_str}")
+            return set(flags)
+
+        pre_flags = vf_summary(pre_vf, "Pre-switch (2s)")
+        post_flags = vf_summary(post_vf, "Post-switch (5s)")
+        new_flags = post_flags - pre_flags
+        if new_flags:
+            print(f"  New flags introduced post-switch: {[f'0x{f:02X}' for f in sorted(new_flags)]}")
+
+        print()
+
+
+if __name__ == "__main__":
+    main()

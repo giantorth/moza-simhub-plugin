@@ -50,6 +50,25 @@ namespace MozaPlugin
         private volatile string _serialPartA = "";
         private volatile string _serialPartB = "";
 
+        // Raw observed reply bytes from group 0x40 cmd 0x28 polls.
+        // PitHouse polls 28:00 + 28:01 at ~1 Hz throughout the active phase
+        // across all four bridge captures (sim/logs/bridge-20260503-*.jsonl).
+        // Reply layouts:
+        //   28:00 reply: C0 71 28 00 00 <byte5>
+        //   28:01 reply: C0 71 28 01 <byte4> <byte5>
+        // Cross-capture analysis shows byte5 of 28:00 takes dominant 00/01 +
+        // recurring 0x0b across all captures, with sporadic high values.
+        // Same observation applies even when the user is NOT touching wheel
+        // controls — the byte still oscillates. Semantics not yet decoded;
+        // stored raw without naming so a maintainer can correlate values
+        // against game state in subsequent controlled experiments.
+        public volatile byte Last28x00Byte5;
+        public volatile bool Last28x00ByteValid;
+        public volatile byte Last28x01Byte4;
+        public volatile byte Last28x01Byte5;
+        public volatile bool Last28x01BytesValid;
+        public volatile int Last28xReplyTickMs; // Environment.TickCount snapshot
+
         // Temperatures (raw / 100 = degrees C from device)
         public volatile int McuTemp;
         public volatile int MosfetTemp;
@@ -160,11 +179,17 @@ namespace MozaPlugin
 
         // Per-knob LED ring colors — W17 CS Pro (4 knobs) / W18 KS Pro (5 knobs).
         // Background = idle colour shown when the knob is not being turned;
-        // primary = colour flashed on rotation. Wire: [27, group, role] + RGB,
-        // group 1..KnobCount (group 0 = RPM), role 0=background, 1=primary.
+        // primary = colour flashed on rotation. Wire: [0x27, group, role] + RGB,
+        // group 0..KnobCount-1, role 0=background, 1=primary.
         public const int WheelKnobMax = 5;
         public readonly byte[][] WheelKnobBackgroundColors = InitColorArray(WheelKnobMax);
         public readonly byte[][] WheelKnobPrimaryColors = InitColorArray(WheelKnobMax);
+
+        // Group 3 (Rotary) per-LED ring colors. Up to 56 LEDs (CS Pro 48, KS Pro 56).
+        // Readable + writable via wheel-group3-color{1..56}.
+        public const int KnobRingLedMax = 56;
+        public readonly byte[][] KnobRingColors = InitColorArray(KnobRingLedMax);
+        public volatile int KnobRingBrightness = -1;
 
         // ES wheel
         public volatile int WheelESRpmBrightness;
@@ -177,6 +202,8 @@ namespace MozaPlugin
         public volatile int DashRpmDisplayMode;
         public volatile int DashRpmBrightness;
         public volatile int DashFlagsBrightness;
+        public volatile int DashDisplayBrightness;
+        public volatile int DashDisplayStandbyMin;
 
         public readonly byte[][] DashRpmColors = InitRpmColorArray();
         public readonly byte[][] DashRpmBlinkColors = InitRpmColorArray();
@@ -355,6 +382,7 @@ namespace MozaPlugin
                 case "wheel-rpm-indicator-mode":     WheelRpmIndicatorMode = value - 1; break; // raw 1/2/3 → display 0/1/2
                 case "wheel-get-rpm-display-mode":  WheelRpmDisplayMode = value; break;
                 case "wheel-old-rpm-brightness":     WheelESRpmBrightness = value; break;
+                case "wheel-group3-brightness":      KnobRingBrightness = value; break;
 
                 // Dash settings
                 case "dash-rpm-indicator-mode":  DashRpmIndicatorMode = value; break;
@@ -489,6 +517,13 @@ namespace MozaPlugin
                 if (idx >= 0 && idx < 6 && data.Length >= 3)
                     SetColor(DashFlagColors[idx], data);
             }
+            // Group 3 (Rotary) per-LED ring colors
+            else if (commandName.StartsWith("wheel-group3-color"))
+            {
+                int idx = ParseTrailingIndex(commandName, "wheel-group3-color");
+                if (idx >= 0 && idx < KnobRingLedMax && data.Length >= 3)
+                    SetColor(KnobRingColors[idx], data);
+            }
             // Wheel identity strings (work with any data length)
             else if (commandName == "wheel-model-name")
             {
@@ -607,6 +642,12 @@ namespace MozaPlugin
             DisplayDeviceType = System.Array.Empty<byte>();
             DisplayCapabilities = System.Array.Empty<byte>();
             DisplayIdentity11 = System.Array.Empty<byte>();
+            Last28x00Byte5 = 0;
+            Last28x00ByteValid = false;
+            Last28x01Byte4 = 0;
+            Last28x01Byte5 = 0;
+            Last28x01BytesValid = false;
+            Last28xReplyTickMs = 0;
             _serialPartA = "";
             _serialPartB = "";
         }

@@ -3,12 +3,25 @@ using System.Collections.Generic;
 namespace MozaPlugin.Protocol
 {
     /// <summary>
-    /// Pre-built command definitions from docs/serial.md.
+    /// Pre-built command definitions from docs/protocol/devices/.
     /// </summary>
     public static class MozaCommandDatabase
     {
         private static readonly Dictionary<string, MozaCommand> _commands = new Dictionary<string, MozaCommand>();
         public static IReadOnlyDictionary<string, MozaCommand> Commands => _commands;
+
+        // Group-indexed lookup built once at static-constructor end. Each command
+        // appears under both its ReadGroup and WriteGroup keys (skipping 0xFF =
+        // not-applicable). Lets MozaResponseParser scan only the commands matching
+        // the inbound group instead of iterating all ~200+ entries per message.
+        private static readonly Dictionary<byte, List<MozaCommand>> _byGroup
+            = new Dictionary<byte, List<MozaCommand>>();
+        public static IReadOnlyList<MozaCommand> CommandsForGroup(byte group)
+        {
+            return _byGroup.TryGetValue(group, out var list)
+                ? (IReadOnlyList<MozaCommand>)list
+                : System.Array.Empty<MozaCommand>();
+        }
 
         static MozaCommandDatabase()
         {
@@ -138,9 +151,11 @@ namespace MozaPlugin.Protocol
             // ===== TELEMETRY OUTPUT =====
             AddCommand("dash-send-telemetry",           "dash",  0xFF, 65, new byte[] { 253, 222 }, 4, "int");
             AddCommand("wheel-send-rpm-telemetry",      "wheel", 0xFF, 63, new byte[] { 26, 0 },    4, "array");
-            AddCommand("wheel-send-buttons-telemetry",  "wheel", 0xFF, 63, new byte[] { 26, 1 },    2, "array");
+            AddCommand("wheel-send-buttons-telemetry",  "wheel", 0xFF, 63, new byte[] { 26, 1 },    8, "array");
             AddCommand("wheel-telemetry-rpm-colors",    "wheel", 0xFF, 63, new byte[] { 25, 0 },   20, "array");
             AddCommand("wheel-telemetry-button-colors", "wheel", 0xFF, 63, new byte[] { 25, 1 },   20, "array");
+            AddCommand("wheel-send-knob-telemetry",     "wheel", 0xFF, 63, new byte[] { 26, 3 },    8, "array");
+            AddCommand("wheel-telemetry-knob-colors",   "wheel", 0xFF, 63, new byte[] { 25, 3 },   20, "array");
             AddCommand("wheel-old-send-telemetry",      "wheel", 0xFF, 65, new byte[] { 253, 222 }, 4, "int");
 
             // ===== WHEEL IDENTITY (read-only, bytes=0 → request sends cmd ID only) =====
@@ -193,15 +208,15 @@ namespace MozaPlugin.Protocol
                 AddCommand($"wheel-button-color{i + 1}", "wheel", 64, 63, new byte[] { 31, 1, 0xFF, i }, 3, "array");
 
             // Per-rotary-knob LED colors (W17 CS Pro = 4 knobs, W18 KS Pro = 5 knobs).
-            // Wire: [0x27, <group>, <role>] + [R, G, B]. group = 1..5 (knob N — group 0 is RPM),
+            // Wire: [0x27, <group>, <role>] + [R, G, B]. group = 0..4 (knob 1..5),
             // role 0=background (idle), 1=primary (active). Write-only — wheel echoes via
-            // WheelEchoPrefixes entries for (0x3F, 0x17, 0x27, 0x01..0x05). Cmd byte must be
+            // WheelEchoPrefixes entries for (0x3F, 0x17, 0x27, 0x00..0x04). Cmd byte must be
             // 0x27 (LED group colour); decimal `27` (= 0x1B) is the brightness-page command —
             // using it caused KS Pro / CS Pro knob colour writes to silently no-op.
             for (byte k = 1; k <= 5; k++)
             {
-                AddCommand($"wheel-knob{k}-bg-color",      "wheel", 0xFF, 63, new byte[] { 0x27, k, 0 }, 3, "array");
-                AddCommand($"wheel-knob{k}-primary-color", "wheel", 0xFF, 63, new byte[] { 0x27, k, 1 }, 3, "array");
+                AddCommand($"wheel-knob{k}-bg-color",      "wheel", 0xFF, 63, new byte[] { 0x27, (byte)(k - 1), 0 }, 3, "array");
+                AddCommand($"wheel-knob{k}-primary-color", "wheel", 0xFF, 63, new byte[] { 0x27, (byte)(k - 1), 1 }, 3, "array");
             }
 
             // Extended LED groups (2=Single/28 LEDs, 3=Rotary/56 LEDs, 4=Ambient/12 LEDs).
@@ -300,7 +315,7 @@ namespace MozaPlugin.Protocol
             AddCommand("handbrake-cal-stop",  "handbrake", 0xFF, 94, new byte[] { 4 }, 2, "int");
 
             // ===== AB9 ACTIVE SHIFTER (device: ab9, dev id 0x12, group 0x1F write / 0x1F read) =====
-            // Per docs/AB9-poc-plan.md and docs/moza-protocol.md § "AB9 active shifter".
+            // Per docs/AB9-poc-plan.md and docs/protocol/devices/ab9-shifter.md.
             // Wire format: 7E 03 1F 12 <cmdHi> <cmdLo> <value> <checksum>. Single-byte
             // payload for sliders/mode. Response group on the wire is 0x9F; the parser
             // toggles bit7 back to 0x1F before matching, so both Read- and WriteGroup
@@ -316,8 +331,23 @@ namespace MozaPlugin.Protocol
         private static void AddCommand(string name, string device, byte readGroup, byte writeGroup,
             byte[] commandId, int payloadBytes, string payloadType)
         {
-            _commands[name] = new MozaCommand(name, device, readGroup, writeGroup,
+            var cmd = new MozaCommand(name, device, readGroup, writeGroup,
                 commandId, payloadBytes, payloadType);
+            _commands[name] = cmd;
+            // Index by both groups so the parser can fetch all commands matching
+            // an inbound group in one lookup. 0xFF means "not applicable".
+            if (readGroup != 0xFF)
+            {
+                if (!_byGroup.TryGetValue(readGroup, out var rl))
+                    _byGroup[readGroup] = rl = new List<MozaCommand>();
+                rl.Add(cmd);
+            }
+            if (writeGroup != 0xFF && writeGroup != readGroup)
+            {
+                if (!_byGroup.TryGetValue(writeGroup, out var wl))
+                    _byGroup[writeGroup] = wl = new List<MozaCommand>();
+                wl.Add(cmd);
+            }
         }
 
         public static MozaCommand? Get(string name)

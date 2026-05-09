@@ -1,0 +1,500 @@
+{
+  "TitleId": 1,
+  "configJsonList": [
+    "Core",
+    "Grids",
+    "Mono",
+    "Pulse",
+    "Rally V1",
+    "Rally V2",
+    "Rally V3",
+    "Rally V4",
+    "Rally V5",
+    "Rally V6"
+  ],
+  "disableManager": {
+    "dashboards": [],
+    "imageRefMap": {
+      "MD5/0ce2f297012788aa00025b743bda7f53.png": 1,
+      "MD5/16866dfa2636067bb5022b3ca0da237f.png": 1,
+      "MD5/2e71a39c11973642c01eb4d8a14db845.png": 1,
+      "MD5/35adae7435d4ebcc36c377991f6dfb0e.png": 1,
+      "MD5/3fd76b0bcf929e42139661b6e0543cb0.png": 1,
+      "MD5/40715d614afb2678718c3cb89de8214f.png": 1,
+      "MD5/478283d6c41655e09ad3da9e024db8a6.png": 1,
+      "MD5/498434662b5c0bf34e7ac2acbf012309.png": 1,
+      "MD5/5a541aae7f85c2b8837db1664fa5dd61.png": 1,
+      "MD5/6e219eb9453d38ceeddd199ff5def37c.png": 1,
+      "MD5/791fe3d3843ea195075ee2e05ee18a86.png": 1,
+      "MD5/890a1d9763c657ffb2baad10487dee0a.png": 1,
+      "MD5/8b093bdee54da30d40bb9e98882bfe3c.png": 1,
+      "MD5/912ac6a452dde50a0920a8ea42bb6d9d.png": 1,
+      "MD5/CM01.png": 1,
+      "MD5/CM02.png": 1,
+      "MD5/aa590e8b2571d394ef1554c19dcf285d.mp4": 1,
+      "MD5/ae94140a6b5ad277fd1d9380cbf9ddf0.png": 1,
+      "MD5/bf3932d9c1e0e5ce7e32c1678b735648.png": 1,
+      "MD5/bf78fdc6806ea884a911861176ccde74.png": 1,
+      "MD5/c2657726876b11fd572b8b568af197cf.png": 1,
+      "MD5/d0488b054a399ec8e1c96859bb5650a9.png": 1,
+      "MD5/e1c973b41eca8c762404e3ee889e999f.png": 1,
+      "MD5/e23af02628301812de89f67bb25a49d8.png": 1
+    },
+    "rootPath": "/home/moza/resource/dashes"
+  },
+  "displayVersion": 11,
+  "enableManager": {
+    "dashboards": [
+      {
+        "createTime": "",
+        "dirName": "Rally V1",
+        "hash": "6237346230306537323364343265656566653032343734323631653261363333",
+        "id": "0ZPoaC0XdTHawiWIvXEq8wjDYjGenlMz",
+        "idealDeviceInfos": [
+          {
+            "deviceId": 17,
+            "hardwareVersion": "RS21-W08-HW SM-DU-V14",
+            "networkId": 1,
+            "productType": "W17 Display"
+          }
+        ],
+        "lastModified": "2025-11-21T07:45:36Z",
+        "previewImageFilePaths": [
+          "/home/moza/resource/dashes/Rally V1/Rally V1.mzdash_v2_10_3_05.png"
+        ],
+        "resouceImageFilePaths": [],
+        "title": "Rally V1"
+      },
+      {
+        "createTime": "",
+        "dirName": "Rally V2",
+        "hash": "6237613532663061666562366333326334383130383838313261333439313531",
+        "id": "AMl9tFWbubQZ8IstnJIKyTN31NV1glNP",
+        "idealDeviceInfos": [
+          {
+            "deviceId": 17,
+            "hardwareVersion": "RS21-W08-HW SM-DU-V14",
+            "networkId": 1,
+            "productType": "W17 Display"
+          }
+        ],
+        "lastModified": "2025-11-27T04:14:08Z",
+        "previewImageFilePaths": [
+          "/home/moza/resource/dashes/Rally V2/Rally V2.mzdash_v2_10_3_05.png"
+        ],
+        "resouceImageFilePaths": [],
+        "title": "Rally V2"
+      },
+      {
+        "createTime": "",
+        "dirName": "Rally V5",
+        "hash": "6233376336386235373331636432613339346466323063373762663938333334",
+        "id": "GVehpvxoDjAqP7ogybavd7zcZPanaPfv",
+        "idealDeviceInfos": [
+          {
+            "deviceId": 17,
+            "hardwareVersion": "RS21-W08-HW SM-DU-V14",
+            "networkId": 1,
+            "productType": "W17 Display"
+          }
+        ],
+        "lastModified": "2026-04-17T06:24:32Z",
+        "previewImageFilePaths": [
+          "/home/moza/resource/dashes/Rally V5/Rally V5.mzdash_v2_10_3_05.png"
+        ],
+        "resouceImageFilePaths": [],
+        "title": "Rally V5"
+      },
+      {
+        "createTime": "",
+        "dirName": "Rally V3",
+        "hash": "3935653534646664313165636362643564383433326662333964663132663363",
+        "id": "PJx9TUnPLBUrSkL3Q9nZ5a6QCH1QKKAg",
+        "idealDeviceInfos": [
+          {
+            "deviceId": 17,
+            "hardwareVersion": "RS21-W08-HW SM-DU-V14",
+            "networkId": 1,
+            "productType": "W17 Display"
+          }
+        ],
+        "lastModified": "2025-11-21T03:02:21Z",
+        "previewImageFilePaths": [
+          "/home/moza/resource/dashes/Rally V3/Rally V3.mzdash_v2_10_3_05.png"
+        ],
+        "resouceImageFilePaths": [],
+        "title": "Rally V3"
+      },
+      {
+        "createTime": "",
+        "dirName": "Rally V6",
+        "hash": "6364623666313036383261613838303135633534396531383464363830326365",
+        "id": "ZxJDzapoFuOg6KSzufFAzpkA2vQLGT1I",
+        "idealDeviceInfos": [
+          {
+            "deviceId": 8,
+            "hardwareVersion": "RS21-W17-HW RGB-DU-V11",
+            "networkId": 1,
+            "productType": "W17 Display"
+          }
+        ],
+        "lastModified": "2025-12-16T07:21:29Z",
+        "previewImageFilePaths": [
+          "/home/moza/resource/dashes/Rally V6/Rally V6.mzdash_v2_10_3_05.png"
+        ],
+        "resouceImageFilePaths": [
+          "MD5/c2657726876b11fd572b8b568af197cf.png",
+          "MD5/5a541aae7f85c2b8837db1664fa5dd61.png",
+          "MD5/bf3932d9c1e0e5ce7e32c1678b735648.png"
+        ],
+        "title": "Rally V6"
+      },
+      {
+        "createTime": "",
+        "dirName": "Rally V4",
+        "hash": "3065343165636161366631616434666132326261353731653736353436623765",
+        "id": "m7o97CNOJ6sPGNrKjAYnna1Ani9X9QP6",
+        "idealDeviceInfos": [
+          {
+            "deviceId": 17,
+            "hardwareVersion": "RS21-W08-HW SM-DU-V14",
+            "networkId": 1,
+            "productType": "W17 Display"
+          }
+        ],
+        "lastModified": "2026-04-16T18:15:02Z",
+        "previewImageFilePaths": [
+          "/home/moza/resource/dashes/Rally V4/Rally V4.mzdash_v2_10_3_05.png"
+        ],
+        "resouceImageFilePaths": [],
+        "title": "Rally V4"
+      },
+      {
+        "createTime": "",
+        "dirName": "Core",
+        "hash": "3765323436613133613461663164656432353339396562613033313234383032",
+        "id": "{23f611f4-5660-454b-808b-f19728f64d48}",
+        "idealDeviceInfos": [
+          {
+            "deviceId": 8,
+            "hardwareVersion": "RS21-W17-HW RGB-DU-V11",
+            "networkId": 1,
+            "productType": "W17 Display"
+          }
+        ],
+        "lastModified": "2026-04-20T20:11:31Z",
+        "previewImageFilePaths": [
+          "/home/moza/resource/dashes/Core/Core.mzdash_v2_10_3_05.png"
+        ],
+        "resouceImageFilePaths": [],
+        "title": "Core"
+      },
+      {
+        "createTime": "",
+        "dirName": "Mono",
+        "hash": "3066326562363463663137356433316263663233633966363362373033396266",
+        "id": "{288fdc2c-6050-4c8e-86b3-51bb4f4f5ccc}",
+        "idealDeviceInfos": [
+          {
+            "deviceId": 8,
+            "hardwareVersion": "RS21-W17-HW RGB-DU-V11",
+            "networkId": 1,
+            "productType": "W17 Display"
+          }
+        ],
+        "lastModified": "2026-04-14T17:29:04Z",
+        "previewImageFilePaths": [
+          "/home/moza/resource/dashes/Mono/Mono.mzdash_v2_10_3_05.png"
+        ],
+        "resouceImageFilePaths": [],
+        "title": "Mono"
+      },
+      {
+        "createTime": "",
+        "dirName": "Pulse",
+        "hash": "6632333430393764323065333866623537656631396561653761633261336164",
+        "id": "{3b177b19-9884-48b1-b7b2-6dcdb6180828}",
+        "idealDeviceInfos": [
+          {
+            "deviceId": 8,
+            "hardwareVersion": "RS21-W17-HW RGB-DU-V11",
+            "networkId": 1,
+            "productType": "W17 Display"
+          }
+        ],
+        "lastModified": "2025-11-21T09:03:48Z",
+        "previewImageFilePaths": [
+          "/home/moza/resource/dashes/Pulse/Pulse.mzdash_v2_10_3_05.png"
+        ],
+        "resouceImageFilePaths": [
+          "MD5/8b093bdee54da30d40bb9e98882bfe3c.png"
+        ],
+        "title": "Pulse"
+      },
+      {
+        "createTime": "",
+        "dirName": "Grids",
+        "hash": "3862623437393737666138386161303166316534343736613233613836646636",
+        "id": "{f6b22346-fdef-4f9d-87d0-02579c96d483}",
+        "idealDeviceInfos": [
+          {
+            "deviceId": 8,
+            "hardwareVersion": "RS21-W17-HW RGB-DU-V11",
+            "networkId": 1,
+            "productType": "W17 Display"
+          }
+        ],
+        "lastModified": "2025-11-21T09:04:11Z",
+        "previewImageFilePaths": [
+          "/home/moza/resource/dashes/Grids/Grids.mzdash_v2_10_3_05.png"
+        ],
+        "resouceImageFilePaths": [],
+        "title": "Grids"
+      }
+    ],
+    "imageRefMap": {
+      "MD5/0ce2f297012788aa00025b743bda7f53.png": 1,
+      "MD5/16866dfa2636067bb5022b3ca0da237f.png": 1,
+      "MD5/2e71a39c11973642c01eb4d8a14db845.png": 1,
+      "MD5/35adae7435d4ebcc36c377991f6dfb0e.png": 1,
+      "MD5/3fd76b0bcf929e42139661b6e0543cb0.png": 1,
+      "MD5/40715d614afb2678718c3cb89de8214f.png": 1,
+      "MD5/478283d6c41655e09ad3da9e024db8a6.png": 1,
+      "MD5/498434662b5c0bf34e7ac2acbf012309.png": 1,
+      "MD5/5a541aae7f85c2b8837db1664fa5dd61.png": 1,
+      "MD5/6e219eb9453d38ceeddd199ff5def37c.png": 1,
+      "MD5/791fe3d3843ea195075ee2e05ee18a86.png": 1,
+      "MD5/890a1d9763c657ffb2baad10487dee0a.png": 1,
+      "MD5/8b093bdee54da30d40bb9e98882bfe3c.png": 1,
+      "MD5/912ac6a452dde50a0920a8ea42bb6d9d.png": 1,
+      "MD5/CM01.png": 1,
+      "MD5/CM02.png": 1,
+      "MD5/aa590e8b2571d394ef1554c19dcf285d.mp4": 1,
+      "MD5/ae94140a6b5ad277fd1d9380cbf9ddf0.png": 1,
+      "MD5/bf3932d9c1e0e5ce7e32c1678b735648.png": 1,
+      "MD5/bf78fdc6806ea884a911861176ccde74.png": 1,
+      "MD5/c2657726876b11fd572b8b568af197cf.png": 1,
+      "MD5/d0488b054a399ec8e1c96859bb5650a9.png": 1,
+      "MD5/e1c973b41eca8c762404e3ee889e999f.png": 1,
+      "MD5/e23af02628301812de89f67bb25a49d8.png": 1
+    },
+    "rootPath": "/home/moza/resource/dashes"
+  },
+  "fontRefMap": {},
+  "imagePath": [
+    {
+      "md5": "5a541aae7f85c2b8837db1664fa5dd61",
+      "modify": "-4673085230000",
+      "url": "MD5/5a541aae7f85c2b8837db1664fa5dd61.png"
+    },
+    {
+      "md5": "8b093bdee54da30d40bb9e98882bfe3c",
+      "modify": "-4679572208000",
+      "url": "MD5/8b093bdee54da30d40bb9e98882bfe3c.png"
+    },
+    {
+      "md5": "a444d071c069c37480c3d44ab3ca14be",
+      "modify": "-4679643320000",
+      "url": "MD5/a444d071c069c37480c3d44ab3ca14be.png"
+    },
+    {
+      "md5": "bf3932d9c1e0e5ce7e32c1678b735648",
+      "modify": "-4673085230000",
+      "url": "MD5/bf3932d9c1e0e5ce7e32c1678b735648.png"
+    },
+    {
+      "md5": "c0e1818a41ada8c274dcc8b89fd0a62a",
+      "modify": "-4679556964000",
+      "url": "MD5/c0e1818a41ada8c274dcc8b89fd0a62a.png"
+    },
+    {
+      "md5": "c2657726876b11fd572b8b568af197cf",
+      "modify": "-4673085230000",
+      "url": "MD5/c2657726876b11fd572b8b568af197cf.png"
+    },
+    {
+      "md5": "f0c45b151c2d7b0c7c536c7f481aabc8",
+      "modify": "-4679572854000",
+      "url": "MD5/f0c45b151c2d7b0c7c536c7f481aabc8.png"
+    },
+    {
+      "md5": "3fd76b0bcf929e42139661b6e0543cb0",
+      "modify": "-4661303065779",
+      "url": "MD5/3fd76b0bcf929e42139661b6e0543cb0.png"
+    },
+    {
+      "md5": "e1c973b41eca8c762404e3ee889e999f",
+      "modify": "-4661303065679",
+      "url": "MD5/e1c973b41eca8c762404e3ee889e999f.png"
+    },
+    {
+      "md5": "d0488b054a399ec8e1c96859bb5650a9",
+      "modify": "-4661303065687",
+      "url": "MD5/d0488b054a399ec8e1c96859bb5650a9.png"
+    },
+    {
+      "md5": "b8d10e4e32e17f8558de9f4f223aa5be",
+      "modify": "-4661303065699",
+      "url": "MD5/b8d10e4e32e17f8558de9f4f223aa5be.png"
+    },
+    {
+      "md5": "6930f70ff43b96af3470ea56fa71b4d4",
+      "modify": "-4661303065715",
+      "url": "MD5/CM02.png"
+    },
+    {
+      "md5": "498434662b5c0bf34e7ac2acbf012309",
+      "modify": "-4661303065755",
+      "url": "MD5/498434662b5c0bf34e7ac2acbf012309.png"
+    },
+    {
+      "md5": "bf78fdc6806ea884a911861176ccde74",
+      "modify": "-4661303065691",
+      "url": "MD5/bf78fdc6806ea884a911861176ccde74.png"
+    },
+    {
+      "md5": "478283d6c41655e09ad3da9e024db8a6",
+      "modify": "-4661303065763",
+      "url": "MD5/478283d6c41655e09ad3da9e024db8a6.png"
+    },
+    {
+      "md5": "641406407a062b8e79c938f5839da52f",
+      "modify": "-4660898796635",
+      "url": "MD5/641406407a062b8e79c938f5839da52f.png"
+    },
+    {
+      "md5": "e36e7493a242d05e44819bbfef38072e",
+      "modify": "-4661303065639",
+      "url": "MD5/moza_4b207f61883f417d1008791c8a54d5ab.png"
+    },
+    {
+      "md5": "79a4990504b65f6adc14c739e203ae3c",
+      "modify": "-4661252068023",
+      "url": "MD5/79a4990504b65f6adc14c739e203ae3c.mp4"
+    },
+    {
+      "md5": "890a1d9763c657ffb2baad10487dee0a",
+      "modify": "-4661303065735",
+      "url": "MD5/890a1d9763c657ffb2baad10487dee0a.png"
+    },
+    {
+      "md5": "ebd1c1be52b980588921f8aae37e1ef1",
+      "modify": "-4661303065663",
+      "url": "MD5/ebd1c1be52b980588921f8aae37e1ef1.png"
+    },
+    {
+      "md5": "7ba83c4e0fbffd653276c44418e95bb3",
+      "modify": "-4661477066639",
+      "url": "MD5/7ba83c4e0fbffd653276c44418e95bb3.png"
+    },
+    {
+      "md5": "16866dfa2636067bb5022b3ca0da237f",
+      "modify": "-4661303065803",
+      "url": "MD5/16866dfa2636067bb5022b3ca0da237f.png"
+    },
+    {
+      "md5": "e23af02628301812de89f67bb25a49d8",
+      "modify": "-4661303065671",
+      "url": "MD5/e23af02628301812de89f67bb25a49d8.png"
+    },
+    {
+      "md5": "40715d614afb2678718c3cb89de8214f",
+      "modify": "-4661303065771",
+      "url": "MD5/40715d614afb2678718c3cb89de8214f.png"
+    },
+    {
+      "md5": "aa590e8b2571d394ef1554c19dcf285d",
+      "modify": "-4661251706755",
+      "url": "MD5/aa590e8b2571d394ef1554c19dcf285d.mp4"
+    },
+    {
+      "md5": "2e71a39c11973642c01eb4d8a14db845",
+      "modify": "-4661303065795",
+      "url": "MD5/2e71a39c11973642c01eb4d8a14db845.png"
+    },
+    {
+      "md5": "ed68b13dc7b07814bb4773187aea910f",
+      "modify": "-4661399276883",
+      "url": "MD5/ed68b13dc7b07814bb4773187aea910f.mp4"
+    },
+    {
+      "md5": "ae94140a6b5ad277fd1d9380cbf9ddf0",
+      "modify": "-4661303065707",
+      "url": "MD5/ae94140a6b5ad277fd1d9380cbf9ddf0.png"
+    },
+    {
+      "md5": "d8109ac6cd639daa1166677d065e2680",
+      "modify": "-4661420795255",
+      "url": "MD5/d8109ac6cd639daa1166677d065e2680.mp4"
+    },
+    {
+      "md5": "35adae7435d4ebcc36c377991f6dfb0e",
+      "modify": "-4661303065787",
+      "url": "MD5/35adae7435d4ebcc36c377991f6dfb0e.png"
+    },
+    {
+      "md5": "36c21341560e1ee6c9953ab942483c6d",
+      "modify": "-4661303065723",
+      "url": "MD5/CM01.png"
+    },
+    {
+      "md5": "6e219eb9453d38ceeddd199ff5def37c",
+      "modify": "-4661303065751",
+      "url": "MD5/6e219eb9453d38ceeddd199ff5def37c.png"
+    },
+    {
+      "md5": "0ce2f297012788aa00025b743bda7f53",
+      "modify": "-4661303065811",
+      "url": "MD5/0ce2f297012788aa00025b743bda7f53.png"
+    },
+    {
+      "md5": "791fe3d3843ea195075ee2e05ee18a86",
+      "modify": "-4661303065743",
+      "url": "MD5/791fe3d3843ea195075ee2e05ee18a86.png"
+    },
+    {
+      "md5": "9b76e6d1274feca6cfd4c84e23f0a535",
+      "modify": "-4661251706763",
+      "url": "MD5/9b76e6d1274feca6cfd4c84e23f0a535.png"
+    },
+    {
+      "md5": "f85bbf1cc0cc26430cd51390238da0e9",
+      "modify": "-4660898796627",
+      "url": "MD5/f85bbf1cc0cc26430cd51390238da0e9.png"
+    },
+    {
+      "md5": "912ac6a452dde50a0920a8ea42bb6d9d",
+      "modify": "-4661303065727",
+      "url": "MD5/912ac6a452dde50a0920a8ea42bb6d9d.png"
+    }
+  ],
+  "imageRefMap": {
+    "MD5/0ce2f297012788aa00025b743bda7f53.png": 2,
+    "MD5/16866dfa2636067bb5022b3ca0da237f.png": 2,
+    "MD5/2e71a39c11973642c01eb4d8a14db845.png": 2,
+    "MD5/35adae7435d4ebcc36c377991f6dfb0e.png": 2,
+    "MD5/3fd76b0bcf929e42139661b6e0543cb0.png": 2,
+    "MD5/40715d614afb2678718c3cb89de8214f.png": 2,
+    "MD5/478283d6c41655e09ad3da9e024db8a6.png": 2,
+    "MD5/498434662b5c0bf34e7ac2acbf012309.png": 2,
+    "MD5/5a541aae7f85c2b8837db1664fa5dd61.png": 2,
+    "MD5/6e219eb9453d38ceeddd199ff5def37c.png": 2,
+    "MD5/791fe3d3843ea195075ee2e05ee18a86.png": 2,
+    "MD5/890a1d9763c657ffb2baad10487dee0a.png": 2,
+    "MD5/8b093bdee54da30d40bb9e98882bfe3c.png": 2,
+    "MD5/912ac6a452dde50a0920a8ea42bb6d9d.png": 2,
+    "MD5/CM01.png": 2,
+    "MD5/CM02.png": 2,
+    "MD5/aa590e8b2571d394ef1554c19dcf285d.mp4": 2,
+    "MD5/ae94140a6b5ad277fd1d9380cbf9ddf0.png": 2,
+    "MD5/bf3932d9c1e0e5ce7e32c1678b735648.png": 2,
+    "MD5/bf78fdc6806ea884a911861176ccde74.png": 2,
+    "MD5/c2657726876b11fd572b8b568af197cf.png": 2,
+    "MD5/d0488b054a399ec8e1c96859bb5650a9.png": 2,
+    "MD5/e1c973b41eca8c762404e3ee889e999f.png": 2,
+    "MD5/e23af02628301812de89f67bb25a49d8.png": 2
+  },
+  "resetVersion": 10,
+  "rootDirPath": "/home/moza/resource",
+  "sortTag": 0
+}

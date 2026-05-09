@@ -1,0 +1,641 @@
+{
+  "TitleId": 1,
+  "configJsonList": [
+    "DNR endurance",
+    "Formula 1",
+    "GT V01",
+    "GT V02",
+    "GT V03",
+    "JDM Gauge Style 01",
+    "JDM Gauge Style 02",
+    "JDM Gauge Style 03",
+    "Lovely Dashboard for Vision GS",
+    "Rally V01",
+    "m Formula 1",
+    "rpm-only"
+  ],
+  "disableManager": {
+    "dashboards": [],
+    "imageRefMap": {
+      "Formula 1/bg_3.png": 1,
+      "Formula 1/electricity.png": 2,
+      "Formula 1/mailbox.png": 2,
+      "Formula 1/t.png": 2,
+      "GT V01/bg_1.png": 1,
+      "GT V01/bg_2.png": 1,
+      "GT V02/bg_3.png": 1,
+      "GT V02/t.png": 1,
+      "GT V03/bg_5.png": 1,
+      "GT V03/bg_6.png": 1,
+      "GT V03/pointer.png": 1,
+      "JDM Gauge Style 01/bg_3.png": 1,
+      "JDM Gauge Style 01/mailbox.png": 1,
+      "JDM Gauge Style 01/pointer.png": 1,
+      "JDM Gauge Style 02/bg_3.png": 1,
+      "JDM Gauge Style 02/bg_4.png": 1,
+      "JDM Gauge Style 02/pointer_1.png": 1,
+      "JDM Gauge Style 03/bg_6.png": 1,
+      "JDM Gauge Style 03/bg_6_1.png": 1,
+      "JDM Gauge Style 03/gasoline.png": 1,
+      "JDM Gauge Style 03/pointer.png": 1,
+      "JDM Gauge Style 03/water.png": 1,
+      "MD5/2bc7a97f4f540046c045928803471edf.png": 1,
+      "MD5/4a8411bb828cd14e2bcf724a2bd725de.png": 1,
+      "MD5/aeaec0ea3dd59f5815cee5660a20e8b0.png": 1,
+      "MD5/bbe96b84aa574297727e0226f9007ccd.png": 1,
+      "MD5/d508ee6966b967835a1068b40db5ca76.png": 1,
+      "Rally V01/bg_8.png": 1,
+      "Rally V01/ignition.png": 1,
+      "Rally V01/ignition_breakdown.png": 1,
+      "Rally V01/ignition_hot.png": 1,
+      "Rally V01/pneumatic-on.png": 1,
+      "Rally V01/pneumatic.png": 1,
+      "Rally V01/water.png": 1,
+      "Rally V01/water_warn.png": 1
+    },
+    "rootPath": "/home/moza/resource/dashes"
+  },
+  "displayVersion": 5,
+  "enableManager": {
+    "dashboards": [
+      {
+        "createTime": "2026-01-04T16:54:40",
+        "dirName": "m Formula 1",
+        "hash": "3563376266336265663832346139373864303333386633313733383634623234",
+        "id": "Z1uJIkXe5kuDicVSUgFXRElVcfjTeo12",
+        "idealDeviceInfos": [
+          {
+            "deviceId": 8,
+            "hardwareVersion": "RS21-W08-HW SM-DU-V14",
+            "networkId": 1,
+            "productType": "Display"
+          }
+        ],
+        "lastModified": "2026-01-04T21:18:31Z",
+        "previewImageFilePaths": [
+          "/home/moza/resource/dashes/m Formula 1/m Formula 1.mzdash_v2_10_3_05.png"
+        ],
+        "resouceImageFilePaths": [
+          "MD5/2bc7a97f4f540046c045928803471edf.png",
+          "Formula 1/electricity.png",
+          "Formula 1/mailbox.png",
+          "Formula 1/t.png"
+        ],
+        "title": "m Formula 1"
+      },
+      {
+        "createTime": "2025-07-21T22:31:35",
+        "dirName": "Lovely Dashboard for Vision GS",
+        "hash": "3131333430316661303839356233653338333733636131343062613563363035",
+        "id": "cOJbwLc2KlsTP2qNzIS6GfpMwX2O2a3x",
+        "idealDeviceInfos": [
+          {
+            "deviceId": 16,
+            "hardwareVersion": "RS21-W08-HW SM-DU-V14",
+            "networkId": 1,
+            "productType": "Display"
+          }
+        ],
+        "lastModified": "2025-09-22T16:57:29Z",
+        "previewImageFilePaths": [
+          "/home/moza/resource/dashes/Lovely Dashboard for Vision GS/Lovely Dashboard for Vision GS.mzdash_v2_10_3_05.png"
+        ],
+        "resouceImageFilePaths": [
+          "MD5/d508ee6966b967835a1068b40db5ca76.png",
+          "MD5/bbe96b84aa574297727e0226f9007ccd.png",
+          "MD5/4a8411bb828cd14e2bcf724a2bd725de.png"
+        ],
+        "title": "Lovely Dashboard for Vision GS"
+      },
+      {
+        "createTime": "2018-03-09T12:36:09",
+        "dirName": "Formula 1",
+        "hash": "3035643437396561613939396665343761616235616534643062633433343131",
+        "id": "{00000000-0000-0000-0000-000000000001}",
+        "idealDeviceInfos": [
+          {
+            "deviceId": 8,
+            "hardwareVersion": "RS21-W08-HW SM-DU-V14",
+            "networkId": 1,
+            "productType": "Display"
+          }
+        ],
+        "lastModified": "2024-10-22T08:35:07Z",
+        "previewImageFilePaths": [
+          "/home/moza/resource/dashes/Formula 1/1.png",
+          "/home/moza/resource/dashes/Formula 1/2.png",
+          "/home/moza/resource/dashes/Formula 1/3.png",
+          "/home/moza/resource/dashes/Formula 1/Formula 1.mzdash_v2_10_3_05.png"
+        ],
+        "resouceImageFilePaths": [
+          "Formula 1/t.png",
+          "Formula 1/electricity.png",
+          "Formula 1/mailbox.png",
+          "Formula 1/bg_3.png"
+        ],
+        "title": "Formula 1"
+      },
+      {
+        "createTime": "2018-03-09T12:36:09",
+        "dirName": "GT V01",
+        "hash": "3763643665656266323363656132326631333537666665633031616631653162",
+        "id": "{00000000-0000-0000-0000-000000000002}",
+        "idealDeviceInfos": [
+          {
+            "deviceId": 8,
+            "hardwareVersion": "RS21-W08-HW SM-DU-V14",
+            "networkId": 1,
+            "productType": "Display"
+          }
+        ],
+        "lastModified": "2024-10-22T08:35:30Z",
+        "previewImageFilePaths": [
+          "/home/moza/resource/dashes/GT V01/1.png",
+          "/home/moza/resource/dashes/GT V01/2.png",
+          "/home/moza/resource/dashes/GT V01/GT V01.mzdash_v2_10_3_05.png"
+        ],
+        "resouceImageFilePaths": [
+          "GT V01/bg_1.png",
+          "GT V01/bg_2.png"
+        ],
+        "title": "GT V01"
+      },
+      {
+        "createTime": "2018-03-09T12:36:09",
+        "dirName": "GT V02",
+        "hash": "6361616334656665366465316533366330643661656135373139663032363863",
+        "id": "{00000000-0000-0000-0000-000000000003}",
+        "idealDeviceInfos": [
+          {
+            "deviceId": 8,
+            "hardwareVersion": "RS21-W08-HW SM-DU-V14",
+            "networkId": 1,
+            "productType": "Display"
+          }
+        ],
+        "lastModified": "2024-10-22T08:35:57Z",
+        "previewImageFilePaths": [
+          "/home/moza/resource/dashes/GT V02/1.png",
+          "/home/moza/resource/dashes/GT V02/2.png",
+          "/home/moza/resource/dashes/GT V02/3.png",
+          "/home/moza/resource/dashes/GT V02/GT V02.mzdash_v2_10_3_05.png"
+        ],
+        "resouceImageFilePaths": [
+          "GT V02/t.png",
+          "GT V02/bg_3.png"
+        ],
+        "title": "GT V02"
+      },
+      {
+        "createTime": "2018-03-09T12:36:09",
+        "dirName": "GT V03",
+        "hash": "6634306336623230363535613433643463393035396361356130353562343631",
+        "id": "{00000000-0000-0000-0000-000000000004}",
+        "idealDeviceInfos": [
+          {
+            "deviceId": 8,
+            "hardwareVersion": "RS21-W08-HW SM-DU-V14",
+            "networkId": 1,
+            "productType": "Display"
+          }
+        ],
+        "lastModified": "2024-10-22T08:36:04Z",
+        "previewImageFilePaths": [
+          "/home/moza/resource/dashes/GT V03/1.png",
+          "/home/moza/resource/dashes/GT V03/GT V03.mzdash_v2_10_3_05.png"
+        ],
+        "resouceImageFilePaths": [
+          "GT V03/bg_6.png",
+          "GT V03/pointer.png",
+          "GT V03/bg_5.png"
+        ],
+        "title": "GT V03"
+      },
+      {
+        "createTime": "2018-03-09T12:36:09",
+        "dirName": "JDM Gauge Style 01",
+        "hash": "3661316335393936343833333033613532366432386235383763353534363438",
+        "id": "{00000000-0000-0000-0000-000000000005}",
+        "idealDeviceInfos": [
+          {
+            "deviceId": 8,
+            "hardwareVersion": "RS21-W08-HW SM-DU-V14",
+            "networkId": 1,
+            "productType": "Display"
+          }
+        ],
+        "lastModified": "2024-10-22T08:36:10Z",
+        "previewImageFilePaths": [
+          "/home/moza/resource/dashes/JDM Gauge Style 01/1.png",
+          "/home/moza/resource/dashes/JDM Gauge Style 01/2.png",
+          "/home/moza/resource/dashes/JDM Gauge Style 01/3.png",
+          "/home/moza/resource/dashes/JDM Gauge Style 01/4.png",
+          "/home/moza/resource/dashes/JDM Gauge Style 01/JDM Gauge Style 01.mzdash_v2_10_3_05.png"
+        ],
+        "resouceImageFilePaths": [
+          "JDM Gauge Style 01/mailbox.png",
+          "JDM Gauge Style 01/bg_3.png",
+          "JDM Gauge Style 01/pointer.png"
+        ],
+        "title": "JDM Gauge Style 01"
+      },
+      {
+        "createTime": "2018-03-09T12:36:09",
+        "dirName": "JDM Gauge Style 02",
+        "hash": "3663313836366433653836613035376336643730613032383132383966646366",
+        "id": "{00000000-0000-0000-0000-000000000006}",
+        "idealDeviceInfos": [
+          {
+            "deviceId": 8,
+            "hardwareVersion": "RS21-W08-HW SM-DU-V14",
+            "networkId": 1,
+            "productType": "Display"
+          }
+        ],
+        "lastModified": "2024-10-22T08:36:16Z",
+        "previewImageFilePaths": [
+          "/home/moza/resource/dashes/JDM Gauge Style 02/1.png",
+          "/home/moza/resource/dashes/JDM Gauge Style 02/2.png",
+          "/home/moza/resource/dashes/JDM Gauge Style 02/JDM Gauge Style 02.mzdash_v2_10_3_05.png"
+        ],
+        "resouceImageFilePaths": [
+          "JDM Gauge Style 02/bg_4.png",
+          "JDM Gauge Style 02/bg_3.png",
+          "JDM Gauge Style 02/pointer_1.png"
+        ],
+        "title": "JDM Gauge Style 02"
+      },
+      {
+        "createTime": "2018-03-09T12:36:09",
+        "dirName": "JDM Gauge Style 03",
+        "hash": "6131306666366662343831353735646239373165643861643161366433633263",
+        "id": "{00000000-0000-0000-0000-000000000007}",
+        "idealDeviceInfos": [
+          {
+            "deviceId": 8,
+            "hardwareVersion": "RS21-W08-HW SM-DU-V14",
+            "networkId": 1,
+            "productType": "Display"
+          }
+        ],
+        "lastModified": "2024-10-22T08:36:23Z",
+        "previewImageFilePaths": [
+          "/home/moza/resource/dashes/JDM Gauge Style 03/1.png",
+          "/home/moza/resource/dashes/JDM Gauge Style 03/2.png",
+          "/home/moza/resource/dashes/JDM Gauge Style 03/JDM Gauge Style 03.mzdash_v2_10_3_05.png"
+        ],
+        "resouceImageFilePaths": [
+          "JDM Gauge Style 03/bg_6.png",
+          "JDM Gauge Style 03/water.png",
+          "JDM Gauge Style 03/pointer.png",
+          "JDM Gauge Style 03/gasoline.png",
+          "JDM Gauge Style 03/bg_6_1.png"
+        ],
+        "title": "JDM Gauge Style 03"
+      },
+      {
+        "createTime": "2018-03-09T12:36:09",
+        "dirName": "Rally V01",
+        "hash": "6431343436316362636536346363626364323538343132636433643338643539",
+        "id": "{00000000-0000-0000-0000-000000000008}",
+        "idealDeviceInfos": [
+          {
+            "deviceId": 8,
+            "hardwareVersion": "RS21-W08-HW SM-DU-V14",
+            "networkId": 1,
+            "productType": "Display"
+          }
+        ],
+        "lastModified": "2024-10-22T08:36:30Z",
+        "previewImageFilePaths": [
+          "/home/moza/resource/dashes/Rally V01/1.png",
+          "/home/moza/resource/dashes/Rally V01/Rally V01.mzdash_v2_10_3_05.png"
+        ],
+        "resouceImageFilePaths": [
+          "Rally V01/ignition.png",
+          "Rally V01/water_warn.png",
+          "Rally V01/ignition_hot.png",
+          "Rally V01/ignition_breakdown.png",
+          "Rally V01/bg_8.png",
+          "Rally V01/pneumatic.png",
+          "Rally V01/water.png",
+          "Rally V01/pneumatic-on.png"
+        ],
+        "title": "Rally V01"
+      },
+      {
+        "createTime": "2025-09-09T21:48:20",
+        "dirName": "DNR endurance",
+        "hash": "6464396463396366633162343331346331643061323662313037646561666233",
+        "id": "{0568d52d-ffdb-4a99-8e6d-ae29eec40c22}",
+        "idealDeviceInfos": [
+          {
+            "deviceId": 16,
+            "hardwareVersion": "RS21-W08-HW SM-DU-V14",
+            "networkId": 1,
+            "productType": "Display"
+          }
+        ],
+        "lastModified": "2025-09-09T22:50:36Z",
+        "previewImageFilePaths": [
+          "/home/moza/resource/dashes/DNR endurance/DNR endurance.mzdash_v2_10_3_05.png"
+        ],
+        "resouceImageFilePaths": [
+          "MD5/aeaec0ea3dd59f5815cee5660a20e8b0.png"
+        ],
+        "title": "DNR endurance"
+      },
+      {
+        "createTime": "2026-04-09T19:22:46",
+        "dirName": "rpm-only",
+        "hash": "3363316432316232306239326232636336613735346237656466333232643539",
+        "id": "{bb821501-d962-4797-a5e0-7d95e58992b5}",
+        "idealDeviceInfos": [
+          {
+            "deviceId": 16,
+            "hardwareVersion": "RS21-W08-HW SM-DU-V14",
+            "networkId": 1,
+            "productType": "Display"
+          }
+        ],
+        "lastModified": "2026-04-09T19:22:13Z",
+        "previewImageFilePaths": [
+          "/home/moza/resource/dashes/rpm-only/rpm-only.mzdash_v2_10_3_05.png"
+        ],
+        "resouceImageFilePaths": [],
+        "title": "rpm-only"
+      }
+    ],
+    "imageRefMap": {
+      "Formula 1/bg_3.png": 1,
+      "Formula 1/electricity.png": 2,
+      "Formula 1/mailbox.png": 2,
+      "Formula 1/t.png": 2,
+      "GT V01/bg_1.png": 1,
+      "GT V01/bg_2.png": 1,
+      "GT V02/bg_3.png": 1,
+      "GT V02/t.png": 1,
+      "GT V03/bg_5.png": 1,
+      "GT V03/bg_6.png": 1,
+      "GT V03/pointer.png": 1,
+      "JDM Gauge Style 01/bg_3.png": 1,
+      "JDM Gauge Style 01/mailbox.png": 1,
+      "JDM Gauge Style 01/pointer.png": 1,
+      "JDM Gauge Style 02/bg_3.png": 1,
+      "JDM Gauge Style 02/bg_4.png": 1,
+      "JDM Gauge Style 02/pointer_1.png": 1,
+      "JDM Gauge Style 03/bg_6.png": 1,
+      "JDM Gauge Style 03/bg_6_1.png": 1,
+      "JDM Gauge Style 03/gasoline.png": 1,
+      "JDM Gauge Style 03/pointer.png": 1,
+      "JDM Gauge Style 03/water.png": 1,
+      "MD5/2bc7a97f4f540046c045928803471edf.png": 1,
+      "MD5/4a8411bb828cd14e2bcf724a2bd725de.png": 1,
+      "MD5/aeaec0ea3dd59f5815cee5660a20e8b0.png": 1,
+      "MD5/bbe96b84aa574297727e0226f9007ccd.png": 1,
+      "MD5/d508ee6966b967835a1068b40db5ca76.png": 1,
+      "Rally V01/bg_8.png": 1,
+      "Rally V01/ignition.png": 1,
+      "Rally V01/ignition_breakdown.png": 1,
+      "Rally V01/ignition_hot.png": 1,
+      "Rally V01/pneumatic-on.png": 1,
+      "Rally V01/pneumatic.png": 1,
+      "Rally V01/water.png": 1,
+      "Rally V01/water_warn.png": 1
+    },
+    "rootPath": "/home/moza/resource/dashes"
+  },
+  "fontRefMap": {},
+  "imagePath": [
+    {
+      "md5": "6318a204cf4ea1fccfe4a891d86290d5",
+      "modify": "-4719896561000",
+      "url": "JDM Gauge Style 02/pointer_1.png"
+    },
+    {
+      "md5": "46162a8187cc25b48d9892b1b83aed1f",
+      "modify": "-4719896565000",
+      "url": "JDM Gauge Style 02/bg_3.png"
+    },
+    {
+      "md5": "0994aa763c951f91142aeb9eb2472b4f",
+      "modify": "-4719896563000",
+      "url": "JDM Gauge Style 02/bg_4.png"
+    },
+    {
+      "md5": "bbe96b84aa574297727e0226f9007ccd",
+      "modify": "-4684526904068",
+      "url": "MD5/bbe96b84aa574297727e0226f9007ccd.png"
+    },
+    {
+      "md5": "4a8411bb828cd14e2bcf724a2bd725de",
+      "modify": "-4684526904069",
+      "url": "MD5/4a8411bb828cd14e2bcf724a2bd725de.png"
+    },
+    {
+      "md5": "d508ee6966b967835a1068b40db5ca76",
+      "modify": "-4684526904067",
+      "url": "MD5/d508ee6966b967835a1068b40db5ca76.png"
+    },
+    {
+      "md5": "aeaec0ea3dd59f5815cee5660a20e8b0",
+      "modify": "-4680209499265",
+      "url": "MD5/aeaec0ea3dd59f5815cee5660a20e8b0.png"
+    },
+    {
+      "md5": "2bc7a97f4f540046c045928803471edf",
+      "modify": "-4670117627938",
+      "url": "MD5/2bc7a97f4f540046c045928803471edf.png"
+    },
+    {
+      "md5": "13e096297f26b45298986b2206bbbc3f",
+      "modify": "-4719896553000",
+      "url": "JDM Gauge Style 03/water.png"
+    },
+    {
+      "md5": "4a8db44d2c7361361276c99420209459",
+      "modify": "-4719896556000",
+      "url": "JDM Gauge Style 03/gasoline.png"
+    },
+    {
+      "md5": "088a815ffc2abf46060e6c090a1075a0",
+      "modify": "-4719896557000",
+      "url": "JDM Gauge Style 03/bg_6_1.png"
+    },
+    {
+      "md5": "50cddedfc9e1e862e7c9b1376f217e59",
+      "modify": "-4719896555000",
+      "url": "JDM Gauge Style 03/pointer.png"
+    },
+    {
+      "md5": "bb21277fe7e0e89c3e363682f3fdcca5",
+      "modify": "-4719896559000",
+      "url": "JDM Gauge Style 03/bg_6.png"
+    },
+    {
+      "md5": "cf5f07b560819afbdaa6ef38d56d867a",
+      "modify": "-4719896549000",
+      "url": "Rally V01/ignition.png"
+    },
+    {
+      "md5": "f3c2d19379cfa05d8901473f4663eb75",
+      "modify": "-4719896541000",
+      "url": "Rally V01/water.png"
+    },
+    {
+      "md5": "4652af0925ad43d0bcf43c35e5bb539d",
+      "modify": "-4719896542000",
+      "url": "Rally V01/pneumatic.png"
+    },
+    {
+      "md5": "2619e78dc4d85dcbc9b806c135df3098",
+      "modify": "-4719896539000",
+      "url": "Rally V01/water_warn.png"
+    },
+    {
+      "md5": "1962024a06273ac50a1d1b17023c3804",
+      "modify": "-4719896544000",
+      "url": "Rally V01/pneumatic-on.png"
+    },
+    {
+      "md5": "80ccc813384b93e7cc2d86527b9b0dba",
+      "modify": "-4719896547000",
+      "url": "Rally V01/ignition_breakdown.png"
+    },
+    {
+      "md5": "659fa8160c0977820ae411483636ba50",
+      "modify": "-4719896551000",
+      "url": "Rally V01/bg_8.png"
+    },
+    {
+      "md5": "067f29389ffc3a26758f24b2bea06ac6",
+      "modify": "-4719896546000",
+      "url": "Rally V01/ignition_hot.png"
+    },
+    {
+      "md5": "6412204605e84e830e2e2d7992c5db9c",
+      "modify": "-4719896587000",
+      "url": "GT V02/bg_3.png"
+    },
+    {
+      "md5": "50cddedfc9e1e862e7c9b1376f217e59",
+      "modify": "-4719896585000",
+      "url": "GT V02/pointer.png"
+    },
+    {
+      "md5": "13994fbed052d214e17033e4f3440402",
+      "modify": "-4719896584000",
+      "url": "GT V02/t.png"
+    },
+    {
+      "md5": "30aa4cc13c016bc63d1e3fecdae88421",
+      "modify": "-4719896571000",
+      "url": "JDM Gauge Style 01/cap.png"
+    },
+    {
+      "md5": "aa4ff9455adec2d8c2f8072c85746e4a",
+      "modify": "-4719896569000",
+      "url": "JDM Gauge Style 01/mailbox.png"
+    },
+    {
+      "md5": "5cb20379d089d47d14bf5a12e6774db5",
+      "modify": "-4719896572000",
+      "url": "JDM Gauge Style 01/bg_3.png"
+    },
+    {
+      "md5": "50cddedfc9e1e862e7c9b1376f217e59",
+      "modify": "-4719896567000",
+      "url": "JDM Gauge Style 01/pointer.png"
+    },
+    {
+      "md5": "d32d196caeeb9b07ca3de13a56ae65ce",
+      "modify": "-4719896576000",
+      "url": "GT V01/bg_1.png"
+    },
+    {
+      "md5": "e8c6b9ab364cd832f9d2cf1680b94a93",
+      "modify": "-4719896574000",
+      "url": "GT V01/bg_2.png"
+    },
+    {
+      "md5": "b8afbf033689d5c378af416457371562",
+      "modify": "-4719896590000",
+      "url": "Formula 1/mailbox.png"
+    },
+    {
+      "md5": "63bc768f0e3ba7d82b3ad114ec61b313",
+      "modify": "-4719896592000",
+      "url": "Formula 1/bg_3.png"
+    },
+    {
+      "md5": "f893a0639414b138daf5102b93015340",
+      "modify": "-4719896591000",
+      "url": "Formula 1/electricity.png"
+    },
+    {
+      "md5": "99ecd4c1846f06fc639e44f5a16da0b1",
+      "modify": "-4719896588000",
+      "url": "Formula 1/t.png"
+    },
+    {
+      "md5": "c09ee97cbca0f3c52352e2b2729b88b2",
+      "modify": "-4719896577000",
+      "url": "GT V03/pointer_1.png"
+    },
+    {
+      "md5": "50cddedfc9e1e862e7c9b1376f217e59",
+      "modify": "-4719896579000",
+      "url": "GT V03/pointer.png"
+    },
+    {
+      "md5": "c3486ea4ee30972dce53cc2b96bcd822",
+      "modify": "-4719896582000",
+      "url": "GT V03/bg_5.png"
+    },
+    {
+      "md5": "4c8150217f6b5d59d5bb6e1175de1814",
+      "modify": "-4719896580000",
+      "url": "GT V03/bg_6.png"
+    }
+  ],
+  "imageRefMap": {
+    "Formula 1/bg_3.png": 2,
+    "Formula 1/electricity.png": 4,
+    "Formula 1/mailbox.png": 4,
+    "Formula 1/t.png": 4,
+    "GT V01/bg_1.png": 2,
+    "GT V01/bg_2.png": 2,
+    "GT V02/bg_3.png": 2,
+    "GT V02/t.png": 2,
+    "GT V03/bg_5.png": 2,
+    "GT V03/bg_6.png": 2,
+    "GT V03/pointer.png": 2,
+    "JDM Gauge Style 01/bg_3.png": 2,
+    "JDM Gauge Style 01/mailbox.png": 2,
+    "JDM Gauge Style 01/pointer.png": 2,
+    "JDM Gauge Style 02/bg_3.png": 2,
+    "JDM Gauge Style 02/bg_4.png": 2,
+    "JDM Gauge Style 02/pointer_1.png": 2,
+    "JDM Gauge Style 03/bg_6.png": 2,
+    "JDM Gauge Style 03/bg_6_1.png": 2,
+    "JDM Gauge Style 03/gasoline.png": 2,
+    "JDM Gauge Style 03/pointer.png": 2,
+    "JDM Gauge Style 03/water.png": 2,
+    "MD5/2bc7a97f4f540046c045928803471edf.png": 2,
+    "MD5/4a8411bb828cd14e2bcf724a2bd725de.png": 2,
+    "MD5/aeaec0ea3dd59f5815cee5660a20e8b0.png": 2,
+    "MD5/bbe96b84aa574297727e0226f9007ccd.png": 2,
+    "MD5/d508ee6966b967835a1068b40db5ca76.png": 2,
+    "Rally V01/bg_8.png": 2,
+    "Rally V01/ignition.png": 2,
+    "Rally V01/ignition_breakdown.png": 2,
+    "Rally V01/ignition_hot.png": 2,
+    "Rally V01/pneumatic-on.png": 2,
+    "Rally V01/pneumatic.png": 2,
+    "Rally V01/water.png": 2,
+    "Rally V01/water_warn.png": 2
+  },
+  "resetVersion": 5,
+  "rootDirPath": "/home/moza/resource",
+  "sortTag": 0
+}

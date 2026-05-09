@@ -57,7 +57,7 @@ namespace MozaPlugin.Telemetry
         public TelemetryLogEntry(byte[] frame)
         {
             Timestamp = DateTime.UtcNow;
-            Frame = frame;
+            Frame = (byte[])frame.Clone();
         }
 
         public string FrameHex => BitConverter.ToString(Frame).Replace("-", " ").ToLowerInvariant();

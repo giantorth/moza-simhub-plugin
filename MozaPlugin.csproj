@@ -25,13 +25,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Remove="MozaPlugin.Tests\**" />
-    <EmbeddedResource Remove="MozaPlugin.Tests\**" />
-    <None Remove="MozaPlugin.Tests\**" />
-    <Page Remove="MozaPlugin.Tests\**" />
-  </ItemGroup>
-
-  <ItemGroup>
     <Reference Include="SimHub.Plugins">
       <HintPath>libs\SimHub\SimHub.Plugins.dll</HintPath>
       <Private>false</Private>
@@ -58,13 +51,24 @@
     </Reference>
     <Reference Include="System.IO.Compression" />
     <Reference Include="System.IO.Compression.FileSystem" />
+    <Reference Include="System.Windows.Forms" />
   </ItemGroup>
 
   <ItemGroup>
     <EmbeddedResource Include="Data\Telemetry.json" LogicalName="MozaPlugin.Data.Telemetry.json" />
+    <EmbeddedResource Include="Data\ActionCatalog.bin" LogicalName="MozaPlugin.Data.ActionCatalog.bin" />
     <EmbeddedResource Include="DeviceTemplates\MozaWheelGeneric\MOZA Racing Wheel\device.json" LogicalName="MozaPlugin.Devices.WheelGeneric.device.json" />
     <EmbeddedResource Include="DeviceTemplates\MozaWheelOldProto\MOZA Old Protocol Wheel\device.json" LogicalName="MozaPlugin.Devices.WheelOldProto.device.json" />
     <EmbeddedResource Include="DeviceTemplates\MozaDashShdp\MOZA Dashboard\device.json" LogicalName="MozaPlugin.Devices.Dash.device.json" />
+    <!-- Factory dashboards shipped with MOZA wheel firmware. Copied verbatim
+         from PitHouse `bin/dashes/<Name>/<Name>.mzdash`. Name underscores in
+         filenames map back to spaces in dashboard display name (e.g.
+         `Rally_V1.mzdash` → "Rally V1"). LoadBuiltinProfiles uses the URL
+         widget tree to derive per-widget tier-defs that match PitHouse's
+         channel-renegotiation pattern when the wheel switches dashboards. -->
+    <EmbeddedResource Include="Data\Dashes\*.mzdash">
+      <LogicalName>MozaPlugin.Data.Dashes.%(Filename).mzdash</LogicalName>
+    </EmbeddedResource>
   </ItemGroup>
 
   <ItemGroup>

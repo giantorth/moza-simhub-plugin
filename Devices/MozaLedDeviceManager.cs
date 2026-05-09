@@ -26,17 +26,23 @@ namespace MozaPlugin.Devices
             Array.Empty<Color>(), Array.Empty<Color>(), 1.0, 1.0, 1.0, 1.0);
         private double _lastBrightness = -1;
         private double _lastButtonsBrightness = -1;
-        private double _lastFlagsBrightness = -1;
+
+        private Color[]? _lastKnobs;
 
         // Per-component bitmask tracking (avoid redundant bitmask sends)
         private int _lastRpmBitmask = -1;
         private int _lastButtonBitmask = -1;
+        private int _lastKnobBitmask = -1;
 
         // Diagnostic: log rawColors shape once per distinct (length, non-empty pattern)
         private string? _lastRawDiagKey;
 
         // Keepalive timer
         private DateTime _lastSendTime = DateTime.MinValue;
+        // Tracked separately so knob frames are refreshed even while RPM is updating
+        // every frame (RPM activity keeps the RPM controller alive but not the knob
+        // controller, which forgets its state if not periodically retold).
+        private DateTime _lastKnobSendTime = DateTime.MinValue;
         private const double KeepaliveIntervalSeconds = 1.0;
 
         // ES wheel wake-up
@@ -82,12 +88,14 @@ namespace MozaPlugin.Devices
                 // Reset cached state so everything re-initializes on reconnect
                 _lastLeds = null;
                 _lastButtons = null;
+                _lastKnobs = null;
                 _lastFlagColorsPrimed = false;
                 _lastRpmBitmask = -1;
                 _lastButtonBitmask = -1;
+                _lastKnobBitmask = -1;
                 _lastBrightness = -1;
                 _lastButtonsBrightness = -1;
-                _lastFlagsBrightness = -1;
+                _lastKnobSendTime = DateTime.MinValue;
                 _ledsAwake = false;
                 OnDisconnect?.Invoke(this, EventArgs.Empty);
             }
@@ -186,7 +194,7 @@ namespace MozaPlugin.Devices
                 var modelInfo = plugin.WheelModelInfo;
                 if (rawColors.Length > 0)
                 {
-                    LogRawDiagnostic(rawColors, ledColors.Length, buttonColors.Length);
+                    // LogRawDiagnostic(rawColors, ledColors.Length, buttonColors.Length);
 
                     int telemetryPhys = modelInfo != null
                         ? modelInfo.RpmLedCount + (modelInfo.HasFlagLeds ? MozaDeviceConstants.FlagLedCount : 0)
@@ -202,7 +210,7 @@ namespace MozaPlugin.Devices
                     _ledsAwake = true;
                     plugin.DeviceManager.WriteSetting("wheel-old-send-telemetry", 0x3FF);
                     plugin.DeviceManager.WriteSetting("wheel-old-send-telemetry", 0);
-                    MozaLog.Info("[Moza] ES wheel LED wake-up sent");
+                    MozaLog.Debug("[Moza] ES wheel LED wake-up sent");
                 }
 
                 bool limitUpdates = plugin.Settings.LimitWheelUpdates;
@@ -350,10 +358,74 @@ namespace MozaPlugin.Devices
                         if (alwaysResendBitmask || buttonBitmask != _lastButtonBitmask)
                         {
                             _lastButtonBitmask = buttonBitmask;
+                            // 8-byte form matching PitHouse: active_mask(u32 LE) + window_mask(u32 LE).
+                            // PitHouse sends window=0 for buttons.
                             plugin.DeviceManager.WriteArray("wheel-send-buttons-telemetry",
-                                new byte[] { (byte)(buttonBitmask & 0xFF), (byte)((buttonBitmask >> 8) & 0xFF) });
+                                BuildKnobBitmaskBytes(buttonBitmask, 0));
                         }
                         anySent = true;
+                    }
+                }
+
+                // --- Knob indicator LEDs (new-protocol wheels with knob ring LEDs) ---
+                // SimHub feeds knob colors via the Extra/encoders channel (SourceRole 3).
+                // Only send knob frames when at least one knob has color — sending the
+                // window mask with all-black active wakes up the knob LED controller.
+                if (isNewWheel && encoderColors.Length > 0 && modelInfo != null && modelInfo.KnobCount > 0)
+                {
+                    int knobCount = modelInfo.KnobCount;
+                    Color[] knobColors;
+                    if (encoderColors.Length >= knobCount)
+                    {
+                        knobColors = new Color[knobCount];
+                        Array.Copy(encoderColors, 0, knobColors, 0, knobCount);
+                    }
+                    else
+                    {
+                        knobColors = encoderColors;
+                    }
+
+                    // Apply rawState overrides for knob region
+                    // Physical layout: [telemetry][buttons][knobs]
+                    if (rawColors.Length > 0)
+                    {
+                        int knobPhysOffset = (modelInfo.RpmLedCount + (modelInfo.HasFlagLeds ? MozaDeviceConstants.FlagLedCount : 0))
+                                           + modelInfo.ButtonLedCount;
+                        knobColors = ApplyOverrides(knobColors, rawColors, knobPhysOffset, knobCount);
+                    }
+
+                    int count = Math.Min(knobColors.Length, knobCount);
+                    int knobBitmask = 0;
+                    for (int i = 0; i < count; i++)
+                    {
+                        if (knobColors[i].R > 0 || knobColors[i].G > 0 || knobColors[i].B > 0)
+                            knobBitmask |= (1 << i);
+                    }
+
+                    // Skip sending when all knobs are black and we haven't previously
+                    // sent a non-zero bitmask — avoids waking the knob LED controller.
+                    bool knobsActive = knobBitmask != 0 || _lastKnobBitmask > 0;
+
+                    if (knobsActive)
+                    {
+                        bool knobsChanged = _lastKnobs == null || !knobColors.SequenceEqual(_lastKnobs);
+                        bool shouldSendKnobs = knobsChanged || (!limitUpdates && forceRefresh);
+
+                        if (shouldSendKnobs)
+                        {
+                            _lastKnobs = (Color[])knobColors.Clone();
+
+                            SendColorChunks(plugin, knobColors, count, "wheel-telemetry-knob-colors");
+
+                            if (alwaysResendBitmask || knobBitmask != _lastKnobBitmask)
+                            {
+                                _lastKnobBitmask = knobBitmask;
+                                int windowMask = (1 << knobCount) - 1;
+                                plugin.DeviceManager.WriteArray("wheel-send-knob-telemetry", BuildKnobBitmaskBytes(knobBitmask, windowMask));
+                            }
+                            _lastKnobSendTime = DateTime.UtcNow;
+                            anySent = true;
+                        }
                     }
                 }
 
@@ -368,15 +440,12 @@ namespace MozaPlugin.Devices
                     anySent = true;
                 }
 
-                // Flag brightness is slaved to RPM brightness on wheels with flag LEDs —
-                // the 3/N/3 layout is a single logical strip, so one master knob controls all.
-                // Routed through the Meter sub-device via dash-flags-brightness; gated on dash detect.
-                if (hasFlagLeds && plugin.IsDashDetected && rpmBrightness != _lastFlagsBrightness)
-                {
-                    _lastFlagsBrightness = rpmBrightness;
-                    plugin.DeviceManager.WriteSetting("dash-flags-brightness", (int)(rpmBrightness * 100));
-                    anySent = true;
-                }
+                // Flag brightness was previously slaved to SimHub's per-frame rpmBrightness
+                // here. Removed: SimHub passes 0 during scene transitions / no-game states,
+                // which would blank the flag LEDs (and was the source of the dashboard
+                // "incorrectly sending 0 brightness" bug). SimHub brightness now applies to
+                // wheel RPM + button LEDs only; flag LEDs use the stored config written via
+                // ApplySavedDashSettings on connect / plugin UI slider.
 
                 if (isNewWheel && buttonsBrightness != _lastButtonsBrightness)
                 {
@@ -390,13 +459,36 @@ namespace MozaPlugin.Devices
                 {
                     _lastSendTime = DateTime.UtcNow;
                 }
-                else if (plugin.Settings.WheelKeepalive && _lastLeds != null)
+                else if (_lastLeds != null)
                 {
                     var now = DateTime.UtcNow;
                     if ((now - _lastSendTime).TotalSeconds >= KeepaliveIntervalSeconds)
                     {
                         _lastSendTime = now;
                         ResendLastState(plugin, isNewWheel, isOldWheel);
+                    }
+                }
+
+                // Independent knob keepalive: knob colors rarely change, so the
+                // change-detection path above stops re-sending them once SimHub
+                // stabilizes. The shared keepalive above only fires when nothing
+                // else moved — under live RPM that never happens. Refresh knob
+                // frame on its own cadence so the knob LED controller doesn't
+                // forget the state.
+                if (isNewWheel && _lastKnobs != null && modelInfo?.KnobCount > 0)
+                {
+                    var now = DateTime.UtcNow;
+                    if ((now - _lastKnobSendTime).TotalSeconds >= KeepaliveIntervalSeconds)
+                    {
+                        _lastKnobSendTime = now;
+                        int knobCount = Math.Min(_lastKnobs.Length, modelInfo.KnobCount);
+                        SendColorChunks(plugin, _lastKnobs, knobCount, "wheel-telemetry-knob-colors");
+                        if (_lastKnobBitmask >= 0)
+                        {
+                            int windowMask = (1 << modelInfo.KnobCount) - 1;
+                            plugin.DeviceManager.WriteArray("wheel-send-knob-telemetry",
+                                BuildKnobBitmaskBytes(_lastKnobBitmask, windowMask));
+                        }
                     }
                 }
             }
@@ -434,6 +526,18 @@ namespace MozaPlugin.Devices
                             new byte[] { c.R, c.G, c.B });
                     }
                 }
+
+                if (_lastKnobs != null && modelInfo?.KnobCount > 0)
+                {
+                    int knobCount = Math.Min(_lastKnobs.Length, modelInfo.KnobCount);
+                    SendColorChunks(plugin, _lastKnobs, knobCount, "wheel-telemetry-knob-colors");
+                    if (_lastKnobBitmask >= 0)
+                    {
+                        int windowMask = (1 << modelInfo.KnobCount) - 1;
+                        plugin.DeviceManager.WriteArray("wheel-send-knob-telemetry",
+                            BuildKnobBitmaskBytes(_lastKnobBitmask, windowMask));
+                    }
+                }
             }
             else if (isOldWheel)
             {
@@ -445,7 +549,7 @@ namespace MozaPlugin.Devices
         /// <summary>
         /// Build RPM active-LED bitmask payload sized for the wheel's LED count.
         /// 16 or fewer LEDs → 2 bytes (legacy wire format). 17+ LEDs → 4 bytes.
-        /// KS Pro / CS Pro (18 LEDs) require the extended form to light bits 16-17.
+        /// KS Pro (18 LEDs) requires the extended form to light bits 16-17.
         /// </summary>
         internal static byte[] BuildRpmBitmaskBytes(int bitmask, int ledCount)
         {
@@ -461,6 +565,24 @@ namespace MozaPlugin.Devices
             return new byte[] {
                 (byte)(bitmask & 0xFF),
                 (byte)((bitmask >> 8) & 0xFF)
+            };
+        }
+
+        /// <summary>
+        /// Build knob indicator bitmask payload — always 8-byte form:
+        /// active_mask(u32 LE) + window_mask(u32 LE).
+        /// </summary>
+        internal static byte[] BuildKnobBitmaskBytes(int activeMask, int windowMask)
+        {
+            return new byte[] {
+                (byte)(activeMask & 0xFF),
+                (byte)((activeMask >> 8) & 0xFF),
+                (byte)((activeMask >> 16) & 0xFF),
+                (byte)((activeMask >> 24) & 0xFF),
+                (byte)(windowMask & 0xFF),
+                (byte)((windowMask >> 8) & 0xFF),
+                (byte)((windowMask >> 16) & 0xFF),
+                (byte)((windowMask >> 24) & 0xFF),
             };
         }
 
@@ -519,6 +641,7 @@ namespace MozaPlugin.Devices
             string key = sb.ToString();
             if (key == _lastRawDiagKey) return;
             _lastRawDiagKey = key;
+            // Very chatty when animation is running
             MozaLog.Debug($"[Moza] IndividualLEDs diag {key}");
         }
 

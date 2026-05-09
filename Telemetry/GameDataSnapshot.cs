@@ -13,8 +13,8 @@ namespace MozaPlugin.Telemetry
         public double SpeedKmh;
         public double Rpms;
         public double Gear;         // 0=R/N, 1=1st, 2=2nd, …
-        public double Throttle;     // 0–100
-        public double Brake;        // 0–100
+        public double Throttle;     // 0.0–1.0 (converted from SimHub's 0–100)
+        public double Brake;        // 0.0–1.0 (converted from SimHub's 0–100)
         public double BestLapTimeSeconds;
         public double CurrentLapTimeSeconds;
         public double LastLapTimeSeconds;
@@ -26,6 +26,7 @@ namespace MozaPlugin.Telemetry
         public double TyreWearFrontRight;
         public double TyreWearRearLeft;
         public double TyreWearRearRight;
+        public double CurrentLap;       // lap counter (1+)
 
         /// <summary>Populate from a live StatusDataBase instance.</summary>
         public static GameDataSnapshot FromStatusData(StatusDataBase? data)
@@ -49,6 +50,7 @@ namespace MozaPlugin.Telemetry
                 TyreWearFrontRight     = data.TyreWearFrontRight,
                 TyreWearRearLeft       = data.TyreWearRearLeft,
                 TyreWearRearRight      = data.TyreWearRearRight,
+                CurrentLap             = data.CurrentLap,
             };
         }
 
@@ -81,6 +83,7 @@ namespace MozaPlugin.Telemetry
                 case SimHubField.TyreWearFrontRight:    return TyreWearFrontRight;
                 case SimHubField.TyreWearRearLeft:      return TyreWearRearLeft;
                 case SimHubField.TyreWearRearRight:     return TyreWearRearRight;
+                case SimHubField.CurrentLap:            return CurrentLap;
                 default:                                return 0.0;
             }
         }

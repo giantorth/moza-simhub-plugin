@@ -1,3 +1,4 @@
+using System;
 using System.Threading;
 using System.Threading.Tasks;
 using MozaPlugin.Protocol;
@@ -9,9 +10,10 @@ namespace MozaPlugin
     /// Handles reading and writing settings to Moza devices.
     /// Includes wheel ID cycling to support different wheel models (23, 21, 19).
     /// </summary>
-    public class MozaDeviceManager
+    public class MozaDeviceManager : IDisposable
     {
         private readonly MozaSerialConnection _connection;
+        private readonly CancellationTokenSource _shutdownCts = new CancellationTokenSource();
 
         // Wheel device ID detection
         // ES wheels may be on ID 21 instead of 23; R5 ES wheels share base ID 19
@@ -115,7 +117,7 @@ namespace MozaPlugin
             frame[3] = deviceId;
             if (payload != null)
                 System.Buffer.BlockCopy(payload, 0, frame, 4, payloadLen);
-            frame[frame.Length - 1] = MozaProtocol.CalculateWireChecksum(frame);
+            frame[frame.Length - 1] = MozaProtocol.CalculateWireChecksum(frame, frame.Length - 1);
             _connection.Send(frame);
         }
 
@@ -168,6 +170,11 @@ namespace MozaPlugin
             MozaLog.Info($"[Moza] Wheel locked on device ID {_wheelDeviceId}");
         }
 
+        // Default backoff for tracked reads: catch transient drops in 200ms,
+        // widen on each retry. 3 attempts × 200/400/800 ≈ 1.4 s budget total.
+        private static readonly int[] ReadRetryBackoffMs = { 200, 400, 800 };
+        private const int ReadRetryMaxAttempts = 3;
+
         public bool ReadSettingForDevice(string commandName, byte deviceId)
         {
             if (!_connection.IsConnected) return false;
@@ -176,6 +183,8 @@ namespace MozaPlugin
             var msg = cmd.BuildReadMessage(deviceId);
             if (msg == null) return false;
             _connection.Send(msg);
+            MozaPlugin.Instance?.PendingResponses.Track(
+                cmd.Name, msg, ReadRetryBackoffMs, ReadRetryMaxAttempts);
             return true;
         }
 
@@ -187,6 +196,8 @@ namespace MozaPlugin
             var msg = cmd.BuildReadMessage(GetDeviceId(cmd.DeviceType));
             if (msg == null) return false;
             _connection.Send(msg);
+            MozaPlugin.Instance?.PendingResponses.Track(
+                cmd.Name, msg, ReadRetryBackoffMs, ReadRetryMaxAttempts);
             return true;
         }
 
@@ -243,14 +254,32 @@ namespace MozaPlugin
         /// </summary>
         public void ReadSettingsPaced(string[] commandNames, int gapMs = 10)
         {
+            var token = _shutdownCts.Token;
             Task.Run(() =>
             {
-                foreach (var name in commandNames)
+                try
                 {
-                    ReadSetting(name);
-                    Thread.Sleep(gapMs);
+                    foreach (var name in commandNames)
+                    {
+                        if (token.IsCancellationRequested) return;
+                        ReadSetting(name);
+                        // Cancellable sleep — Dispose() cancels the token so a
+                        // mid-batch teardown unblocks immediately instead of
+                        // running the remaining (commandNames * gapMs) ms.
+                        if (token.WaitHandle.WaitOne(gapMs)) return;
+                    }
                 }
-            });
+                catch (ObjectDisposedException)
+                {
+                    // CTS disposed while we were running — accept and exit.
+                }
+            }, token);
+        }
+
+        public void Dispose()
+        {
+            try { _shutdownCts.Cancel(); } catch { }
+            try { _shutdownCts.Dispose(); } catch { }
         }
 
         private byte GetDeviceId(string deviceType)
@@ -264,6 +293,7 @@ namespace MozaPlugin
                 case "hub":       return MozaProtocol.DeviceHub;
                 case "main":      return MozaProtocol.DeviceMain;
                 case "handbrake": return MozaProtocol.DeviceHandbrake;
+                case "ab9":       return MozaProtocol.DeviceAb9;
                 default:          return MozaProtocol.DeviceBase;
             }
         }

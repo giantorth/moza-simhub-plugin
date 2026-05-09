@@ -54,10 +54,12 @@ class _SimSession:
     """Wraps serial port + read/proactive threads for one simulator run."""
 
     def __init__(self, ser, sim, log_fh, alive, write_lock,
-                 emits_7c23, frames_7c23, c7_23_reps):
+                 emits_7c23, frames_7c23, c7_23_reps,
+                 wire_trace_fh=None):
         self.ser = ser
         self.sim = sim
         self.log_fh = log_fh
+        self.wire_trace_fh = wire_trace_fh
         self.alive = alive
         self.write_lock = write_lock
         self._threads: list = []
@@ -71,8 +73,23 @@ class _SimSession:
         ser = self.ser
         sim = self.sim
         log_fh = self.log_fh
+        wire_trace_fh = self.wire_trace_fh
         alive = self.alive
         write_lock = self.write_lock
+
+        # Mirror of wheel_sim.cmd_live._emit_wire_trace — emit one JSONL line
+        # per frame in the same {t, dir, hex, len} schema as bridge-*.jsonl
+        # captures, so tools/moza_trace.py + tierdef-decode etc. consume MCP-
+        # launched sim runs the same way they consume cmd_live runs.
+        def _emit_wire_trace(direction: str, frame: bytes) -> None:
+            if wire_trace_fh is None:
+                return
+            wire_trace_fh.write(json.dumps({
+                't': time.time(),
+                'dir': direction,
+                'hex': frame.hex(),
+                'len': len(frame),
+            }) + '\n')
 
         def _write(frame: bytes, tag: str):
             ser.write(frame[:2])
@@ -81,6 +98,7 @@ class _SimSession:
                 if b == MSG_START:
                     ser.write(b'\x7e')
             log_fh.write(f'{_ts()} TX [{tag:<13}] {frame.hex(" ")}\n')
+            _emit_wire_trace('b2h', frame)
 
         def read_loop():
             import serial as _serial
@@ -98,6 +116,7 @@ class _SimSession:
                         label = ''
                     with write_lock:
                         log_fh.write(f'{_ts()} RX [{tag:<13}] {frame.hex(" ")}  | {label}\n')
+                        _emit_wire_trace('h2b', frame)
                         for rsp in responses:
                             _write(rsp, tag)
                 except (OSError, _serial.SerialException):
@@ -152,6 +171,19 @@ class _SimSession:
             sim.catalog_sent = True
             if sim.emitter:
                 sim.emitter.emit_event('catalog_sent', frames=sim.proactive_sent)
+            # If PitHouse resumed an existing session (no fresh OPEN frames),
+            # the session_open path never fires _fire_device_init. Trigger
+            # the burst here so device-side opens (0x04/0x06/0x08/0x09/0x0a)
+            # and the configJson state push (proactive_session09 models) go
+            # out. Without this VGS/CSP dashboard manager UI never sees the
+            # wheel after a sim-restart.
+            if not sim._device_init_started:
+                sim._device_init_started = True
+                try:
+                    sim._fire_device_init()
+                except Exception as e:
+                    with write_lock:
+                        log_fh.write(f'{_ts()} -- [proactive   ] _fire_device_init FAILED: {type(e).__name__}: {e}\n')
             with write_lock:
                 log_fh.write(f'{_ts()} -- [proactive   ] catalog complete, {sim.proactive_sent} frames sent\n')
 
@@ -187,6 +219,12 @@ class _SimSession:
             self.log_fh.close()
         except Exception:
             pass
+        if self.wire_trace_fh is not None:
+            try:
+                self.wire_trace_fh.close()
+            except Exception:
+                pass
+            self.wire_trace_fh = None
         for t in self._threads:
             t.join(timeout=2.0)
 
@@ -377,8 +415,11 @@ def _apply_model(ws_mod, model_name: str) -> dict:
         device_catalog = ws_mod.build_device_catalog(model, channel_urls)
 
     frames_name = model.get('_7c23_frames_name', 'CSP')
-    c7_23_frames = {'CSP': ws_mod._7C_23_FRAMES_CSP, 'VGS': ws_mod._7C_23_FRAMES_VGS}.get(
-        frames_name, ws_mod._7C_23_FRAMES_CSP)
+    c7_23_frames = {
+        'CSP': ws_mod._7C_23_FRAMES_CSP,
+        'VGS': ws_mod._7C_23_FRAMES_VGS,
+        'KSPRO': ws_mod._7C_23_FRAMES_KSPRO,
+    }.get(frames_name, ws_mod._7C_23_FRAMES_CSP)
 
     # Per-model replay table: layer JSON tables over any startup-loaded pcap
     # replay. The fallback to `_config['replay']` (loaded once from default
@@ -410,9 +451,18 @@ def _apply_model(ws_mod, model_name: str) -> dict:
 
 
 @_server.tool()
-def sim_start(port: Optional[str] = None, model: Optional[str] = None) -> dict:
+def sim_start(port: Optional[str] = None, model: Optional[str] = None,
+              wire_trace: Optional[str] = None) -> dict:
     """Start the simulator on a serial port. Uses configured port/model if omitted.
-    Model choices: vgs, csp, ks."""
+    Model choices: vgs, csp, ks.
+
+    Args:
+      wire_trace: Optional path to a JSONL wire-trace file. When set, every RX
+        and TX frame is emitted as one JSON object per line ({t, dir, hex,
+        len}) in the same schema as bridge-*.jsonl captures, so tools/tierdef-
+        decode + tools/trace-sess02-decode + tools/bridge-decode-ff-init
+        consume it without modification. Mirrors the --wire-trace CLI flag on
+        wheel_sim.py's cmd_live."""
     global _sim, _session, _last_disconnect
 
     if _session is not None:
@@ -489,6 +539,21 @@ def sim_start(port: Optional[str] = None, model: Optional[str] = None) -> dict:
     model_name = use_model.get('friendly', use_model.get('name', 'unknown'))
     print(f'[MCP sim_start] model={model_name} port={use_port}', file=sys.stderr)
 
+    # Optional parallel JSONL wire trace. Schema matches bridge-*.jsonl /
+    # moza-wire-*.jsonl so tools/moza_trace.py decoders consume it directly.
+    wire_trace_fh = None
+    if wire_trace:
+        try:
+            wt_path = Path(wire_trace)
+            wt_path.parent.mkdir(parents=True, exist_ok=True)
+            wire_trace_fh = open(wt_path, 'w', buffering=1)
+            print(f'[MCP sim_start] wire trace JSONL → {wt_path}', file=sys.stderr)
+        except OSError as e:
+            ser.close()
+            log_fh.close()
+            _release_port_lock()
+            return {"error": f"Cannot open wire trace file '{wire_trace}': {e}"}
+
     sim = _ws.WheelSimulator(
         _config['db'],
         use_replay,
@@ -499,6 +564,9 @@ def sim_start(port: Optional[str] = None, model: Optional[str] = None) -> dict:
         display_model_name=overrides.get('display_model_name', ''),
         rpm_led_count=int(use_model.get('rpm_led_count', 10)),
         button_led_count=int(use_model.get('button_led_count', 14)),
+        factory_state_file=use_model.get('factory_state_file'),
+        proactive_session09=use_model.get('proactive_session09', True),
+        configjson_session=int(use_model.get('configjson_session', 0x09)),
     )
     _sim = sim
 
@@ -511,11 +579,15 @@ def sim_start(port: Optional[str] = None, model: Optional[str] = None) -> dict:
         use_emits_7c23,
         use_c7_23_frames,
         use_c7_23_reps,
+        wire_trace_fh=wire_trace_fh,
     )
     session.start()
     _session = session
 
-    return {"status": "running", "port": use_port, "model": model_name}
+    result = {"status": "running", "port": use_port, "model": model_name}
+    if wire_trace:
+        result["wire_trace"] = wire_trace
+    return result
 
 
 @_server.tool()
@@ -948,9 +1020,16 @@ def sim_reported_state() -> dict:
         import json as _json
         dashboards = fs.dashboards()
         # Build the actual state bytes the sim would send to PitHouse, then
-        # decode + expose the full structure. This reflects the factory-state
-        # merge (11 canonical + FS uploads) rather than just FS contents.
-        payload = _ws.build_configjson_state(dashboards)
+        # decode + expose the full structure. Pure FS view — empty FS yields
+        # empty configJsonList / enableManager.dashboards.
+        _img_ref, _img_path = fs.image_manifest()
+        payload = _ws.build_configjson_state(
+            dashboards,
+            display_version=getattr(_sim, '_display_version', 11),
+            reset_version=getattr(_sim, '_reset_version', 10),
+            factory_file=getattr(_sim, '_factory_state_file', None),
+            image_ref_map=_img_ref,
+            image_path=_img_path)
         state_json = _json.loads(zlib.decompress(payload[9:]))
         em = state_json.get('enableManager', {}).get('dashboards', [])
         em_names = [d.get('dirName') or d.get('title') or d.get('name', '') for d in em]
@@ -965,9 +1044,39 @@ def sim_reported_state() -> dict:
             "top_level_keys": list(state_json.keys()),
             "fs_count": len(fs.tree()),
             "fs_dashboards_count": len(dashboards),
+            "active_dash_index": getattr(_sim, 'active_dash_index', 1),
+            "active_dash_pages": getattr(_sim, 'active_dash_pages', 1),
         }
     except Exception as e:
         return {"error": str(e)}
+
+
+@_server.tool()
+def sim_set_active_dashboard(target, pages: int = 1) -> dict:
+    """Track which dashboard slot the sim's wheel "displays" — drives the
+    28:00 (`WheelGetCfg_GetMultiFunctionSwitch`) and 28:01
+    (`WheelGetCfg_GetMultiFunctionNum`) reply bytes that PitHouse polls.
+
+    `target` is a slot index (1-N), dirName, or dashboard id matching one
+    of the factory or FS-tracked dashboards. `pages` defaults to 1.
+
+    PitHouse's set-side wire signal isn't fully RE'd yet, so this MCP
+    tool is the only way to drive active-dash state into the sim. See
+    usb-capture/payload-09-state-re.md § "Active dashboard" for the
+    open RE work.
+    """
+    if _sim is None:
+        return _no_sim()
+    try:
+        # Allow string-encoded ints from MCP clients that always JSON-string args.
+        if isinstance(target, str) and target.isdigit():
+            target = int(target)
+        result = _sim.set_active_dashboard(target, pages=pages)
+    except ValueError as e:
+        return {"error": str(e)}
+    except Exception as e:
+        return {"error": f"set_active_dashboard failed: {e}"}
+    return {"status": "ok", **result}
 
 
 def run_stdio():

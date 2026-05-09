@@ -1,0 +1,162 @@
+#!/usr/bin/env python3
+"""Print a high-level summary of a MOZA wire trace.
+
+Usage:
+    tools/trace-summary [TRACE]           # defaults to latest trace
+    tools/trace-summary path/to/file.jsonl
+    tools/trace-summary 20260506-104929   # partial match in Logs dir
+"""
+import argparse
+import struct
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from moza_trace import load_trace, resolve_trace, Frame
+
+
+def summarize(frames: list[Frame], path: Path) -> None:
+    if not frames:
+        print("Empty trace.")
+        return
+
+    duration = frames[-1].t
+    h2b = [f for f in frames if f.dir == 'h2b']
+    b2h = [f for f in frames if f.dir == 'b2h']
+
+    print(f"Trace: {path.name}")
+    print(f"Duration: {duration:.1f}s  |  {len(frames)} frames  (h2b={len(h2b)}, b2h={len(b2h)})")
+    print()
+
+    # Session opens/closes
+    print("--- Sessions ---")
+    for direction in ('h2b', 'b2h'):
+        opens = [f for f in frames if f.dir == direction and f.is_open]
+        closes = [f for f in frames if f.dir == direction and f.is_close]
+        if opens or closes:
+            label = "host->wheel" if direction == 'h2b' else "wheel->host"
+            for f in opens:
+                print(f"  {label} OPEN  sess=0x{f.session:02X} port={f.port} t={f.t:.3f}s")
+            for f in closes:
+                print(f"  {label} CLOSE sess=0x{f.session:02X} t={f.t:.3f}s")
+    print()
+
+    # FF records by kind
+    print("--- FF Records ---")
+    ff_h2b: dict[int, list[Frame]] = {}
+    ff_b2h: dict[int, list[Frame]] = {}
+    for f in frames:
+        if not f.is_ff_record:
+            continue
+        bucket = ff_h2b if f.dir == 'h2b' else ff_b2h
+        bucket.setdefault(f.ff_kind, []).append(f)
+    for label, bucket in [("h2b", ff_h2b), ("b2h", ff_b2h)]:
+        for kind in sorted(bucket.keys()):
+            recs = bucket[kind]
+            sessions = set(r.session for r in recs)
+            first_t = recs[0].t
+            print(f"  {label} kind={kind:2d} count={len(recs):4d} sess={sorted(sessions)} first={first_t:.3f}s")
+    print()
+
+    # Dashboard switches (kind=4)
+    print("--- Dashboard Switches ---")
+    switches_h2b = [f for f in frames if f.is_ff_record and f.ff_kind == 4 and f.dir == 'h2b']
+    switches_b2h = [f for f in frames if f.is_ff_record and f.ff_kind == 4 and f.dir == 'b2h']
+    if not switches_h2b:
+        print("  No h2b kind=4 switches")
+    for f in switches_h2b:
+        echo = next((e for e in switches_b2h if e.t > f.t and e.t - f.t < 2.0), None)
+        echo_str = f"echo at +{(echo.t - f.t)*1000:.0f}ms" if echo else "NO ECHO"
+        print(f"  t={f.t:.3f}s h2b switch (size={f.ff_size}) -> {echo_str}")
+    print()
+
+    # Value frames
+    print("--- Value Frames ---")
+    vfs = [f for f in frames if f.is_value_frame]
+    if not vfs:
+        print("  No value frames")
+    else:
+        nonzero = [f for f in vfs if any(b != 0 for b in f.vf_data)]
+        flags = sorted(set(f.vf_flag for f in vfs))
+        first_t = vfs[0].t
+        print(f"  Total: {len(vfs)}, non-zero: {len(nonzero)}, flags: [{', '.join(f'0x{f:02X}' for f in flags)}]")
+        print(f"  First at t={first_t:.3f}s", end="")
+        if nonzero:
+            print(f", first non-zero at t={nonzero[0].t:.3f}s")
+            # Decode first few floats from first non-zero frame
+            data = nonzero[0].vf_data
+            floats = []
+            for i in range(0, min(len(data), 16), 4):
+                if i + 4 <= len(data):
+                    floats.append(struct.unpack_from('<f', data, i)[0])
+            print(f"  First non-zero data: {[f'{v:.2f}' for v in floats]}")
+        else:
+            print(" -- ALL ZERO DATA")
+
+        # Rate
+        if len(vfs) > 1:
+            rate = len(vfs) / (vfs[-1].t - vfs[0].t) if vfs[-1].t > vfs[0].t else 0
+            print(f"  Rate: ~{rate:.0f} frames/sec")
+    print()
+
+    # Stream-slot frames (FFB enable, sequence counter, mode)
+    # FFB enable: 7E [N] 41 17 FD DE ...
+    # Seq counter: 7E [N] 2D 13 F5 31 ...
+    # Mode: 7E [N] 40 17 28 02 01 00 ...
+    print("--- Stream Slots ---")
+    ffb = [f for f in h2b if len(f.raw) >= 6 and f.raw[2] == 0x41 and f.raw[3] == 0x17 and f.raw[4] == 0xFD and f.raw[5] == 0xDE]
+    seq = [f for f in h2b if len(f.raw) >= 6 and f.raw[2] == 0x2D and f.raw[3] == 0x13 and f.raw[4] == 0xF5 and f.raw[5] == 0x31]
+    mode = [f for f in h2b if len(f.raw) >= 8 and f.raw[2] == 0x40 and f.raw[4] == 0x28 and f.raw[5] == 0x02 and f.raw[6] == 0x01]
+    print(f"  FFB enable:   {len(ffb):5d}")
+    print(f"  Seq counter:  {len(seq):5d}")
+    print(f"  Mode (28:02): {len(mode):5d}")
+    print()
+
+    # Session data chunk counts
+    print("--- Session Data Chunks ---")
+    for direction in ('h2b', 'b2h'):
+        data_chunks: dict[int, int] = {}
+        for f in frames:
+            if f.dir == direction and f.is_data:
+                data_chunks[f.session] = data_chunks.get(f.session, 0) + 1
+        if data_chunks:
+            label = "h2b" if direction == 'h2b' else "b2h"
+            for sess in sorted(data_chunks.keys()):
+                print(f"  {label} sess=0x{sess:02X}: {data_chunks[sess]} data chunks")
+    print()
+
+    # FC acks
+    print("--- FC Acks ---")
+    fc_h2b = [f for f in frames if f.fc_cmd >= 0 and f.dir == 'h2b']
+    fc_b2h = [f for f in frames if f.fc_cmd >= 0 and f.dir == 'b2h']
+    if fc_h2b or fc_b2h:
+        print(f"  h2b: {len(fc_h2b)}, b2h: {len(fc_b2h)}")
+    else:
+        print("  None")
+    print()
+
+    # Group distribution per direction
+    for direction in ('h2b', 'b2h'):
+        grps: dict[int, int] = {}
+        for f in frames:
+            if f.dir == direction and len(f.raw) >= 3:
+                grps[f.group] = grps.get(f.group, 0) + 1
+        if grps:
+            print(f"--- {direction} Group Distribution ---")
+            for g in sorted(grps.keys()):
+                print(f"  grp=0x{g:02X}: {grps[g]:5d}")
+            print()
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Summarize a MOZA wire trace")
+    parser.add_argument("trace", nargs="?", default="latest",
+                        help="Path or partial name (default: latest)")
+    args = parser.parse_args()
+    path = resolve_trace(args.trace)
+    frames = load_trace(path)
+    summarize(frames, path)
+
+
+if __name__ == "__main__":
+    main()

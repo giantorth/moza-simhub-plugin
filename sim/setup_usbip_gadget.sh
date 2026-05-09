@@ -18,12 +18,12 @@ fi
 
 GADGET=/sys/kernel/config/usb_gadget/moza
 
-# Clean up stale state before loading anything. Leaked wheel_sim.py procs
-# also trigger teardown so they get killed before we rebuild the gadget —
+# Clean up stale state before loading anything. Leaked wheel_sim.py / bridge.py
+# procs also trigger teardown so they get killed before we rebuild the gadget —
 # otherwise their stale ttyGS0 fds would block UDC unbind on the next cycle.
 if [[ -d "$GADGET" ]] \
    || pgrep -x usbipd >/dev/null 2>&1 \
-   || pgrep -f 'wheel_sim\.py' >/dev/null 2>&1; then
+   || pgrep -f 'wheel_sim\.py|bridge\.py' >/dev/null 2>&1; then
     echo "Stale gadget, usbipd, or wheel_sim found — running teardown first..."
     if ! bash "$(dirname "$0")/teardown_usbip_gadget.sh"; then
         echo "Pre-cleanup teardown failed — refusing to proceed (gadget would EBUSY)." >&2

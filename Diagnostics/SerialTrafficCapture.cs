@@ -1,15 +1,18 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.IO;
 using System.Text;
 using System.Threading;
 
 namespace MozaPlugin.Diagnostics
 {
     /// <summary>
-    /// Process-wide ring buffer of timestamped serial frames in both directions.
-    /// Off by default; turned on/off from the Diagnostics tab. No data persists
-    /// to disk — the buffer lives in memory and is cleared every Start().
+    /// Process-wide ring buffer of timestamped serial frames in both directions,
+    /// plus an optional always-on JSONL sink that mirrors the layout produced by
+    /// <c>sim/bridge.py</c> so capture-comparison tooling works on either source.
+    /// In-memory ring is cleared on every Start(); file sink (when enabled) keeps
+    /// growing until plugin unload.
     /// </summary>
     public sealed class SerialTrafficCapture
     {
@@ -35,9 +38,16 @@ namespace MozaPlugin.Diagnostics
         private volatile bool _enabled;
         private DateTime _startedAtUtc;
 
+        // Always-on JSONL sink (bridge-format). Independent of in-memory ring.
+        private readonly object _fileLock = new object();
+        private StreamWriter? _fileSink;
+        private string? _fileSinkPath;
+        private int _fileSinkLineCount;
+
         public bool Enabled => _enabled;
         public int Count => Volatile.Read(ref _count);
         public DateTime StartedAtUtc => _startedAtUtc;
+        public string? FileSinkPath => _fileSinkPath;
 
         private SerialTrafficCapture() { }
 
@@ -46,6 +56,47 @@ namespace MozaPlugin.Diagnostics
             Clear();
             _startedAtUtc = DateTime.UtcNow;
             _enabled = true;
+        }
+
+        /// <summary>
+        /// Open a JSONL sink at <paramref name="path"/>. Each subsequent Tx/Rx is
+        /// written as a single bridge-compatible JSON line. Independent of
+        /// <see cref="Enabled"/> — file sink writes whether the in-memory ring
+        /// is on or off.
+        /// </summary>
+        public void StartFileSink(string path)
+        {
+            lock (_fileLock)
+            {
+                CloseFileSinkLocked();
+                Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
+                // AutoFlush=true forced sync flush per frame which under Wine
+                // blocks the read/write hot path for milliseconds → telemetry
+                // tick stall → visible test-mode lag. Use OS buffering; flush
+                // periodically (every ~64 lines) to keep crashes from losing
+                // more than a fraction of a second.
+                _fileSink = new StreamWriter(new FileStream(
+                    path, FileMode.Create, FileAccess.Write, FileShare.Read,
+                    bufferSize: 16384))
+                {
+                    AutoFlush = false,
+                };
+                _fileSinkPath = path;
+                _fileSinkLineCount = 0;
+            }
+        }
+
+        public void StopFileSink()
+        {
+            lock (_fileLock) CloseFileSinkLocked();
+        }
+
+        private void CloseFileSinkLocked()
+        {
+            try { _fileSink?.Flush(); } catch { }
+            try { _fileSink?.Dispose(); } catch { }
+            _fileSink = null;
+            _fileSinkPath = null;
         }
 
         /// <summary>Stop capture and return a snapshot of the recorded entries in order.</summary>
@@ -69,7 +120,11 @@ namespace MozaPlugin.Diagnostics
 
         private void Record(Direction dir, string source, byte[] frame)
         {
-            if (!_enabled || frame == null || frame.Length == 0) return;
+            if (frame == null || frame.Length == 0) return;
+            // File sink — always writes when open, even if ring is off.
+            WriteFileSinkLine(dir, frame);
+
+            if (!_enabled) return;
             // Copy — caller buffers (e.g. read-loop tmp buffer) get reused.
             var copy = new byte[frame.Length];
             Buffer.BlockCopy(frame, 0, copy, 0, frame.Length);
@@ -86,6 +141,85 @@ namespace MozaPlugin.Diagnostics
             while (n > MaxEntries && _entries.TryDequeue(out _))
                 n = Interlocked.Decrement(ref _count);
         }
+
+        private void WriteFileSinkLine(Direction dir, byte[] frame)
+        {
+            // Bridge-compatible JSONL: {"t":..., "dir":"h2b"|"b2h", "len":N, "ok":true,
+            //                            "hex":"...", "grp":..., "dev":..., "payload":"..."}
+            // Tx (host→device) = h2b; Rx (device→host) = b2h.
+            // Frame layout: 7E [N] grp dev payload[N] cs. Skip when frame is too short.
+            StreamWriter? sink;
+            lock (_fileLock) sink = _fileSink;
+            if (sink == null) return;
+
+            var sb = new StringBuilder(frame.Length * 2 + 96);
+            double t = (DateTime.UtcNow - _epoch).TotalSeconds;
+            sb.Append("{\"t\":");
+            sb.Append(t.ToString("F6", System.Globalization.CultureInfo.InvariantCulture));
+            sb.Append(",\"dir\":\"");
+            sb.Append(dir == Direction.Tx ? "h2b" : "b2h");
+            sb.Append("\",\"len\":");
+            sb.Append(frame.Length);
+            sb.Append(",\"ok\":true,\"hex\":\"");
+            for (int i = 0; i < frame.Length; i++)
+            {
+                sb.Append(HexChar(frame[i] >> 4));
+                sb.Append(HexChar(frame[i] & 0xF));
+            }
+            sb.Append('"');
+            // grp/dev/payload extraction. Two shapes:
+            //   * Tx: full wire frame `7E [N] grp dev <body> cs` — body length = frame.Length - 5
+            //     Two N conventions exist:
+            //       legacy (VGS/F1):  N = body.Length excluding grp+dev (= cmd+prefix+...+data)
+            //                         frame.Length = N + 5
+            //       Type02 (CSP/W17): N = body.Length INCLUDING grp+dev
+            //                         frame.Length = N + 3
+            //     We don't trust N for slicing — instead, payload spans from offset 4 to
+            //     frame.Length-1 (= just before checksum). This works for both conventions.
+            //   * Rx: parsed message (FrameSplitter already stripped framing) —
+            //     starts directly with `grp dev payload...`, no checksum.
+            int grp = -1, dev = -1, payStart = -1, payEnd = -1;
+            if (frame.Length >= 6 && frame[0] == 0x7E)
+            {
+                grp = frame[2];
+                dev = frame[3];
+                payStart = 4;
+                payEnd = frame.Length - 1; // last byte is checksum
+            }
+            else if (frame.Length >= 2)
+            {
+                grp = frame[0];
+                dev = frame[1];
+                payStart = 2;
+                payEnd = frame.Length;
+            }
+            if (grp >= 0 && dev >= 0 && payStart >= 0)
+            {
+                sb.Append(",\"grp\":");
+                sb.Append(grp);
+                sb.Append(",\"dev\":");
+                sb.Append(dev);
+                sb.Append(",\"payload\":\"");
+                for (int i = payStart; i < payEnd; i++)
+                {
+                    sb.Append(HexChar(frame[i] >> 4));
+                    sb.Append(HexChar(frame[i] & 0xF));
+                }
+                sb.Append('"');
+            }
+            sb.Append('}');
+            try
+            {
+                lock (_fileLock)
+                {
+                    sink.WriteLine(sb.ToString());
+                    if ((++_fileSinkLineCount & 63) == 0) sink.Flush();
+                }
+            }
+            catch { /* sink may have been closed concurrently — silent drop */ }
+        }
+
+        private static readonly DateTime _epoch = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
 
         /// <summary>
         /// Render entries as one-line-per-frame text. Timestamps are local time
@@ -120,6 +254,6 @@ namespace MozaPlugin.Diagnostics
             }
         }
 
-        private static char HexChar(int n) => (char)(n < 10 ? '0' + n : 'A' + (n - 10));
+        private static char HexChar(int n) => (char)(n < 10 ? '0' + n : 'a' + (n - 10));
     }
 }

@@ -27,20 +27,142 @@ namespace MozaPlugin.Telemetry
     /// </summary>
     public sealed class SessionDataReassembler
     {
+        // Cap so a stream of chunks whose envelope/zlib never resolves can't
+        // grow the list to OOM. Mirrors TileServerStateParser's 1 MiB cap.
+        // Real session payloads (configJson state, mzdash uploads) sit well
+        // below this; overflow means the stream is corrupted or the END
+        // marker was lost.
+        private const int MaxBufferBytes = 1 << 20;
+
         private readonly List<byte> _buffer = new();
+        private bool _overflowLogged;
+        // Last accepted inbound seq, or -1 before the first chunk. Used by the
+        // seq-aware AddChunk overload to detect missing chunks (a single dropped
+        // chunk under Wine SerialPort R/W contention silently corrupts the zlib
+        // stream — see TelemetrySender.cs ProbeAndOpenSessions comment for the
+        // pre-existing 0x09 burst issue this guard now catches across sessions).
+        private int _lastSeq = -1;
+        private string _gapTag = "";
 
         public int Length { get { lock (_buffer) return _buffer.Count; } }
 
-        /// <summary>Feed one raw chunk payload (the bytes after session/type/seq).</summary>
+        /// <summary>Last accepted inbound seq, or -1 if no chunks have been
+        /// added since the last <see cref="Clear"/>.</summary>
+        public int LastAcceptedSeq { get { lock (_buffer) return _lastSeq; } }
+
+        /// <summary>Feed one raw chunk payload (the bytes after session/type/seq).
+        /// No seq tracking — caller doesn't have the seq context. Use the
+        /// <see cref="AddChunk(int, byte[])"/> overload when seq is available so
+        /// gaps are detected instead of corrupting the buffer silently.</summary>
         public void AddChunk(byte[] chunk)
         {
             if (chunk == null || chunk.Length < 4) return;
             byte[] net = StripCrcTrailer(chunk);
             lock (_buffer)
+            {
+                if (_buffer.Count + net.Length > MaxBufferBytes)
+                {
+                    if (!_overflowLogged)
+                    {
+                        MozaLog.Warn($"[Moza] SessionDataReassembler exceeded {MaxBufferBytes} bytes ({_buffer.Count}+{net.Length}); dropping buffer");
+                        _overflowLogged = true;
+                    }
+                    _buffer.Clear();
+                    return;
+                }
                 _buffer.AddRange(net);
+            }
         }
 
-        public void Clear() { lock (_buffer) _buffer.Clear(); }
+        /// <summary>
+        /// Feed one chunk WITH its inbound seq number. Returns true when the
+        /// chunk was accepted (including as the start of a new burst after a
+        /// detected restart); false ONLY on a forward gap (chunks lost mid-
+        /// burst), in which case the buffer is cleared and the caller should
+        /// trigger session-specific recovery (re-issue the open / prime / RPC
+        /// call so the wheel re-emits its burst). Without forward-gap detection
+        /// a single dropped chunk silently corrupts the zlib stream and the
+        /// surrounding handshake fails permanently for the lifetime of the
+        /// session.
+        ///
+        /// Three non-monotonic cases are recognised:
+        ///   - <c>seq == _lastSeq</c> — exact duplicate (wheel retransmit
+        ///     because its inbound ack got lost). Skip silently; chunk's bytes
+        ///     are already in the buffer.
+        ///   - <c>seq &lt; _lastSeq</c> — wheel restarted its outbound seq
+        ///     counter for a new logical message (common on file-transfer
+        ///     sessions where each dir-listing / RPC reply burst is
+        ///     independent, and after configJson re-prime). Clear in-progress
+        ///     buffer and accept this chunk as the first of the new burst.
+        ///   - <c>seq &gt; _lastSeq + 1</c> — true forward gap (chunks lost).
+        ///     Clear, return false.
+        ///
+        /// First chunk after Clear (or Reset) accepts any seq. <paramref name="tag"/>
+        /// is a free-form label included in the warning log (e.g. "sess=0x09")
+        /// so multi-reassembler diagnostics are distinguishable.
+        /// </summary>
+        public bool AddChunk(int seq, byte[] chunk, string tag = "")
+        {
+            if (chunk == null || chunk.Length < 4) return true;
+            byte[] net = StripCrcTrailer(chunk);
+            lock (_buffer)
+            {
+                if (_lastSeq != -1 && seq != _lastSeq + 1)
+                {
+                    if (seq == _lastSeq) return true;
+
+                    string warnTag = string.IsNullOrEmpty(tag) ? _gapTag : tag;
+                    string tagSuffix = string.IsNullOrEmpty(warnTag) ? "" : $" ({warnTag})";
+                    if (seq < _lastSeq)
+                    {
+                        MozaLog.Debug(
+                            $"[Moza] Reassembler seq restart{tagSuffix}: " +
+                            $"got seq={seq}, last was {_lastSeq}; clearing {_buffer.Count}B buffer (assuming new burst)");
+                        _buffer.Clear();
+                        _overflowLogged = false;
+                        _lastSeq = -1;
+                        // fall through to accept this chunk as the first of the new burst
+                    }
+                    else
+                    {
+                        int missing = seq - _lastSeq - 1;
+                        MozaLog.Warn(
+                            $"[Moza] Reassembler seq gap{tagSuffix}: " +
+                            $"got seq={seq}, expected {_lastSeq + 1} ({missing} chunk(s) missing); " +
+                            $"clearing {_buffer.Count}B buffer — caller should re-handshake");
+                        _buffer.Clear();
+                        _overflowLogged = false;
+                        _lastSeq = -1;
+                        return false;
+                    }
+                }
+                if (_buffer.Count + net.Length > MaxBufferBytes)
+                {
+                    if (!_overflowLogged)
+                    {
+                        MozaLog.Warn($"[Moza] SessionDataReassembler exceeded {MaxBufferBytes} bytes ({_buffer.Count}+{net.Length}); dropping buffer");
+                        _overflowLogged = true;
+                    }
+                    _buffer.Clear();
+                    _lastSeq = -1;
+                    return true;
+                }
+                _buffer.AddRange(net);
+                _lastSeq = seq;
+                if (!string.IsNullOrEmpty(tag)) _gapTag = tag;
+                return true;
+            }
+        }
+
+        public void Clear()
+        {
+            lock (_buffer)
+            {
+                _buffer.Clear();
+                _overflowLogged = false;
+                _lastSeq = -1;
+            }
+        }
 
         /// <summary>Snapshot the current reassembled buffer.</summary>
         public byte[] Snapshot()
@@ -57,29 +179,44 @@ namespace MozaPlugin.Telemetry
         /// </summary>
         public static byte[] StripCrcTrailer(byte[] chunk)
         {
-            if (chunk.Length < 4) return chunk;
-            uint wire = (uint)(chunk[chunk.Length - 4]
-                              | (chunk[chunk.Length - 3] << 8)
-                              | (chunk[chunk.Length - 2] << 16)
-                              | (chunk[chunk.Length - 1] << 24));
-            uint crcFull = TierDefinitionBuilder.Crc32(chunk, 0, chunk.Length - 4);
-            if (crcFull == wire)
+            if (chunk.Length < 3) return chunk;
+
+            // Try **3-byte CRC** first (low 24 bits of CRC32 LE). Verified
+            // 2026-05-09 against captured wheel chunks across sess=0x01,
+            // 0x02, 0x09: 154/154 chunks matched 3-byte CRC, 0/154 matched
+            // 4-byte. The earlier 4-byte assumption stripped one extra byte
+            // per chunk and corrupted reassembly buffers (configJson zlib
+            // failures, garbled catalog URLs ending in stray 0x04 bytes
+            // from the next chunk's tag byte).
+            uint wire3 = (uint)(chunk[chunk.Length - 3]
+                              | (chunk[chunk.Length - 2] << 8)
+                              | (chunk[chunk.Length - 1] << 16));
+            uint crc3 = TierDefinitionBuilder.Crc32(chunk, 0, chunk.Length - 3) & 0xFFFFFFu;
+            if (crc3 == wire3)
             {
-                var o = new byte[chunk.Length - 4];
+                var o = new byte[chunk.Length - 3];
                 Array.Copy(chunk, 0, o, 0, o.Length);
                 return o;
             }
-            if (chunk.Length >= 5)
+
+            // Fallback: 4-byte CRC (older firmware variant or edge case).
+            if (chunk.Length >= 4)
             {
-                uint crcStrip1 = TierDefinitionBuilder.Crc32(chunk, 1, chunk.Length - 5);
-                if (crcStrip1 == wire)
+                uint wire4 = (uint)(chunk[chunk.Length - 4]
+                                  | (chunk[chunk.Length - 3] << 8)
+                                  | (chunk[chunk.Length - 2] << 16)
+                                  | (chunk[chunk.Length - 1] << 24));
+                uint crc4 = TierDefinitionBuilder.Crc32(chunk, 0, chunk.Length - 4);
+                if (crc4 == wire4)
                 {
-                    var o = new byte[chunk.Length - 5];
-                    Array.Copy(chunk, 1, o, 0, o.Length);
+                    var o = new byte[chunk.Length - 4];
+                    Array.Copy(chunk, 0, o, 0, o.Length);
                     return o;
                 }
             }
-            var fallback = new byte[chunk.Length - 4];
+
+            // Last resort: blind 3-byte strip (matches verified majority case).
+            var fallback = new byte[chunk.Length - 3];
             Array.Copy(chunk, 0, fallback, 0, fallback.Length);
             return fallback;
         }
@@ -105,7 +242,7 @@ namespace MozaPlugin.Telemetry
                 }
             }
             // Fallback: mzdash bodies embed raw 0x7E bytes that interact with
-            // the wire-level escape rules (see docs/moza-protocol.md:31-54).
+            // the wire-level escape rules (see docs/protocol/wire/checksum.md).
             // If envelope-offset decode failed, scan for zlib magic (78 9c / 78 da)
             // and try each candidate — mirrors sim/wheel_sim.py:1742-1770.
             return TryDecompressByMagic(buf);
