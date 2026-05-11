@@ -34,6 +34,17 @@ namespace MozaPlugin
             AutoApplyProfileCheck.IsChecked = plugin.Settings.AutoApplyProfileOnLaunch;
             LimitWheelUpdatesCheck.IsChecked = plugin.Settings.LimitWheelUpdates;
             AlwaysResendBitmaskCheck.IsChecked = plugin.Settings.AlwaysResendBitmask;
+            GearshiftVibrateOnNeutralCheck.IsChecked = plugin.Settings.GearshiftVibrateOnNeutral;
+            {
+                int dbMs = plugin.Settings.GearshiftDebounceMs;
+                if (dbMs < 0) dbMs = 0;
+                if (dbMs > 1000) dbMs = 1000;
+                // Snap to 50 ms grid so the slider thumb sits on a tick when the
+                // persisted value came from an older build / a manual edit.
+                dbMs = ((dbMs + 25) / 50) * 50;
+                GearshiftDebounceSlider.Value = dbMs;
+                GearshiftDebounceValue.Text = $"{dbMs} ms";
+            }
             EnableAb9Check.IsChecked = plugin.Settings.EnableAb9;
             StartCaptureOnNextLaunchCheck.IsChecked = plugin.Settings.StartCaptureOnNextLaunch;
             // Reflect any in-flight capture (e.g. armed from a previous session
@@ -358,6 +369,28 @@ namespace MozaPlugin
             GearshiftVibrationValue.Text = val.ToString();
             _data.GearshiftVibration = val;
             _device.WriteSetting("base-gearshift-vibration", val);
+            _plugin.SaveSettings();
+        }
+
+        private void GearshiftVibrateOnNeutralCheck_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_suppressEvents) return;
+            _plugin.Settings.GearshiftVibrateOnNeutral = GearshiftVibrateOnNeutralCheck.IsChecked == true;
+            _plugin.SaveSettings();
+        }
+
+        private void GearshiftDebounceSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (_suppressEvents) return;
+            int val = (int)Math.Round(e.NewValue);
+            // Snap to 50 ms grid (IsSnapToTickEnabled + TickFrequency=50 already
+            // enforces this on user input, but be defensive against external
+            // sources that bypass the tick grid).
+            val = ((val + 25) / 50) * 50;
+            if (val < 0) val = 0;
+            if (val > 1000) val = 1000;
+            GearshiftDebounceValue.Text = $"{val} ms";
+            _plugin.Settings.GearshiftDebounceMs = val;
             _plugin.SaveSettings();
         }
 

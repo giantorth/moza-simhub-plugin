@@ -133,6 +133,15 @@ namespace MozaPlugin
         // value hasn't changed. Fixes wheels that don't pick up new colors without a bitmask write.
         public bool AlwaysResendBitmask { get; set; } = false;
 
+        // Gearshift event tuning (plugin-side; the firmware-stored intensity
+        // is `base-gearshift-vibration`). VibrateOnNeutral default is false so
+        // H-pattern shifters bump on engagement only — the prior gear → "N"
+        // transition is dis-engagement and gets suppressed. Flip to true to
+        // also fire on transitions into neutral. DebounceMs coalesces rapid
+        // ratcheting (paddle bursts); 500 ms = ~2 shifts/sec ceiling.
+        public bool GearshiftVibrateOnNeutral { get; set; } = false;
+        public int GearshiftDebounceMs { get; set; } = 500;
+
         // One-shot flag: arm capture from the Diagnostics tab so it's already running when
         // the plugin re-initializes (catches early connect/handshake traffic that the user
         // can't normally arm in time). Cleared on Init the moment capture is started, so

@@ -602,24 +602,23 @@ namespace MozaPlugin
         // _lastGearString holds the most recently observed Gear value (string
         // — "R"/"N"/"1".."6"). Initial null suppresses the warm-up frame so we
         // don't fire on the first DataUpdate just because the previous value
-        // was unset. Debounce window is 500 ms to coalesce ratcheting / rapid
-        // shifts.
+        // was unset. Debounce window comes from settings (default 500 ms) to
+        // coalesce ratcheting / rapid shifts.
         private string? _lastGearString;
         private DateTime _lastGearShiftSendUtc = DateTime.MinValue;
-        private const double GearShiftDebounceMs = 500.0;
 
         // Fire a one-shot `base-gearshift-event` when the SimHub-reported gear
         // value changes, gated by `_data.GearshiftVibration > 0` (the user's
-        // intensity slider — 0 disables the effect entirely) and a 500 ms
+        // intensity slider — 0 disables the effect entirely) and a user-tunable
         // debounce so quick ratcheting up/down of gears doesn't pile triggers
         // on the wire.
         //
-        // Transitions *into* neutral ("N") never fire — they represent
-        // dis-engagement, not a shift. An H-pattern shift produces two
-        // transitions ("1"→"N"→"2"); we want the bump on engagement (N→2),
+        // By default, transitions *into* neutral ("N" or "0") never fire — they
+        // represent dis-engagement, not a shift. An H-pattern shift produces
+        // two transitions ("1"→"N"→"2"); we want the bump on engagement (N→2),
         // not on the stick leaving the prior gear (1→N). Sequential / paddle
-        // shifts go directly between gears and still fire normally. The 500 ms
-        // debounce remains for rapid ratcheting between non-neutral gears.
+        // shifts go directly between gears and still fire normally. The user
+        // can opt in to bumping on neutral via `GearshiftVibrateOnNeutral`.
         private void CheckGearshiftEvent(GameData data)
         {
             if (!_data.IsConnected) return;
@@ -634,16 +633,16 @@ namespace MozaPlugin
             if (gear == _lastGearString) return;
             // Update the latch on every change so we don't compare against a
             // stale value on the next tick. Whether we *fire* is decided after.
-            string previous = _lastGearString;
             _lastGearString = gear;
-            // Skip dis-engagement transitions (anything → neutral). For an
-            // H-pattern shifter this is the "stick leaves prior gear" event;
-            // suppressing it means the next change (N → new gear) is what
-            // actually triggers the bump. Some games report neutral as "0"
-            // instead of "N" — treat both as neutral.
-            if (gear == "N" || gear == "0") return;
+            // Skip dis-engagement transitions (anything → neutral) unless the
+            // user has opted in. Some games report neutral as "0" instead of
+            // "N" — treat both as neutral.
+            bool isNeutral = (gear == "N" || gear == "0");
+            if (isNeutral && !_settings.GearshiftVibrateOnNeutral) return;
+            int debounceMs = _settings.GearshiftDebounceMs;
+            if (debounceMs < 0) debounceMs = 0;
             var now = DateTime.UtcNow;
-            if ((now - _lastGearShiftSendUtc).TotalMilliseconds < GearShiftDebounceMs) return;
+            if (debounceMs > 0 && (now - _lastGearShiftSendUtc).TotalMilliseconds < debounceMs) return;
             _lastGearShiftSendUtc = now;
             _deviceManager.WriteSetting("base-gearshift-event", 1);
         }

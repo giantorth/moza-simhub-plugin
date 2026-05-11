@@ -216,6 +216,16 @@
                             <Slider x:Name="GearshiftVibrationSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="5" TickFrequency="1" SmallChange="1" LargeChange="1" IsSnapToTickEnabled="True" ValueChanged="GearshiftVibrationSlider_ValueChanged"/>
                             <TextBlock x:Name="GearshiftVibrationValue" Style="{StaticResource SliderValue}" Text="0"/>
                         </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Vibrate on Neutral" Style="{StaticResource SliderLabel}"/>
+                            <CheckBox x:Name="GearshiftVibrateOnNeutralCheck" VerticalAlignment="Center"
+                                      Checked="GearshiftVibrateOnNeutralCheck_Changed" Unchecked="GearshiftVibrateOnNeutralCheck_Changed"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4">
+                            <TextBlock Text="Shift Debounce" Style="{StaticResource SliderLabel}"/>
+                            <Slider x:Name="GearshiftDebounceSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="1000" TickFrequency="50" SmallChange="50" LargeChange="50" IsSnapToTickEnabled="True" ValueChanged="GearshiftDebounceSlider_ValueChanged"/>
+                            <TextBlock x:Name="GearshiftDebounceValue" Style="{StaticResource SliderValue}" Text="500 ms"/>
+                        </StackPanel>
 
                         <TextBlock Text="Protection" Style="{StaticResource SectionHeader}"/>
                         <StackPanel Orientation="Horizontal" Margin="0,8">
