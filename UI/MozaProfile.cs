@@ -75,6 +75,16 @@ namespace MozaPlugin
         public int WheelTelemetryMode { get; set; } = -1;
         public int WheelIdleEffect { get; set; } = -1;
         public int WheelButtonsIdleEffect { get; set; } = -1;
+        public int WheelKnobIdleEffect { get; set; } = -1;
+        public int WheelKnobLedMode { get; set; } = -1;
+        public int WheelButtonsLedMode { get; set; } = -1;
+        public int WheelTelemetryIdleSpeedMs { get; set; } = -1;
+        public int WheelButtonsIdleSpeedMs { get; set; } = -1;
+        public int WheelKnobIdleSpeedMs { get; set; } = -1;
+        public int WheelSleepMode { get; set; } = -1;
+        public int WheelSleepTimeoutMin { get; set; } = -1;
+        public int WheelSleepSpeedMs { get; set; } = -1;
+        public int[]? WheelSleepColor { get; set; }
         public int WheelRpmBrightness { get; set; } = -1;
         public int WheelButtonsBrightness { get; set; } = -1;
         public int WheelFlagsBrightness { get; set; } = -1;
@@ -143,6 +153,16 @@ namespace MozaPlugin
         // values to a device that isn't attached.
         public Ab9Settings? Ab9 { get; set; }
 
+        // ===== Active dashboard for this game profile =====
+        // Stable key in the same format MozaPlugin.GetActiveDashboardKeyCandidates() emits:
+        //   "wheel:<configJsonId>"     — wheel-resident dashboard, stable across re-uploads
+        //   "file:<filename>:<sha1-8>" — custom .mzdash file
+        //   "builtin:<name>"           — embedded plugin profile
+        // Null = no preference; the wheel keeps whatever dashboard is currently displayed
+        // when this profile loads. Captured from the active dashboard at SaveSettings()
+        // time; re-applied by ApplyProfile() so each SimHub game gets its own dashboard.
+        public string? TelemetryDashboardKey { get; set; }
+
         // ===== ProfileBase abstract implementation =====
 
         public override void CopyProfilePropertiesFrom(MozaProfile p)
@@ -164,6 +184,16 @@ namespace MozaPlugin
             // Wheel LED
             WheelTelemetryMode = p.WheelTelemetryMode; WheelIdleEffect = p.WheelIdleEffect;
             WheelButtonsIdleEffect = p.WheelButtonsIdleEffect;
+            WheelKnobIdleEffect = p.WheelKnobIdleEffect;
+            WheelKnobLedMode = p.WheelKnobLedMode;
+            WheelButtonsLedMode = p.WheelButtonsLedMode;
+            WheelTelemetryIdleSpeedMs = p.WheelTelemetryIdleSpeedMs;
+            WheelButtonsIdleSpeedMs = p.WheelButtonsIdleSpeedMs;
+            WheelKnobIdleSpeedMs = p.WheelKnobIdleSpeedMs;
+            WheelSleepMode = p.WheelSleepMode;
+            WheelSleepTimeoutMin = p.WheelSleepTimeoutMin;
+            WheelSleepSpeedMs = p.WheelSleepSpeedMs;
+            WheelSleepColor = p.WheelSleepColor;
             WheelRpmBrightness = p.WheelRpmBrightness; WheelButtonsBrightness = p.WheelButtonsBrightness;
             WheelFlagsBrightness = p.WheelFlagsBrightness;
 
@@ -214,6 +244,8 @@ namespace MozaPlugin
             DashFlagColors = CloneArray(p.DashFlagColors);
 
             Ab9 = p.Ab9?.Clone();
+
+            TelemetryDashboardKey = p.TelemetryDashboardKey;
         }
 
         // ===== Capture current state =====
@@ -221,9 +253,17 @@ namespace MozaPlugin
         /// <summary>
         /// Populate this profile by capturing all current device state.
         /// </summary>
-        public void CaptureFromCurrent(MozaPluginSettings settings, MozaData data)
+        /// <param name="activeDashboardKey">
+        /// Identity of the currently-loaded dashboard, in the same format
+        /// <see cref="MozaPlugin.GetActiveDashboardKeyCandidates"/> returns.
+        /// Pass <c>null</c> to leave <see cref="TelemetryDashboardKey"/> untouched
+        /// (e.g. when the plugin can't resolve a key — early init, no profile loaded).
+        /// </param>
+        public void CaptureFromCurrent(MozaPluginSettings settings, MozaData data, string? activeDashboardKey = null)
         {
             if (!data.BaseSettingsRead) return;
+            if (!string.IsNullOrEmpty(activeDashboardKey))
+                TelemetryDashboardKey = activeDashboardKey;
 
             // Base/Motor
             Limit = data.Limit; FfbStrength = data.FfbStrength; Torque = data.Torque;
@@ -243,6 +283,16 @@ namespace MozaPlugin
             WheelTelemetryMode = settings.WheelTelemetryMode;
             WheelIdleEffect = settings.WheelIdleEffect;
             WheelButtonsIdleEffect = settings.WheelButtonsIdleEffect;
+            WheelKnobIdleEffect = settings.WheelKnobIdleEffect;
+            WheelKnobLedMode = settings.WheelKnobLedMode;
+            WheelButtonsLedMode = settings.WheelButtonsLedMode;
+            WheelTelemetryIdleSpeedMs = settings.WheelTelemetryIdleSpeedMs;
+            WheelButtonsIdleSpeedMs = settings.WheelButtonsIdleSpeedMs;
+            WheelKnobIdleSpeedMs = settings.WheelKnobIdleSpeedMs;
+            WheelSleepMode = settings.WheelSleepMode;
+            WheelSleepTimeoutMin = settings.WheelSleepTimeoutMin;
+            WheelSleepSpeedMs = settings.WheelSleepSpeedMs;
+            WheelSleepColor = settings.WheelSleepColor;
             WheelRpmBrightness = settings.WheelRpmBrightness;
             WheelButtonsBrightness = settings.WheelButtonsBrightness;
             WheelFlagsBrightness = settings.WheelFlagsBrightness;

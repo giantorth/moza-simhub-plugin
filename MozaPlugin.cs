@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
+using System.Text;
 using System.Threading;
 using System.Timers;
 using System.Windows.Media;
@@ -99,7 +100,7 @@ namespace MozaPlugin
             "base-protection", "base-natural-inertia",
             "base-speed-damping", "base-speed-damping-point",
             "base-soft-limit-stiffness", "base-soft-limit-retain",
-            "base-ffb-reverse", "base-temp-strategy",
+            "base-ffb-reverse", "base-temp-strategy", "base-gearshift-vibration",
             "main-get-work-mode", "main-get-led-status",
             "main-get-damper-gain", "main-get-friction-gain",
             "main-get-inertia-gain", "main-get-spring-gain",
@@ -115,6 +116,9 @@ namespace MozaPlugin
         {
             "wheel-telemetry-mode", "wheel-telemetry-idle-effect",
             "wheel-buttons-idle-effect",
+            "wheel-knob-idle-effect",
+            "wheel-knob-led-mode", "wheel-buttons-led-mode",
+            "wheel-idle-mode", "wheel-idle-timeout",
             "wheel-rpm-brightness", "wheel-buttons-brightness", "wheel-flags-brightness",
             "wheel-idle-mode", "wheel-idle-timeout", "wheel-idle-speed",
             "wheel-idle-color",
@@ -140,7 +144,7 @@ namespace MozaPlugin
             "wheel-flag-color4", "wheel-flag-color5", "wheel-flag-color6",
             // Extended LED group presence probes (Single/Rotary/Ambient).
             // A brightness response flips IsWheelLedGroupPresent for that group.
-            "wheel-group2-brightness", "wheel-group3-brightness", "wheel-group4-brightness",
+            "wheel-single-brightness", "wheel-knob-brightness", "wheel-ambient-brightness",
         };
 
         private static readonly string[] OldWheelSettingsReadCommands = new[]
@@ -350,6 +354,16 @@ namespace MozaPlugin
                 // Null-guard for upgraded settings missing ProfileStore
                 if (_settings.ProfileStore == null)
                     _settings.ProfileStore = new MozaProfileStore();
+
+                // One-shot upgrade: pre-2026-05-09 settings stored channel mappings in
+                // TelemetryChannelMappings (single-level, not wheel-scoped). Move them
+                // into TelemetryChannelMappingsByWheel[""] so users keep their data
+                // when they install this build.
+                if (_settings.MigrateLegacyChannelMappingsIfNeeded())
+                {
+                    MozaLog.Info("[Moza] Migrated legacy TelemetryChannelMappings to per-wheel schema (under empty-wheel slot \"\")");
+                    this.SaveCommonSettings("MozaPluginSettings", _settings);
+                }
 
 
                 // Restore blink colors from settings (write-only, can't be polled from device)
@@ -580,11 +594,66 @@ namespace MozaPlugin
             _saveDebounceTimer = null;
         }
 
+        // Gearshift trigger state. When the SimHub-reported gear value changes
+        // and the user has the base "Gearshift vibration intensity" set above
+        // zero, fire `base-gearshift-event` (cmd 0x76 on grp 0x2D) to make the
+        // wheelbase rumble. PitHouse uses the same fire-and-forget event;
+        // verified live 2026-05-10.
+        // _lastGearString holds the most recently observed Gear value (string
+        // — "R"/"N"/"1".."6"). Initial null suppresses the warm-up frame so we
+        // don't fire on the first DataUpdate just because the previous value
+        // was unset. Debounce window is 500 ms to coalesce ratcheting / rapid
+        // shifts.
+        private string? _lastGearString;
+        private DateTime _lastGearShiftSendUtc = DateTime.MinValue;
+        private const double GearShiftDebounceMs = 500.0;
+
+        // Fire a one-shot `base-gearshift-event` when the SimHub-reported gear
+        // value changes, gated by `_data.GearshiftVibration > 0` (the user's
+        // intensity slider — 0 disables the effect entirely) and a 500 ms
+        // debounce so quick ratcheting up/down of gears doesn't pile triggers
+        // on the wire.
+        //
+        // Transitions *into* neutral ("N") never fire — they represent
+        // dis-engagement, not a shift. An H-pattern shift produces two
+        // transitions ("1"→"N"→"2"); we want the bump on engagement (N→2),
+        // not on the stick leaving the prior gear (1→N). Sequential / paddle
+        // shifts go directly between gears and still fire normally. The 500 ms
+        // debounce remains for rapid ratcheting between non-neutral gears.
+        private void CheckGearshiftEvent(GameData data)
+        {
+            if (!_data.IsConnected) return;
+            if (_data.GearshiftVibration <= 0) return;
+            string? gear = data?.NewData?.Gear;
+            if (string.IsNullOrEmpty(gear)) return;
+            if (_lastGearString == null)
+            {
+                _lastGearString = gear;
+                return; // warm-up: record the first observed value, don't fire
+            }
+            if (gear == _lastGearString) return;
+            // Update the latch on every change so we don't compare against a
+            // stale value on the next tick. Whether we *fire* is decided after.
+            string previous = _lastGearString;
+            _lastGearString = gear;
+            // Skip dis-engagement transitions (anything → neutral). For an
+            // H-pattern shifter this is the "stick leaves prior gear" event;
+            // suppressing it means the next change (N → new gear) is what
+            // actually triggers the bump. Some games report neutral as "0"
+            // instead of "N" — treat both as neutral.
+            if (gear == "N" || gear == "0") return;
+            var now = DateTime.UtcNow;
+            if ((now - _lastGearShiftSendUtc).TotalMilliseconds < GearShiftDebounceMs) return;
+            _lastGearShiftSendUtc = now;
+            _deviceManager.WriteSetting("base-gearshift-event", 1);
+        }
+
         public void DataUpdate(PluginManager pluginManager, ref GameData data)
         {
             if (IsShuttingDown) return;
             _activeTelemetry?.UpdateGameData(data.NewData);
             _activeTelemetry?.SetGameRunning(data.GameRunning);
+            CheckGearshiftEvent(data);
             // Drive the new pipeline's tick — pumps tier-def emissions, heartbeat cadence,
             // and value-frame bursts. The old TelemetrySender uses its own internal timer
             // and doesn't need a tick driver here.
@@ -707,7 +776,17 @@ namespace MozaPlugin
 
         internal void SaveSettings()
         {
-            _settings.ProfileStore?.CurrentProfile?.CaptureFromCurrent(_settings, _data);
+            // Resolve the current dashboard key (wheel:<id> > file:<...> > builtin:<name>)
+            // so the active SimHub profile records which dashboard the user picked.
+            // Re-applied on profile load so each game keeps its own dashboard selection.
+            string? activeDashKey = null;
+            try
+            {
+                var cands = GetActiveDashboardKeyCandidates();
+                if (cands.Count > 0) activeDashKey = cands[0];
+            }
+            catch { /* candidate resolver is conservative; ignore early-init errors */ }
+            _settings.ProfileStore?.CurrentProfile?.CaptureFromCurrent(_settings, _data, activeDashKey);
             // Mirror the active flat Wheel* fields into the per-wheel-model slot
             // so each physical wheel keeps its own brightness/mode/input settings
             // across reloads (see MozaPluginSettings.PerWheelSlots).
@@ -1153,20 +1232,23 @@ namespace MozaPlugin
             // Apply user channel mappings for the selected dashboard (overrides
             // each channel's SimHubProperty string by URL). Must run before
             // assigning Profile so the frame builder binds resolvers correctly.
-            if (profile != null)
+            // Walk candidate dashboard keys (wheel:<id>, file:<...>, builtin:<name>)
+            // under the current wheel UID; first hit wins so a freshly-saved
+            // wheel:<id> entry overrides any orphaned legacy file:<...> entry.
+            if (profile != null && s.TelemetryChannelMappingsByWheel != null)
             {
-                // Resolve the file path for GetDashboardKey — single-file override,
-                // folder library, or null (builtin).
-                string? keyPath = s.TelemetryMzdashPath;
-                if (string.IsNullOrEmpty(keyPath) && DashCache != null)
-                    keyPath = DashCache.TryGetFolderFilePath(profile.Name);
-
-                string dashboardKey = DashboardProfileStore.GetDashboardKey(
-                    keyPath, profile);
-                if (s.TelemetryChannelMappings != null &&
-                    s.TelemetryChannelMappings.TryGetValue(dashboardKey, out var overrides))
+                string wheelKey = CurrentWheelKey();
+                if (s.TelemetryChannelMappingsByWheel.TryGetValue(wheelKey, out var middle) &&
+                    middle != null)
                 {
-                    DashboardProfileStore.ApplyUserMappings(profile, overrides);
+                    foreach (var dashKey in GetActiveDashboardKeyCandidates())
+                    {
+                        if (middle.TryGetValue(dashKey, out var overrides) && overrides != null)
+                        {
+                            DashboardProfileStore.ApplyUserMappings(profile, overrides);
+                            break;
+                        }
+                    }
                 }
             }
 
@@ -1221,6 +1303,80 @@ namespace MozaPlugin
                 _pluginManager?.GetPropertyValue(path), path);
         }
 
+        // Latched once per plugin lifetime so a SimHub API change doesn't spam the log.
+        private bool _allPropertiesNamesWarned;
+
+        /// <summary>
+        /// Snapshot of every property name SimHub currently exposes (DataCorePlugin.GameData.*,
+        /// game-specific Acc.Physics.* / R3E.* / etc., plus paths registered by other plugins).
+        /// Used by the channel-mappings ComboBox autocomplete. Sorted case-insensitively.
+        /// Falls back to the curated <see cref="KnownSimHubProperties.Paths"/> list when
+        /// the live API is unavailable (PluginManager null, exception, or missing method).
+        /// </summary>
+        public IReadOnlyList<string> GetAllSimHubPropertyNames()
+        {
+            try
+            {
+                var pm = _pluginManager;
+                if (pm != null)
+                {
+                    // PluginManager.GetAllPropertiesNames() returns IEnumerable<string> — verified
+                    // in libs/SimHub/SimHub.Plugins.dll. Guarded by reflection so older SimHub
+                    // builds without this method degrade to the static fallback.
+                    var mi = pm.GetType().GetMethod("GetAllPropertiesNames",
+                        System.Reflection.BindingFlags.Instance |
+                        System.Reflection.BindingFlags.Public |
+                        System.Reflection.BindingFlags.NonPublic);
+                    if (mi != null)
+                    {
+                        var names = mi.Invoke(pm, null) as System.Collections.IEnumerable;
+                        if (names != null)
+                        {
+                            // SimHub can register the same property under multiple
+                            // plugins (DataCorePlugin / Plugins.PersistantTrackerPlugin
+                            // overlap, Custom Series), and the autocomplete dropdown
+                            // would otherwise show duplicates. Dedupe here so every
+                            // consumer of the live list gets a unique-name snapshot.
+                            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                            var list = new List<string>(256);
+                            foreach (var n in names)
+                            {
+                                if (n is string s && !string.IsNullOrEmpty(s) && seen.Add(s))
+                                    list.Add(s);
+                            }
+                            list.Sort(StringComparer.OrdinalIgnoreCase);
+                            return list;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                if (!_allPropertiesNamesWarned)
+                {
+                    _allPropertiesNamesWarned = true;
+                    MozaLog.Warn("[Moza] GetAllPropertiesNames failed; falling back to static list: " + ex.Message);
+                }
+            }
+            return KnownSimHubProperties.Paths;
+        }
+
+        /// <summary>
+        /// Resolve the current raw value of a SimHub property for UI display in the
+        /// channel-mappings grid. Returns null when the path is empty, internal-only,
+        /// or unresolvable. The caller formats for display.
+        /// </summary>
+        public object? GetPropertyValueForDisplay(string? path)
+        {
+            if (string.IsNullOrEmpty(path)) return null;
+            // @internal/ values bypass SimHub — surface them as the resolved double
+            // so the UI shows the live wheel angle etc. instead of "(not found)".
+            if (path!.StartsWith("@internal/", StringComparison.Ordinal))
+                return ResolveInternalChannel(path);
+            try { return _pluginManager?.GetPropertyValue(path); }
+            catch { return null; }
+        }
+
         private double ResolveInternalChannel(string path)
         {
             switch (path)
@@ -1240,53 +1396,201 @@ namespace MozaPlugin
             }
         }
 
-        /// <summary>Stable identity key for the currently-loaded dashboard.</summary>
-        internal string CurrentDashboardKey()
+        /// <summary>
+        /// Stable per-physical-wheel key. 24-char lowercase hex of the wheel's STM32 MCU
+        /// UID (firmware-resident, persists across plugin reload and SimHub restart).
+        /// Returns "" when the UID hasn't been read yet (cold start before wheel detect)
+        /// or when all bytes are zero — both treated as "unknown wheel" so mappings still
+        /// land somewhere instead of being dropped on the floor.
+        /// </summary>
+        internal string CurrentWheelKey()
         {
-            var profile = _activeTelemetry?.Profile;
-            if (profile == null) return "";
-            string? keyPath = _settings.TelemetryMzdashPath;
-            if (string.IsNullOrEmpty(keyPath) && DashCache != null)
-                keyPath = DashCache.TryGetFolderFilePath(profile.Name);
-            return DashboardProfileStore.GetDashboardKey(keyPath, profile);
+            var uid = _data?.WheelMcuUid;
+            if (uid == null || uid.Length != 12) return "";
+            bool allZero = true;
+            for (int i = 0; i < 12; i++) { if (uid[i] != 0) { allZero = false; break; } }
+            if (allZero) return "";
+            var sb = new StringBuilder(24);
+            for (int i = 0; i < 12; i++) sb.Append(uid[i].ToString("x2"));
+            return sb.ToString();
         }
 
-        /// <summary>Set or clear a per-channel SimHub property override for the current dashboard.</summary>
+        /// <summary>
+        /// Candidate dashboard keys for the user's currently-selected dashboard,
+        /// highest priority first:
+        /// <list type="number">
+        ///   <item><c>wheel:&lt;id&gt;</c> — when configJson reports a matching enabled-dashboard entry with a non-empty Id (stable across re-uploads)</item>
+        ///   <item><c>file:&lt;filename&gt;:&lt;sha1-first-8&gt;</c> — when a file path is resolvable</item>
+        ///   <item><c>builtin:&lt;name&gt;</c> — fallback for embedded profiles</item>
+        /// </list>
+        /// Caller iterates the list when looking up; primary writer uses index 0.
+        ///
+        /// Reads from <c>_settings.TelemetryProfileName</c> / <c>TelemetryMzdashPath</c>
+        /// (the user-intent source of truth — updates synchronously in the dropdown
+        /// SelectionChanged handler) and only falls back to <c>_activeTelemetry.Profile.Name</c>
+        /// when settings is empty. Earlier the candidate list mirrored the running
+        /// pipeline's profile, which lags settings between SelectionChanged and the
+        /// async ApplyTelemetrySettings → caused stale TelemetryDashboardKey saves
+        /// (every-other-switch loss across game switches) and a redundant Stop+Start
+        /// at startup when the saved key didn't appear to match the (still-null)
+        /// active profile.
+        /// </summary>
+        internal IReadOnlyList<string> GetActiveDashboardKeyCandidates()
+        {
+            var s = _settings;
+            string profileName = s?.TelemetryProfileName ?? "";
+            string mzdashPath = s?.TelemetryMzdashPath ?? "";
+
+            // Settings empty (cold launch before any selection) → fall back to
+            // the running profile's name so we still produce candidates if
+            // telemetry happens to be assembled from a non-settings source.
+            if (string.IsNullOrEmpty(profileName) && string.IsNullOrEmpty(mzdashPath))
+            {
+                profileName = _activeTelemetry?.Profile?.Name ?? "";
+            }
+
+            if (string.IsNullOrEmpty(profileName) && string.IsNullOrEmpty(mzdashPath))
+                return Array.Empty<string>();
+
+            var result = new List<string>(3);
+
+            // 1) wheel:<id> — match selected name against configJson catalog
+            if (!string.IsNullOrEmpty(profileName))
+            {
+                var state = WheelStateForDiagnostics;
+                if (state != null && state.EnabledDashboards != null)
+                {
+                    foreach (var entry in state.EnabledDashboards)
+                    {
+                        if (entry == null || string.IsNullOrEmpty(entry.Id)) continue;
+                        bool nameMatch =
+                            string.Equals(entry.Title, profileName, StringComparison.OrdinalIgnoreCase) ||
+                            string.Equals(entry.DirName, profileName, StringComparison.OrdinalIgnoreCase);
+                        if (nameMatch)
+                        {
+                            result.Add("wheel:" + entry.Id);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // 2) file:<filename>:<sha1>
+            string? keyPath = mzdashPath;
+            if (string.IsNullOrEmpty(keyPath) && DashCache != null && !string.IsNullOrEmpty(profileName))
+                keyPath = DashCache.TryGetFolderFilePath(profileName);
+            if (!string.IsNullOrEmpty(keyPath))
+            {
+                // GetDashboardKey reads profile?.Name only in the loadedPath==null
+                // branch (which we don't take here — keyPath is non-empty). Pass
+                // the running profile if we have one but it's unused.
+                string fileKey = DashboardProfileStore.GetDashboardKey(keyPath, _activeTelemetry?.Profile!);
+                if (!string.IsNullOrEmpty(fileKey) && !result.Contains(fileKey))
+                    result.Add(fileKey);
+            }
+
+            // 3) builtin:<name>
+            if (!string.IsNullOrEmpty(profileName))
+            {
+                string builtinKey = "builtin:" + profileName;
+                if (!result.Contains(builtinKey))
+                    result.Add(builtinKey);
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Live-rewire the host-side value source for a single channel without
+        /// touching the wire — finds the matching channel in the active profile by
+        /// URL and updates its <see cref="ChannelDefinition.SimHubProperty"/> in place.
+        /// The frame builder's resolver lambdas read this field per-frame (see
+        /// <see cref="TelemetryFrameBuilder"/>), so the new property is used on the
+        /// very next telemetry frame. Safe to call while telemetry is running.
+        /// </summary>
+        internal void UpdateActiveChannelMapping(string channelUrl, string propertyPath)
+        {
+            var profile = _activeTelemetry?.Profile;
+            if (profile == null || string.IsNullOrEmpty(channelUrl)) return;
+            string trimmed = (propertyPath ?? "").Trim();
+            foreach (var tier in profile.Tiers)
+            {
+                foreach (var ch in tier.Channels)
+                {
+                    if (string.Equals(ch.Url, channelUrl, StringComparison.OrdinalIgnoreCase))
+                        ch.SimHubProperty = trimmed;
+                }
+            }
+        }
+
+        /// <summary>Set or clear a per-channel SimHub property override for the current wheel + dashboard.</summary>
         internal void SetChannelMapping(string channelUrl, string propertyPath)
         {
             if (string.IsNullOrEmpty(channelUrl)) return;
-            string key = CurrentDashboardKey();
-            if (string.IsNullOrEmpty(key)) return;
+            var candidates = GetActiveDashboardKeyCandidates();
+            if (candidates.Count == 0) return;
+            string dashKey = candidates[0]; // write to the highest-priority key
+            string wheelKey = CurrentWheelKey();
 
-            _settings.TelemetryChannelMappings ??=
-                new System.Collections.Generic.Dictionary<string,
+            if (_settings.TelemetryChannelMappingsByWheel == null)
+                _settings.TelemetryChannelMappingsByWheel =
+                    new System.Collections.Generic.Dictionary<string,
+                        System.Collections.Generic.Dictionary<string,
+                            System.Collections.Generic.Dictionary<string, string>>>(StringComparer.OrdinalIgnoreCase);
+
+            if (!_settings.TelemetryChannelMappingsByWheel.TryGetValue(wheelKey, out var middle))
+            {
+                middle = new System.Collections.Generic.Dictionary<string,
                     System.Collections.Generic.Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
+                _settings.TelemetryChannelMappingsByWheel[wheelKey] = middle;
+            }
 
-            if (!_settings.TelemetryChannelMappings.TryGetValue(key, out var inner))
+            if (!middle.TryGetValue(dashKey, out var inner))
             {
                 inner = new System.Collections.Generic.Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-                _settings.TelemetryChannelMappings[key] = inner;
+                middle[dashKey] = inner;
             }
 
             string trimmed = (propertyPath ?? "").Trim();
             if (string.IsNullOrEmpty(trimmed))
+            {
                 inner.Remove(channelUrl);
+                // Tidy: drop empty inner dict, then empty middle dict, so the JSON
+                // doesn't accumulate empty objects after every reset-to-default.
+                if (inner.Count == 0) middle.Remove(dashKey);
+                if (middle.Count == 0) _settings.TelemetryChannelMappingsByWheel.Remove(wheelKey);
+            }
             else
+            {
                 inner[channelUrl] = trimmed;
+            }
+
+            // Live-rewire the active profile's matching channel so the next
+            // frame uses the new property. No tier-def restart — we already
+            // negotiated the wire format with the wheel; we're just changing
+            // where the host pulls each channel's value from.
+            UpdateActiveChannelMapping(channelUrl, trimmed);
 
             SaveSettings();
         }
 
-        /// <summary>Clear all per-channel overrides for the currently-loaded dashboard.</summary>
+        /// <summary>Clear all per-channel overrides for the current wheel + dashboard, across every candidate key.</summary>
         internal void ClearCurrentDashboardMappings()
         {
-            string key = CurrentDashboardKey();
-            if (string.IsNullOrEmpty(key)) return;
-            if (_settings.TelemetryChannelMappings != null &&
-                _settings.TelemetryChannelMappings.Remove(key))
+            var candidates = GetActiveDashboardKeyCandidates();
+            if (candidates.Count == 0) return;
+            string wheelKey = CurrentWheelKey();
+            if (_settings.TelemetryChannelMappingsByWheel == null) return;
+            if (!_settings.TelemetryChannelMappingsByWheel.TryGetValue(wheelKey, out var middle)) return;
+
+            bool changed = false;
+            foreach (var key in candidates)
             {
-                SaveSettings();
+                if (middle.Remove(key)) changed = true;
             }
+            if (middle.Count == 0)
+                _settings.TelemetryChannelMappingsByWheel.Remove(wheelKey);
+            if (changed) SaveSettings();
         }
 
         /// <summary>
@@ -1309,8 +1613,147 @@ namespace MozaPlugin
             ThreadPool.QueueUserWorkItem(_ => t.Start());
         }
 
+        // Set when ApplyProfile sees a TelemetryDashboardKey but the wheel state isn't
+        // ready yet (cold start, hub re-enumeration, etc.). PollStatus retries once
+        // the wheel catalog arrives. Cleared after a successful apply or when the user
+        // manually picks a dashboard (manual action wins over a stale profile setting).
+        private string? _pendingProfileDashboardKey;
+        private long _pendingProfileDashboardKeyDeadlineTicks;
+        // Stop retrying after this long so a profile authored against a different wheel
+        // catalog doesn't pin the pending-key forever.
+        private static readonly TimeSpan PendingProfileKeyTimeout = TimeSpan.FromMinutes(5);
+
+        /// <summary>
+        /// Apply <see cref="MozaProfile.TelemetryDashboardKey"/> to the wheel: switch
+        /// the active dashboard so each SimHub game/profile gets its own. Defers to
+        /// the next poll tick when the wheel state isn't ready.
+        /// Returns true when the key was applied or dropped (no further retry needed).
+        /// </summary>
+        internal bool ApplyTelemetryDashboardFromProfile(MozaProfile profile)
+        {
+            if (profile == null) return true;
+            string? key = profile.TelemetryDashboardKey;
+            if (string.IsNullOrEmpty(key)) return true; // no preference recorded
+
+            // Already on the requested dashboard? No-op — avoid a redundant
+            // Stop+Start. The candidate list reads from _settings (the user-intent
+            // source of truth), so this matches at plugin startup when the saved
+            // profile key equals the user's last selection — no needless restart
+            // cycle that would arm IsInSilenceCooldown and silently suppress the
+            // user's first manual SendDashboardSwitch.
+            try
+            {
+                var current = GetActiveDashboardKeyCandidates();
+                foreach (var c in current)
+                {
+                    if (string.Equals(c, key, StringComparison.OrdinalIgnoreCase))
+                    {
+                        MozaLog.Debug("[Moza] ApplyTelemetryDashboardFromProfile: already on " + key + " — no-op");
+                        return true;
+                    }
+                }
+            }
+            catch { /* fall through to apply attempt */ }
+
+            if (key!.StartsWith("wheel:", StringComparison.OrdinalIgnoreCase))
+            {
+                string id = key.Substring("wheel:".Length);
+                var sender = _telemetrySender;
+                var state = WheelStateForDiagnostics;
+                if (state == null || state.EnabledDashboards == null || sender == null)
+                    return false; // not ready — caller defers
+
+                WheelDashboardEntry? match = null;
+                foreach (var entry in state.EnabledDashboards)
+                {
+                    if (entry != null && string.Equals(entry.Id, id, StringComparison.OrdinalIgnoreCase))
+                    {
+                        match = entry;
+                        break;
+                    }
+                }
+                if (match == null)
+                {
+                    MozaLog.Info("[Moza] Profile dashboard key not found in current wheel catalog (id=" +
+                                 id + "); leaving current selection");
+                    return true; // wheel doesn't have this dashboard; stop retrying
+                }
+
+                // Locate the slot in ConfigJsonList (UI-ordered library names) by name.
+                int slot = -1;
+                if (state.ConfigJsonList != null)
+                {
+                    for (int i = 0; i < state.ConfigJsonList.Count; i++)
+                    {
+                        var name = state.ConfigJsonList[i];
+                        if (string.IsNullOrEmpty(name)) continue;
+                        if (string.Equals(name, match.Title, StringComparison.OrdinalIgnoreCase) ||
+                            string.Equals(name, match.DirName, StringComparison.OrdinalIgnoreCase))
+                        {
+                            slot = i;
+                            break;
+                        }
+                    }
+                }
+                if (slot < 0)
+                {
+                    MozaLog.Info("[Moza] Profile dashboard '" + match.Title +
+                                 "' missing from configJsonList; leaving current selection");
+                    return true;
+                }
+
+                MozaLog.Info($"[Moza] Applying profile dashboard '{match.Title}' (id={id}, slot={slot})");
+                _settings.TelemetryProfileName = match.Title;
+                _settings.TelemetryMzdashPath = "";
+                PersistSettings();
+                OnDashboardSwitched((uint)slot);
+                return true;
+            }
+
+            if (key.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+            {
+                // file:<filename>:<sha1-first-8> — try to resolve from DashCache (folder
+                // library or wheel-download cache) by filename. If we can't find the
+                // exact file we don't fail loudly — the user can always re-pick.
+                string remainder = key.Substring("file:".Length);
+                int colon = remainder.LastIndexOf(':');
+                string filename = colon > 0 ? remainder.Substring(0, colon) : remainder;
+                string? path = DashCache?.TryGetFolderFilePath(System.IO.Path.GetFileNameWithoutExtension(filename));
+                if (!string.IsNullOrEmpty(path) && System.IO.File.Exists(path))
+                {
+                    MozaLog.Info("[Moza] Applying profile dashboard file: " + path);
+                    _settings.TelemetryMzdashPath = path!;
+                    _settings.TelemetryProfileName = "";
+                    PersistSettings();
+                    OnDashboardSwitched();
+                    return true;
+                }
+                MozaLog.Info("[Moza] Profile dashboard file not resolvable (" + filename +
+                             "); leaving current selection");
+                return true;
+            }
+
+            if (key.StartsWith("builtin:", StringComparison.OrdinalIgnoreCase))
+            {
+                string name = key.Substring("builtin:".Length);
+                MozaLog.Info("[Moza] Applying profile dashboard (builtin): " + name);
+                _settings.TelemetryProfileName = name;
+                _settings.TelemetryMzdashPath = "";
+                PersistSettings();
+                OnActiveDashboardChanged();
+                return true;
+            }
+
+            MozaLog.Warn("[Moza] Unknown TelemetryDashboardKey prefix: " + key);
+            return true;
+        }
+
         internal void OnActiveDashboardChanged()
         {
+            // Manual action wins: user picked a dashboard from the UI dropdown,
+            // so abandon any pending profile-driven switch waiting for the catalog.
+            _pendingProfileDashboardKey = null;
+
             var sender = _telemetrySender;
             if (sender != null && sender.Enabled)
             {
@@ -1334,12 +1777,22 @@ namespace MozaPlugin
             }
         }
 
-        internal void OnDashboardSwitched()
+        /// <summary>
+        /// Slot-aware dashboard switch entry point. Used when the wheel's
+        /// configJsonList provides a 0-based slot index (UI dropdown selection,
+        /// profile-driven switch by name). The TelemetrySender emits FF kind=4
+        /// on session 0x02 and waits for the wheel's b2h kind=4 echo (with
+        /// retry) before tearing the pipeline down for the new tier-def.
+        /// </summary>
+        internal void OnDashboardSwitched(uint slot)
         {
+            _pendingProfileDashboardKey = null;
+
             var sender = _telemetrySender;
             if (sender != null && sender.Enabled)
             {
-                MozaLog.Debug("[Moza] OnDashboardSwitched: scheduling Stop+Start pipeline cycle");
+                MozaLog.Debug(
+                    $"[Moza] OnDashboardSwitched(slot={slot}): scheduling switch + Stop+Start pipeline cycle");
 
                 // Stage the new dashboard's profile + mzdash content INTO the
                 // sender first so the post-Start cold-start sequence builds
@@ -1347,14 +1800,37 @@ namespace MozaPlugin
                 // sets Profile + MzdashContent + MzdashName as side effects.
                 ApplyTelemetrySettings();
 
-                // Cycle the pipeline. RestartForSwitch handles the kind=4 drain
-                // wait (so the UI knob's just-emitted FF kind=4 actually lands
-                // before Stop discards the queue), then Stop+Start. The
-                // ~10–14s wheel sess=0x09 timeout is enforced inside StartInner
-                // via _lastStopUtcTicks, so we don't need an explicit settle
-                // here — Start automatically waits the right amount before
-                // opening sessions. Don't re-send FF kind=4 here; the wheel-UI
-                // knob already did.
+                // SwitchToProfile(slot, null) emits the FF kind=4 then runs
+                // Stop+Start. Profile was already staged above, so we pass
+                // null and the existing Profile sticks.
+                sender.SwitchToProfile(slot, null);
+                return;
+            }
+
+            var host = _telemetryHost;
+            if (host != null && host.Enabled)
+            {
+                MozaLog.Debug(
+                    $"[Moza] OnDashboardSwitched(slot={slot}) (v2): applying telemetry settings");
+                ApplyTelemetrySettings();
+            }
+        }
+
+        /// <summary>
+        /// Slot-less dashboard switch entry point. Used by file-mode and
+        /// builtin-fallback paths where the wheel's configJsonList doesn't
+        /// expose a slot for the new dashboard — no FF kind=4 is emitted; the
+        /// sender just cycles Stop+Start so the new profile takes effect.
+        /// </summary>
+        internal void OnDashboardSwitched()
+        {
+            _pendingProfileDashboardKey = null;
+
+            var sender = _telemetrySender;
+            if (sender != null && sender.Enabled)
+            {
+                MozaLog.Debug("[Moza] OnDashboardSwitched: scheduling Stop+Start pipeline cycle (no slot)");
+                ApplyTelemetrySettings();
                 sender.RestartForSwitch();
                 return;
             }
@@ -1422,7 +1898,22 @@ namespace MozaPlugin
             if (Interlocked.CompareExchange(ref _telemetryStartRequested, 1, 0) != 0) return;
 
             MozaLog.Info("[Moza] Wheel detected and telemetry enabled — starting telemetry sender");
-            ThreadPool.QueueUserWorkItem(_ => t.Start());
+            // Wrap the work item in a top-level catch so any exception from
+            // Start() (e.g. ObjectDisposedException from a race against
+            // plugin Dispose during game-switch reload, IOException from a
+            // serial port that closed mid-probe) is logged instead of
+            // propagating up through ThreadPool — on .NET Framework 4.8
+            // unhandled exceptions in ThreadPool callbacks can take down
+            // the SimHub host process.
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                try { t.Start(); }
+                catch (ObjectDisposedException) { /* plugin disposed mid-start */ }
+                catch (Exception ex)
+                {
+                    MozaLog.Warn($"[Moza] Telemetry start failed: {ex.GetType().Name}: {ex.Message}");
+                }
+            });
         }
 
         private static MultiStreamProfile? FindProfile(
@@ -1599,6 +2090,42 @@ namespace MozaPlugin
             if (IsShuttingDown) return;
             if (!_connection.IsConnected) return;
 
+            // Retry a deferred profile-driven dashboard switch once the wheel catalog
+            // arrives. Stops retrying after PendingProfileKeyTimeout so a profile
+            // authored against a different wheel doesn't pin this state forever.
+            if (_pendingProfileDashboardKey != null)
+            {
+                if (DateTime.UtcNow.Ticks > _pendingProfileDashboardKeyDeadlineTicks)
+                {
+                    MozaLog.Info("[Moza] Pending profile dashboard apply timed out (key=" +
+                                 _pendingProfileDashboardKey + "); giving up");
+                    _pendingProfileDashboardKey = null;
+                }
+                else
+                {
+                    var profile = _settings.ProfileStore?.CurrentProfile;
+                    if (profile != null &&
+                        string.Equals(profile.TelemetryDashboardKey, _pendingProfileDashboardKey, StringComparison.OrdinalIgnoreCase))
+                    {
+                        try
+                        {
+                            if (ApplyTelemetryDashboardFromProfile(profile))
+                                _pendingProfileDashboardKey = null;
+                        }
+                        catch (Exception ex)
+                        {
+                            MozaLog.Warn("[Moza] Pending dashboard apply retry threw: " + ex.Message);
+                            _pendingProfileDashboardKey = null;
+                        }
+                    }
+                    else
+                    {
+                        // Profile changed under us — drop the stale pending key.
+                        _pendingProfileDashboardKey = null;
+                    }
+                }
+            }
+
             // Hot-swap detection: track whether the locked wheel is still responding
             // and periodically verify the model name hasn't changed.
             if (_newWheelDetected || _oldWheelDetected)
@@ -1659,11 +2186,11 @@ namespace MozaPlugin
                     _group3ColorsRead = true;
                     int total = model.KnobRingLedTotal;
                     var cmds = new string[total + 1];
-                    cmds[0] = "wheel-group3-brightness";
+                    cmds[0] = "wheel-knob-brightness";
                     for (int i = 0; i < total; i++)
-                        cmds[i + 1] = $"wheel-group3-color{i + 1}";
+                        cmds[i + 1] = $"wheel-knob-bg-color{i + 1}";
                     _deviceManager.ReadSettingsPaced(cmds);
-                    MozaLog.Debug($"[Moza] Reading Group 3 ring LED colors ({total} LEDs)");
+                    MozaLog.Debug($"[Moza] Reading knob ring LED colors ({total} LEDs)");
                 }
             }
 
@@ -1868,11 +2395,15 @@ namespace MozaPlugin
             if (r.ArrayValue != null)
                 _data.UpdateFromArray(r.Name, r.ArrayValue);
 
-            // Extended LED group presence — any response to groupN brightness/mode/color
-            // from this wheel proves the group exists in firmware.
-            if (r.Name != null && r.Name.StartsWith("wheel-group", StringComparison.Ordinal))
+            // Extended LED group presence — any response to a brightness/mode/color
+            // command from one of the named groups proves it exists in firmware.
+            // Maps the user-facing prefix back to the rs21_parameter.db group ID.
+            if (r.Name != null)
             {
-                int g = r.Name.Length > 11 ? r.Name[11] - '0' : -1;
+                int g = -1;
+                if (r.Name.StartsWith("wheel-single-",  StringComparison.Ordinal)) g = 2;
+                else if (r.Name.StartsWith("wheel-knob-",    StringComparison.Ordinal)) g = 3;
+                else if (r.Name.StartsWith("wheel-ambient-", StringComparison.Ordinal)) g = 4;
                 if (g >= 2 && g <= 4)
                 {
                     int bit = 1 << g;
@@ -2285,6 +2816,31 @@ namespace MozaPlugin
                 _data.WheelTelemetryIdleEffect = _settings.WheelIdleEffect;
             if (_settings.WheelButtonsIdleEffect >= 0)
                 _data.WheelButtonsIdleEffect = _settings.WheelButtonsIdleEffect;
+            if (_settings.WheelKnobIdleEffect >= 0)
+                _data.WheelKnobIdleEffect = _settings.WheelKnobIdleEffect;
+            if (_settings.WheelKnobLedMode >= 0)
+                _data.WheelKnobLedMode = _settings.WheelKnobLedMode;
+            if (_settings.WheelButtonsLedMode >= 0)
+                _data.WheelButtonsLedMode = _settings.WheelButtonsLedMode;
+            if (_settings.WheelTelemetryIdleSpeedMs >= 0)
+                _data.WheelTelemetryIdleSpeedMs = _settings.WheelTelemetryIdleSpeedMs;
+            if (_settings.WheelButtonsIdleSpeedMs >= 0)
+                _data.WheelButtonsIdleSpeedMs = _settings.WheelButtonsIdleSpeedMs;
+            if (_settings.WheelKnobIdleSpeedMs >= 0)
+                _data.WheelKnobIdleSpeedMs = _settings.WheelKnobIdleSpeedMs;
+            if (_settings.WheelSleepMode >= 0)
+                _data.WheelIdleMode = _settings.WheelSleepMode;
+            if (_settings.WheelSleepTimeoutMin >= 0)
+                _data.WheelIdleTimeout = _settings.WheelSleepTimeoutMin;
+            if (_settings.WheelSleepSpeedMs >= 0)
+                _data.WheelIdleSpeed = _settings.WheelSleepSpeedMs;
+            if (_settings.WheelSleepColor != null && _settings.WheelSleepColor.Length > 0)
+            {
+                var rgb = MozaProfile.UnpackColor(_settings.WheelSleepColor[0]);
+                _data.WheelIdleColor[0] = rgb[0];
+                _data.WheelIdleColor[1] = rgb[1];
+                _data.WheelIdleColor[2] = rgb[2];
+            }
             if (_settings.WheelRpmIndicatorMode >= 0)
                 _data.WheelRpmIndicatorMode = _settings.WheelRpmIndicatorMode;
             if (_settings.WheelRpmDisplayMode >= 0)
@@ -2316,6 +2872,38 @@ namespace MozaPlugin
                 _deviceManager.WriteSetting("wheel-telemetry-idle-effect", _settings.WheelIdleEffect);
             if (_settings.WheelButtonsIdleEffect >= 0)
                 _deviceManager.WriteSetting("wheel-buttons-idle-effect", _settings.WheelButtonsIdleEffect);
+            if (_settings.WheelKnobIdleEffect >= 0)
+                _deviceManager.WriteSetting("wheel-knob-idle-effect", _settings.WheelKnobIdleEffect);
+            if (_settings.WheelKnobLedMode >= 0)
+                _deviceManager.WriteSetting("wheel-knob-led-mode", _settings.WheelKnobLedMode);
+            if (_settings.WheelButtonsLedMode >= 0)
+                _deviceManager.WriteSetting("wheel-buttons-led-mode", _settings.WheelButtonsLedMode);
+            // Per-effect speed sliders (cmd 0x1E [group] [effect_id] [BE u16 ms]).
+            // Only fire when both effect and speed are saved — without an effect_id
+            // we'd be writing a per-effect timer with effect=0 (Off) which has no
+            // animation to time and therefore no observable effect on the wheel.
+            if (_settings.WheelIdleEffect >= 0 && _settings.WheelTelemetryIdleSpeedMs >= 0)
+                _deviceManager.WriteArray("wheel-telemetry-idle-interval",
+                    BuildIdleIntervalPayload(_settings.WheelIdleEffect, _settings.WheelTelemetryIdleSpeedMs));
+            if (_settings.WheelButtonsIdleEffect >= 0 && _settings.WheelButtonsIdleSpeedMs >= 0)
+                _deviceManager.WriteArray("wheel-buttons-idle-interval",
+                    BuildIdleIntervalPayload(_settings.WheelButtonsIdleEffect, _settings.WheelButtonsIdleSpeedMs));
+            if (_settings.WheelKnobIdleEffect >= 0 && _settings.WheelKnobIdleSpeedMs >= 0)
+                _deviceManager.WriteArray("wheel-knob-idle-interval",
+                    BuildIdleIntervalPayload(_settings.WheelKnobIdleEffect, _settings.WheelKnobIdleSpeedMs));
+            // Wheel sleep-light settings (cmd 0x20/0x21/0x22/0x24).
+            if (_settings.WheelSleepMode >= 0)
+                _deviceManager.WriteSetting("wheel-idle-mode", _settings.WheelSleepMode);
+            if (_settings.WheelSleepTimeoutMin >= 0)
+                _deviceManager.WriteSetting("wheel-idle-timeout", _settings.WheelSleepTimeoutMin);
+            if (_settings.WheelSleepMode >= 0 && _settings.WheelSleepSpeedMs >= 0)
+                _deviceManager.WriteArray("wheel-idle-speed",
+                    BuildIdleIntervalPayload(_settings.WheelSleepMode, _settings.WheelSleepSpeedMs));
+            if (_settings.WheelSleepColor != null && _settings.WheelSleepColor.Length > 0)
+            {
+                var rgb = MozaProfile.UnpackColor(_settings.WheelSleepColor[0]);
+                _deviceManager.WriteColor("wheel-idle-color", rgb[0], rgb[1], rgb[2]);
+            }
 
             // ES/Old wheel modes
             if (_settings.WheelRpmIndicatorMode >= 0)
@@ -2563,6 +3151,59 @@ namespace MozaPlugin
                     _settings.WheelButtonsIdleEffect = profile.WheelButtonsIdleEffect;
                     _data.WheelButtonsIdleEffect = profile.WheelButtonsIdleEffect;
                 }
+                if (profile.WheelKnobIdleEffect >= 0)
+                {
+                    _settings.WheelKnobIdleEffect = profile.WheelKnobIdleEffect;
+                    _data.WheelKnobIdleEffect = profile.WheelKnobIdleEffect;
+                }
+                if (profile.WheelKnobLedMode >= 0)
+                {
+                    _settings.WheelKnobLedMode = profile.WheelKnobLedMode;
+                    _data.WheelKnobLedMode = profile.WheelKnobLedMode;
+                }
+                if (profile.WheelButtonsLedMode >= 0)
+                {
+                    _settings.WheelButtonsLedMode = profile.WheelButtonsLedMode;
+                    _data.WheelButtonsLedMode = profile.WheelButtonsLedMode;
+                }
+                if (profile.WheelTelemetryIdleSpeedMs >= 0)
+                {
+                    _settings.WheelTelemetryIdleSpeedMs = profile.WheelTelemetryIdleSpeedMs;
+                    _data.WheelTelemetryIdleSpeedMs = profile.WheelTelemetryIdleSpeedMs;
+                }
+                if (profile.WheelButtonsIdleSpeedMs >= 0)
+                {
+                    _settings.WheelButtonsIdleSpeedMs = profile.WheelButtonsIdleSpeedMs;
+                    _data.WheelButtonsIdleSpeedMs = profile.WheelButtonsIdleSpeedMs;
+                }
+                if (profile.WheelKnobIdleSpeedMs >= 0)
+                {
+                    _settings.WheelKnobIdleSpeedMs = profile.WheelKnobIdleSpeedMs;
+                    _data.WheelKnobIdleSpeedMs = profile.WheelKnobIdleSpeedMs;
+                }
+                if (profile.WheelSleepMode >= 0)
+                {
+                    _settings.WheelSleepMode = profile.WheelSleepMode;
+                    _data.WheelIdleMode = profile.WheelSleepMode;
+                }
+                if (profile.WheelSleepTimeoutMin >= 0)
+                {
+                    _settings.WheelSleepTimeoutMin = profile.WheelSleepTimeoutMin;
+                    _data.WheelIdleTimeout = profile.WheelSleepTimeoutMin;
+                }
+                if (profile.WheelSleepSpeedMs >= 0)
+                {
+                    _settings.WheelSleepSpeedMs = profile.WheelSleepSpeedMs;
+                    _data.WheelIdleSpeed = profile.WheelSleepSpeedMs;
+                }
+                if (profile.WheelSleepColor != null && profile.WheelSleepColor.Length > 0)
+                {
+                    _settings.WheelSleepColor = profile.WheelSleepColor;
+                    var rgb = MozaProfile.UnpackColor(profile.WheelSleepColor[0]);
+                    _data.WheelIdleColor[0] = rgb[0];
+                    _data.WheelIdleColor[1] = rgb[1];
+                    _data.WheelIdleColor[2] = rgb[2];
+                }
                 if (profile.WheelRpmBrightness >= 0)
                 {
                     _settings.WheelRpmBrightness = profile.WheelRpmBrightness;
@@ -2736,6 +3377,32 @@ namespace MozaPlugin
             // would corrupt the profile if concurrent device reads have overwritten _data
             // with stale values before the device has processed our writes.
             PersistSettings();
+
+            // Apply the profile-recorded dashboard preference last so the wheel
+            // settings are in place before we ask it to switch dashboards. If the
+            // wheel catalog isn't ready yet (cold start before configJson arrives),
+            // queue the switch for the next PollStatus tick.
+            if (!string.IsNullOrEmpty(profile.TelemetryDashboardKey))
+            {
+                bool applied = false;
+                try { applied = ApplyTelemetryDashboardFromProfile(profile); }
+                catch (Exception ex)
+                {
+                    MozaLog.Warn("[Moza] ApplyTelemetryDashboardFromProfile threw: " + ex.Message);
+                    applied = true; // don't infinitely retry on a broken key
+                }
+                if (!applied)
+                {
+                    _pendingProfileDashboardKey = profile.TelemetryDashboardKey;
+                    _pendingProfileDashboardKeyDeadlineTicks =
+                        DateTime.UtcNow.Add(PendingProfileKeyTimeout).Ticks;
+                    MozaLog.Debug("[Moza] Profile dashboard apply deferred — wheel state not ready");
+                }
+                else
+                {
+                    _pendingProfileDashboardKey = null;
+                }
+            }
         }
 
         private void ApplyBaseSettingIfSet(int value, Action<int> setData, params string[] commands)
@@ -2790,6 +3457,33 @@ namespace MozaPlugin
                         _deviceManager.WriteSetting("wheel-telemetry-idle-effect", profile.WheelIdleEffect);
                     if (profile.WheelButtonsIdleEffect >= 0)
                         _deviceManager.WriteSetting("wheel-buttons-idle-effect", profile.WheelButtonsIdleEffect);
+                    if (profile.WheelKnobIdleEffect >= 0)
+                        _deviceManager.WriteSetting("wheel-knob-idle-effect", profile.WheelKnobIdleEffect);
+                    if (profile.WheelKnobLedMode >= 0)
+                        _deviceManager.WriteSetting("wheel-knob-led-mode", profile.WheelKnobLedMode);
+                    if (profile.WheelButtonsLedMode >= 0)
+                        _deviceManager.WriteSetting("wheel-buttons-led-mode", profile.WheelButtonsLedMode);
+                    if (profile.WheelIdleEffect >= 0 && profile.WheelTelemetryIdleSpeedMs >= 0)
+                        _deviceManager.WriteArray("wheel-telemetry-idle-interval",
+                            BuildIdleIntervalPayload(profile.WheelIdleEffect, profile.WheelTelemetryIdleSpeedMs));
+                    if (profile.WheelButtonsIdleEffect >= 0 && profile.WheelButtonsIdleSpeedMs >= 0)
+                        _deviceManager.WriteArray("wheel-buttons-idle-interval",
+                            BuildIdleIntervalPayload(profile.WheelButtonsIdleEffect, profile.WheelButtonsIdleSpeedMs));
+                    if (profile.WheelKnobIdleEffect >= 0 && profile.WheelKnobIdleSpeedMs >= 0)
+                        _deviceManager.WriteArray("wheel-knob-idle-interval",
+                            BuildIdleIntervalPayload(profile.WheelKnobIdleEffect, profile.WheelKnobIdleSpeedMs));
+                    if (profile.WheelSleepMode >= 0)
+                        _deviceManager.WriteSetting("wheel-idle-mode", profile.WheelSleepMode);
+                    if (profile.WheelSleepTimeoutMin >= 0)
+                        _deviceManager.WriteSetting("wheel-idle-timeout", profile.WheelSleepTimeoutMin);
+                    if (profile.WheelSleepMode >= 0 && profile.WheelSleepSpeedMs >= 0)
+                        _deviceManager.WriteArray("wheel-idle-speed",
+                            BuildIdleIntervalPayload(profile.WheelSleepMode, profile.WheelSleepSpeedMs));
+                    if (profile.WheelSleepColor != null && profile.WheelSleepColor.Length > 0)
+                    {
+                        var rgb = MozaProfile.UnpackColor(profile.WheelSleepColor[0]);
+                        _deviceManager.WriteColor("wheel-idle-color", rgb[0], rgb[1], rgb[2]);
+                    }
                     if (profile.WheelRpmBrightness >= 0)
                         _deviceManager.WriteSetting("wheel-rpm-brightness", profile.WheelRpmBrightness);
                     if (profile.WheelButtonsBrightness >= 0)
@@ -2860,6 +3554,21 @@ namespace MozaPlugin
             }
         }
 
+        // Build the 3-byte payload shared by per-effect speed commands:
+        //   wheel-{telemetry,buttons,knob}-idle-interval — `[effect_id, ms_msb, ms_lsb]`
+        //   wheel-idle-speed                              — `[mode,      ms_msb, ms_lsb]`
+        // The first byte selects which effect/mode the slider applies to;
+        // the remaining two bytes encode the ms value big-endian.
+        private static byte[] BuildIdleIntervalPayload(int selector, int ms)
+        {
+            ms = System.Math.Max(0, System.Math.Min(0xFFFF, ms));
+            return new byte[] {
+                (byte)(selector & 0xFF),
+                (byte)((ms >> 8) & 0xFF),
+                (byte)(ms & 0xFF),
+            };
+        }
+
         private void WriteColorArray(int[]? packedColors, string commandPrefix, int count)
         {
             if (packedColors == null) return;
@@ -2872,45 +3581,69 @@ namespace MozaPlugin
         }
 
         /// <summary>
-        /// Push per-knob background + primary colors to the wheel. No-op unless the
-        /// active wheel model exposes knob LED rings (W17 CS Pro / W18 KS Pro).
-        /// Source arrays are packed R&lt;&lt;16|G&lt;&lt;8|B per knob; null = skip.
+        /// Push per-knob "bulk Inactive default" + per-knob "Active" colors to the
+        /// wheel. No-op unless the active wheel model exposes knob LED rings
+        /// (W17 CS Pro / W18 KS Pro). Source arrays are packed R&lt;&lt;16|G&lt;&lt;8|B
+        /// per knob; null = skip. The bulk Inactive value for each knob is fanned
+        /// out to all of that knob's ring LEDs via the per-LED wheel-knob-bg-color{N}
+        /// writes (cmd 0x1F 0x03 0x01); the Active value drives cmd 0x27 ROLE=0.
         /// </summary>
-        private void WriteKnobColors(int[]? packedBackground, int[]? packedPrimary)
+        private void WriteKnobColors(int[]? packedBulkInactive, int[]? packedActive)
         {
-            int knobs = WheelModelInfo?.KnobCount ?? 0;
+            var model = WheelModelInfo;
+            int knobs = model?.KnobCount ?? 0;
             if (knobs <= 0) return;
-            WriteKnobRoleArray(packedBackground, "bg-color", knobs);
-            WriteKnobRoleArray(packedPrimary,    "primary-color", knobs);
-        }
 
-        private void WriteKnobRoleArray(int[]? packedColors, string roleSuffix, int count)
-        {
-            if (packedColors == null) return;
-            int len = Math.Min(packedColors.Length, count);
-            for (int i = 0; i < len; i++)
+            // Per-knob Active LED color (cmd 0x27 ROLE=0).
+            if (packedActive != null)
             {
-                var rgb = MozaProfile.UnpackColor(packedColors[i]);
-                _deviceManager.WriteColor($"wheel-knob{i + 1}-{roleSuffix}", rgb[0], rgb[1], rgb[2]);
+                int len = Math.Min(packedActive.Length, knobs);
+                for (int i = 0; i < len; i++)
+                {
+                    var rgb = MozaProfile.UnpackColor(packedActive[i]);
+                    _deviceManager.WriteColor($"wheel-knob{i + 1}-active-color", rgb[0], rgb[1], rgb[2]);
+                }
+            }
+
+            // Per-knob "bulk Inactive default" — fan one color out to all of the
+            // knob's ring LEDs via per-LED writes (cmd 0x1F 0x03 0x01).
+            if (packedBulkInactive != null
+                && model?.KnobRingLeds != null
+                && IsWheelLedGroupPresent(3))
+            {
+                int kLen = Math.Min(packedBulkInactive.Length, knobs);
+                for (int k = 0; k < kLen; k++)
+                {
+                    var rgb = MozaProfile.UnpackColor(packedBulkInactive[k]);
+                    int startIdx = model.KnobRingStartIndex(k);
+                    int count = model.KnobRingLeds[k];
+                    for (int i = 0; i < count; i++)
+                    {
+                        int ledIdx = startIdx + i;
+                        _deviceManager.WriteColor($"wheel-knob-bg-color{ledIdx + 1}", rgb[0], rgb[1], rgb[2]);
+                    }
+                }
             }
         }
 
         /// <summary>
-        /// Push Group 3 per-LED ring colors to the wheel. No-op unless the active
-        /// wheel model has KnobRingLeds and Group 3 is present.
+        /// Push per-LED ring colors (cmd 0x1F 0x03 0x01) to the wheel. No-op
+        /// unless the active wheel model has KnobRingLeds and Group 3 is present.
+        /// `packedColors` is indexed across all knobs contiguously (LED 1..56);
+        /// brightness &lt; 0 skips the brightness write.
         /// </summary>
         private void WriteKnobRingColors(int[]? packedColors, int brightness)
         {
             var model = WheelModelInfo;
             if (model?.KnobRingLeds == null || !IsWheelLedGroupPresent(3)) return;
             if (brightness >= 0)
-                _deviceManager.WriteSetting("wheel-group3-brightness", brightness);
+                _deviceManager.WriteSetting("wheel-knob-brightness", brightness);
             if (packedColors == null) return;
             int total = Math.Min(packedColors.Length, model.KnobRingLedTotal);
             for (int i = 0; i < total; i++)
             {
                 var rgb = MozaProfile.UnpackColor(packedColors[i]);
-                _deviceManager.WriteColor($"wheel-group3-color{i + 1}", rgb[0], rgb[1], rgb[2]);
+                _deviceManager.WriteColor($"wheel-knob-bg-color{i + 1}", rgb[0], rgb[1], rgb[2]);
             }
         }
 
@@ -2952,6 +3685,33 @@ namespace MozaPlugin
                         _deviceManager.WriteSetting("wheel-telemetry-idle-effect", extSettings.WheelIdleEffect);
                     if (extSettings.WheelButtonsIdleEffect >= 0)
                         _deviceManager.WriteSetting("wheel-buttons-idle-effect", extSettings.WheelButtonsIdleEffect);
+                    if (extSettings.WheelKnobIdleEffect >= 0)
+                        _deviceManager.WriteSetting("wheel-knob-idle-effect", extSettings.WheelKnobIdleEffect);
+                    if (extSettings.WheelKnobLedMode >= 0)
+                        _deviceManager.WriteSetting("wheel-knob-led-mode", extSettings.WheelKnobLedMode);
+                    if (extSettings.WheelButtonsLedMode >= 0)
+                        _deviceManager.WriteSetting("wheel-buttons-led-mode", extSettings.WheelButtonsLedMode);
+                    if (extSettings.WheelIdleEffect >= 0 && extSettings.WheelTelemetryIdleSpeedMs >= 0)
+                        _deviceManager.WriteArray("wheel-telemetry-idle-interval",
+                            BuildIdleIntervalPayload(extSettings.WheelIdleEffect, extSettings.WheelTelemetryIdleSpeedMs));
+                    if (extSettings.WheelButtonsIdleEffect >= 0 && extSettings.WheelButtonsIdleSpeedMs >= 0)
+                        _deviceManager.WriteArray("wheel-buttons-idle-interval",
+                            BuildIdleIntervalPayload(extSettings.WheelButtonsIdleEffect, extSettings.WheelButtonsIdleSpeedMs));
+                    if (extSettings.WheelKnobIdleEffect >= 0 && extSettings.WheelKnobIdleSpeedMs >= 0)
+                        _deviceManager.WriteArray("wheel-knob-idle-interval",
+                            BuildIdleIntervalPayload(extSettings.WheelKnobIdleEffect, extSettings.WheelKnobIdleSpeedMs));
+                    if (extSettings.WheelSleepMode >= 0)
+                        _deviceManager.WriteSetting("wheel-idle-mode", extSettings.WheelSleepMode);
+                    if (extSettings.WheelSleepTimeoutMin >= 0)
+                        _deviceManager.WriteSetting("wheel-idle-timeout", extSettings.WheelSleepTimeoutMin);
+                    if (extSettings.WheelSleepMode >= 0 && extSettings.WheelSleepSpeedMs >= 0)
+                        _deviceManager.WriteArray("wheel-idle-speed",
+                            BuildIdleIntervalPayload(extSettings.WheelSleepMode, extSettings.WheelSleepSpeedMs));
+                    if (extSettings.WheelSleepColor != null && extSettings.WheelSleepColor.Length > 0)
+                    {
+                        var rgb = MozaProfile.UnpackColor(extSettings.WheelSleepColor[0]);
+                        _deviceManager.WriteColor("wheel-idle-color", rgb[0], rgb[1], rgb[2]);
+                    }
                     if (extSettings.WheelRpmBrightness >= 0)
                         _deviceManager.WriteSetting("wheel-rpm-brightness", extSettings.WheelRpmBrightness);
                     if (extSettings.WheelButtonsBrightness >= 0)

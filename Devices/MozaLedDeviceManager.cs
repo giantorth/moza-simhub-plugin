@@ -43,7 +43,15 @@ namespace MozaPlugin.Devices
         // every frame (RPM activity keeps the RPM controller alive but not the knob
         // controller, which forgets its state if not periodically retold).
         private DateTime _lastKnobSendTime = DateTime.MinValue;
+        // Last time SimHub fed a non-black knob frame. The keepalive runs only
+        // while this is recent — once SimHub goes idle for KnobIdleTimeoutSeconds
+        // the keepalive pauses, letting the wheel revert to its stored static
+        // Active / per-LED background colors (wheel-knob{N}-active-color +
+        // wheel-knob-bg-color{N}). Resumes the moment SimHub drives a knob
+        // active again.
+        private DateTime _lastKnobActivityTime = DateTime.MinValue;
         private const double KeepaliveIntervalSeconds = 1.0;
+        private const double KnobIdleTimeoutSeconds = 30.0;
 
         // ES wheel wake-up
         private bool _ledsAwake;
@@ -96,6 +104,7 @@ namespace MozaPlugin.Devices
                 _lastBrightness = -1;
                 _lastButtonsBrightness = -1;
                 _lastKnobSendTime = DateTime.MinValue;
+                _lastKnobActivityTime = DateTime.MinValue;
                 _ledsAwake = false;
                 OnDisconnect?.Invoke(this, EventArgs.Empty);
             }
@@ -402,6 +411,12 @@ namespace MozaPlugin.Devices
                             knobBitmask |= (1 << i);
                     }
 
+                    // Stamp activity whenever SimHub is actively driving knobs. Used
+                    // by the keepalive below to pause once SimHub goes idle so the
+                    // wheel can show its stored static primary/background colors.
+                    if (knobBitmask != 0)
+                        _lastKnobActivityTime = DateTime.UtcNow;
+
                     // Skip sending when all knobs are black and we haven't previously
                     // sent a non-zero bitmask — avoids waking the knob LED controller.
                     bool knobsActive = knobBitmask != 0 || _lastKnobBitmask > 0;
@@ -475,10 +490,19 @@ namespace MozaPlugin.Devices
                 // else moved — under live RPM that never happens. Refresh knob
                 // frame on its own cadence so the knob LED controller doesn't
                 // forget the state.
+                //
+                // Gated on KnobIdleTimeoutSeconds since the last non-black knob
+                // frame from SimHub: while telemetry is flowing the wheel needs
+                // the periodic refresh, but once SimHub goes idle the wheel
+                // must be allowed to revert to its stored static primary /
+                // background colors (otherwise the user-configured "active"
+                // colour set via wheel-knob{N}-active-color is invisible).
+                // Resumes automatically the next frame SimHub drives a knob.
                 if (isNewWheel && _lastKnobs != null && modelInfo?.KnobCount > 0)
                 {
                     var now = DateTime.UtcNow;
-                    if ((now - _lastKnobSendTime).TotalSeconds >= KeepaliveIntervalSeconds)
+                    bool dataFlowing = (now - _lastKnobActivityTime).TotalSeconds <= KnobIdleTimeoutSeconds;
+                    if (dataFlowing && (now - _lastKnobSendTime).TotalSeconds >= KeepaliveIntervalSeconds)
                     {
                         _lastKnobSendTime = now;
                         int knobCount = Math.Min(_lastKnobs.Length, modelInfo.KnobCount);

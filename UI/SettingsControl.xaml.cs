@@ -240,6 +240,17 @@ namespace MozaPlugin
             TorqueSlider.Value = Clamp(_data.Torque, 50, 100);
             TorqueValue.Text = $"{_data.Torque}%";
 
+            // Performance output (cmd 0x1E base = TempStrategy): 0 = Reserved, 1 = Full
+            int perf = _data.TempStrategy;
+            if (perf >= 0 && perf < PerformanceOutputCombo.Items.Count)
+                PerformanceOutputCombo.SelectedIndex = perf;
+            // Gearshift vibration intensity (cmd 0x2E base): 0..5
+            int gs = _data.GearshiftVibration;
+            if (gs < 0) gs = 0;
+            if (gs > 5) gs = 5;
+            GearshiftVibrationSlider.Value = gs;
+            GearshiftVibrationValue.Text = gs.ToString();
+
             double spd = _data.Speed / 10.0;
             SpeedSlider.Value = Clamp(spd, 0, 200);
             SpeedValue.Text = $"{spd:F0}%";
@@ -327,6 +338,26 @@ namespace MozaPlugin
             TorqueValue.Text = $"{val}%";
             _data.Torque = val;
             _device.WriteSetting("base-torque", val);
+            _plugin.SaveSettings();
+        }
+
+        private void PerformanceOutputCombo_Changed(object sender, SelectionChangedEventArgs e)
+        {
+            if (_suppressEvents) return;
+            int val = PerformanceOutputCombo.SelectedIndex;
+            if (val < 0) return;
+            _data.TempStrategy = val;
+            _device.WriteSetting("base-temp-strategy", val);
+            _plugin.SaveSettings();
+        }
+
+        private void GearshiftVibrationSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (_suppressEvents) return;
+            int val = (int)Math.Round(e.NewValue);
+            GearshiftVibrationValue.Text = val.ToString();
+            _data.GearshiftVibration = val;
+            _device.WriteSetting("base-gearshift-vibration", val);
             _plugin.SaveSettings();
         }
 
@@ -1758,9 +1789,9 @@ namespace MozaPlugin
                              LiveColorCmd = "wheel-telemetry-rpm-colors", LiveBitmaskCmd = "wheel-send-rpm-telemetry" },
             new DiagLedCfg { Slot = 1, Title = "Group 1 — Button",   MaxLeds = 16, ColorCmdPrefix = "wheel-button-color", BrightnessCmd = "wheel-buttons-brightness", ModeCmd = null,
                              LiveColorCmd = "wheel-telemetry-button-colors", LiveBitmaskCmd = "wheel-send-buttons-telemetry" },
-            new DiagLedCfg { Slot = 2, Title = "Group 2 — Single",   MaxLeds = 28, ColorCmdPrefix = "wheel-group2-color", BrightnessCmd = "wheel-group2-brightness",  ModeCmd = "wheel-group2-mode" },
-            new DiagLedCfg { Slot = 3, Title = "Group 3 — Rotary",   MaxLeds = 56, ColorCmdPrefix = "wheel-group3-color", BrightnessCmd = "wheel-group3-brightness",  ModeCmd = "wheel-group3-mode" },
-            new DiagLedCfg { Slot = 4, Title = "Group 4 — Ambient",  MaxLeds = 12, ColorCmdPrefix = "wheel-group4-color", BrightnessCmd = "wheel-group4-brightness",  ModeCmd = "wheel-group4-mode" },
+            new DiagLedCfg { Slot = 2, Title = "Group 2 — Single",   MaxLeds = 28, ColorCmdPrefix = "wheel-single-color",  BrightnessCmd = "wheel-single-brightness",  ModeCmd = "wheel-single-mode" },
+            new DiagLedCfg { Slot = 3, Title = "Group 3 — Knob ring", MaxLeds = 56, ColorCmdPrefix = "wheel-knob-bg-color", BrightnessCmd = "wheel-knob-brightness",    ModeCmd = "wheel-knob-led-mode" },
+            new DiagLedCfg { Slot = 4, Title = "Group 4 — Ambient",  MaxLeds = 12, ColorCmdPrefix = "wheel-ambient-color", BrightnessCmd = "wheel-ambient-brightness", ModeCmd = "wheel-ambient-mode" },
             new DiagLedCfg { Slot = 5, Title = "Flags (Meter device)", MaxLeds = 6, ColorCmdPrefix = "dash-flag-color",   BrightnessCmd = "dash-flags-brightness",    ModeCmd = null },
         };
 

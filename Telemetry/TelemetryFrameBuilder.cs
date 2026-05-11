@@ -52,25 +52,41 @@ namespace MozaPlugin.Telemetry
             int dataLen = profile.TotalBytes;
             _frameBuffer = new byte[HeaderLen + dataLen + ChecksumLen];
 
-            // Bind one resolver per channel. Per-frame cost is one delegate invoke
-            // instead of a dictionary lookup.
+            // Bind one resolver per channel. Each resolver captures the
+            // ChannelDefinition reference (not just the path snapshot) so that
+            // user-driven mapping edits — which mutate ch.SimHubProperty in
+            // place via DashboardProfileStore.ApplyUserMappings — take effect
+            // on the very next frame without rebuilding the frame builder.
+            // The wire format (channel indices, compression, bit widths) is
+            // unchanged by a mapping edit, so we don't need a tier-def restart;
+            // we're just rewiring the host-side value source. Per-frame cost
+            // is two property reads + one branch on top of the existing
+            // resolver dispatch — sub-µs even on long tier lists.
             _resolvers = new Func<GameDataSnapshot, double>[profile.Channels.Count];
             for (int i = 0; i < profile.Channels.Count; i++)
             {
                 var ch = profile.Channels[i];
-                if (!string.IsNullOrEmpty(ch.SimHubProperty) && propertyResolver != null)
+                if (propertyResolver != null)
                 {
-                    var path = ch.SimHubProperty;
                     var resolver = propertyResolver;
-                    double scale = ch.SimHubPropertyScale == 0.0 ? 1.0 : ch.SimHubPropertyScale;
-                    _resolvers[i] = scale == 1.0
-                        ? (_ => resolver(path))
-                        : (_ => resolver(path) * scale);
+                    var channel = ch;
+                    _resolvers[i] = s =>
+                    {
+                        var p = channel.SimHubProperty;
+                        if (!string.IsNullOrEmpty(p))
+                        {
+                            double scale = channel.SimHubPropertyScale;
+                            if (scale == 0.0) scale = 1.0;
+                            double v = resolver(p);
+                            return scale == 1.0 ? v : v * scale;
+                        }
+                        return s.GetField(channel.SimHubField);
+                    };
                 }
                 else
                 {
-                    var field = ch.SimHubField;
-                    _resolvers[i] = s => s.GetField(field);
+                    var channel = ch;
+                    _resolvers[i] = s => s.GetField(channel.SimHubField);
                 }
             }
 

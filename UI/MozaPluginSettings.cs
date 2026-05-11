@@ -22,6 +22,28 @@ namespace MozaPlugin
         public int WheelIdleEffect { get => _wheelIdleEffect; set => _wheelIdleEffect = value; }
         private volatile int _wheelButtonsIdleEffect = -1;
         public int WheelButtonsIdleEffect { get => _wheelButtonsIdleEffect; set => _wheelButtonsIdleEffect = value; }
+        private volatile int _wheelKnobIdleEffect = -1;
+        public int WheelKnobIdleEffect { get => _wheelKnobIdleEffect; set => _wheelKnobIdleEffect = value; }
+        private volatile int _wheelKnobLedMode = -1;
+        public int WheelKnobLedMode { get => _wheelKnobLedMode; set => _wheelKnobLedMode = value; }
+        private volatile int _wheelButtonsLedMode = -1;
+        public int WheelButtonsLedMode { get => _wheelButtonsLedMode; set => _wheelButtonsLedMode = value; }
+        // Per-group idle-effect speed (cmd 0x1E [group] [effect_id] [BE u16 ms]).
+        // -1 = never set; UI defaults to 1000ms when first showing the slider.
+        private volatile int _wheelTelemetryIdleSpeedMs = -1;
+        public int WheelTelemetryIdleSpeedMs { get => _wheelTelemetryIdleSpeedMs; set => _wheelTelemetryIdleSpeedMs = value; }
+        private volatile int _wheelButtonsIdleSpeedMs = -1;
+        public int WheelButtonsIdleSpeedMs { get => _wheelButtonsIdleSpeedMs; set => _wheelButtonsIdleSpeedMs = value; }
+        private volatile int _wheelKnobIdleSpeedMs = -1;
+        public int WheelKnobIdleSpeedMs { get => _wheelKnobIdleSpeedMs; set => _wheelKnobIdleSpeedMs = value; }
+        // Wheel sleep-light settings (cmd 0x20/0x21/0x22/0x24).
+        private volatile int _wheelSleepMode = -1;        // cmd 0x20 — 1-byte mode enum
+        public int WheelSleepMode { get => _wheelSleepMode; set => _wheelSleepMode = value; }
+        private volatile int _wheelSleepTimeoutMin = -1;  // cmd 0x21 — BE u16 minutes
+        public int WheelSleepTimeoutMin { get => _wheelSleepTimeoutMin; set => _wheelSleepTimeoutMin = value; }
+        private volatile int _wheelSleepSpeedMs = -1;     // cmd 0x22 [mode] [BE u16 ms]
+        public int WheelSleepSpeedMs { get => _wheelSleepSpeedMs; set => _wheelSleepSpeedMs = value; }
+        public int[]? WheelSleepColor { get; set; }       // packed R<<16|G<<8|B (single)
 
         // Wheel input settings cached locally — newer KS-family firmware
         // silently drops read-back for these (cmd 9 / cmd 10), so we have to
@@ -210,12 +232,62 @@ namespace MozaPlugin
         // Whether to send the 0x2D/F5:31 sequence counter to the base (~30 Hz)
         public bool TelemetrySendSequenceCounter { get; set; } = true;
 
-        // Per-dashboard user channel mappings. Outer key = DashboardProfileStore.GetDashboardKey
-        // (e.g. "builtin:Formula 1" or "file:custom.mzdash:a1b2c3d4"). Inner key =
-        // channel URL (e.g. "v1/gameData/Rpm"). Value = SimHub property path
-        // (e.g. "DataCorePlugin.GameData.Rpms"). Empty value clears the override.
-        public Dictionary<string, Dictionary<string, string>> TelemetryChannelMappings { get; set; }
-            = new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
+        // LEGACY (pre-2026-05-09): single-level dashboard → url → property dict, NOT
+        // scoped per wheel and using a brittle dashboard key (file SHA1 changes on
+        // every PitHouse re-save; cleared on dropdown switch). Kept solely for
+        // one-shot migration into TelemetryChannelMappingsByWheel — see
+        // MigrateLegacyChannelMappingsIfNeeded(). New code never writes here.
+        public Dictionary<string, Dictionary<string, string>>? TelemetryChannelMappings { get; set; }
+
+        // Per-wheel, per-dashboard channel mappings.
+        //   Outer key:  Wheel MCU UID hex (24 lowercase chars from MozaData.WheelMcuUid),
+        //               or "" when UID is unknown (pre-detect / legacy migration).
+        //   Middle key: Dashboard identity from MozaPlugin.GetActiveDashboardKeyCandidates().
+        //               Preferred: "wheel:&lt;configJsonId&gt;" (stable, survives re-uploads).
+        //               Fallback:  "file:&lt;filename&gt;:&lt;sha1-first-8&gt;" (custom mzdash file).
+        //               Fallback:  "builtin:&lt;profileName&gt;" (embedded profile).
+        //   Inner key:  Channel URL (e.g. "v1/gameData/Rpm").
+        //   Value:      SimHub property path (e.g. "DataCorePlugin.GameData.Rpms").
+        //               Empty/missing = use Telemetry.json default.
+        public Dictionary<string, Dictionary<string, Dictionary<string, string>>> TelemetryChannelMappingsByWheel { get; set; }
+            = new Dictionary<string, Dictionary<string, Dictionary<string, string>>>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// One-shot migration: copy entries from the legacy single-level
+        /// <see cref="TelemetryChannelMappings"/> into <see cref="TelemetryChannelMappingsByWheel"/>
+        /// under the empty-wheel slot ("") so users upgrading from 2026-05-08 or earlier
+        /// don't lose their per-dashboard mappings. The legacy field is cleared after
+        /// migration so it serializes as null on the next save and never re-runs.
+        /// Returns true when a migration actually happened (caller should SaveSettings()).
+        /// </summary>
+        public bool MigrateLegacyChannelMappingsIfNeeded()
+        {
+            var legacy = TelemetryChannelMappings;
+            if (legacy == null || legacy.Count == 0) return false;
+
+            if (TelemetryChannelMappingsByWheel == null)
+                TelemetryChannelMappingsByWheel =
+                    new Dictionary<string, Dictionary<string, Dictionary<string, string>>>(StringComparer.OrdinalIgnoreCase);
+
+            if (!TelemetryChannelMappingsByWheel.TryGetValue("", out var emptyWheel))
+            {
+                emptyWheel = new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
+                TelemetryChannelMappingsByWheel[""] = emptyWheel;
+            }
+
+            foreach (var kv in legacy)
+            {
+                if (string.IsNullOrEmpty(kv.Key) || kv.Value == null) continue;
+                // Don't clobber an existing entry under the empty-wheel slot — first
+                // wins. (Subsequent loads of the legacy field shouldn't happen because
+                // we null it out below, but be defensive.)
+                if (emptyWheel.ContainsKey(kv.Key)) continue;
+                emptyWheel[kv.Key] = new Dictionary<string, string>(kv.Value, StringComparer.OrdinalIgnoreCase);
+            }
+
+            TelemetryChannelMappings = null;
+            return true;
+        }
 
         // Per-wheel-model setting slots. Keyed by wheel model name (from data.WheelModelName).
         // The flat Wheel* properties above represent the CURRENTLY-ACTIVE wheel; on save we
@@ -263,6 +335,7 @@ namespace MozaPlugin
                 slot.WheelTelemetryMode     = WheelTelemetryMode;
                 slot.WheelIdleEffect        = WheelIdleEffect;
                 slot.WheelButtonsIdleEffect = WheelButtonsIdleEffect;
+                slot.WheelKnobIdleEffect    = WheelKnobIdleEffect;
                 slot.WheelPaddlesMode       = WheelPaddlesMode;
                 slot.WheelClutchPoint       = WheelClutchPoint;
                 slot.WheelKnobMode          = WheelKnobMode;
@@ -278,6 +351,15 @@ namespace MozaPlugin
                 slot.WheelKnobPrimaryColors    = WheelKnobPrimaryColors;
                 slot.WheelKnobRingColors       = WheelKnobRingColors;
                 slot.WheelKnobRingBrightness   = WheelKnobRingBrightness;
+                slot.WheelKnobLedMode          = WheelKnobLedMode;
+                slot.WheelButtonsLedMode       = WheelButtonsLedMode;
+                slot.WheelTelemetryIdleSpeedMs = WheelTelemetryIdleSpeedMs;
+                slot.WheelButtonsIdleSpeedMs   = WheelButtonsIdleSpeedMs;
+                slot.WheelKnobIdleSpeedMs      = WheelKnobIdleSpeedMs;
+                slot.WheelSleepMode            = WheelSleepMode;
+                slot.WheelSleepTimeoutMin      = WheelSleepTimeoutMin;
+                slot.WheelSleepSpeedMs         = WheelSleepSpeedMs;
+                slot.WheelSleepColor           = WheelSleepColor;
             }
         }
 
@@ -291,6 +373,7 @@ namespace MozaPlugin
                 WheelTelemetryMode     = slot.WheelTelemetryMode;
                 WheelIdleEffect        = slot.WheelIdleEffect;
                 WheelButtonsIdleEffect = slot.WheelButtonsIdleEffect;
+                WheelKnobIdleEffect    = slot.WheelKnobIdleEffect;
                 WheelPaddlesMode       = slot.WheelPaddlesMode;
                 WheelClutchPoint       = slot.WheelClutchPoint;
                 WheelKnobMode          = slot.WheelKnobMode;
@@ -306,6 +389,15 @@ namespace MozaPlugin
                 WheelKnobPrimaryColors    = slot.WheelKnobPrimaryColors;
                 WheelKnobRingColors       = slot.WheelKnobRingColors;
                 WheelKnobRingBrightness   = slot.WheelKnobRingBrightness;
+                WheelKnobLedMode          = slot.WheelKnobLedMode;
+                WheelButtonsLedMode       = slot.WheelButtonsLedMode;
+                WheelTelemetryIdleSpeedMs = slot.WheelTelemetryIdleSpeedMs;
+                WheelButtonsIdleSpeedMs   = slot.WheelButtonsIdleSpeedMs;
+                WheelKnobIdleSpeedMs      = slot.WheelKnobIdleSpeedMs;
+                WheelSleepMode            = slot.WheelSleepMode;
+                WheelSleepTimeoutMin      = slot.WheelSleepTimeoutMin;
+                WheelSleepSpeedMs         = slot.WheelSleepSpeedMs;
+                WheelSleepColor           = slot.WheelSleepColor;
             }
         }
     }
@@ -320,6 +412,7 @@ namespace MozaPlugin
         public int WheelTelemetryMode { get; set; } = -1;
         public int WheelIdleEffect { get; set; } = -1;
         public int WheelButtonsIdleEffect { get; set; } = -1;
+        public int WheelKnobIdleEffect { get; set; } = -1;
         public int WheelPaddlesMode { get; set; } = -1;
         public int WheelClutchPoint { get; set; } = -1;
         public int WheelKnobMode { get; set; } = -1;
@@ -335,5 +428,14 @@ namespace MozaPlugin
         public int[]? WheelKnobPrimaryColors { get; set; }
         public int[]? WheelKnobRingColors { get; set; }
         public int WheelKnobRingBrightness { get; set; } = -1;
+        public int WheelKnobLedMode { get; set; } = -1;
+        public int WheelButtonsLedMode { get; set; } = -1;
+        public int WheelTelemetryIdleSpeedMs { get; set; } = -1;
+        public int WheelButtonsIdleSpeedMs { get; set; } = -1;
+        public int WheelKnobIdleSpeedMs { get; set; } = -1;
+        public int WheelSleepMode { get; set; } = -1;
+        public int WheelSleepTimeoutMin { get; set; } = -1;
+        public int WheelSleepSpeedMs { get; set; } = -1;
+        public int[]? WheelSleepColor { get; set; }
     }
 }
