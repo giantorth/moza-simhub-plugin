@@ -45,7 +45,7 @@ namespace MozaPlugin
                 GearshiftDebounceSlider.Value = dbMs;
                 GearshiftDebounceValue.Text = $"{dbMs} ms";
             }
-            EnableAb9Check.IsChecked = plugin.Settings.EnableAb9;
+            DisableSerialProbeFallbackCheck.IsChecked = plugin.Settings.DisableSerialProbeFallback;
             StartCaptureOnNextLaunchCheck.IsChecked = plugin.Settings.StartCaptureOnNextLaunch;
             // Reflect any in-flight capture (e.g. armed from a previous session
             // and started in MozaPlugin.Init) so the user sees Stop instead of
@@ -1136,12 +1136,11 @@ namespace MozaPlugin
             _plugin.SaveSettings();
         }
 
-        private void EnableAb9Check_Changed(object sender, RoutedEventArgs e)
+        private void DisableSerialProbeFallbackCheck_Changed(object sender, RoutedEventArgs e)
         {
             if (_suppressEvents) return;
-            // SetAb9Enabled writes the setting, persists, and disconnects on
-            // false — no separate SaveSettings call needed.
-            _plugin.SetAb9Enabled(EnableAb9Check.IsChecked == true);
+            _plugin.Settings.DisableSerialProbeFallback = DisableSerialProbeFallbackCheck.IsChecked == true;
+            _plugin.SaveSettings();
         }
 
         private void ClearAllSettingsButton_Click(object sender, RoutedEventArgs e)
@@ -1253,6 +1252,8 @@ namespace MozaPlugin
         {
             if (DiagWheelIdentityBox == null) return;
             DiagPluginBox.Text = BuildPluginInfoText();
+            if (DiagUsbDetectionBox != null)
+                DiagUsbDetectionBox.Text = BuildUsbDetectionText();
             DiagWheelIdentityBox.Text = BuildWheelIdentityText();
             DiagDisplayIdentityBox.Text = BuildDisplayIdentityText();
             DiagDashboardStateBox.Text = BuildDashboardStateText();
@@ -1270,6 +1271,46 @@ namespace MozaPlugin
         {
             var sb = new System.Text.StringBuilder();
             sb.Append($"Version:        {GetPluginVersion()}");
+            return sb.ToString();
+        }
+
+        private string BuildUsbDetectionText()
+        {
+            var sb = new System.Text.StringBuilder();
+
+            var ports = global::MozaPlugin.Protocol.MozaPortDiscovery.Instance.Enumerate();
+            string fallbackState;
+            if (_plugin.Settings.DisableSerialProbeFallback)
+                fallbackState = "DISABLED";
+            else if (ports.Count > 0)
+                fallbackState = "armed (idle — registry has MOZA device(s))";
+            else
+                fallbackState = "armed (active — registry empty)";
+            sb.AppendLine($"Source:         Registry  (probe fallback: {fallbackState})");
+
+            if (ports.Count == 0)
+            {
+                sb.AppendLine("Discovered:     (no MOZA devices in registry)");
+            }
+            else
+            {
+                sb.AppendLine($"Discovered:     {ports.Count} device(s)");
+                for (int i = 0; i < ports.Count; i++)
+                {
+                    var p = ports[i];
+                    sb.AppendLine($"  {p.PortName,-6} VID 0x{p.Vid:X4}  PID 0x{p.Pid:X4}  {p.FriendlyName}");
+                }
+            }
+
+            // Per-connection assignment lines so the user can see which physical
+            // port the wheelbase pipe and the AB9 pipe (if any) are bound to.
+            string wheelbasePort = _plugin.Connection?.LastPortName ?? "";
+            sb.Append("Assignments:    Wheelbase ");
+            sb.Append(string.IsNullOrEmpty(wheelbasePort) ? "(disconnected)" : "→ " + wheelbasePort);
+            string ab9Port = _plugin.Ab9Manager?.Connection?.LastPortName ?? "";
+            sb.Append("  |  AB9 ");
+            sb.Append(string.IsNullOrEmpty(ab9Port) ? "(disconnected)" : "→ " + ab9Port);
+            sb.AppendLine();
             return sb.ToString();
         }
 
@@ -1573,6 +1614,9 @@ namespace MozaPlugin
             var sb = new System.Text.StringBuilder();
             sb.AppendLine("=== Plugin ===");
             sb.AppendLine(DiagPluginBox.Text);
+            sb.AppendLine();
+            sb.AppendLine("=== USB detection ===");
+            sb.AppendLine(BuildUsbDetectionText());
             sb.AppendLine();
             sb.AppendLine("=== Wheel identity ===");
             sb.AppendLine(DiagWheelIdentityBox.Text);

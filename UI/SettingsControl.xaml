@@ -851,13 +851,13 @@
                         <TextBlock Text="Always send the LED bitmask with color updates, even if unchanged. Causes extra traffic so do not use unless required."
                                    Foreground="Gray" FontSize="11" Margin="0,4,0,0" TextWrapping="Wrap"/>
 
-                        <TextBlock Text="AB9 Shifter" Style="{StaticResource SectionHeader}"/>
+                        <TextBlock Text="USB Detection" Style="{StaticResource SectionHeader}"/>
                         <StackPanel Orientation="Horizontal" Margin="0,8">
-                            <TextBlock Text="Enable AB9 shifter detection" Style="{StaticResource SliderLabel}"/>
-                            <CheckBox x:Name="EnableAb9Check" VerticalAlignment="Center"
-                                      Checked="EnableAb9Check_Changed" Unchecked="EnableAb9Check_Changed"/>
+                            <TextBlock Text="Disable serial-probe fallback (advanced)" Style="{StaticResource SliderLabel}"/>
+                            <CheckBox x:Name="DisableSerialProbeFallbackCheck" VerticalAlignment="Center"
+                                      Checked="DisableSerialProbeFallbackCheck_Changed" Unchecked="DisableSerialProbeFallbackCheck_Changed"/>
                         </StackPanel>
-                        <TextBlock Text="Enable only if you have an AB9 shifter."
+                        <TextBlock Text="Default behaviour: Moza devices are discovered via Windows USB enumeration. If that returns nothing (Wine/Proton without USB enumeration, driver missing) the plugin falls back to writing a Moza protocol probe to every COM port. Check this to forbid the probe entirely — guarantees no Moza writes to non-Moza serial devices, but Moza hardware won't be found on systems where the registry path is unavailable."
                                    Foreground="Gray" FontSize="11" Margin="0,4,0,0" TextWrapping="Wrap"/>
 
                         <TextBlock Text="Dashboard Telemetry" Style="{StaticResource SectionHeader}"/>
@@ -1013,6 +1013,13 @@
                         <!-- Plugin info -->
                         <TextBlock Text="Plugin" FontWeight="SemiBold" Margin="0,0,0,6"/>
                         <TextBlock x:Name="DiagPluginBox" FontFamily="Consolas" FontSize="11"
+                                   TextWrapping="Wrap" Text="—" Margin="0,0,0,10"/>
+
+                        <Separator Margin="0,4,0,8"/>
+
+                        <!-- USB detection (registry-based discovery) -->
+                        <TextBlock Text="USB detection" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                        <TextBlock x:Name="DiagUsbDetectionBox" FontFamily="Consolas" FontSize="11"
                                    TextWrapping="Wrap" Text="—" Margin="0,0,0,10"/>
 
                         <Separator Margin="0,4,0,8"/>

@@ -104,14 +104,18 @@ namespace MozaPlugin
         public string LastWheelbasePort { get; set; } = "";
         public string LastAb9Port { get; set; } = "";
 
-        // AB9 shifter detection toggle. When false, plugin never probes / opens
-        // the AB9 port — defense for users with base-only setups where the
-        // AB9 manager would otherwise try to grab a COM port that may collide
-        // with the wheelbase under Wine. Off by default — most users don't
-        // have an AB9; AB9 owners flip this on once. Existing users with AB9
-        // hardware will need to enable it after upgrade (Newtonsoft fills
-        // missing JSON keys from the C# initializer = false).
-        public bool EnableAb9 { get; set; } = false;
+        // Hard opt-out of the serial-probe fallback. Default behaviour
+        // (false) is registry-first: if the registry-based MOZA USB
+        // discovery returns matching ports, those are used and no probe
+        // ever runs; if the registry returns zero MOZA devices total
+        // (Wine/Proton without USB enumeration, driver not loaded),
+        // the plugin falls back to writing a Moza protocol probe frame
+        // to every COM port on the system as a last resort. Setting
+        // this to true forbids the probe entirely — useful for the
+        // rare user who wants to guarantee no Moza writes ever reach
+        // a non-Moza serial peripheral. The previous ScanUnknownSerialPorts
+        // (and earlier EnableAb9) on-disk keys are silently ignored.
+        public bool DisableSerialProbeFallback { get; set; } = false;
 
         // Whether to automatically apply profile settings on launch
         public bool AutoApplyProfileOnLaunch { get; set; } = true;
