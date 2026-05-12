@@ -1,10 +1,8 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Collections;
 using System.IO.Ports;
 using System.Linq;
-using System.Reflection;
 using System.Threading;
 using MozaPlugin.Diagnostics;
 
@@ -59,11 +57,17 @@ namespace MozaPlugin.Protocol
         private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _activePorts =
             new System.Collections.Concurrent.ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
 
-        // Filter applied during port discovery. Receives the WMI-reported PID
-        // ("0x1000") or null for probe-based discovery where PID is unknown.
+        // Filter applied during port discovery. Receives the registry-reported
+        // PID ("0x1000") or null for probe-based discovery where PID is unknown.
         // Returns true to accept, false to skip. Default = accept all.
         private readonly Func<string?, bool>? _pidFilter;
         private readonly MozaProbeTarget _probeTarget;
+        // When set and returning true, FindMozaPort never falls back to the
+        // legacy serial-probe path even if the registry returned no MOZA
+        // devices. Default (null or false) leaves the fallback armed for the
+        // empty-registry case (Wine/Proton without USB enumeration, driver not
+        // loaded). Toggled by the user via MozaPluginSettings.DisableSerialProbeFallback.
+        private readonly Func<bool>? _disableProbeFallback;
 
         private volatile SerialPort? _port;
         private Thread? _readThread;
@@ -185,23 +189,52 @@ namespace MozaPlugin.Protocol
             }
         }
 
-        public MozaSerialConnection() : this(null, MozaProbeTarget.BaseAndHub) { }
+        public MozaSerialConnection() : this(null, MozaProbeTarget.BaseAndHub, null) { }
 
         /// <summary>
         /// Construct a serial connection scoped to a subset of MOZA composite
         /// devices. <paramref name="pidFilter"/> receives each candidate port's
-        /// PID (null under Wine probe discovery) and returns true to accept.
+        /// PID (null only on the legacy probe path where PID is unknown) and
+        /// returns true to accept.
         /// <paramref name="probeTarget"/> selects which probe frames are issued
-        /// when WMI is unavailable; AB9 callers must pass <see cref="MozaProbeTarget.Ab9"/>
-        /// so the AB9-specific identity probe is used (and so the wheelbase
-        /// hub probe never claims an AB9 port).
+        /// if and only if the legacy probe fallback runs; AB9 callers must pass
+        /// <see cref="MozaProbeTarget.Ab9"/>.
+        /// <paramref name="disableProbeFallback"/> hard-disables the legacy
+        /// probe fallback. Default (null) leaves it armed for the case where
+        /// the registry-based discovery returns zero MOZA devices total —
+        /// then the probe runs as a last resort so users on systems without
+        /// USB PnP enumeration (Wine/Proton, broken driver install) can still
+        /// connect. When the registry sees at least one MOZA device, the probe
+        /// is suppressed regardless of this flag — see <see cref="FindMozaPort"/>.
         /// </summary>
         public MozaSerialConnection(
             Func<string?, bool>? pidFilter,
-            MozaProbeTarget probeTarget = MozaProbeTarget.BaseAndHub)
+            MozaProbeTarget probeTarget = MozaProbeTarget.BaseAndHub,
+            Func<bool>? disableProbeFallback = null)
         {
             _pidFilter = pidFilter;
             _probeTarget = probeTarget;
+            _disableProbeFallback = disableProbeFallback;
+        }
+
+        /// <summary>
+        /// Format a 16-bit PID as the canonical "0x" + 4-hex-uppercase string
+        /// the rest of the plugin (PID filters, DiscoveredPid, device.json
+        /// templates) is built around.
+        /// </summary>
+        private static string FormatPid(ushort pid) =>
+            "0x" + pid.ToString("X4", System.Globalization.CultureInfo.InvariantCulture);
+
+        /// <summary>
+        /// Mark the hub as observed on this pipe. Called from MozaPlugin's
+        /// device-detect handler when a hub-group response arrives, so the
+        /// post-session 5-slot enumeration burst still fires for hub-attached
+        /// wheels even though we no longer learn about hubs from a probe.
+        /// Idempotent; latched true.
+        /// </summary>
+        public void MarkHubDetected()
+        {
+            HubProbeSucceeded = true;
         }
 
         public bool Connect()
@@ -214,146 +247,47 @@ namespace MozaPlugin.Protocol
             if (_running || _port != null)
                 Disconnect();
 
-            // Try the last known port first to avoid re-probing (which
-            // opens/closes the port and can reset the device under Wine).
-            // Check `_activePorts` first so a peer connection (wheelbase vs
-            // AB9 with the same saved port) doesn't grab a port already
-            // claimed — Wine allows the dual-open and silently splits the
-            // byte stream between the two readers, which then loses ~half of
-            // each wheel response (visible as missing session 0x09 chunks
-            // and false "AB9 shifter detected" on a base-only setup).
+            // Try the last known port first to avoid re-probing — but only if
+            // the registry still confirms the port belongs to a MOZA device of
+            // the right family. Identity is settled at the registry layer
+            // before we open anything, which eliminates two old hazards:
+            //  1. The cached port being reassigned to a different MOZA device
+            //     after a USB-port swap (e.g. wheelbase relocated to where the
+            //     AB9 used to be) — the legacy probe-based liveness check
+            //     would mis-validate because AB9's main dev id 0x12 collides
+            //     with the wheelbase Hub id and both reply 0x89 to the AB9
+            //     identity probe.
+            //  2. Ghost registry entries — MozaPortDiscovery filters those out
+            //     by cross-referencing against SerialPort.GetPortNames().
             //
-            // On native Windows, validate via WMI that the cached port
-            // still has a live MOZA device behind it. Moving USB ports causes
-            // Windows to assign a new COM number; the old COM entry may stay
-            // openable as a ghost device in the registry while the real device
-            // is on a different port — writes go into a black hole and the
-            // plugin never discovers the real port.
-            //
-            // When WMI is unavailable (Wine/Proton), open the cached port and
-            // send a quick liveness probe. If no frame arrives within 400ms,
-            // the port is dead — disconnect and let FindMozaPort re-discover.
-            // The brief open+close of the wrong port won't reset the real
-            // device (they're different ttys).
+            // The `_activePorts` peer-held check stays as defence-in-depth so
+            // a same-process sibling connection (wheelbase vs AB9 holding the
+            // same saved COM) can't double-open under Wine, which doesn't
+            // enforce O_EXCL on pty serial drivers.
             if (_lastPortName != null
                 && !_activePorts.ContainsKey(_lastPortName))
             {
-                var wmiPorts = FindAllMozaPorts();
-                bool wmiAvailable = wmiPorts.Count > 0;
-                bool cachedPortValid = false;
-                if (wmiAvailable)
+                if (MozaPortDiscovery.Instance.TryGetByPort(_lastPortName, out var info)
+                    && (_pidFilter == null || _pidFilter(FormatPid(info.Pid))))
                 {
-                    foreach (var (wmiPort, wmiPid) in wmiPorts)
-                    {
-                        if (string.Equals(wmiPort, _lastPortName, StringComparison.OrdinalIgnoreCase))
-                        {
-                            if (_pidFilter == null || _pidFilter(wmiPid))
-                            {
-                                cachedPortValid = true;
-                                if (wmiPid != null) DiscoveredPid = wmiPid;
-                            }
-                            else
-                            {
-                                MozaLog.Debug(
-                                    $"[Moza] Cached port {_lastPortName} is now PID={wmiPid ?? "?"} (filtered out)");
-                            }
-                            break;
-                        }
-                    }
-                }
-                else if (TryOpen(_lastPortName))
-                {
-                    // No WMI — liveness-probe the cached port. The read
-                    // thread is running; write the appropriate probe and
-                    // look for the expected response group **anywhere** in
-                    // the receive stream during the validation window, not
-                    // just at byte offset 0. The wheel commonly emits
-                    // boot-time debug-log frames (group 0x0E, ASCII text
-                    // like "MCU temp: 37.000 (°C)") immediately on open —
-                    // the legacy `_firstRxGroup` check saw that noise first
-                    // and rejected the (valid) port even though the probe
-                    // response arrived a few ms later in the same window.
-                    //
-                    // We also re-emit the probe a couple of times so a
-                    // probe lost in the debug-log flood gets a fresh chance.
-                    byte[] probe;
-                    byte expectedGroup;
-                    if (_probeTarget == MozaProbeTarget.Ab9)
-                    {
-                        probe = Ab9ProbeFrame;
-                        expectedGroup = Ab9RespGroup;
-                    }
-                    else
-                    {
-                        probe = BaseProbeFrame;
-                        expectedGroup = BaseRespGroup;
-                    }
-
-                    const int ValidationWindowMs = 1500;
-                    const int ProbeRepeatMs = 250;
-                    const int PollSliceMs = 25;
-
-                    int waited = 0;
-                    int nextProbeAt = 0;
-                    while (waited < ValidationWindowMs)
-                    {
-                        if (waited >= nextProbeAt)
-                        {
-                            try { _port?.Write(probe, 0, probe.Length); } catch { }
-                            nextProbeAt = waited + ProbeRepeatMs;
-                        }
-                        Thread.Sleep(PollSliceMs);
-                        waited += PollSliceMs;
-                        bool seen;
-                        lock (_rxGroupsSeen) seen = HaveSeenRxGroup(expectedGroup);
-                        if (seen) break;
-                    }
-
-                    bool seenExpected;
-                    lock (_rxGroupsSeen) seenExpected = HaveSeenRxGroup(expectedGroup);
-                    if (seenExpected)
-                    {
-                        cachedPortValid = true;
-                        MozaLog.Debug(
-                            $"[Moza] Cached port {_lastPortName} responded with 0x{expectedGroup:X2} " +
-                            $"within {waited}ms — confirmed");
-                    }
-                    else
-                    {
-                        int rxGroup = Volatile.Read(ref _firstRxGroup);
-                        string detail = rxGroup == 0
-                            ? "no response"
-                            : $"no 0x{expectedGroup:X2} seen (first was 0x{rxGroup:X2})";
-                        MozaLog.Debug(
-                            $"[Moza] Cached port {_lastPortName}: {detail} after {ValidationWindowMs}ms — stale, will re-discover");
-                        Disconnect();
-                    }
-                }
-
-                if (!cachedPortValid)
-                {
+                    DiscoveredPid = FormatPid(info.Pid);
+                    if (TryOpen(_lastPortName))
+                        return true;
                     MozaLog.Debug(
-                        $"[Moza] Clearing saved port {_lastPortName}");
+                        $"[Moza] Cached port {_lastPortName} validated but failed to open — clearing");
                     _lastPortName = null;
                 }
                 else
                 {
-                    // WMI path: port was validated but not yet opened.
-                    // Non-WMI path: already opened + probed, _running is true.
-                    if (!_running && !TryOpen(_lastPortName))
-                    {
-                        MozaLog.Debug(
-                            $"[Moza] Cached port {_lastPortName} validated but failed to open — clearing");
-                        _lastPortName = null;
-                    }
-                    else
-                    {
-                        return true;
-                    }
+                    MozaLog.Debug(
+                        $"[Moza] Cached port {_lastPortName} no longer matches a MOZA device in the registry — clearing");
+                    _lastPortName = null;
                 }
             }
 
-            var (portName, pid, viaHubProbe) = FindMozaPort(_pidFilter, _probeTarget, () => _shutdownRequested);
+            var (portName, pid, viaHubProbe) = FindMozaPort(
+                _pidFilter, _probeTarget, _lastPortName, _disableProbeFallback,
+                () => _shutdownRequested);
             if (portName == null)
                 return false;
 
@@ -879,93 +813,87 @@ namespace MozaPlugin.Protocol
         }
 
         /// <summary>
-        /// Enumerate every MOZA composite serial port currently visible via WMI,
-        /// returning <c>(portName, pid)</c> pairs in WMI iteration order. Empty
-        /// list when WMI is unavailable (probe-based discovery handles that path
-        /// inside <see cref="FindMozaPort"/>). Public so callers that need to
-        /// open more than one MOZA device — e.g. wheelbase + AB9 shifter — can
-        /// inspect the full topology before deciding which port belongs to whom.
+        /// Locate a MOZA device the connection should attach to. Two-stage chain:
+        ///   1. <see cref="MozaPortDiscovery"/> registry walk (the always-on
+        ///      primary path on Windows, and on Wine/Proton when the Wine
+        ///      USB subsystem populates the registry tree). Returns directly
+        ///      if any port satisfies the PID filter — no serial bytes
+        ///      written, identity settled at the registry layer.
+        ///   2. Legacy serial-probe fallback. Only runs when the registry
+        ///      returned <em>zero</em> MOZA devices total — that's the signal
+        ///      that the registry path itself is broken on this machine
+        ///      (Wine/Proton without USB enumeration, driver missing).
+        ///      When the registry returns at least one MOZA device but none
+        ///      matching <paramref name="pidFilter"/>, the probe is
+        ///      suppressed: the registry's "no" answer is trusted, which
+        ///      prevents the AB9-manager probe storm that disrupted non-MOZA
+        ///      serial peripherals on Windows users without an AB9 attached.
+        ///      <paramref name="disableProbeFallback"/> hard-disables the
+        ///      probe even in the empty-registry case (user opt-out via
+        ///      <c>DisableSerialProbeFallback</c>).
+        ///
+        /// <paramref name="preferredPort"/> tilts the registry result selection
+        /// toward the saved port when multiple MOZA devices of the same family
+        /// are present (multi-rig setups, or transient duplicate enumerations).
         /// </summary>
-        public static IReadOnlyList<(string PortName, string? Pid)> FindAllMozaPorts()
-        {
-            var results = new List<(string, string?)>();
-            try
-            {
-                var asm = Assembly.Load("System.Management");
-                var searcherType = asm.GetType("System.Management.ManagementObjectSearcher")!;
-                using var searcher = (IDisposable)Activator.CreateInstance(
-                    searcherType, "SELECT * FROM Win32_PnPEntity WHERE Caption LIKE '%(COM%'")!;
-                var collection = (IDisposable)searcherType.GetMethod("Get", Type.EmptyTypes)!.Invoke(searcher, null)!;
-                using (collection)
-                {
-                    foreach (var obj in (IEnumerable)collection)
-                    {
-                        var objType = obj.GetType();
-                        var prop = objType.GetProperty("Item", new[] { typeof(string) })!;
-                        var deviceId = prop.GetValue(obj, new object[] { "DeviceID" })?.ToString() ?? "";
-                        var caption = prop.GetValue(obj, new object[] { "Caption" })?.ToString() ?? "";
-
-                        if (deviceId.IndexOf("VID_346E", StringComparison.OrdinalIgnoreCase) < 0)
-                            continue;
-
-                        int comStart = caption.IndexOf("(COM");
-                        if (comStart < 0) continue;
-                        int comEnd = caption.IndexOf(")", comStart);
-                        if (comEnd <= comStart) continue;
-
-                        var portName = caption.Substring(comStart + 1, comEnd - comStart - 1);
-                        results.Add((portName, ExtractPid(deviceId)));
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                // WMI unavailable (Wine/Proton) or query failed. Caller falls back
-                // to probe path. Log at Debug — reconnect timer fires every 5 s,
-                // and Info-level here would flood the log on systems where
-                // System.Management can't load (e.g. SimHub plugin AppDomain
-                // without the assembly resolvable).
-                MozaLog.Debug(
-                    $"[Moza] WMI enumeration failed: {ex.GetType().Name}: {ex.Message}");
-            }
-            return results;
-        }
-
         private static (string? PortName, string? Pid, bool ViaHubProbe) FindMozaPort(
             Func<string?, bool>? pidFilter,
             MozaProbeTarget probeTarget,
+            string? preferredPort,
+            Func<bool>? disableProbeFallback,
             Func<bool>? cancel = null)
         {
-            // Try WMI-based discovery first (native Windows). Iterate every Moza
-            // port and pick the first one that satisfies the optional PID filter
-            // — keeps wheelbase code from accidentally opening an attached AB9
-            // shifter when both enumerate as VID_346E composite devices.
-            var wmiPorts = FindAllMozaPorts();
-            if (wmiPorts.Count > 0)
+            // Stage 1: registry walk. Take the full MOZA enumeration first
+            // so we can distinguish "the registry is working but our PID
+            // isn't there" from "the registry sees nothing at all".
+            var allRegistryPorts = MozaPortDiscovery.Instance.Enumerate();
+
+            // Filter through the existing string-based pidFilter contract.
+            var matchingPorts = pidFilter == null
+                ? allRegistryPorts
+                : (IReadOnlyList<MozaPortDiscovery.PortInfo>)allRegistryPorts
+                    .Where(p => pidFilter(FormatPid(p.Pid))).ToList();
+
+            if (matchingPorts.Count > 0)
             {
-                foreach (var (portName, pid) in wmiPorts)
+                MozaPortDiscovery.PortInfo chosen = matchingPorts[0];
+                if (!string.IsNullOrEmpty(preferredPort))
                 {
-                    if (pidFilter != null && !pidFilter(pid))
+                    for (int i = 0; i < matchingPorts.Count; i++)
                     {
-                        MozaLog.Debug(
-                            $"[Moza] Skipping {portName} PID={pid ?? "unknown"} (filtered)");
-                        continue;
+                        if (string.Equals(matchingPorts[i].PortName, preferredPort,
+                                          StringComparison.OrdinalIgnoreCase))
+                        {
+                            chosen = matchingPorts[i];
+                            break;
+                        }
                     }
-                    MozaLog.Debug(
-                        $"[Moza] Found Moza device on {portName} PID={pid ?? "unknown"} (WMI)");
-                    return (portName, pid, false);
                 }
-                // No match for this filter — silent at Debug level. Reconnect
-                // timer ticks every 5s, so Info would spam the log.
-                MozaLog.Debug("[Moza] No matching MOZA device found via WMI");
+                MozaLog.Debug(
+                    $"[Moza] Found MOZA device on {chosen.PortName} PID={FormatPid(chosen.Pid)} (registry)");
+                return (chosen.PortName, FormatPid(chosen.Pid), false);
+            }
+
+            // No matching port. Decide whether to probe.
+            if (allRegistryPorts.Count > 0)
+            {
+                // Registry is working — it sees at least one MOZA device but
+                // none for our filter. Trust that "no" answer; probing here
+                // would re-introduce the AB9 probe storm on Windows users
+                // who have a wheelbase but no AB9 attached.
+                MozaLog.Debug(
+                    $"[Moza] Registry has {allRegistryPorts.Count} MOZA device(s) but none match this connection's PID filter — skipping probe (trust registry)");
                 return (null, null, false);
             }
 
-            // WMI unavailable — drop to probe. Probe-target specific frames
-            // positively confirm device identity by response group, so AB9
-            // callers can use the probe path safely (no null-PID rejection
-            // needed any more — the AB9 probe only matches AB9 responses).
-            MozaLog.Debug("[Moza] WMI discovery returned no devices, trying probe");
+            if (disableProbeFallback?.Invoke() == true)
+            {
+                MozaLog.Debug(
+                    "[Moza] No MOZA device in registry; DisableSerialProbeFallback is on so probe is skipped");
+                return (null, null, false);
+            }
+
+            MozaLog.Debug("[Moza] No MOZA device in registry, falling back to serial probe");
 
             // Probe-based discovery: try opening each COM port and sending a Moza read command.
             // This works under Proton/Wine where COM ports are symlinked to /dev/ttyACM*.
@@ -1064,29 +992,6 @@ namespace MozaPlugin.Protocol
             // would flood the log when no device is plugged in.
             MozaLog.Debug("[Moza] No MOZA device found on any COM port");
             return (null, null, false);
-        }
-
-        /// <summary>
-        /// Extract the PID from a WMI DeviceID string.
-        /// Format: USB\VID_346E&amp;PID_XXXX\...
-        /// Returns the PID as a hex string like "0x0006", or null if not found.
-        /// </summary>
-        private static string? ExtractPid(string deviceId)
-        {
-            int pidIndex = deviceId.IndexOf("PID_", StringComparison.OrdinalIgnoreCase);
-            if (pidIndex < 0 || pidIndex + 8 > deviceId.Length)
-                return null;
-
-            var pidHex = deviceId.Substring(pidIndex + 4, 4);
-
-            // Validate it's actually hex
-            foreach (char c in pidHex)
-            {
-                if (!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f')))
-                    return null;
-            }
-
-            return "0x" + pidHex.ToUpperInvariant();
         }
 
         private enum ProbeKind { Base, Hub, Ab9 }

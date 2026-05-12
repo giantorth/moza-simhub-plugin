@@ -299,6 +299,7 @@ namespace MozaPlugin
         internal bool IsHubDetected => _hubDetected;
         internal bool IsAb9Detected => _ab9Detected;
         internal MozaAb9DeviceManager Ab9Manager => _ab9Manager;
+        internal MozaSerialConnection Connection => _connection;
 
         /// <summary>True if the wheel's internal Display sub-device responded to probe.
         /// Reads `_data.DisplayModelName` so detection works as soon as the wheel-detection
@@ -418,11 +419,18 @@ namespace MozaPlugin
                 RegisterProperties(pluginManager);
                 RegisterActions();
 
-                // Reject the AB9 shifter PID on the wheelbase pipe — both devices
-                // enumerate as VID_346E composite, and without this filter the
-                // wheelbase code path can grab the AB9 port and stall on probes.
-                // Probe-based discovery (PID = null, Wine/Proton) still works.
-                _connection = new MozaSerialConnection(pid => !MozaUsbIds.IsAb9Pid(pid));
+                // Reject the AB9 shifter PID on the wheelbase pipe — both
+                // devices enumerate as VID_346E composite. The registry-based
+                // discovery in MozaPortDiscovery routes by exact PID and never
+                // mis-claims the AB9 port. The serial-probe fallback (only
+                // armed when the registry returns zero MOZA devices total)
+                // honours the same filter.
+                Func<bool> disableProbeFallback = () =>
+                    _settings != null && _settings.DisableSerialProbeFallback;
+                _connection = new MozaSerialConnection(
+                    pid => !MozaUsbIds.IsAb9Pid(pid),
+                    MozaProbeTarget.BaseAndHub,
+                    disableProbeFallback);
                 if (!string.IsNullOrEmpty(_settings.LastWheelbasePort))
                     _connection.LastPortName = _settings.LastWheelbasePort;
                 _connection.MessageReceived += OnMessageReceived;
@@ -430,7 +438,7 @@ namespace MozaPlugin
 
                 _deviceManager = new MozaDeviceManager(_connection);
 
-                _ab9Manager = new MozaAb9DeviceManager();
+                _ab9Manager = new MozaAb9DeviceManager(disableProbeFallback);
                 if (!string.IsNullOrEmpty(_settings.LastAb9Port))
                     _ab9Manager.Connection.LastPortName = _settings.LastAb9Port;
                 _ab9Manager.MessageReceived += OnAb9MessageReceived;
@@ -464,7 +472,10 @@ namespace MozaPlugin
                     if (IsShuttingDown) return;
                     if (!_connection.IsConnected)
                         TryConnect();
-                    if (_settings.EnableAb9 && !_ab9Manager.IsConnected)
+                    // AB9 manager is always probed; with registry-based
+                    // discovery the attempt is microseconds when no AB9 is
+                    // enumerated, so there's no probe storm to defend against.
+                    if (!_ab9Manager.IsConnected)
                         TryConnectAb9();
                 };
                 _reconnectTimer.AutoReset = true;
@@ -872,29 +883,6 @@ namespace MozaPlugin
                 _wheelPollMisses = 0;
                 _lastKnownWheelModel = "";
                 MozaLog.Info("[Moza] Connection disabled");
-            }
-        }
-
-        /// <summary>
-        /// Toggle AB9 shifter detection at runtime. When disabled, disconnect
-        /// any active AB9 connection and clear detection state so the device
-        /// extension UI hides cleanly. When re-enabled, the reconnect timer
-        /// (5 s cadence) picks it up automatically — no explicit start needed.
-        /// </summary>
-        internal void SetAb9Enabled(bool enabled)
-        {
-            _settings.EnableAb9 = enabled;
-            SaveSettings();
-            if (enabled)
-            {
-                MozaLog.Info("[Moza] AB9 detection enabled — next reconnect tick will probe");
-            }
-            else
-            {
-                _ab9Detected = false;
-                _ab9SettingsApplied = false;
-                try { _ab9Manager?.Disconnect(); } catch { }
-                MozaLog.Info("[Moza] AB9 detection disabled — disconnected");
             }
         }
 
@@ -2009,11 +1997,6 @@ namespace MozaPlugin
         private void TryConnectAb9()
         {
             if (_ab9Manager == null) return;
-            // Defense-in-depth: skip if AB9 detection has been disabled by
-            // the user. The reconnect-timer gate at line 422 should already
-            // prevent the call, but guard here too in case future callers
-            // bypass that check.
-            if (!_settings.EnableAb9) return;
             if (_ab9Detected)
             {
                 // Connection dropped after a successful detection — clear so the
@@ -2819,6 +2802,13 @@ namespace MozaPlugin
                     {
                         _hubDetected = true;
                         _deviceManager.ReadSettings(HubReadCommands);
+                        // Mirror to the connection so TelemetrySender's hub-only
+                        // 5-slot enumeration burst still fires for hub-attached
+                        // wheels. Pre-registry, this flag was set by the probe
+                        // path (HubProbeSucceeded) at port-discovery time; with
+                        // registry-based discovery we don't probe, so the first
+                        // 0xE4 hub reply is now the trigger.
+                        try { _connection.MarkHubDetected(); } catch { }
                         MozaLog.Info("[Moza] Universal Hub detected");
                     }
                     break;
@@ -3886,7 +3876,12 @@ namespace MozaPlugin
 
                 Directory.CreateDirectory(deviceDir);
 
-                var pid = _connection.DiscoveredPid ?? "0x0004";
+                // Registry-based discovery always populates DiscoveredPid when
+                // we successfully connected. Fallback only matters if the file
+                // is generated before the first connect — use 0x0006 (R9
+                // wheelbase, the most common documented PID), not the prior
+                // 0x0004 placeholder that doesn't match any known device.
+                var pid = _connection.DiscoveredPid ?? "0x0006";
                 var json = GenerateWheelDeviceJson(guid, productName, rpmCount, hasFlagLeds, buttonCount, knobCount, pid);
                 File.WriteAllText(deviceJsonPath, json);
 
@@ -4064,10 +4059,13 @@ namespace MozaPlugin
                     }
                     else
                     {
-                        // Fallback: no PID discovered (e.g. probe-based discovery under Wine).
-                        // Use 0x0004 as a reasonable default.
-                        json = json.Replace("__DETECT_PID__", "0x0004");
-                        MozaLog.Debug($"[Moza] No PID discovered, using fallback 0x0004 for {deviceName}");
+                        // Fallback: no PID discovered (probe path under Wine
+                        // when registry discovery returned nothing). Use
+                        // 0x0006 (R9 wheelbase, the most common documented
+                        // PID) instead of the prior 0x0004 placeholder that
+                        // doesn't match any known device.
+                        json = json.Replace("__DETECT_PID__", "0x0006");
+                        MozaLog.Debug($"[Moza] No PID discovered, using fallback 0x0006 for {deviceName}");
                     }
 
                     File.WriteAllText(deviceJsonPath, json);
