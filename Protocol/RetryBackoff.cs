@@ -1,9 +1,8 @@
 namespace MozaPlugin.Protocol
 {
     /// <summary>
-    /// Retry-backoff schedules shared between the V0 (TelemetrySender) and V2
-    /// (MozaTelemetryHost) telemetry pipelines. Centralising prevents drift
-    /// when one pipeline's cadence is tuned and the other is forgotten.
+    /// Retry-backoff schedules for the telemetry pipeline. Centralised so
+    /// blind-retransmit cadences are tuned in one place.
     /// </summary>
     public static class RetryBackoff
     {

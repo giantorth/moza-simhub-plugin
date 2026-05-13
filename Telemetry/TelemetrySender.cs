@@ -51,7 +51,7 @@ namespace MozaPlugin.Telemetry
     /// Each tier in the MultiStreamProfile runs at its own rate derived from package_level.
     /// Flag bytes are 0x00 + tier index (sorted by package_level ascending).
     /// </summary>
-    public class TelemetrySender : IDisposable, global::MozaPlugin.Telemetry2.IMozaTelemetry
+    public class TelemetrySender : IDisposable
     {
         private readonly MozaSerialConnection _connection;
         private Timer? _sendTimer;
@@ -337,7 +337,7 @@ namespace MozaPlugin.Telemetry
         private bool _session09ReplySent;
         public WheelDashboardState? WheelState => _configJson.LastState;
 
-        // IMozaTelemetry impl — wraps WheelState.ConfigJsonList for the auto-test.
+        // Wraps WheelState.ConfigJsonList for the auto-test.
         public System.Collections.Generic.IReadOnlyList<string>? WheelReportedDashboards
             => _configJson.LastState?.ConfigJsonList;
 
@@ -569,11 +569,11 @@ namespace MozaPlugin.Telemetry
             }
         }
 
-        // Wire-trace phase marker (see IMozaTelemetry contract). Frame:
+        // Wire-trace phase marker. Frame:
         //   7e 03 55 55 4d 4b [phaseId] [chk]
         // grp=0x55 dev=0x55 not used by any wheel command — wheel ignores, but
-        // the frame lands in the SerialTrafficCapture wire trace so the v1↔v2
-        // diff tool can align both runs by phase id.
+        // the frame lands in the SerialTrafficCapture wire trace so post-mortem
+        // tooling can align runs by phase id.
         public void SendPhaseMarker(byte phaseId)
         {
             if (!_connection.IsConnected) return;

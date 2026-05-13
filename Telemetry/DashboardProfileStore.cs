@@ -6,7 +6,7 @@ using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
-using MozaPlugin.Telemetry2.Protocol;
+using MozaPlugin.Telemetry.Protocol;
 using Newtonsoft.Json.Linq;
 
 namespace MozaPlugin.Telemetry

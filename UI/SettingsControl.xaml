@@ -889,16 +889,6 @@
                         <TextBlock TextWrapping="Wrap" Foreground="Gray" FontSize="11" Margin="0,2,0,8"
                                    Text="Auto detects the wheel's firmware era from its handshake (catalog push and identity) and picks the matching wire protocol. Override only if telemetry stays broken — pick the era that matches your wheel hardware. Telemetry restarts automatically on change."/>
 
-                        <!-- Hidden for now: v2 telemetry pipeline not ready for general use
-                        <CheckBox x:Name="UseNewTelemetryPipelineCheck"
-                                  Content="Use greenfield Telemetry2 pipeline (experimental)"
-                                  Margin="0,8,0,4"
-                                  Checked="UseNewTelemetryPipeline_Changed"
-                                  Unchecked="UseNewTelemetryPipeline_Changed"/>
-                        <TextBlock TextWrapping="Wrap" Foreground="Gray" FontSize="11" Margin="0,0,0,8"
-                                   Text="Switch to the new layered telemetry pipeline (Telemetry2). Restart SimHub or toggle telemetry off/on to apply. Disable if you hit issues; the old pipeline stays the default until live verification clears."/>
-                        -->
-
                         <TextBlock Text="Reset" Style="{StaticResource SectionHeader}"/>
                         <StackPanel Orientation="Horizontal" Margin="0,8">
                             <Button x:Name="ClearAllSettingsButton" Content="Clear All Settings &amp; Profiles"

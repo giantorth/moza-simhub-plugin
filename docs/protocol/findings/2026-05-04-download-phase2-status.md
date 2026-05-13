@@ -41,11 +41,11 @@ h2b first 200 bytes (UTF-16LE decoded): `/home/moza/resource/dashes/Core/Core.mz
 
 b2h first 200 bytes (UTF-16LE-decoded path portion): `/tmp/_moza_filetransfer_tmp_1777646209820` — wheel acknowledges with its temp staging path. This is the 249B staging ack from HANDOFF.md, except in this capture the response continues past 249B into phase 2.
 
-## What this means for the refactor
+## Status
 
-The plan (`/home/rorth/.claude/plans/i-want-to-perform-resilient-wozniak.md`) is unchanged: download is deferred to a later milestone. `Telemetry2/Operations/DashboardDownloadOp` remains a placeholder that returns `NotSupported`. The existing `Telemetry/DashboardDownloader.cs` (924 LOC) stays in-tree under the old pipeline as reference material; the new pipeline doesn't ship with it.
+Download is deferred to a later milestone. The existing `Telemetry/DashboardDownloader.cs` (924 LOC) stays in-tree as reference material.
 
-What changes: when download work resumes, the starting point is `bridge-20260501-073603.jsonl`, not "needs fresh capture." The phase-2 protocol can be reverse-engineered from existing data.
+When download work resumes, the starting point is `bridge-20260501-073603.jsonl`, not "needs fresh capture." The phase-2 protocol can be reverse-engineered from existing data.
 
 ## Specific decoding tasks for the future download milestone
 

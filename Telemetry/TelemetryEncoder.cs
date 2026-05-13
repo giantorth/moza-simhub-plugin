@@ -1,4 +1,4 @@
-using MozaPlugin.Telemetry2.Protocol;
+using MozaPlugin.Telemetry.Protocol;
 
 namespace MozaPlugin.Telemetry
 {

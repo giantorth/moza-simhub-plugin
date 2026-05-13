@@ -1229,8 +1229,6 @@ namespace MozaPlugin
                 UploadDashboardCheck.IsChecked = s.TelemetryUploadDashboard;
                 DownloadDashboardCheck.IsChecked = s.TelemetryDownloadDashboard;
                 FirmwareEraCombo.SelectedIndex = (int)s.TelemetryWheelEra;
-                // Hidden for now: v2 telemetry pipeline UI not shown
-                // UseNewTelemetryPipelineCheck.IsChecked = s.UseNewTelemetryPipeline;
             }
         }
 
@@ -1263,18 +1261,6 @@ namespace MozaPlugin
             _plugin.SaveSettings();
             _plugin.RestartTelemetry();
         }
-
-        // Hidden for now: v2 telemetry pipeline UI not shown
-        // private void UseNewTelemetryPipeline_Changed(object sender, RoutedEventArgs e)
-        // {
-        //     if (_suppressEvents) return;
-        //     _plugin.Settings.UseNewTelemetryPipeline = UseNewTelemetryPipelineCheck.IsChecked == true;
-        //     _plugin.SaveSettings();
-        //     // The pipeline implementation is selected at MozaPlugin.Init() time. Toggling
-        //     // mid-session does not swap implementations; user must restart SimHub. We still
-        //     // call RestartTelemetry() so the active pipeline goes through Stop/Start.
-        //     _plugin.RestartTelemetry();
-        // }
 
         // ── Diagnostics tab ─────────────────────────────────────────────
         private void RefreshDiagnosticsTab()
@@ -1467,7 +1453,6 @@ namespace MozaPlugin
             if (ts == null && !_plugin.TelemetryEnabledForDiagnostics)
                 return "(telemetry not running)";
             var sb = new System.Text.StringBuilder();
-            sb.AppendLine($"Pipeline:           {(ts != null ? "OLD (TelemetrySender)" : "NEW (Telemetry2 host)")}");
             sb.AppendLine($"Enabled:            {_plugin.TelemetryEnabledForDiagnostics}");
             sb.AppendLine($"FramesSent:         {_plugin.FramesSentForDiagnostics}");
             var budget = _plugin.SerialBudgetForDiagnostics;

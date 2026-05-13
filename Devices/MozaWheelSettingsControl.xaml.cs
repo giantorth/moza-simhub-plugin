@@ -1141,8 +1141,7 @@ namespace MozaPlugin.Devices
             }
 
             bool enabled = _plugin.Settings.TelemetryEnabled;
-            // Both pipelines implement IMozaTelemetry.TestMode now.
-            var active = _plugin.ActiveTelemetry;
+            var active = _plugin.TelemetrySender;
             bool testMode = active?.TestMode ?? false;
             int framesSent = _plugin.FramesSentForDiagnostics;
 
@@ -1170,7 +1169,7 @@ namespace MozaPlugin.Devices
         private void UpdateTelemetryProfileInfo()
         {
             if (_plugin == null) return;
-            var profile = _plugin.ActiveTelemetry?.Profile;
+            var profile = _plugin.TelemetrySender?.Profile;
             if (profile == null || profile.Tiers.Count == 0)
             {
                 TelemetryProfileInfo.Text = "—";
@@ -1283,7 +1282,7 @@ namespace MozaPlugin.Devices
             if (selected == null) return;
 
             int idx = TelemetryProfileCombo.SelectedIndex;
-            var active = _plugin.ActiveTelemetry;
+            var active = _plugin.TelemetrySender;
             var state = _plugin.WheelStateForDiagnostics;
 
             // Wheel-reported mode: dropdown is configJsonList-ordered.
@@ -1494,7 +1493,7 @@ namespace MozaPlugin.Devices
         private void TelemetryTestStart_Click(object sender, RoutedEventArgs e)
         {
             if (_plugin == null) return;
-            var active = _plugin.ActiveTelemetry;
+            var active = _plugin.TelemetrySender;
             if (active == null) return;
             active.TestMode = true;
             if (!_plugin.Settings.TelemetryEnabled)
@@ -1509,7 +1508,7 @@ namespace MozaPlugin.Devices
         private void TelemetryTestStop_Click(object sender, RoutedEventArgs e)
         {
             if (_plugin == null) return;
-            var active = _plugin.ActiveTelemetry;
+            var active = _plugin.TelemetrySender;
             if (active == null) return;
             active.TestMode = false;
             if (!_plugin.Settings.TelemetryEnabled)
@@ -1662,7 +1661,7 @@ namespace MozaPlugin.Devices
             // share the same backing list (avoids N copies of a 500-entry list).
             var props = _plugin.GetAllSimHubPropertyNames();
 
-            var profile = _plugin.ActiveTelemetry?.Profile;
+            var profile = _plugin.TelemetrySender?.Profile;
             if (profile == null || profile.Tiers.Count == 0)
             {
                 // No mzdash loaded: fall back to whatever channel URLs the

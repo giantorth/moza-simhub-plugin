@@ -64,8 +64,7 @@ namespace MozaPlugin.Telemetry
         private volatile bool _dirListingRefreshed;
         public bool DirListingRefreshed => _dirListingRefreshed;
 
-        // Public surface (mirrors IMozaTelemetry's upload-related properties).
-        // TelemetrySender's setters/getters delegate here.
+        // Upload-related properties. TelemetrySender's setters/getters delegate here.
         public byte[]? MzdashContent { get; set; }
         public string MzdashName { get; set; } = "";
         public bool UploadDashboard { get; set; } = true;

@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using MozaPlugin.Protocol;
-using MozaPlugin.Telemetry2.Protocol;
+using MozaPlugin.Telemetry.Protocol;
 
 namespace MozaPlugin.Telemetry
 {

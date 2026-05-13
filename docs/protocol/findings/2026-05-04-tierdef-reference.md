@@ -1,6 +1,6 @@
-# PitHouse tier-def byte-exact reference (Phase 0 deliverable)
+# PitHouse tier-def byte-exact reference
 
-This is the test-fixture seed for the new `Telemetry2/Protocol/TierDefBuilder` byte-diff verification (Phase 6 of the refactor plan). It establishes the byte-exact "what PitHouse emits" reference per captured session, so the new builder can be written to match.
+Byte-exact "what PitHouse emits" reference per captured session — used as the source of truth when verifying that tier-def emission matches the wheel's expectations.
 
 It supersedes (in scope of byte-exactness) the earlier semantic analysis in `2026-05-03-pithouse-tierdef-reference.md`. The semantic facts established there still hold — this document provides the byte-level reference that the semantic rules predict.
 
@@ -178,9 +178,9 @@ The "what triggers section-2 emission" open question is still partially open —
 
 The "cumulative redeclaration on retransmit" open question doesn't matter for the new builder — chunks are content-identical retransmits via the blind-retransmit policy, and the canonical-stream view we use for byte-diff testing already deduplicates them.
 
-## Test-fixture rows for Phase 6 byte-diff verification
+## Test-fixture rows for byte-diff verification
 
-Each row below seeds one byte-diff test in `MozaPlugin.Tests/Telemetry2/Protocol/TierDefBuilderTests.cs`. The "expected bytes" column references the byte range in the canonical stream of the named capture file.
+Each row below identifies a byte-diff reference scenario. The "expected bytes" column references the byte range in the canonical stream of the named capture file.
 
 | # | Capture | Emission | Bytes (offset..end) | Scenario |
 |--:|---------|---------:|:--------------------:|:---------|

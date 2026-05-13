@@ -1,23 +1,18 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using MozaPlugin.Telemetry2;
 
 namespace MozaPlugin.Telemetry
 {
     /// <summary>
-    /// Single-switch auto test harness driven by <see cref="IMozaTelemetry"/>.
-    /// Pipeline-agnostic: identical flow runs against the old TelemetrySender and
-    /// the new MozaTelemetryHost so wire-trace diffs use the same trigger shape.
+    /// Single-switch auto test harness driven by <see cref="TelemetrySender"/>.
     ///
     /// Flow:
     ///   1. Wait for initial subscription to settle (SubscriptionGen ≥ 1).
     ///   2. Enable TestMode for <see cref="PreSwitchTestMs"/> — captures the
     ///      starting dashboard's wire-level test pattern as baseline.
     ///   3. Determine target slot: ALWAYS slot 1 (alphabetical second dash) when
-    ///      starting on slot 0, else slot 0. Deterministic for v1↔v2 wire-diff
-    ///      comparisons. Old behavior (alternating direction across runs) was
-    ///      removed because identical inputs are required for byte-exact diffs.
+    ///      starting on slot 0, else slot 0. Deterministic for wire-diff captures.
     ///   4. Resolve target profile via callback, then call SwitchToProfile
     ///      atomically (no race with a separate Profile-set + SendDashboardSwitch).
     ///   5. Wait for SubscriptionGen to bump (or timeout).
@@ -26,9 +21,9 @@ namespace MozaPlugin.Telemetry
     ///
     /// At every state transition we inject a phase-marker frame on the wire
     /// (grp=0x55 dev=0x55 cmd="MK" + phase id) via
-    /// <see cref="IMozaTelemetry.SendPhaseMarker(byte)"/>. The wheel ignores it;
-    /// the frame appears in the moza-wire-*.jsonl trace so the v1↔v2 diff tool
-    /// can align both runs by phase boundary.
+    /// <see cref="TelemetrySender.SendPhaseMarker(byte)"/>. The wheel ignores it;
+    /// the frame appears in the wire trace so post-mortem tooling can align
+    /// runs by phase boundary.
     ///
     /// <see cref="Reset"/> re-arms the harness for another run without reconstruction.
     /// Triggered by <see cref="UI.MozaPluginSettings.EnableAutoTestOnConnect"/>.
@@ -41,8 +36,8 @@ namespace MozaPlugin.Telemetry
             PostSwitchTest, Done,
         }
 
-        // Phase ids written to wire trace via IMozaTelemetry.SendPhaseMarker.
-        // Stable values so the diff tool (sim/diff_v1_v2.py) can search for them.
+        // Phase ids written to the wire trace via TelemetrySender.SendPhaseMarker.
+        // Stable values so post-mortem tooling can search for them.
         private const byte PhaseEnterIdle           = 0x10;
         private const byte PhaseEnterPreSwitchTest  = 0x11;
         private const byte PhaseEnterSwitchPending  = 0x12;
@@ -59,7 +54,7 @@ namespace MozaPlugin.Telemetry
         // user-visible TelemetryProfileName so the UI reflects what the auto-test did.
         public delegate void TargetChosenCallback(string dashName);
 
-        private readonly IMozaTelemetry _telemetry;
+        private readonly TelemetrySender _telemetry;
         private readonly ProfileResolver _resolveProfile;
         private readonly DashCacheResolver _resolveDashCache;
         private readonly TargetChosenCallback? _onTargetChosen;
@@ -78,7 +73,7 @@ namespace MozaPlugin.Telemetry
         private const int PostSwitchTestMs = 5000;
 
         public DashboardSwitchAutoTest(
-            IMozaTelemetry telemetry,
+            TelemetrySender telemetry,
             ProfileResolver resolveProfile,
             DashCacheResolver resolveDashCache,
             TargetChosenCallback? onTargetChosen = null)

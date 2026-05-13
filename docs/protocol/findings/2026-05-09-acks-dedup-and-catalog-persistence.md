@@ -71,7 +71,7 @@ The peak counter (`_peakBytesInWindow`) is now monotonic per session — it was 
 ## 8. State-machine guards added
 
 - **Kind=4 emission blocked during cooldown** — `SendDashboardSwitch` no-ops when `_state != Active` or in the post-Stop silence window. Rapid double-clicks during the 11 s `MinSilenceAfterStopMs` wait were leaking kind=4 frames mid-restart and corrupting wheel-side state (observed: wheel responded with backref-only catalog stuck at 8 entries until next plugin restart).
-- **`IsInSilenceCooldown`** exposed via `IMozaTelemetry`. UI dropdown + Test Start/Stop disabled while true so users can't trigger races.
+- **`IsInSilenceCooldown`** exposed on `TelemetrySender`. UI dropdown + Test Start/Stop disabled while true so users can't trigger races.
 - **Preamble extension when catalog empty** — `TickPreamble` holds the Active transition until `_catalogParser.Count > 0` (capped at 3 s). Going Active with `catalog=0` produced an `idx=alpha` tier-def with all unbound channels which the post-Active growth re-apply then had to clean up.
 
 ## 9. Catalog-growth re-apply

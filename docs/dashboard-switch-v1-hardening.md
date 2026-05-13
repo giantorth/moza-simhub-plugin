@@ -13,13 +13,6 @@ dropdown-revert on top of this baseline made things actively worse (see
 §"Why the current attempt is broken" for the full post-mortem). That
 attempt has been reverted; the simpler baseline restored.
 
-The v2 telemetry host (`Telemetry2/`) implements a different model
-(in-place renegotiate via `ApplySubscription(force:true)`, no Stop+Start,
-event-driven SwitchState machine). **v2 does not actually work** — it's
-slated for removal. Its design is **not** load-bearing inspiration; the
-hardening here keeps v1's working protocol mechanism intact and only
-adds robustness around it.
-
 ## Goals
 
 1. **Don't touch what works**: the FF kind=4 emit + Stop+Start cycle is

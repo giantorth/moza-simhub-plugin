@@ -303,9 +303,6 @@ is right; flagged here so they can be opened in the same plan:
   lambda passed in
 - `Protocol/SessionPropertyPushBuilder` — body format for FF kind=4 (and
   whether kinds 2/7/8/11 already have helpers we are not using)
-- `Telemetry2/MozaTelemetryHost.cs:1443-1456,1581` — the v2 host has its
-  own sess=0x02 reception path; double-check whether the v1 sender
-  consumes b2h sess=02 at all
 
 ## Decision points the user needs to weigh in on
 

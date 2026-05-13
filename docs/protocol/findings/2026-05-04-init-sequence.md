@@ -1,16 +1,14 @@
-# PitHouse cold-start init sequence + FF record kind inventory (Phase 0 deliverable)
+# PitHouse cold-start init sequence + FF record kind inventory
 
 > **Canonical reference:** [`../sessions/session-0x02-ff-init.md`](../sessions/session-0x02-ff-init.md).
-> The implementation plan in §"Phase 4: WheelHandshakeOp" below was
-> partially attempted 2026-05-13 on the legacy `TelemetrySender` path
-> (not the Telemetry2 refactor) by emitting captured kind=8/11 bytes
+> An implementation attempt 2026-05-13 emitted captured kind=8/11 bytes
 > verbatim. Result: the W17 wheel locked after a few restart cycles and
 > required a physical power-cycle. The .bin files contain session-bound
 > state; replaying them across sessions is a verified dead-end. Before
 > re-attempting, see the canonical doc for the required body-decode
 > work-list.
 
-This is the byte-exact reference for the new `Telemetry2/Operations/WheelHandshakeOp` (Phase 4 of the refactor plan) and `Telemetry2/Protocol/FfRecordBuilder` (Phase 3). It documents what FF records PitHouse sends at session start, in what order, with what byte content, on which session.
+Byte-exact reference for what FF records PitHouse sends at session start, in what order, with what byte content, on which session.
 
 ## Critical correction vs HANDOVER-INVESTIGATION.md
 
@@ -196,14 +194,13 @@ The new `FfRecordBuilder` must produce these exact bytes given the inputs. CRC m
 
 ## What this changes vs the refactor plan
 
-The plan in `/home/rorth/.claude/plans/i-want-to-perform-resilient-wozniak.md` lists "Inverted session layout — tier-def on 0x01 should be 0x02; FF records on 0x02 should be 0x01" as a key tangle (citation: HANDOVER-INVESTIGATION.md). **That tangle does not exist in 2026-05-03 captures.** The plugin's current session layout is already correct.
+An earlier plan listed "Inverted session layout — tier-def on 0x01 should be 0x02; FF records on 0x02 should be 0x01" as a key tangle (citation: HANDOVER-INVESTIGATION.md). **That tangle does not exist in 2026-05-03 captures.** The plugin's current session layout is already correct.
 
 This means:
-- `Telemetry2/Sessions/SessionEndpoint` for tier-def stays on session 0x01 (same as old `_session01OutboundSeq`).
-- FF records (init + heartbeat + switch + LED + brightness + standby) go on session 0x02 (same as old `_session02OutboundSeq`).
-- The new architecture preserves the current session mapping; the layered redesign focuses on collapsing the god-class state machine, not flipping session bytes.
+- Tier-def stays on session 0x01 (matches the `_session01OutboundSeq` path).
+- FF records (init + heartbeat + switch + LED + brightness + standby) go on session 0x02 (matches the `_session02OutboundSeq` path).
 
-The plan should be revised to reflect this. The `MozaTelemetryHost` state machine, `TierDefNegotiator` purity, `END_MARKER` cumulative max-channel-idx rule, and proper `BlindRetransmit` policy on tier-def session remain the structural fix. The session swap was a non-issue.
+The session swap was a non-issue; `END_MARKER` cumulative max-channel-idx rule and proper blind-retransmit policy on tier-def session are the real structural concerns.
 
 ## Open items
 

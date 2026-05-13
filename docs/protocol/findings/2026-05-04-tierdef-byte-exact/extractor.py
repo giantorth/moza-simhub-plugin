@@ -8,7 +8,7 @@ For each capture, build:
   - TLV entries with absolute byte offset in the canonical stream
 
 Output: one section per emission, with raw hex of new bytes added in that window
-plus parsed TLV summary. This is the byte-diff reference for Telemetry2 tests.
+plus parsed TLV summary. Byte-diff reference for tier-def emission work.
 """
 import sys, json, hashlib, os
 sys.path.insert(0, '/tmp')
