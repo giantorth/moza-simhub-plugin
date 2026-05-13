@@ -68,11 +68,6 @@ namespace MozaPlugin.Devices
         private readonly Border[] _knobRingColorSwatches = new Border[MozaData.KnobRingLedMax];
         private readonly FrameworkElement[] _knobRingKnobContainers = new FrameworkElement[MozaData.WheelKnobMax];
 
-        // ES wheel indicator: device 1=RPM, 2=Off, 3=On (1-based, -1 applied on read)
-        // UI combo: 0="SimHub Mode", 1="Always On", 2="Off"
-        private static readonly int[] EsIndicatorToDisplay = { 0, 2, 1 };
-        private static readonly int[] EsIndicatorToStored = { 0, 2, 1 };
-
         public MozaWheelSettingsControl()
         {
             using (_suppressor.Begin())
@@ -757,9 +752,7 @@ namespace MozaPlugin.Devices
 
                 if (oldWheel)
                 {
-                    int storedIndicator = _data!.WheelRpmIndicatorMode;
-                    if (storedIndicator >= 0 && storedIndicator < EsIndicatorToDisplay.Length)
-                        SetComboSafe(EsRpmIndicatorCombo, EsIndicatorToDisplay[storedIndicator]);
+                    SetComboSafe(EsRpmIndicatorCombo, (int)IndicatorMode.FromEsStored(_data!.WheelRpmIndicatorMode));
                     SetComboSafe(EsRpmDisplayCombo, _data.WheelRpmDisplayMode);
                 }
             }
@@ -1030,8 +1023,8 @@ namespace MozaPlugin.Devices
         {
             if (_suppressEvents || _plugin == null) return;
             int display = EsRpmIndicatorCombo.SelectedIndex;
-            if (display < 0 || display >= EsIndicatorToStored.Length) return;
-            int stored = EsIndicatorToStored[display];
+            if (display < 0 || display > 2) return;
+            int stored = IndicatorMode.ToEsStored((IndicatorDisplayMode)display);
             // ES wheel uses +1 expression: stored 0 -> raw 1, stored 1 -> raw 2, etc.
             int raw = stored + 1;
             _data!.WheelRpmIndicatorMode = stored;

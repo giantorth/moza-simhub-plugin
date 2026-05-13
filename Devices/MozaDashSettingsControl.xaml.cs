@@ -31,11 +31,6 @@ namespace MozaPlugin.Devices
         private readonly Border[] _dashRpmBlinkColorSwatches = new Border[10];
         private readonly Border[] _dashFlagColorSwatches = new Border[6];
 
-        // Device values: 0=Off, 1=RPM (SimHub), 2=On
-        // Display order: 0=SimHub Mode, 1=Always On, 2=Off
-        private static readonly int[] IndicatorToDisplay = { 2, 0, 1 }; // device 0→Off, 1→SimHub, 2→AlwaysOn
-        private static readonly int[] IndicatorToStored = { 1, 2, 0 };  // SimHub→1, AlwaysOn→2, Off→0
-
         public MozaDashSettingsControl()
         {
             using (_suppressor.Begin())
@@ -237,13 +232,9 @@ namespace MozaPlugin.Devices
 
                 if (dashDetected)
                 {
-                    int storedRpmIndicator = _data!.DashRpmIndicatorMode;
-                    if (storedRpmIndicator >= 0 && storedRpmIndicator < IndicatorToDisplay.Length)
-                        SetComboSafe(DashRpmIndicatorCombo, IndicatorToDisplay[storedRpmIndicator]);
+                    SetComboSafe(DashRpmIndicatorCombo, (int)IndicatorMode.FromDashStored(_data!.DashRpmIndicatorMode));
                     SetComboSafe(DashRpmDisplayCombo, _data.DashRpmDisplayMode);
-                    int storedFlagsIndicator = _data.DashFlagsIndicatorMode;
-                    if (storedFlagsIndicator >= 0 && storedFlagsIndicator < IndicatorToDisplay.Length)
-                        SetComboSafe(DashFlagsIndicatorCombo, IndicatorToDisplay[storedFlagsIndicator]);
+                    SetComboSafe(DashFlagsIndicatorCombo, (int)IndicatorMode.FromDashStored(_data.DashFlagsIndicatorMode));
 
                     DashRpmBrightnessSlider.Value = Clamp(_data.DashRpmBrightness, 0, 100);
                     DashRpmBrightnessValue.Text = $"{_data.DashRpmBrightness}";
@@ -285,8 +276,8 @@ namespace MozaPlugin.Devices
         {
             if (_suppressEvents || _plugin == null) return;
             int display = DashRpmIndicatorCombo.SelectedIndex;
-            if (display < 0 || display >= IndicatorToStored.Length) return;
-            int stored = IndicatorToStored[display];
+            if (display < 0 || display > 2) return;
+            int stored = IndicatorMode.ToDashStored((IndicatorDisplayMode)display);
             _data!.DashRpmIndicatorMode = stored;
             _device!.WriteSetting("dash-rpm-indicator-mode", stored);
             _plugin.SaveSettings();
@@ -305,8 +296,8 @@ namespace MozaPlugin.Devices
         {
             if (_suppressEvents || _plugin == null) return;
             int display = DashFlagsIndicatorCombo.SelectedIndex;
-            if (display < 0 || display >= IndicatorToStored.Length) return;
-            int stored = IndicatorToStored[display];
+            if (display < 0 || display > 2) return;
+            int stored = IndicatorMode.ToDashStored((IndicatorDisplayMode)display);
             _data!.DashFlagsIndicatorMode = stored;
             _device!.WriteSetting("dash-flags-indicator-mode", stored);
             _plugin.SaveSettings();

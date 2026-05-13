@@ -2935,12 +2935,14 @@ namespace MozaPlugin.Telemetry
             if (curLen > _catalogParser.LastParsedBufferLen)
             {
                 _catalogParser.TryParse();
-                if (_catalogParser.BufferLength > 4096)
+                // Buffer-overrun guard: post-renegotiate noise can fill a
+                // session's buffer with redundant end-marker bytes; drop only
+                // the overflowing session(s) since the parser keeps the merged
+                // catalog cached. Per-session so end-marker spam on one
+                // session can't wipe another session's still-unparsed records.
+                if (_catalogParser.MaxSessionBufferLength > 4096)
                 {
-                    // Buffer-overrun guard: post-renegotiate noise can fill the
-                    // buffer with redundant end-marker bytes; drop them since
-                    // the parser keeps the merged catalog cached.
-                    _catalogParser.ClearBuffer();
+                    _catalogParser.ClearOverflowingSessions(4096);
                 }
             }
         }
