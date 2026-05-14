@@ -136,6 +136,21 @@ class BFrame:
         return self.payload[3] | (self.payload[4] << 8)
 
 
+def bframe_from_obj(obj: dict, t0: float) -> BFrame:
+    """Build a BFrame from a parsed JSONL line. ``t0`` is the trace's
+    epoch anchor (first frame's timestamp) used to compute ``t_rel``."""
+    t = obj["t"]
+    return BFrame(
+        t=t,
+        t_rel=t - t0,
+        dir=obj["dir"],
+        grp=obj.get("grp", 0),
+        dev=obj.get("dev", 0),
+        payload=bytes.fromhex(obj.get("payload", "")),
+        raw=bytes.fromhex(obj["hex"]),
+    )
+
+
 def load_bridge(path: str | Path, max_lines: int = 0) -> list[BFrame]:
     frames: list[BFrame] = []
     t0: Optional[float] = None
@@ -144,21 +159,46 @@ def load_bridge(path: str | Path, max_lines: int = 0) -> list[BFrame]:
             if max_lines and i >= max_lines:
                 break
             obj = json.loads(line.strip())
-            t = obj["t"]
             if t0 is None:
-                t0 = t
-            raw = bytes.fromhex(obj["hex"])
-            payload = bytes.fromhex(obj.get("payload", ""))
-            frames.append(BFrame(
-                t=t,
-                t_rel=t - t0,
-                dir=obj["dir"],
-                grp=obj.get("grp", 0),
-                dev=obj.get("dev", 0),
-                payload=payload,
-                raw=raw,
-            ))
+                t0 = obj["t"]
+            frames.append(bframe_from_obj(obj, t0))
     return frames
+
+
+def stream_bridge(path: str | Path, follow: bool = True, from_start: bool = False):
+    """Yield BFrames as they're appended to a bridge JSONL file.
+
+    Set ``from_start=True`` to replay the existing contents first; otherwise
+    streaming begins at end-of-file (typical live-monitor use). Set
+    ``follow=False`` for a one-shot read of whatever is on disk now.
+
+    The first emitted frame's timestamp anchors ``t_rel`` for the rest of
+    the stream — same convention as :func:`load_bridge`.
+    """
+    import time
+    t0: Optional[float] = None
+    with open(path) as fh:
+        if not from_start:
+            fh.seek(0, 2)  # skip to EOF — only new frames will be read
+        while True:
+            line = fh.readline()
+            if not line:
+                if not follow:
+                    return
+                time.sleep(0.05)
+                continue
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                # Bridge writes line-by-line; a partial flush mid-line is
+                # rare but possible. Skip and pick up on next iteration.
+                continue
+            if t0 is None:
+                t0 = obj["t"]
+            yield bframe_from_obj(obj, t0)
 
 
 def resolve_bridge(arg: Optional[str] = None) -> Path:

@@ -19,6 +19,11 @@
       "command": ".venv/bin/python3",
       "args": ["sim/bridge.py", "--mcp", "/dev/ttyACM0", "/dev/ttyGS0"],
       "cwd": "."
+    },
+    "ab9-sim-linux": {
+      "command": ".venv/bin/python3",
+      "args": ["sim/ab9_sim.py", "--mcp", "/dev/ttyGS1"],
+      "cwd": "."
     }
   }
 }

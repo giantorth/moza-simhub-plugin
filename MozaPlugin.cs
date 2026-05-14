@@ -53,6 +53,29 @@ namespace MozaPlugin
         private volatile bool _ab9Detected;
         private volatile bool _ab9SettingsApplied;
 
+        // ===== AB9 host-rendered engine vibration =====
+        //
+        // PitHouse-style 91 Hz stream of Group 0x20 / cmd 0x0A 0x05 frames
+        // encoding period = K / (rpm × freq) — see
+        // docs/protocol/devices/ab9-shifter.md. DataUpdate writes the
+        // volatiles; the worker thread reads them each tick alongside the
+        // user's intensity/freq sliders from the active profile.
+        //
+        // K calibrated against five corner points captured from PitHouse:
+        // idle+100Hz, idle+200Hz, idle+50Hz, redline+200Hz, redline+50Hz —
+        // all five collapse to K ≈ 3.95 × 10¹¹ within 3%.
+        private const double EngineVibK = 3.95e11;
+        private const double EngineVibFreqMinHz = 50.0;
+        private const double EngineVibFreqMaxHz = 200.0;
+        private Thread? _ab9EngineVibThread;
+        private volatile bool _ab9EngineVibStop;
+        private volatile bool _ab9EngineVibActive;
+        // double can't be `volatile` in C# — wrap in long with Interlocked.Exchange
+        // for a torn-write-free cross-thread RPM read. Same approach as
+        // _telemetryStartRequested above.
+        private long _latestRpmBits;
+        private volatile bool _latestGameRunning;
+
         // Guard against concurrent/duplicate telemetry Start() dispatch
         private int _telemetryStartRequested;
 
@@ -444,6 +467,18 @@ namespace MozaPlugin
                     _ab9Manager.Connection.LastPortName = _settings.LastAb9Port;
                 _ab9Manager.MessageReceived += OnAb9MessageReceived;
 
+                // AB9 engine-vibration worker — runs unconditionally; tick
+                // body gates on AB9 connection/detection state. The thread
+                // exits when _ab9EngineVibStop is set in End/CleanupPartialInit.
+                _ab9EngineVibStop = false;
+                _ab9EngineVibActive = false;
+                _ab9EngineVibThread = new Thread(Ab9EngineVibrationLoop)
+                {
+                    IsBackground = true,
+                    Name = "MozaAb9EngineVib",
+                };
+                _ab9EngineVibThread.Start();
+
                 // 5 s poll interval. Was 2 s, but the diagnostic reads it issues
                 // (base-state, mcu/mosfet/motor temp via 0x2B/0x13 cmd 1/4/5/6 +
                 // hub/dash/handbrake/pedal probes) generated ~6 frames/s of plugin-
@@ -543,6 +578,15 @@ namespace MozaPlugin
             try { _reconnectTimer?.Stop(); } catch { }
             try { _saveDebounceTimer?.Stop(); } catch { }
             try { _telemetrySender?.Stop(); } catch { }
+
+            // Halt the AB9 engine-vib worker before disposing the AB9 manager.
+            try
+            {
+                _ab9EngineVibStop = true;
+                _ab9EngineVibThread?.Join(1000);
+                _ab9EngineVibThread = null;
+            }
+            catch { }
             try
             {
                 if (_connection != null)
@@ -640,6 +684,93 @@ namespace MozaPlugin
             _telemetrySender?.UpdateGameData(data.NewData);
             _telemetrySender?.SetGameRunning(data.GameRunning);
             CheckGearshiftEvent(data);
+
+            // Stash the freshest RPM + game-running flag for the AB9 engine-vib
+            // worker thread (read at ~91 Hz from a separate thread). Interlocked
+            // exchange because `double` cannot be `volatile` in C#.
+            double rpm = data.NewData?.Rpms ?? 0.0;
+            Interlocked.Exchange(ref _latestRpmBits, BitConverter.DoubleToInt64Bits(rpm));
+            _latestGameRunning = data.GameRunning;
+        }
+
+        // ===== AB9 engine-vibration worker =====
+        //
+        // Runs as a dedicated background thread (not a System.Timers.Timer) because
+        // the latter only delivers ~64 Hz under the default 15.6 ms Windows clock
+        // granularity. Latest-wins stream lane in MozaSerialConnection means a
+        // late tick just discards the previous frame from the slot — no FIFO
+        // pile-up. We target 91 Hz; the actual wire rate is whatever the OS
+        // scheduler delivers and that is harmless.
+        private void Ab9EngineVibrationLoop()
+        {
+            long stopwatchFreq = System.Diagnostics.Stopwatch.Frequency;
+            long periodTicks = stopwatchFreq * 11 / 1000;   // ~11 ms = 91 Hz
+            long next = System.Diagnostics.Stopwatch.GetTimestamp() + periodTicks;
+            while (!_ab9EngineVibStop)
+            {
+                try { ProcessEngineVibTick(); }
+                catch (Exception ex)
+                {
+                    MozaLog.Debug($"[Moza/AB9] engine-vib tick: {ex.Message}");
+                }
+
+                long now = System.Diagnostics.Stopwatch.GetTimestamp();
+                long deltaTicks = next - now;
+                if (deltaTicks <= 0)
+                {
+                    // Fell behind by more than one tick — reset the deadline so
+                    // we don't busy-loop firing back-to-back catch-up frames.
+                    next = now + periodTicks;
+                    continue;
+                }
+                int sleepMs = (int)Math.Min(50, Math.Max(1, deltaTicks * 1000 / stopwatchFreq));
+                Thread.Sleep(sleepMs);
+                next += periodTicks;
+            }
+        }
+
+        private void ProcessEngineVibTick()
+        {
+            if (IsShuttingDown) return;
+            if (_ab9Manager == null || !_ab9Manager.IsConnected || !_ab9Detected) return;
+
+            var ab9 = _settings?.ProfileStore?.CurrentProfile?.Ab9;
+            if (ab9 == null) return;
+
+            int intensity = ab9.EngineVibrationIntensity;
+            int freqSlider = ab9.EngineVibrationFrequency;
+            double freqHz = EngineVibFreqMinHz
+                + (freqSlider / 100.0) * (EngineVibFreqMaxHz - EngineVibFreqMinHz);
+            double rpm = BitConverter.Int64BitsToDouble(Interlocked.Read(ref _latestRpmBits));
+            bool gameOn = _latestGameRunning;
+
+            bool active = gameOn && intensity > 0 && rpm > 100.0 && freqHz > 0.0;
+            uint period;
+            if (active)
+            {
+                double p = EngineVibK / (rpm * freqHz);
+                if (p < MozaAb9DeviceManager.MinPeriodTicks)
+                    p = MozaAb9DeviceManager.MinPeriodTicks;
+                if (p > MozaAb9DeviceManager.MaxPeriodTicks)
+                    p = MozaAb9DeviceManager.MaxPeriodTicks;
+                period = (uint)p;
+            }
+            else
+            {
+                // Mid-range filler when silent. PitHouse leaves the last active
+                // value in the bytes; we pick a stable midpoint so the frame
+                // payload stays well-formed even if a future AB9 firmware
+                // revision starts validating the period field strictly.
+                period = 0x100000;
+            }
+
+            _ab9Manager.SendEngineVibrationStream(active, period);
+            if (active != _ab9EngineVibActive)
+            {
+                _ab9EngineVibActive = active;
+                MozaLog.Debug($"[Moza/AB9] engine-vib {(active ? "active" : "silent")} "
+                              + $"(rpm={rpm:F0} freq={freqHz:F1}Hz period={period})");
+            }
         }
 
         // Resolve a dashboard name to its parsed MultiStreamProfile without firing
@@ -673,6 +804,13 @@ namespace MozaPlugin
             _pollTimer?.Stop();
             _retryTimer?.Stop();
             _reconnectTimer?.Stop();
+
+            // Stop the AB9 engine-vib worker before the AB9 manager / connection
+            // are disposed; the tick already gates on _ab9Manager.IsConnected
+            // but joining here keeps shutdown deterministic.
+            _ab9EngineVibStop = true;
+            try { _ab9EngineVibThread?.Join(1000); } catch { }
+            _ab9EngineVibThread = null;
 
             // Clear detection flags up-front. If SimHub re-uses this plugin instance
             // across load/unload, the next Init() also clears them — together this
@@ -2264,6 +2402,10 @@ namespace MozaPlugin
             _ab9Manager.SendSlider(Devices.Ab9Slider.NaturalDamping, ab9.NaturalDamping);
             _ab9Manager.SendSlider(Devices.Ab9Slider.NaturalFriction, ab9.NaturalFriction);
             _ab9Manager.SendSlider(Devices.Ab9Slider.MaxTorqueLimit, ab9.MaxTorqueLimit);
+            // Push the persisted gear-shift-vibration intensity. AB9 firmware
+            // stores it and applies it autonomously on every HID-detected gear
+            // engagement — no host trigger needed per shift.
+            _ab9Manager.SendGearShiftVibrationIntensity(ab9.GearShiftVibrationIntensity);
             _ab9SettingsApplied = true;
         }
 
@@ -3262,6 +3404,10 @@ namespace MozaPlugin
                 _ab9Manager.SendSlider(Devices.Ab9Slider.NaturalDamping, ab9.NaturalDamping);
                 _ab9Manager.SendSlider(Devices.Ab9Slider.NaturalFriction, ab9.NaturalFriction);
                 _ab9Manager.SendSlider(Devices.Ab9Slider.MaxTorqueLimit, ab9.MaxTorqueLimit);
+                // Engine vibration intensity/frequency are host-rendered — the
+                // worker thread picks them up live from this profile. Only the
+                // gear-shift-vibration intensity needs a device-side push.
+                _ab9Manager.SendGearShiftVibrationIntensity(ab9.GearShiftVibrationIntensity);
             }
 
             // Persist _settings without re-capturing _data into the profile.

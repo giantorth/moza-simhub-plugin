@@ -78,15 +78,20 @@ if ! command -v usbipd >/dev/null; then
     exit 1
 fi
 
-pkill -x usbipd 2>/dev/null || true
-usbipd -D
-for _ in $(seq 1 10); do
-    ss -tlnp 2>/dev/null | grep -q ':3240 ' && break
-    sleep 0.3
-done
-if ! ss -tlnp 2>/dev/null | grep -q ':3240 '; then
-    echo "usbipd not listening on port 3240 after 3s" >&2
-    exit 1
+# Start usbipd if it isn't already up. If another Moza gadget (e.g. AB9 at
+# /sys/kernel/config/usb_gadget/moza_ab9) is running, usbipd should already
+# be listening and we must NOT restart it — re-binding usbipd drops the
+# exports of any coexisting gadget.
+if ! pgrep -x usbipd >/dev/null; then
+    usbipd -D
+    for _ in $(seq 1 10); do
+        ss -tlnp 2>/dev/null | grep -q ':3240 ' && break
+        sleep 0.3
+    done
+    if ! ss -tlnp 2>/dev/null | grep -q ':3240 '; then
+        echo "usbipd not listening on port 3240 after 3s" >&2
+        exit 1
+    fi
 fi
 
 # Wait for the gadget device to enumerate on the dummy_hcd host side.

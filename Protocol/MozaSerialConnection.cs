@@ -29,6 +29,10 @@ namespace MozaPlugin.Protocol
         Enable = 8,
         Sequence = 9,
         Mode = 10,
+        // AB9 host-rendered engine vibration: 0x20/dev 0x12/cmd 0x0A 0x05 frames
+        // streamed at ~91 Hz from MozaPlugin's worker thread. Latest-wins is
+        // correct — only the freshest period needs to reach the wire.
+        Ab9EngineVibration = 11,
     }
 
     /// <summary>
@@ -45,7 +49,7 @@ namespace MozaPlugin.Protocol
 
     public class MozaSerialConnection : IDisposable
     {
-        private const int StreamSlotCount = 11;
+        private const int StreamSlotCount = 12;
 
         // Ports currently held by a live MozaSerialConnection. Probe path skips
         // these so the AB9 manager (or any future second connection) can't open

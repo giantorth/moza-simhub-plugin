@@ -1,0 +1,188 @@
+#!/usr/bin/env python3
+"""Live monitor for knob-LED traffic on a PitHouse bridge capture.
+
+Two command families are surfaced:
+
+  cmd 0x27 — per-knob "active position" color (ROLE0 = write the stored
+              Active color; ROLE1 = read-only live LED color at the active
+              rotation position).
+  cmd 0x1F sub 0x03 sub 0xFF — Group 3 (Rotary) per-LED ring color writes.
+              PitHouse drives the 12 "Inactive" swatches per knob with these.
+
+Classifications:
+  WRITE  = h2b grp=0x3F  PitHouse setting the knob's stored Active color
+                          (cmd 0x27, ROLE0 only — ROLE1 writes never observed)
+  READ   = h2b grp=0x40  PitHouse polling the wheel (zero RGB payload)
+  RESP   = b2h grp=0xC0  wheel responding to a READ with the current value
+  ECHO   = b2h grp=0xBF  wheel echoing back a WRITE
+  RING   = h2b grp=0x3F  PitHouse setting one Group 3 ring LED (cmd 0x1F)
+  RING-E = b2h grp=0xBF  wheel echoing back a Group 3 ring LED write
+
+By default tails the most recent bridge-*.jsonl in sim/logs/ and only follows
+new frames. Pass --from-start to replay the full file, --no-follow for a
+one-shot scan, --writes-only to suppress the high-volume read polls, or
+--capture PATH to point at a specific JSONL.
+
+Usage:
+    tools/bridge-watch-knobs                 # tail latest, all knob cmds
+    tools/bridge-watch-knobs --writes-only   # only WRITE/ECHO/RING/RING-E
+    tools/bridge-watch-knobs --no-follow     # one-shot scan of latest
+    tools/bridge-watch-knobs --capture FILE  # specific capture
+"""
+import argparse
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from moza_bridge import resolve_bridge, stream_bridge, BFrame
+
+ROLE = {0x00: "ROLE0", 0x01: "ROLE1"}
+
+
+def classify_cmd27(f: BFrame) -> str | None:
+    """cmd 0x27 — per-knob Active color. Returns label or None."""
+    if not f.payload or f.payload[0] != 0x27 or len(f.payload) < 6:
+        return None
+    if f.dir == "h2b" and f.grp == 0x3F:
+        return "WRITE"
+    if f.dir == "h2b" and f.grp == 0x40:
+        return "READ "
+    if f.dir == "b2h" and f.grp == 0xC0:
+        return "RESP "
+    if f.dir == "b2h" and f.grp == 0xBF:
+        return "ECHO "
+    return None
+
+
+def classify_group3(f: BFrame) -> str | None:
+    """cmd 0x1F 0x03 [sub] [idx] [RGB] — Group 3 (Rotary) per-LED writes.
+
+    Two sub-byte variants observed:
+      sub=0x01   PitHouse's "Inactive" swatch writes (the persistent/default
+                 color for that ring LED).
+      sub=0xFF   What our plugin currently uses for wheel-group3-color{N};
+                 semantics vs 0x01 not yet pinned down.
+    """
+    p = f.payload
+    if len(p) < 4 or p[0] != 0x1F or p[1] != 0x03:
+        return None
+    if p[2] not in (0x01, 0xFF):
+        return None
+    if f.dir == "h2b" and f.grp == 0x3F and len(p) >= 7:
+        return "RING "
+    if f.dir == "b2h" and f.grp == 0xBF and len(p) >= 7:
+        return "RING-E"
+    return None
+
+
+def classify_idle_effect(f: BFrame) -> str | None:
+    """cmd 0x1D [group] [effect_id] — per-group idle-effect setter.
+
+    PitHouse uses this to drive the "Idle effect" dropdown for each LED
+    group (RPM = group 0, Buttons = group 1, Rotary = group 3, etc.).
+    """
+    p = f.payload
+    if len(p) < 3 or p[0] != 0x1D:
+        return None
+    if f.dir == "h2b" and f.grp == 0x3F:
+        return "IDLE "
+    if f.dir == "b2h" and f.grp == 0xBF:
+        return "IDLE-E"
+    return None
+
+
+def classify_idle_interval(f: BFrame) -> str | None:
+    """cmd 0x1E [group] [effect_id] [ms_msb] [ms_lsb] — per-effect speed slider.
+
+    Each animated effect within a group has its own millisecond interval,
+    big-endian u16. PitHouse only emits this when the user moves the speed
+    slider while a Breathing / Color Cycle / Rainbow / etc. effect is
+    selected.
+    """
+    p = f.payload
+    if len(p) < 5 or p[0] != 0x1E:
+        return None
+    if f.dir == "h2b" and f.grp == 0x3F:
+        return "IVAL "
+    if f.dir == "b2h" and f.grp == 0xBF:
+        return "IVAL-E"
+    return None
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--capture", help="Bridge JSONL (default: latest in sim/logs/)")
+    ap.add_argument("--from-start", action="store_true",
+                    help="Replay existing contents before tailing")
+    ap.add_argument("--no-follow", action="store_true",
+                    help="Read once and exit (no tail-follow)")
+    ap.add_argument("--writes-only", action="store_true",
+                    help="Suppress READ/RESP polls, show only writes + echoes")
+    args = ap.parse_args()
+
+    path = resolve_bridge(args.capture)
+    print(f"Watching {path}", file=sys.stderr, flush=True)
+
+    if args.writes_only:
+        keep = {"WRITE", "ECHO ", "RING ", "RING-E",
+                "IDLE ", "IDLE-E", "IVAL ", "IVAL-E"}
+    else:
+        keep = {"WRITE", "READ ", "RESP ", "ECHO ", "RING ", "RING-E",
+                "IDLE ", "IDLE-E", "IVAL ", "IVAL-E"}
+
+    try:
+        for f in stream_bridge(path, follow=not args.no_follow, from_start=args.from_start):
+            kind = classify_cmd27(f)
+            if kind is not None and kind in keep:
+                knob = f.payload[1]
+                role = f.payload[2]
+                R, G, B = f.payload[3], f.payload[4], f.payload[5]
+                rname = ROLE.get(role, f"r{role:02x}")
+                print(f"{f.t % 100000:>10.3f} {kind} grp=0x{f.grp:02x} "
+                      f"knob{knob + 1} {rname} #{R:02x}{G:02x}{B:02x}",
+                      flush=True)
+                continue
+
+            kind = classify_group3(f)
+            if kind is not None and kind in keep:
+                # body: 1f 03 <sub> <led_idx> <R> <G> <B>
+                sub = f.payload[2]
+                led_idx = f.payload[3]
+                R, G, B = f.payload[4], f.payload[5], f.payload[6]
+                # CS Pro / KS Pro both use 12 LEDs/knob for ring layout (KS knob 3
+                # has 8, but its idx range still starts at the knob's contiguous
+                # offset). Reporting (knob, spot) helps eyeball the mapping.
+                knob = led_idx // 12 + 1
+                spot = led_idx % 12
+                print(f"{f.t % 100000:>10.3f} {kind} grp=0x{f.grp:02x} sub=0x{sub:02x} "
+                      f"led_idx={led_idx:>2} (knob{knob} spot{spot}) "
+                      f"#{R:02x}{G:02x}{B:02x}",
+                      flush=True)
+                continue
+
+            kind = classify_idle_effect(f)
+            if kind is not None and kind in keep:
+                # body: 1d <group> <effect_id>
+                group = f.payload[1]
+                effect = f.payload[2]
+                print(f"{f.t % 100000:>10.3f} {kind} grp=0x{f.grp:02x} "
+                      f"led_group={group} effect=0x{effect:02x}",
+                      flush=True)
+                continue
+
+            kind = classify_idle_interval(f)
+            if kind is not None and kind in keep:
+                # body: 1e <group> <effect_id> <ms_msb> <ms_lsb>
+                group = f.payload[1]
+                effect = f.payload[2]
+                ms = (f.payload[3] << 8) | f.payload[4]
+                print(f"{f.t % 100000:>10.3f} {kind} grp=0x{f.grp:02x} "
+                      f"led_group={group} effect=0x{effect:02x} interval={ms}ms",
+                      flush=True)
+    except KeyboardInterrupt:
+        pass
+
+
+if __name__ == "__main__":
+    main()

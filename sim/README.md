@@ -309,6 +309,56 @@ Full step-by-step runbook (prerequisites, troubleshooting, capture workflow): [`
 
 ---
 
+## AB9 active-shifter simulator (`sim/ab9_sim.py`)
+
+`ab9_sim.py` emulates the MOZA AB9 active shifter, which enumerates as its **own** composite USB device (VID `0x346E`, PID `0x1000`) parallel to the wheelbase. It is a standalone peer to `wheel_sim.py` — separate sim process, separate gadget, separate `/dev/ttyGS<N>`. Both can run simultaneously so the plugin sees both devices on its WMI scan (or, under Wine, on its probe-based fallback).
+
+Scope:
+- **CDC ACM only** (EP 0x02 OUT / 0x82 IN). The HID interface (EP 0x83 IN, 1 kHz gear-state reports) is not emulated — the SimHub plugin does not read AB9 HID directly (DirectInput handles gear events at the OS level). Add an `f_hid` function to the gadget if a future use case needs simulated gear events.
+- **Implemented**: identity probe cascade (groups 02/04/05/06/07/08/09/0F/10/11), stored-setting reads (group `0x1E`, cmds `5D/A9/AF/B0/B2/D3/D4/D6/D7/D8`), mode + slider writes (group `0x1F`, cmds `A9/AF/B0/B2/D3/D6`), FFB effect allocation + parameter pushes (group `0x20`), heartbeat (group `0x00`).
+- **Verified**: `--self-test` includes byte-for-byte comparison of every default reply against `usb-capture/AB9/Launch and H-pattern gear engage.pcapng`.
+
+Run:
+
+```bash
+# 1. Bring up the AB9 gadget (independent of the wheelbase gadget — both can coexist)
+sudo bash sim/setup_ab9_gadget.sh
+# → prints /dev/ttyGS<N> on success
+
+# 2. Run the sim against that ttyGS
+python3 sim/ab9_sim.py /dev/ttyGS<N>
+
+# 3. (Optional) Offline self-test, no port required
+python3 sim/ab9_sim.py --self-test
+```
+
+Status / teardown: `sudo bash sim/status_ab9_gadget.sh` / `sudo bash sim/teardown_ab9_gadget.sh`. The teardown script removes only the AB9 gadget at `/sys/kernel/config/usb_gadget/moza_ab9`; it leaves the wheelbase gadget, `usbipd`, and kernel modules alone. The wheelbase setup/teardown scripts have the symmetric behaviour — they no longer kill `usbipd` or unload modules if another Moza gadget is present.
+
+The two gadgets need two free `dummy_udc.N` slots. `dummy_hcd` defaults to 2 UDCs, which is enough for wheelbase + AB9. If you ever need more (e.g. handbrake), reload with `modprobe dummy_hcd num=4`.
+
+### MCP server (`ab9-sim-linux`)
+
+Registered in `.mcp.json` as `ab9-sim-linux` — Claude Code launches `python3 sim/ab9_sim.py --mcp /dev/ttyGS1` and gets these stdio tools:
+
+| Tool | Purpose |
+|------|---------|
+| `ab9_start(port=, wire_trace=)` | Open serial port, spawn read loop. Falls back to the port passed on the `--mcp` command line. |
+| `ab9_stop()` | Close port; signals the cross-process owner if another session holds the `/tmp/ab9_sim_<slug>.lock`. |
+| `ab9_info()` / `ab9_status()` | Connection state / snapshot (uptime, frame counts, mode, sliders, analog). |
+| `ab9_settings()` | Raw hex-keyed dump of every stored 0x1E setting. |
+| `ab9_recent(count=, direction=, tag=, exclude=)` | Recent frames from the rolling ring (~2000). Filter by direction (`rx`/`tx`), include/exclude tag lists. |
+| `ab9_counters()` / `ab9_unhandled()` | Per-tag handler counters; dropped-frame summary keyed by (group, dev, payload-prefix). |
+| `ab9_set_mode(mode)` | Write the stored shifter mode (byte or friendly label like `'Sequential'`). The next host read returns this value. |
+| `ab9_set_slider(name, value)` | Write a slider's stored value (0..100). Names: `mech_resistance`, `spring`, `natural_damping`, `natural_friction`, `max_torque_limit`. |
+| `ab9_set_analog(x, y)` | Set shifter X/Y returned on the next D7/D8 reads (uint16; centre ≈ 0x66E7 / 0x8001). |
+| `ab9_engage_gear(gear)` | Snap analog X/Y to an approximate gear quadrant (`N`, `1`..`7`, `R`). Convenience over `ab9_set_analog`. |
+
+The default port (`/dev/ttyGS1`) is a guess that holds when the wheelbase gadget is brought up first; if AB9 is alone it lands on `/dev/ttyGS0`. Pass `port=` to `ab9_start` to override.
+
+Protocol reference: [`docs/protocol/devices/ab9-shifter.md`](../docs/protocol/devices/ab9-shifter.md). Plugin path: [`Devices/MozaAb9DeviceManager.cs`](../Devices/MozaAb9DeviceManager.cs).
+
+---
+
 ## Capture files reference
 
 See `usb-capture/CAPTURES.md` for the full list. Key files:

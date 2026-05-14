@@ -2345,11 +2345,14 @@ namespace MozaPlugin
             using (_suppressor.Begin())
             {
                 SetAb9ModeCombo(ab9.Mode);
-                SetAb9Slider(Ab9MechResistanceSlider, Ab9MechResistanceValue, ab9.MechanicalResistance);
-                SetAb9Slider(Ab9SpringSlider,         Ab9SpringValue,         ab9.Spring);
-                SetAb9Slider(Ab9DampingSlider,        Ab9DampingValue,        ab9.NaturalDamping);
-                SetAb9Slider(Ab9FrictionSlider,       Ab9FrictionValue,       ab9.NaturalFriction);
-                SetAb9Slider(Ab9MaxTorqueSlider,      Ab9MaxTorqueValue,      ab9.MaxTorqueLimit);
+                SetAb9Slider(Ab9MechResistanceSlider,    Ab9MechResistanceValue,    ab9.MechanicalResistance);
+                SetAb9Slider(Ab9SpringSlider,            Ab9SpringValue,            ab9.Spring);
+                SetAb9Slider(Ab9DampingSlider,           Ab9DampingValue,           ab9.NaturalDamping);
+                SetAb9Slider(Ab9FrictionSlider,          Ab9FrictionValue,          ab9.NaturalFriction);
+                SetAb9Slider(Ab9MaxTorqueSlider,         Ab9MaxTorqueValue,         ab9.MaxTorqueLimit);
+                SetAb9Slider(Ab9EngineVibIntensitySlider, Ab9EngineVibIntensityValue, ab9.EngineVibrationIntensity);
+                SetAb9Slider(Ab9EngineVibFreqSlider,      Ab9EngineVibFreqValue,      ab9.EngineVibrationFrequency);
+                SetAb9Slider(Ab9GearShiftVibSlider,       Ab9GearShiftVibValue,       ab9.GearShiftVibrationIntensity);
             }
             _ab9UiSeeded = true;
         }
@@ -2425,6 +2428,42 @@ namespace MozaPlugin
                 case Ab9Slider.MaxTorqueLimit:       ab9.MaxTorqueLimit = v;       break;
             }
             _plugin.Ab9Manager?.SendSlider(which, v);
+            _plugin.SaveSettings();
+        }
+
+        // Engine Vibration intensity (host-rendered). The 91 Hz worker thread
+        // reads the new value from the profile on its next tick — no device
+        // command is sent.
+        private void Ab9EngineVibIntensitySlider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (_suppressEvents) return;
+            byte v = (byte)Math.Max(0, Math.Min(100, (int)Math.Round(e.NewValue)));
+            Ab9EngineVibIntensityValue.Text = v.ToString();
+            GetOrCreateAb9Profile().EngineVibrationIntensity = v;
+            _plugin.SaveSettings();
+        }
+
+        // Engine Vibration frequency slider (0..100, mapped to 50..200 Hz by
+        // the worker). Host-rendered — same no-send semantics as intensity.
+        private void Ab9EngineVibFreqSlider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (_suppressEvents) return;
+            byte v = (byte)Math.Max(0, Math.Min(100, (int)Math.Round(e.NewValue)));
+            Ab9EngineVibFreqValue.Text = v.ToString();
+            GetOrCreateAb9Profile().EngineVibrationFrequency = v;
+            _plugin.SaveSettings();
+        }
+
+        // Gear-shift vibration intensity. Fires one 0x0A 0x01 config write per
+        // change so the AB9 firmware persists the new stored intensity for its
+        // autonomous shift-rumble.
+        private void Ab9GearShiftVibSlider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (_suppressEvents) return;
+            byte v = (byte)Math.Max(0, Math.Min(100, (int)Math.Round(e.NewValue)));
+            Ab9GearShiftVibValue.Text = v.ToString();
+            GetOrCreateAb9Profile().GearShiftVibrationIntensity = v;
+            _plugin.Ab9Manager?.SendGearShiftVibrationIntensity(v);
             _plugin.SaveSettings();
         }
 

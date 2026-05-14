@@ -52,8 +52,20 @@ if [[ -n "$BUSID" ]]; then
     done
 fi
 
-# Step 2: stop daemon (after unbind).
-pkill -x usbipd 2>/dev/null || true
+# Step 2: stop daemon (after unbind) — but only if no other Moza gadget is
+# still using it. The AB9 gadget at /sys/kernel/config/usb_gadget/moza_ab9
+# also relies on usbipd; killing it here would break a coexisting AB9 sim.
+OTHER_GADGETS=0
+for g in /sys/kernel/config/usb_gadget/*; do
+    [[ -d "$g" ]] || continue
+    [[ "$g" == "$GADGET" ]] && continue
+    OTHER_GADGETS=$((OTHER_GADGETS + 1))
+done
+if [[ $OTHER_GADGETS -eq 0 ]]; then
+    pkill -x usbipd 2>/dev/null || true
+else
+    echo "[INFO] usbipd left running — $OTHER_GADGETS other gadget(s) still present"
+fi
 
 # Step 3: dismantle configfs gadget. UDC write can block if anything still
 # holds /dev/ttyGS0 OR if the kernel is mid-cleanup from a recent disconnect.
@@ -80,12 +92,22 @@ if [[ -d "$GADGET" ]]; then
     rmdir "$GADGET"                           2>/dev/null || true
 fi
 
-# Step 4: unload kernel modules (libcomposite first, then dummy_hcd).
-modprobe -r libcomposite 2>/dev/null || true
-modprobe -r dummy_hcd    2>/dev/null || true
+# Step 4: unload kernel modules (libcomposite first, then dummy_hcd) — only
+# if no other Moza gadget remains. Re-check after the rmdir above.
+RESIDUAL_GADGETS=0
+for g in /sys/kernel/config/usb_gadget/*; do
+    [[ -d "$g" ]] && RESIDUAL_GADGETS=$((RESIDUAL_GADGETS + 1))
+done
+if [[ $RESIDUAL_GADGETS -eq 0 ]]; then
+    modprobe -r libcomposite 2>/dev/null || true
+    modprobe -r dummy_hcd    2>/dev/null || true
+else
+    echo "[INFO] libcomposite/dummy_hcd left loaded — $RESIDUAL_GADGETS gadget(s) still present"
+fi
 
-# Step 5: verify.
-if ls /sys/class/udc/ 2>/dev/null | grep -qE '^dummy'; then
+# Step 5: verify. Only flag UDC presence as a problem when we expected to
+# fully unload modules (i.e. no other gadget present).
+if [[ $RESIDUAL_GADGETS -eq 0 ]] && ls /sys/class/udc/ 2>/dev/null | grep -qE '^dummy'; then
     echo "[WARN] dummy UDC still present in /sys/class/udc/ (module in use?)"
     FAIL=1
 fi

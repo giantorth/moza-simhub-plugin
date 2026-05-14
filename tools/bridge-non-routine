@@ -1,0 +1,145 @@
+#!/usr/bin/env python3
+"""Print non-routine bridge traffic — frames that aren't part of the
+constant-rate baseline (parity polls, FFB enable, sequence counter,
+value frames, LED bitmask telemetry).
+
+Useful for spotting one-off / aperiodic events like setting writes,
+shift triggers, or anything else PitHouse fires only on demand.
+
+Usage:
+    tools/bridge-non-routine                 # latest capture, last 30s
+    tools/bridge-non-routine --window 60     # last 60s
+    tools/bridge-non-routine --capture FILE  # specific JSONL
+    tools/bridge-non-routine --all           # full capture (no time window)
+"""
+import argparse
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from moza_bridge import resolve_bridge, load_bridge
+
+# (direction, grp, dev, cmd-prefix-2-hex) tuples to suppress as baseline noise.
+ROUTINE = {
+    # PitHouse periodic streams
+    ("h2b", 0x2D, 0x13, "f5"),    # sequence counter ~42Hz
+    ("h2b", 0x41, 0x17, "fd"),    # FFB enable ~42Hz
+    ("h2b", 0x43, 0x17, "7d"),    # value frames ~27Hz
+    ("h2b", 0x43, 0x17, "fc"),    # session flow control
+    # Pedal / handbrake parity polls
+    ("h2b", 0x5A, 0x1B, "00"),
+    ("h2b", 0x5D, 0x1B, "01"),
+    ("h2b", 0x25, 0x19, "01"),
+    ("h2b", 0x25, 0x19, "02"),
+    ("h2b", 0x25, 0x19, "03"),
+    # Wheel-side state polls (read group 0x40)
+    ("h2b", 0x40, 0x17, "1f"),    # LED state polls
+    ("h2b", 0x40, 0x17, "27"),    # knob color reads
+    ("h2b", 0x40, 0x17, "1e"),
+    ("h2b", 0x40, 0x17, "1d"),
+    ("h2b", 0x40, 0x17, "1c"),
+    ("h2b", 0x40, 0x17, "1b"),
+    ("h2b", 0x40, 0x17, "20"),
+    ("h2b", 0x40, 0x17, "21"),
+    ("h2b", 0x40, 0x17, "23"),
+    ("h2b", 0x40, 0x17, "24"),
+    ("h2b", 0x40, 0x17, "28"),
+    ("h2b", 0x40, 0x17, "29"),
+    ("h2b", 0x40, 0x17, "2a"),
+    # AB9 polls
+    ("h2b", 0x0E, 0x12, "00"),
+    ("h2b", 0x1F, 0x12, "4f"),
+    # Base status polls
+    ("h2b", 0x2B, 0x13, "02"),
+    # Session probes
+    ("h2b", 0x43, 0x14, "00"),
+    ("h2b", 0x43, 0x15, "00"),
+    ("h2b", 0x43, 0x17, "00"),
+    # Discovery probes (group 0x0E)
+    ("h2b", 0x0E, 0x13, "00"),
+    ("h2b", 0x0E, 0x17, "00"),
+    ("h2b", 0x0E, 0x19, "00"),
+    # Per-frame LED color/bitmask streams
+    ("h2b", 0x3F, 0x17, "1a"),    # bitmask telemetry
+    ("h2b", 0x3F, 0x17, "19"),    # live color telemetry
+    # b2h equivalents for the polls
+    ("b2h", 0xC0, 0x71, "1f"),
+    ("b2h", 0xC0, 0x71, "27"),
+    ("b2h", 0xC0, 0x71, "1e"),
+    ("b2h", 0xC0, 0x71, "1d"),
+    ("b2h", 0xC0, 0x71, "1c"),
+    ("b2h", 0xC0, 0x71, "1b"),
+    ("b2h", 0xC0, 0x71, "20"),
+    ("b2h", 0xC0, 0x71, "21"),
+    ("b2h", 0xC0, 0x71, "23"),
+    ("b2h", 0xC0, 0x71, "24"),
+    ("b2h", 0xC0, 0x71, "28"),
+    ("b2h", 0xC0, 0x71, "29"),
+    ("b2h", 0xC0, 0x71, "2a"),
+    ("b2h", 0xDA, 0xB1, "00"),    # base broadcast
+    ("b2h", 0xDD, 0xB1, "01"),    # base broadcast
+    ("b2h", 0xA5, 0x91, "01"),    # pedal channels
+    ("b2h", 0xA5, 0x91, "02"),
+    ("b2h", 0xA5, 0x91, "03"),
+    ("b2h", 0xC3, 0x71, "fc"),    # session ack
+    ("b2h", 0xC3, 0x71, "7c"),    # session data
+    ("b2h", 0xC3, 0x71, "80"),    # session keepalive
+    ("b2h", 0x9F, 0x21, "4f"),    # AB9 LED state response
+    ("b2h", 0x8E, 0x21, "00"),    # AB9 read response
+    ("b2h", 0x8E, 0x71, "00"),    # wheel read response (group 0x0E)
+    ("b2h", 0xAB, 0x31, "02"),    # base-state-err response
+    ("b2h", 0xBF, 0x71, "1a"),    # bitmask echo
+    ("b2h", 0xBF, 0x71, "19"),    # color echo
+}
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--capture", help="Bridge JSONL (default: latest in sim/logs/)")
+    ap.add_argument("--window", type=float, default=30.0,
+                    help="Window size in seconds (default: 30)")
+    ap.add_argument("--all", action="store_true",
+                    help="Print everything non-routine — no time window")
+    ap.add_argument("--no-dash", action="store_true",
+                    help="Also suppress dashboard session traffic (sess 0x02/0x03/"
+                         "0x06/0x08/0x09/0x0A 7c/fc/80 frames in both directions)")
+    args = ap.parse_args()
+
+    path = resolve_bridge(args.capture)
+    frames = load_bridge(path)
+    if not frames:
+        print(f"Empty capture: {path}", file=sys.stderr)
+        return
+    t_last = frames[-1].t
+    cutoff = 0 if args.all else t_last - args.window
+
+    matched = 0
+    for f in frames:
+        if f.t < cutoff:
+            continue
+        prefix = f.payload[:1].hex() if f.payload else ""
+        key = (f.dir, f.grp, f.dev, prefix)
+        if key in ROUTINE:
+            continue
+        if len(f.payload) < 1:
+            continue
+        # Optional: drop dashboard session traffic (session-data 7c/fc/80 on
+        # the telemetry groups grp 0x43 / 0xC3 dev 0x17 / 0x71). These carry
+        # the on-wheel display data — high volume but not the signal we want
+        # when chasing aperiodic events.
+        if args.no_dash:
+            if f.grp in (0x43, 0xC3) and f.dev in (0x14, 0x15, 0x17, 0x71):
+                if prefix in ("7c", "fc", "80"):
+                    continue
+        matched += 1
+        print(f"{f.t:.3f} {f.dir} grp=0x{f.grp:02x} dev=0x{f.dev:02x} "
+              f"payload={f.payload.hex()}")
+
+    print(f"\n{matched} non-routine frames in window "
+          f"({'full capture' if args.all else f'last {args.window:.0f}s'})",
+          file=sys.stderr)
+
+
+if __name__ == "__main__":
+    main()

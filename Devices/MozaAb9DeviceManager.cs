@@ -215,6 +215,103 @@ namespace MozaPlugin.Devices
                 _connection.Send(msg);
         }
 
+        // ===== Host-rendered engine vibration (Group 0x20 / cmd 0x0A 0x05) =====
+        //
+        // PitHouse streams this at ~91 Hz with a 24-bit BE period field that
+        // satisfies period = K / (engine_rpm × freq_hz), K ≈ 3.95e11. The
+        // slot ID toggles between an active value and 0x0000 (silent
+        // keepalive) when intensity drops to zero. See
+        // docs/protocol/devices/ab9-shifter.md for the full decode.
+        //
+        // Layout of the 24-byte wire frame:
+        //   7E 13 20 12 0A 05 [slot_hi slot_lo] [00 × 7]
+        //                     [per_hi per_mid per_lo] 04 [00 × 4] [cksum]
+        // Length byte 0x13 = 19 = cmd-id(2) + slot(2) + 7-zero + period(3)
+        //                       + tag(1) + 4-zero.
+        public const ushort SilentSlotId = 0x0000;
+        public const ushort DefaultEngineVibSlotId = 0x1996;
+        public const uint MinPeriodTicks = 0x64;
+        public const uint MaxPeriodTicks = 0xFFFFFF;
+
+        /// <summary>
+        /// Push one frame of the engine-vibration stream. When <paramref name="active"/>
+        /// is false the silent-keepalive slot (0x0000) is used and the period
+        /// becomes a stable mid-range filler. The frame goes through the
+        /// latest-wins stream lane so worker stalls never pile stale frames
+        /// on the wire.
+        /// </summary>
+        public bool SendEngineVibrationStream(bool active, uint periodTicks)
+        {
+            if (!_connection.IsConnected) return false;
+            ushort slot = active ? DefaultEngineVibSlotId : SilentSlotId;
+            if (periodTicks < MinPeriodTicks) periodTicks = MinPeriodTicks;
+            if (periodTicks > MaxPeriodTicks) periodTicks = MaxPeriodTicks;
+
+            var frame = new byte[24];
+            frame[0] = MozaProtocol.MessageStart; // 0x7E
+            frame[1] = 0x13;                      // length = cmd(2) + payload(17)
+            frame[2] = 0x20;                      // group: FFB
+            frame[3] = MozaProtocol.DeviceAb9;    // dev id 0x12
+            frame[4] = 0x0A;                      // cmd hi
+            frame[5] = 0x05;                      // cmd lo: streaming refresh
+            frame[6] = (byte)(slot >> 8);
+            frame[7] = (byte)(slot & 0xFF);
+            // frame[8..14] left zero (already zero-initialised)
+            frame[15] = (byte)((periodTicks >> 16) & 0xFF);
+            frame[16] = (byte)((periodTicks >> 8) & 0xFF);
+            frame[17] = (byte)(periodTicks & 0xFF);
+            frame[18] = 0x04;                     // type tag
+            // frame[19..22] trailing zeros
+            frame[23] = MozaProtocol.CalculateWireChecksum(frame, 23);
+            _connection.SendStream(StreamKind.Ab9EngineVibration, frame);
+            return true;
+        }
+
+        // ===== Gear-shift vibration intensity config (Group 0x20 / cmd 0x0A 0x01) =====
+        //
+        // One-shot push on slider change. AB9 firmware persists the value and
+        // fires the rumble pattern itself on every HID-detected gear shift —
+        // no per-shift host trigger needed (see ab9-shifter.md).
+        //
+        // Layout of the 24-byte wire frame:
+        //   7E 13 20 12 0A 01 [int_hi int_lo] [00 × 7]
+        //                     [0E 00 64 04] [00 × 4] [cksum]
+        // Intensity is BE 16-bit, linearly scaled from 0..100 to 0..0x332C
+        // (verified: 30% = 0x0F5A, 100% = 0x332C).
+        private const ushort MaxGearShiftIntensityRaw = 0x332C;
+
+        /// <summary>
+        /// Push the stored gear-shift-vibration intensity (0..100) to the AB9.
+        /// Goes through the one-shot FIFO so it preserves order against the
+        /// other slider writes that follow in <c>ApplySavedAb9Settings</c>.
+        /// </summary>
+        public bool SendGearShiftVibrationIntensity(int intensity0to100)
+        {
+            if (!_connection.IsConnected) return false;
+            if (intensity0to100 < 0) intensity0to100 = 0;
+            if (intensity0to100 > 100) intensity0to100 = 100;
+            ushort raw = (ushort)Math.Round(intensity0to100 / 100.0 * MaxGearShiftIntensityRaw);
+
+            var frame = new byte[24];
+            frame[0] = MozaProtocol.MessageStart;
+            frame[1] = 0x13;
+            frame[2] = 0x20;
+            frame[3] = MozaProtocol.DeviceAb9;
+            frame[4] = 0x0A;
+            frame[5] = 0x01;
+            frame[6] = (byte)(raw >> 8);
+            frame[7] = (byte)(raw & 0xFF);
+            // frame[8..14] zero
+            frame[15] = 0x0E;
+            frame[16] = 0x00;
+            frame[17] = 0x64;
+            frame[18] = 0x04;
+            // frame[19..22] zero
+            frame[23] = MozaProtocol.CalculateWireChecksum(frame, 23);
+            _connection.Send(frame);
+            return true;
+        }
+
         public void Dispose()
         {
             _connection.Dispose();
