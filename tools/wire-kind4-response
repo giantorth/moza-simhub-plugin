@@ -1,0 +1,63 @@
+#!/usr/bin/env python3
+"""Show the wheel's reply traffic in the 2-second window after each kind=4
+emit. Helps figure out what (if anything) the wheel tells us about which
+dashboard it switched to.
+
+Usage: tools/wire-kind4-response <path.jsonl>
+"""
+import sys, struct
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from moza_bridge import load_bridge
+
+def main():
+    if len(sys.argv) != 2:
+        print(__doc__, file=sys.stderr); sys.exit(2)
+    path = sys.argv[1]
+    frames = load_bridge(path)
+    if not frames:
+        print(f"no frames in {path}", file=sys.stderr); sys.exit(1)
+
+    t0 = frames[0].t_rel
+    # Find all kind=4 emit times
+    kind4_times = []
+    for f in frames:
+        if not f.is_session_data or f.dir != "h2b" or f.sess_id != 0x02:
+            continue
+        data = f.sess_data
+        if len(data) < 13 or data[0] != 0xFF:
+            continue
+        kind = struct.unpack_from('<I', data, 9)[0]
+        if kind == 4:
+            slot = struct.unpack_from('<I', data, 13)[0] if len(data) >= 17 else -1
+            kind4_times.append((f.t_rel - t0, slot))
+
+    print(f"=== {Path(path).name} ===")
+    print(f"{len(kind4_times)} kind=4 emit(s)")
+    print()
+    for k4_t, slot in kind4_times:
+        print(f"--- kind=4 emit at t={k4_t:.2f}s slot={slot} ---")
+        # Show all b2h within ±0.5s of kind=4, then up to 2s after
+        for f in frames:
+            t_rel = f.t_rel - t0
+            if t_rel < k4_t - 0.5 or t_rel > k4_t + 2.0:
+                continue
+            if f.dir != 'b2h':
+                continue
+            if not f.is_session_data:
+                continue
+            data = f.sess_data
+            label = ""
+            if len(data) >= 13 and data[0] == 0xFF:
+                kind = struct.unpack_from('<I', data, 9)[0]
+                size = struct.unpack_from('<I', data, 1)[0]
+                # If small body, dump bytes after kind
+                if len(data) >= 13:
+                    body = data[13:min(13+size, len(data))]
+                    label = f" FF kind={kind} size={size} body={body.hex()}"
+            print(f"  Δ{(t_rel-k4_t)*1000:+7.0f}ms sess=0x{f.sess_id:02x} stype=0x{f.sess_type:02x} seq={f.sess_seq:3d} len={len(data)} data[:32]={data[:32].hex()}{label}")
+        print()
+
+if __name__ == '__main__':
+    main()

@@ -162,8 +162,8 @@ namespace MozaPlugin.Devices
             int val = IndicatorStateCombo.SelectedIndex;
             if (val < 0) return;
             _data!.BaseAmbientIndicatorState = val;
-            _settings!.BaseAmbientIndicatorState = val;
-            _device!.WriteSetting("base-ambient-indicator-state", val);
+            _plugin.UpdateActiveProfile(p => p.BaseAmbientIndicatorState = val);
+            _plugin.WriteIfBaseAmbientSupported("base-ambient-indicator-state", val);
             _plugin.SaveSettings();
         }
 
@@ -174,8 +174,8 @@ namespace MozaPlugin.Devices
             if (uiIndex < 0) return;
             int deviceMode = MapStandbyUiToDevice(uiIndex);
             _data!.BaseAmbientStandbyMode = deviceMode;
-            _settings!.BaseAmbientStandbyMode = deviceMode;
-            _device!.WriteSetting("base-ambient-standby-mode", deviceMode);
+            _plugin.UpdateActiveProfile(p => p.BaseAmbientStandbyMode = deviceMode);
+            _plugin.WriteIfBaseAmbientSupported("base-ambient-standby-mode", deviceMode);
             _plugin.SaveSettings();
         }
 
@@ -185,8 +185,8 @@ namespace MozaPlugin.Devices
             int val = SleepModeCombo.SelectedIndex;
             if (val < 0) return;
             _data!.BaseAmbientSleepMode = val;
-            _settings!.BaseAmbientSleepMode = val;
-            _device!.WriteSetting("base-ambient-sleep-mode", val);
+            _plugin.UpdateActiveProfile(p => p.BaseAmbientSleepMode = val);
+            _plugin.WriteIfBaseAmbientSupported("base-ambient-sleep-mode", val);
             _plugin.SaveSettings();
         }
 
@@ -196,8 +196,8 @@ namespace MozaPlugin.Devices
             int val = (int)Math.Round(e.NewValue);
             BrightnessValue.Text = $"{val}";
             _data!.BaseAmbientBrightness = val;
-            _settings!.BaseAmbientBrightness = val;
-            _device!.WriteSetting("base-ambient-brightness", val);
+            _plugin.UpdateActiveProfile(p => p.BaseAmbientBrightness = val);
+            _plugin.WriteIfBaseAmbientSupported("base-ambient-brightness", val);
             _plugin.SaveSettings();
         }
 
@@ -207,21 +207,23 @@ namespace MozaPlugin.Devices
             int val = (int)Math.Round(e.NewValue);
             SleepTimeoutValue.Text = $"{val}";
             _data!.BaseAmbientSleepTimeout = val;
-            _settings!.BaseAmbientSleepTimeout = val;
-            _device!.WriteSetting("base-ambient-sleep-timeout", val);
+            _plugin.UpdateActiveProfile(p => p.BaseAmbientSleepTimeout = val);
+            _plugin.WriteIfBaseAmbientSupported("base-ambient-sleep-timeout", val);
             _plugin.SaveSettings();
         }
 
         private void StartupColorSwatch_Click(object sender, MouseButtonEventArgs e)
         {
             ShowColorPicker(_data!.BaseAmbientStartupColor, "base-ambient-startup-color",
-                packed => { _settings!.BaseAmbientStartupColor = packed; }, StartupColorSwatch);
+                packed => _plugin!.UpdateActiveProfile(p => p.BaseAmbientStartupColor = packed),
+                StartupColorSwatch);
         }
 
         private void ShutdownColorSwatch_Click(object sender, MouseButtonEventArgs e)
         {
             ShowColorPicker(_data!.BaseAmbientShutdownColor, "base-ambient-shutdown-color",
-                packed => { _settings!.BaseAmbientShutdownColor = packed; }, ShutdownColorSwatch);
+                packed => _plugin!.UpdateActiveProfile(p => p.BaseAmbientShutdownColor = packed),
+                ShutdownColorSwatch);
         }
 
         private void ShowColorPicker(byte[] target, string command, Action<int> persistPacked, Border swatch)
@@ -233,7 +235,7 @@ namespace MozaPlugin.Devices
             if (dialog.ShowDialog() == true)
             {
                 byte r = dialog.SelectedR, g = dialog.SelectedG, b = dialog.SelectedB;
-                _device!.WriteColor(command, r, g, b);
+                _plugin.WriteColorIfBaseAmbientSupported(command, r, g, b);
                 target[0] = r; target[1] = g; target[2] = b;
                 swatch.Background = new SolidColorBrush(Color.FromRgb(r, g, b));
                 persistPacked((r << 16) | (g << 8) | b);

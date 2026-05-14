@@ -24,8 +24,27 @@ namespace MozaPlugin.Telemetry.Dashboard
         private readonly SessionDataReassembler _deviceInbox = new();
         private WheelDashboardState? _lastState;
 
-        /// <summary>Most recent dashboard state parsed from the device.</summary>
-        public WheelDashboardState? LastState => _lastState;
+        // Cross-instance cache. The wheel's dashboard library (ConfigJsonList,
+        // EnabledDashboards) is stable across plugin reloads in the same SimHub
+        // process, so a successful parse in any prior instance is still valid
+        // until the wheel is physically swapped. Without this fallback, a
+        // sess=0x09 chunk drop on cold-start leaves _lastState null forever
+        // for that plugin instance — and that's how the wheel ends up stuck
+        // on the wrong dashboard after a game switch, because neither the
+        // catalog re-sync probe nor ApplyTelemetryDashboardFromProfile can
+        // resolve a wheel:<id> key to a slot without it.
+        //
+        // Reset by HardReset() — wheel hot-swap, schema upgrade, dispose.
+        private static WheelDashboardState? _cachedLastState;
+
+        /// <summary>Most recent dashboard state parsed from the device.
+        /// Falls back to the cross-instance cache when this instance hasn't
+        /// completed a parse yet (e.g. mid-cold-start, or a chunk-drop
+        /// rendered this session's parse impossible). Callers that need
+        /// only library data (ConfigJsonList, EnabledDashboards id→name)
+        /// get usable answers; callers that need fresh slot state should
+        /// observe TelemetrySender.WheelReportedSlot instead.</summary>
+        public WheelDashboardState? LastState => _lastState ?? _cachedLastState;
 
         /// <summary>Result of a seq-aware <see cref="OnChunk(int, byte[])"/> call.</summary>
         public enum ChunkResult
@@ -51,6 +70,7 @@ namespace MozaPlugin.Telemetry.Dashboard
             if (state != null)
             {
                 _lastState = state;
+                _cachedLastState = state;
                 // Consume the decoded blob so successive updates (e.g. after
                 // a dashboard change) can reassemble a fresh one.
                 _deviceInbox.Clear();
@@ -108,6 +128,7 @@ namespace MozaPlugin.Telemetry.Dashboard
             var state = WheelStateParser.Parse(decomp, out var missing);
             if (state == null) return ChunkResult.Buffered;
             _lastState = state;
+            _cachedLastState = state;
             _deviceInbox.Clear();
             try
             {
@@ -169,6 +190,7 @@ namespace MozaPlugin.Telemetry.Dashboard
         {
             _deviceInbox.Clear();
             _lastState = null;
+            _cachedLastState = null;
             _lastMissingShape = "";
         }
 

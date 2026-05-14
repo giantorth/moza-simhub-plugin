@@ -1,0 +1,59 @@
+#!/usr/bin/env python3
+"""Dump every session lifecycle event (prime/open/devinit/close/data) on
+specified sessions from a moza-wire-*.jsonl. Useful for tracing a stuck
+handshake: did the host close sessions? Did the wheel ever respond?
+
+Usage: tools/wire-sess-lifecycle <path.jsonl> [sess_id...]
+       defaults to sessions 0x01 0x02 0x03 0x09
+"""
+import sys, struct
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from moza_bridge import load_bridge
+
+SESS_TYPE = {
+    0x10: 'data',   0x14: 'prime',  0x16: 'data-ack',
+    0x1c: 'open',   0x40: 'data',   0x81: 'devinit',
+    0x90: 'close',
+}
+
+def main():
+    if len(sys.argv) < 2:
+        print(__doc__, file=sys.stderr); sys.exit(2)
+    path = sys.argv[1]
+    targets = [int(x, 0) for x in sys.argv[2:]] or [0x01, 0x02, 0x03, 0x09]
+    frames = load_bridge(path)
+    if not frames:
+        print(f"no frames in {path}", file=sys.stderr); sys.exit(1)
+
+    t0 = frames[0].t_rel
+    print(f"=== {Path(path).name} ({len(frames)} frames, {frames[-1].t_rel - t0:.1f}s) ===")
+    print(f"watching sessions: {[f'0x{s:02x}' for s in targets]}")
+    print()
+
+    n_per_sess = {s: {} for s in targets}
+    for f in frames:
+        if not f.is_session_data: continue
+        sid = f.sess_id
+        if sid not in targets: continue
+        st = f.sess_type
+        label = SESS_TYPE.get(st, f'?st=0x{st:02x}')
+        # Suppress noisy data frames after the first 3 per direction
+        key = (f.dir, label)
+        n_per_sess[sid][key] = n_per_sess[sid].get(key, 0) + 1
+        if label == 'data' and n_per_sess[sid][key] > 3:
+            continue
+        t = f.t_rel - t0
+        print(f"  t={t:7.2f}s sess=0x{sid:02x} {f.dir:3s} {label:10s} seq={f.sess_seq}")
+
+    print()
+    print("=== per-session counts ===")
+    for sid in targets:
+        if not n_per_sess[sid]: continue
+        print(f"  sess=0x{sid:02x}:")
+        for (d, l), n in sorted(n_per_sess[sid].items()):
+            print(f"    {d:3s} {l:10s}: {n}")
+
+if __name__ == '__main__':
+    main()

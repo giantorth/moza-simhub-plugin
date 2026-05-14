@@ -1,0 +1,108 @@
+#!/usr/bin/env python3
+"""Decode kind=4 dashboard-switch emits + sess=0x09/0x02 lifecycle events from a
+moza-wire-*.jsonl trace produced by EnableWireTraceFileSink.
+
+Usage: tools/wire-dashboard-switches <path.jsonl>
+
+Emits one line per kind=4 emit, sess=0x09/0x02 prime/open/devinit/close, and a
+post-mortem table linking each kind=4 to its next sess=0x09 device-init.
+
+When debugging "wheel doesn't bind on game switch / cold start", check:
+  - Each kind=4 should be followed by a sess=0x09 device-init within ~11–13 s
+    (the host silence gate + wheel-side timeout).
+  - If two kind=4 emits land within <1 s of each other, something is double-
+    triggering (catalog re-sync probe + profile-apply, or auto-test + apply).
+  - If a kind=4 isn't followed by a devinit at all, the wheel never re-engaged.
+"""
+import sys, struct
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from moza_bridge import load_bridge
+
+def main():
+    if len(sys.argv) != 2:
+        print(__doc__, file=sys.stderr)
+        sys.exit(2)
+    path = sys.argv[1]
+    frames = load_bridge(path)
+    if not frames:
+        print(f"no frames in {path}", file=sys.stderr)
+        sys.exit(1)
+
+    t0 = frames[0].t_rel
+    print(f"=== {Path(path).name} ===")
+    print(f"frames: {len(frames)} duration: {frames[-1].t_rel - t0:.1f}s")
+    print()
+
+    kind4_emits = []  # (t, slot, hex)
+    sess_evts = {}    # sid → [(t, dir, evt)]
+
+    # Session lifecycle byte values. These come from
+    # MozaPlugin.Protocol.SessionPropertyPushBuilder + SerialFrameBuilder.
+    SESS_TYPE = {
+        0x14: 'prime',   0x1c: 'open',  0x81: 'devinit',
+        0x90: 'close',   0x10: 'data',  0x16: 'data-ack', 0x40: 'data',
+    }
+
+    for f in frames:
+        t = f.t_rel - t0
+        if not f.is_session_data:
+            continue
+        sid = f.sess_id
+        st = f.sess_type
+        data = f.sess_data
+        # kind=4 detection on sess=0x02 h2b. FF-record layout:
+        #   data[0]=0xFF, data[1:5]=size LE, data[5:9]=0, data[9:13]=kind LE, data[13:]=body
+        if f.dir == 'h2b' and sid == 0x02 and len(data) >= 13 and data[0] == 0xFF:
+            kind = struct.unpack_from('<I', data, 9)[0]
+            size = struct.unpack_from('<I', data, 1)[0]
+            if kind == 4:
+                body = data[13:13 + size] if len(data) >= 13 + size else data[13:]
+                slot = struct.unpack_from('<I', body, 0)[0] if len(body) >= 4 else -1
+                kind4_emits.append((t, slot, data.hex()))
+        if st in SESS_TYPE:
+            sess_evts.setdefault(sid, []).append((t, f.dir, SESS_TYPE[st]))
+
+    print(f"kind=4 dashboard-switch emits ({len(kind4_emits)}):")
+    for t, slot, hexdata in kind4_emits:
+        print(f"  t={t:7.2f}s slot={slot:2d}  body[:16]={hexdata[:32]}")
+    print()
+
+    print('Session 0x09 lifecycle (host-side prime+open, wheel-side devinit):')
+    for t, d, evt in sorted(sess_evts.get(0x09, []), key=lambda x: x[0]):
+        if evt in ('prime', 'open', 'devinit', 'close'):
+            print(f"  t={t:7.2f}s {d:3s} {evt}")
+    print()
+
+    print('Session 0x02 lifecycle:')
+    for t, d, evt in sorted(sess_evts.get(0x02, []), key=lambda x: x[0]):
+        if evt in ('prime', 'open', 'devinit', 'close'):
+            print(f"  t={t:7.2f}s {d:3s} {evt}")
+    print()
+
+    s09_devinits = sorted(t for t, d, evt in sess_evts.get(0x09, []) if evt == 'devinit' and d == 'b2h')
+    print('=== kind=4 → next sess=0x09 device-init delta ===')
+    print('(delta should be ~11.5–13 s when the silence gate works; <2 s means')
+    print(' the wheel never went through a full close+reopen)')
+    for t, slot, _ in kind4_emits:
+        nxt = next((x for x in s09_devinits if x > t), None)
+        if nxt is None:
+            print(f"  kind=4 t={t:7.2f}s slot={slot:2d} → NO subsequent sess=0x09 devinit")
+        else:
+            print(f"  kind=4 t={t:7.2f}s slot={slot:2d} → devinit t={nxt:7.2f}s (Δ={nxt-t:.2f}s)")
+
+    # Cluster detection: kind=4 emits within 1s of each other suggest a race
+    print()
+    rapid = []
+    for i in range(1, len(kind4_emits)):
+        dt = kind4_emits[i][0] - kind4_emits[i-1][0]
+        if dt < 1.0:
+            rapid.append((kind4_emits[i-1], kind4_emits[i], dt))
+    if rapid:
+        print('=== Suspicious rapid kind=4 clusters (Δ < 1 s) ===')
+        for a, b, dt in rapid:
+            print(f"  t={a[0]:.2f} slot={a[1]} → t={b[0]:.2f} slot={b[1]} (Δ={dt*1000:.0f}ms)")
+
+if __name__ == '__main__':
+    main()

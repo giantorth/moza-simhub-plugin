@@ -111,14 +111,14 @@ namespace MozaPlugin.Devices
 
             var plugin = MozaPlugin.Instance;
             if (plugin != null)
-                _settings.CaptureFromCurrent(plugin.Settings, plugin.Data);
+                _settings.CaptureFromCurrent(plugin.Settings, plugin.Data, plugin.Settings?.ProfileStore?.CurrentProfile);
         }
 
         public override JToken GetSettings()
         {
             var plugin = MozaPlugin.Instance;
             if (plugin != null)
-                _settings.CaptureFromCurrent(plugin.Settings, plugin.Data);
+                _settings.CaptureFromCurrent(plugin.Settings, plugin.Data, plugin.Settings?.ProfileStore?.CurrentProfile);
 
             return JToken.FromObject(_settings);
         }

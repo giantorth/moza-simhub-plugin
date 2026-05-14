@@ -49,10 +49,18 @@ namespace MozaPlugin
                 AutoApplyProfileCheck.IsChecked = plugin.Settings.AutoApplyProfileOnLaunch;
                 LimitWheelUpdatesCheck.IsChecked = plugin.Settings.LimitWheelUpdates;
                 AlwaysResendBitmaskCheck.IsChecked = plugin.Settings.AlwaysResendBitmask;
-                GearshiftVibrateOnNeutralCheck.IsChecked = plugin.Settings.GearshiftVibrateOnNeutral;
                 {
-                    int dbMs = plugin.Settings.GearshiftDebounceMs;
-                    if (dbMs < 0) dbMs = 0;
+                    // Source from the active profile (single source of truth). Falls
+                    // back to plugin-global flat fields for legacy data that hasn't
+                    // been promoted into a profile yet on this launch.
+                    var gsProfile = plugin.Settings.ProfileStore?.CurrentProfile;
+                    bool von = gsProfile?.GearshiftVibrateOnNeutral == 1
+                        || (gsProfile?.GearshiftVibrateOnNeutral == -1 && plugin.Settings.GearshiftVibrateOnNeutral);
+                    GearshiftVibrateOnNeutralCheck.IsChecked = von;
+
+                    int dbMs = gsProfile?.GearshiftDebounceMs ?? -1;
+                    if (dbMs < 0) dbMs = plugin.Settings.GearshiftDebounceMs;
+                    if (dbMs < 0) dbMs = 500;
                     if (dbMs > 1000) dbMs = 1000;
                     // Snap to 50 ms grid so the slider thumb sits on a tick when the
                     // persisted value came from an older build / a manual edit.
@@ -337,8 +345,8 @@ namespace MozaPlugin
             RotationValue.Text = $"{deg}°";
             _data.Limit = raw;
             _data.MaxAngle = raw;
-            _device.WriteSetting("base-limit", raw);
-            _device.WriteSetting("base-max-angle", raw);
+            _plugin.WriteIfBaseConnected("base-limit", raw);
+            _plugin.WriteIfBaseConnected("base-max-angle", raw);
             _plugin.SaveSettings();
         }
 
@@ -349,7 +357,7 @@ namespace MozaPlugin
             int raw = pct * 10;
             FfbStrengthValue.Text = $"{pct}%";
             _data.FfbStrength = raw;
-            _device.WriteSetting("base-ffb-strength", raw);
+            _plugin.WriteIfBaseConnected("base-ffb-strength", raw);
             _plugin.SaveSettings();
         }
 
@@ -359,7 +367,7 @@ namespace MozaPlugin
             int val = (int)Math.Round(e.NewValue);
             TorqueValue.Text = $"{val}%";
             _data.Torque = val;
-            _device.WriteSetting("base-torque", val);
+            _plugin.WriteIfBaseConnected("base-torque", val);
             _plugin.SaveSettings();
         }
 
@@ -369,7 +377,7 @@ namespace MozaPlugin
             int val = PerformanceOutputCombo.SelectedIndex;
             if (val < 0) return;
             _data.TempStrategy = val;
-            _device.WriteSetting("base-temp-strategy", val);
+            _plugin.WriteIfBaseConnected("base-temp-strategy", val);
             _plugin.SaveSettings();
         }
 
@@ -379,14 +387,15 @@ namespace MozaPlugin
             int val = (int)Math.Round(e.NewValue);
             GearshiftVibrationValue.Text = val.ToString();
             _data.GearshiftVibration = val;
-            _device.WriteSetting("base-gearshift-vibration", val);
+            _plugin.WriteIfBaseConnected("base-gearshift-vibration", val);
             _plugin.SaveSettings();
         }
 
         private void GearshiftVibrateOnNeutralCheck_Changed(object sender, RoutedEventArgs e)
         {
             if (_suppressEvents) return;
-            _plugin.Settings.GearshiftVibrateOnNeutral = GearshiftVibrateOnNeutralCheck.IsChecked == true;
+            bool on = GearshiftVibrateOnNeutralCheck.IsChecked == true;
+            _plugin.UpdateActiveProfile(p => p.GearshiftVibrateOnNeutral = on ? 1 : 0);
             _plugin.SaveSettings();
         }
 
@@ -401,7 +410,7 @@ namespace MozaPlugin
             if (val < 0) val = 0;
             if (val > 1000) val = 1000;
             GearshiftDebounceValue.Text = $"{val} ms";
-            _plugin.Settings.GearshiftDebounceMs = val;
+            _plugin.UpdateActiveProfile(p => p.GearshiftDebounceMs = val);
             _plugin.SaveSettings();
         }
 
@@ -412,7 +421,7 @@ namespace MozaPlugin
             int raw = pct * 10;
             SpeedValue.Text = $"{pct}%";
             _data.Speed = raw;
-            _device.WriteSetting("base-speed", raw);
+            _plugin.WriteIfBaseConnected("base-speed", raw);
             _plugin.SaveSettings();
         }
 
@@ -423,7 +432,7 @@ namespace MozaPlugin
             int raw = pct * 10;
             DamperValue.Text = $"{pct}%";
             _data.Damper = raw;
-            _device.WriteSetting("base-damper", raw);
+            _plugin.WriteIfBaseConnected("base-damper", raw);
             _plugin.SaveSettings();
         }
 
@@ -434,7 +443,7 @@ namespace MozaPlugin
             int raw = pct * 10;
             FrictionValue.Text = $"{pct}%";
             _data.Friction = raw;
-            _device.WriteSetting("base-friction", raw);
+            _plugin.WriteIfBaseConnected("base-friction", raw);
             _plugin.SaveSettings();
         }
 
@@ -445,7 +454,7 @@ namespace MozaPlugin
             int raw = val * 10;
             InertiaValue.Text = $"{val}";
             _data.Inertia = raw;
-            _device.WriteSetting("base-inertia", raw);
+            _plugin.WriteIfBaseConnected("base-inertia", raw);
             _plugin.SaveSettings();
         }
 
@@ -456,7 +465,7 @@ namespace MozaPlugin
             int raw = pct * 10;
             SpringValue.Text = $"{pct}%";
             _data.Spring = raw;
-            _device.WriteSetting("base-spring", raw);
+            _plugin.WriteIfBaseConnected("base-spring", raw);
             _plugin.SaveSettings();
         }
 
@@ -467,7 +476,7 @@ namespace MozaPlugin
             int raw = (int)Math.Round(pct * 2.55);
             GameDamperValue.Text = $"{pct}%";
             _data.GameDamper = raw;
-            _device.WriteSetting("main-set-damper-gain", raw);
+            _plugin.WriteIfBaseConnected("main-set-damper-gain", raw);
             _plugin.SaveSettings();
         }
 
@@ -478,7 +487,7 @@ namespace MozaPlugin
             int raw = (int)Math.Round(pct * 2.55);
             GameFrictionValue.Text = $"{pct}%";
             _data.GameFriction = raw;
-            _device.WriteSetting("main-set-friction-gain", raw);
+            _plugin.WriteIfBaseConnected("main-set-friction-gain", raw);
             _plugin.SaveSettings();
         }
 
@@ -489,7 +498,7 @@ namespace MozaPlugin
             int raw = (int)Math.Round(pct * 2.55);
             GameInertiaValue.Text = $"{pct}%";
             _data.GameInertia = raw;
-            _device.WriteSetting("main-set-inertia-gain", raw);
+            _plugin.WriteIfBaseConnected("main-set-inertia-gain", raw);
             _plugin.SaveSettings();
         }
 
@@ -500,7 +509,7 @@ namespace MozaPlugin
             int raw = (int)Math.Round(pct * 2.55);
             GameSpringValue.Text = $"{pct}%";
             _data.GameSpring = raw;
-            _device.WriteSetting("main-set-spring-gain", raw);
+            _plugin.WriteIfBaseConnected("main-set-spring-gain", raw);
             _plugin.SaveSettings();
         }
 
@@ -510,7 +519,7 @@ namespace MozaPlugin
             int val = (int)Math.Round(e.NewValue);
             SpeedDampingValue.Text = $"{val}%";
             _data.SpeedDamping = val;
-            _device.WriteSetting("base-speed-damping", val);
+            _plugin.WriteIfBaseConnected("base-speed-damping", val);
             _plugin.SaveSettings();
         }
 
@@ -520,7 +529,7 @@ namespace MozaPlugin
             int val = (int)Math.Round(e.NewValue);
             SpeedDampingPointValue.Text = $"{val} kph";
             _data.SpeedDampingPoint = val;
-            _device.WriteSetting("base-speed-damping-point", val);
+            _plugin.WriteIfBaseConnected("base-speed-damping-point", val);
             _plugin.SaveSettings();
         }
 
@@ -530,7 +539,7 @@ namespace MozaPlugin
             int val = (int)Math.Round(e.NewValue);
             NaturalInertiaValue.Text = $"{val}";
             _data.NaturalInertia = val;
-            _device.WriteSetting("base-natural-inertia", val);
+            _plugin.WriteIfBaseConnected("base-natural-inertia", val);
             _plugin.SaveSettings();
         }
 
@@ -541,7 +550,7 @@ namespace MozaPlugin
             int raw = (int)Math.Round(display * (400.0 / 9.0) - (400.0 / 9.0) + 100.0);
             SoftLimitStiffnessValue.Text = $"{display}";
             _data.SoftLimitStiffness = raw;
-            _device.WriteSetting("base-soft-limit-stiffness", raw);
+            _plugin.WriteIfBaseConnected("base-soft-limit-stiffness", raw);
             _plugin.SaveSettings();
         }
 
@@ -552,7 +561,7 @@ namespace MozaPlugin
             if (_suppressEvents) return;
             int val = FfbReverseCheck.IsChecked == true ? 1 : 0;
             _data.FfbReverse = val;
-            _device.WriteSetting("base-ffb-reverse", val);
+            _plugin.WriteIfBaseConnected("base-ffb-reverse", val);
             _plugin.SaveSettings();
         }
 
@@ -561,7 +570,7 @@ namespace MozaPlugin
             if (_suppressEvents) return;
             int val = ProtectionCheck.IsChecked == true ? 1 : 0;
             _data.Protection = val;
-            _device.WriteSetting("base-protection", val);
+            _plugin.WriteIfBaseConnected("base-protection", val);
             _plugin.SaveSettings();
         }
 
@@ -570,7 +579,7 @@ namespace MozaPlugin
             if (_suppressEvents) return;
             int val = SoftLimitRetainCheck.IsChecked == true ? 1 : 0;
             _data.SoftLimitRetain = val;
-            _device.WriteSetting("base-soft-limit-retain", val);
+            _plugin.WriteIfBaseConnected("base-soft-limit-retain", val);
             _plugin.SaveSettings();
         }
 
@@ -579,7 +588,7 @@ namespace MozaPlugin
             if (_suppressEvents) return;
             int val = StandbyCheck.IsChecked == true ? 1 : 0;
             _data.WorkMode = val;
-            _device.WriteSetting("main-set-work-mode", val);
+            _plugin.WriteIfBaseConnected("main-set-work-mode", val);
             _plugin.SaveSettings();
         }
 
@@ -588,7 +597,7 @@ namespace MozaPlugin
             if (_suppressEvents) return;
             int val = LedStatusCheck.IsChecked == true ? 1 : 0;
             _data.LedStatus = val;
-            _device.WriteSetting("main-set-led-status", val);
+            _plugin.WriteIfBaseConnected("main-set-led-status", val);
             _plugin.SaveSettings();
         }
 
@@ -654,9 +663,9 @@ namespace MozaPlugin
             if (_suppressEvents) return;
             int val = WheelPaddlesModeCombo.SelectedIndex;
             _data.WheelPaddlesMode = val;
-            _settings.WheelPaddlesMode = val;
+            _plugin.UpdateActiveWheelOverlay(o => o.WheelPaddlesMode = val);
             UpdatePaddlePanelVisibility(val);
-            _device.WriteSetting("wheel-paddles-mode", val + 1); // display 0/1/2 → raw 1/2/3
+            _plugin.WriteIfWheelDetected("wheel-paddles-mode", val + 1); // display 0/1/2 → raw 1/2/3
             _plugin.SaveSettings();
         }
 
@@ -666,8 +675,8 @@ namespace MozaPlugin
             int val = (int)Math.Round(e.NewValue);
             WheelClutchPointValue.Text = $"{val}%";
             _data.WheelClutchPoint = val;
-            _settings.WheelClutchPoint = val;
-            _device.WriteSetting("wheel-clutch-point", val);
+            _plugin.UpdateActiveWheelOverlay(o => o.WheelClutchPoint = val);
+            _plugin.WriteIfWheelDetected("wheel-clutch-point", val);
             _plugin.SaveSettings();
         }
 
@@ -676,8 +685,8 @@ namespace MozaPlugin
             if (_suppressEvents) return;
             int val = KnobModeCombo.SelectedIndex;
             _data.WheelKnobMode = val;
-            _settings.WheelKnobMode = val;
-            _device.WriteSetting("wheel-knob-mode", val);
+            _plugin.UpdateActiveWheelOverlay(o => o.WheelKnobMode = val);
+            _plugin.WriteIfWheelDetected("wheel-knob-mode", val);
             _plugin.SaveSettings();
         }
 
@@ -685,7 +694,7 @@ namespace MozaPlugin
         {
             if (_suppressEvents) return;
             _data.WheelKnobSignalModes[index] = value;
-            _device.WriteSetting($"wheel-knob-signal-mode{index}", value);
+            _plugin.WriteIfWheelDetected($"wheel-knob-signal-mode{index}", value);
             _plugin.SaveSettings();
         }
 
@@ -705,8 +714,8 @@ namespace MozaPlugin
             if (_suppressEvents) return;
             int val = StickModeCheck.IsChecked == true ? 1 : 0;
             _data.WheelStickMode = val;
-            _settings.WheelStickMode = val;
-            _device.WriteSetting("wheel-stick-mode", val * 256);
+            _plugin.UpdateActiveWheelOverlay(o => o.WheelStickMode = val);
+            _plugin.WriteIfWheelDetected("wheel-stick-mode", val * 256);
             _plugin.SaveSettings();
         }
 
@@ -715,8 +724,8 @@ namespace MozaPlugin
             if (_suppressEvents) return;
             int val = StickModeCombo.SelectedIndex;
             _data.WheelStickMode = val;
-            _settings.WheelStickMode = val;
-            _device.WriteSetting("wheel-stick-mode-new", val);
+            _plugin.UpdateActiveWheelOverlay(o => o.WheelStickMode = val);
+            _plugin.WriteIfWheelDetected("wheel-stick-mode-new", val);
             _plugin.SaveSettings();
         }
 
@@ -758,7 +767,7 @@ namespace MozaPlugin
             if (_suppressEvents) return;
             int val = HandbrakeModeCombo.SelectedIndex;
             _data.HandbrakeMode = val;
-            _device.WriteSetting("handbrake-mode", val);
+            _plugin.WriteIfHandbrakeDetected("handbrake-mode", val);
             _plugin.SaveSettings();
         }
 
@@ -768,7 +777,7 @@ namespace MozaPlugin
             int val = (int)Math.Round(e.NewValue);
             HandbrakeThresholdValue.Text = $"{val}%";
             _data.HandbrakeButtonThreshold = val;
-            _device.WriteSetting("handbrake-button-threshold", val);
+            _plugin.WriteIfHandbrakeDetected("handbrake-button-threshold", val);
             _plugin.SaveSettings();
         }
 
@@ -777,7 +786,7 @@ namespace MozaPlugin
             if (_suppressEvents) return;
             int val = HandbrakeDirectionCheck.IsChecked == true ? 1 : 0;
             _data.HandbrakeDirection = val;
-            _device.WriteSetting("handbrake-direction", val);
+            _plugin.WriteIfHandbrakeDetected("handbrake-direction", val);
             _plugin.SaveSettings();
         }
 
@@ -871,12 +880,12 @@ namespace MozaPlugin
             "base-equalizer4", "base-equalizer5", "base-equalizer6"
         };
 
-        private void Eq1Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, Eq1Value, "%", v => { _data.Equalizer1 = v; _device.WriteSetting(EqCommands[0], v); });
-        private void Eq2Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, Eq2Value, "%", v => { _data.Equalizer2 = v; _device.WriteSetting(EqCommands[1], v); });
-        private void Eq3Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, Eq3Value, "%", v => { _data.Equalizer3 = v; _device.WriteSetting(EqCommands[2], v); });
-        private void Eq4Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, Eq4Value, "%", v => { _data.Equalizer4 = v; _device.WriteSetting(EqCommands[3], v); });
-        private void Eq5Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, Eq5Value, "%", v => { _data.Equalizer5 = v; _device.WriteSetting(EqCommands[4], v); });
-        private void Eq6Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, Eq6Value, "%", v => { _data.Equalizer6 = v; _device.WriteSetting(EqCommands[5], v); });
+        private void Eq1Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, Eq1Value, "%", v => { _data.Equalizer1 = v; _plugin.WriteIfBaseConnected(EqCommands[0], v); });
+        private void Eq2Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, Eq2Value, "%", v => { _data.Equalizer2 = v; _plugin.WriteIfBaseConnected(EqCommands[1], v); });
+        private void Eq3Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, Eq3Value, "%", v => { _data.Equalizer3 = v; _plugin.WriteIfBaseConnected(EqCommands[2], v); });
+        private void Eq4Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, Eq4Value, "%", v => { _data.Equalizer4 = v; _plugin.WriteIfBaseConnected(EqCommands[3], v); });
+        private void Eq5Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, Eq5Value, "%", v => { _data.Equalizer5 = v; _plugin.WriteIfBaseConnected(EqCommands[4], v); });
+        private void Eq6Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, Eq6Value, "%", v => { _data.Equalizer6 = v; _plugin.WriteIfBaseConnected(EqCommands[5], v); });
 
         // ===== FFB Curve handlers =====
 
@@ -900,11 +909,11 @@ namespace MozaPlugin
                 FfbCurveY5Slider.Value = p[4]; FfbCurveY5Value.Text = $"{p[4]}"; _data.FfbCurveY5 = p[4];
             }
             // Always write fixed X breakpoints first
-            _device.WriteSetting("base-ffb-curve-x1", 20); _device.WriteSetting("base-ffb-curve-x2", 40);
-            _device.WriteSetting("base-ffb-curve-x3", 60); _device.WriteSetting("base-ffb-curve-x4", 80);
-            _device.WriteSetting("base-ffb-curve-y1", p[0]); _device.WriteSetting("base-ffb-curve-y2", p[1]);
-            _device.WriteSetting("base-ffb-curve-y3", p[2]); _device.WriteSetting("base-ffb-curve-y4", p[3]);
-            _device.WriteSetting("base-ffb-curve-y5", p[4]);
+            _plugin.WriteIfBaseConnected("base-ffb-curve-x1", 20); _plugin.WriteIfBaseConnected("base-ffb-curve-x2", 40);
+            _plugin.WriteIfBaseConnected("base-ffb-curve-x3", 60); _plugin.WriteIfBaseConnected("base-ffb-curve-x4", 80);
+            _plugin.WriteIfBaseConnected("base-ffb-curve-y1", p[0]); _plugin.WriteIfBaseConnected("base-ffb-curve-y2", p[1]);
+            _plugin.WriteIfBaseConnected("base-ffb-curve-y3", p[2]); _plugin.WriteIfBaseConnected("base-ffb-curve-y4", p[3]);
+            _plugin.WriteIfBaseConnected("base-ffb-curve-y5", p[4]);
             _plugin.SaveSettings();
         }
 
@@ -913,11 +922,11 @@ namespace MozaPlugin
         private void FfbCurvePreset_Exponential(object s, RoutedEventArgs e) => ApplyFfbCurvePreset(FfbCurvePresets[2]);
         private void FfbCurvePreset_Parabolic(object s, RoutedEventArgs e) => ApplyFfbCurvePreset(FfbCurvePresets[3]);
 
-        private void FfbCurveY1Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, FfbCurveY1Value, "", v => { _data.FfbCurveY1 = v; _device.WriteSetting("base-ffb-curve-y1", v); });
-        private void FfbCurveY2Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, FfbCurveY2Value, "", v => { _data.FfbCurveY2 = v; _device.WriteSetting("base-ffb-curve-y2", v); });
-        private void FfbCurveY3Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, FfbCurveY3Value, "", v => { _data.FfbCurveY3 = v; _device.WriteSetting("base-ffb-curve-y3", v); });
-        private void FfbCurveY4Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, FfbCurveY4Value, "", v => { _data.FfbCurveY4 = v; _device.WriteSetting("base-ffb-curve-y4", v); });
-        private void FfbCurveY5Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, FfbCurveY5Value, "", v => { _data.FfbCurveY5 = v; _device.WriteSetting("base-ffb-curve-y5", v); });
+        private void FfbCurveY1Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, FfbCurveY1Value, "", v => { _data.FfbCurveY1 = v; _plugin.WriteIfBaseConnected("base-ffb-curve-y1", v); });
+        private void FfbCurveY2Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, FfbCurveY2Value, "", v => { _data.FfbCurveY2 = v; _plugin.WriteIfBaseConnected("base-ffb-curve-y2", v); });
+        private void FfbCurveY3Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, FfbCurveY3Value, "", v => { _data.FfbCurveY3 = v; _plugin.WriteIfBaseConnected("base-ffb-curve-y3", v); });
+        private void FfbCurveY4Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, FfbCurveY4Value, "", v => { _data.FfbCurveY4 = v; _plugin.WriteIfBaseConnected("base-ffb-curve-y4", v); });
+        private void FfbCurveY5Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, FfbCurveY5Value, "", v => { _data.FfbCurveY5 = v; _plugin.WriteIfBaseConnected("base-ffb-curve-y5", v); });
 
         // ===== Bluetooth + Base Calibration =====
 
@@ -926,13 +935,13 @@ namespace MozaPlugin
             if (_suppressEvents) return;
             int val = BluetoothCheck.IsChecked == true ? 0 : 85;
             _data.BleMode = val;
-            _device.WriteSetting("main-set-ble-mode", val);
+            _plugin.WriteIfBaseConnected("main-set-ble-mode", val);
             _plugin.SaveSettings();
         }
 
         private void BaseCalibrateButton_Click(object sender, RoutedEventArgs e)
         {
-            _device.WriteSetting("base-calibration", 1);
+            _plugin.WriteIfBaseConnected("base-calibration", 1);
             BaseCalibrateStatus.Text = "Calibration sent";
             var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
             timer.Tick += (s, _) => { BaseCalibrateStatus.Text = ""; ((DispatcherTimer)s!).Stop(); };
@@ -960,7 +969,7 @@ namespace MozaPlugin
                 HbY5Slider.Value = p[4]; HbY5Value.Text = $"{p[4]}"; _data.HandbrakeCurve[4] = p[4];
             }
             for (int i = 0; i < 5; i++)
-                _device.WriteFloat($"handbrake-y{i + 1}", p[i]);
+                _plugin.WriteFloatIfHandbrakeDetected($"handbrake-y{i + 1}", p[i]);
             _plugin.SaveSettings();
         }
 
@@ -969,23 +978,23 @@ namespace MozaPlugin
         private void HbCurvePreset_Exponential(object s, RoutedEventArgs e) => ApplyHbCurvePreset(HbCurvePresets[2]);
         private void HbCurvePreset_Parabolic(object s, RoutedEventArgs e) => ApplyHbCurvePreset(HbCurvePresets[3]);
 
-        private void HandbrakeMinSlider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnMinMaxSliderChanged(e.NewValue, HandbrakeMinSlider, _data.HandbrakeMax, isMin: true, HandbrakeMinValue, v => { _data.HandbrakeMin = v; _device.WriteSetting("handbrake-min", v); });
-        private void HandbrakeMaxSlider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnMinMaxSliderChanged(e.NewValue, HandbrakeMaxSlider, _data.HandbrakeMin, isMin: false, HandbrakeMaxValue, v => { _data.HandbrakeMax = v; _device.WriteSetting("handbrake-max", v); });
-        private void HbY1Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, HbY1Value, "", v => { _data.HandbrakeCurve[0] = v; _device.WriteFloat("handbrake-y1", v); });
-        private void HbY2Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, HbY2Value, "", v => { _data.HandbrakeCurve[1] = v; _device.WriteFloat("handbrake-y2", v); });
-        private void HbY3Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, HbY3Value, "", v => { _data.HandbrakeCurve[2] = v; _device.WriteFloat("handbrake-y3", v); });
-        private void HbY4Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, HbY4Value, "", v => { _data.HandbrakeCurve[3] = v; _device.WriteFloat("handbrake-y4", v); });
-        private void HbY5Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, HbY5Value, "", v => { _data.HandbrakeCurve[4] = v; _device.WriteFloat("handbrake-y5", v); });
+        private void HandbrakeMinSlider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnMinMaxSliderChanged(e.NewValue, HandbrakeMinSlider, _data.HandbrakeMax, isMin: true, HandbrakeMinValue, v => { _data.HandbrakeMin = v; _plugin.WriteIfHandbrakeDetected("handbrake-min", v); });
+        private void HandbrakeMaxSlider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnMinMaxSliderChanged(e.NewValue, HandbrakeMaxSlider, _data.HandbrakeMin, isMin: false, HandbrakeMaxValue, v => { _data.HandbrakeMax = v; _plugin.WriteIfHandbrakeDetected("handbrake-max", v); });
+        private void HbY1Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, HbY1Value, "", v => { _data.HandbrakeCurve[0] = v; _plugin.WriteFloatIfHandbrakeDetected("handbrake-y1", v); });
+        private void HbY2Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, HbY2Value, "", v => { _data.HandbrakeCurve[1] = v; _plugin.WriteFloatIfHandbrakeDetected("handbrake-y2", v); });
+        private void HbY3Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, HbY3Value, "", v => { _data.HandbrakeCurve[2] = v; _plugin.WriteFloatIfHandbrakeDetected("handbrake-y3", v); });
+        private void HbY4Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, HbY4Value, "", v => { _data.HandbrakeCurve[3] = v; _plugin.WriteFloatIfHandbrakeDetected("handbrake-y4", v); });
+        private void HbY5Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, HbY5Value, "", v => { _data.HandbrakeCurve[4] = v; _plugin.WriteFloatIfHandbrakeDetected("handbrake-y5", v); });
 
         private void HbCalStartButton_Click(object sender, RoutedEventArgs e)
         {
-            _device.WriteSetting("handbrake-cal-start", 1);
+            _plugin.WriteIfHandbrakeDetected("handbrake-cal-start", 1);
             HbCalStatus.Text = "Calibrating — pull fully then stop";
         }
 
         private void HbCalStopButton_Click(object sender, RoutedEventArgs e)
         {
-            _device.WriteSetting("handbrake-cal-stop", 1);
+            _plugin.WriteIfHandbrakeDetected("handbrake-cal-stop", 1);
             HbCalStatus.Text = "Done";
             var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
             timer.Tick += (s, _) => { HbCalStatus.Text = ""; ((DispatcherTimer)s!).Stop(); };
@@ -1089,7 +1098,7 @@ namespace MozaPlugin
                 }
             }
             for (int i = 0; i < 5; i++)
-                _device.WriteFloat($"pedals-{pedal}-y{i + 1}", curve[i]);
+                _plugin.WriteFloatIfPedalsDetected($"pedals-{pedal}-y{i + 1}", curve[i]);
             _plugin.SaveSettings();
         }
 
@@ -1112,47 +1121,47 @@ namespace MozaPlugin
         private void ClutchCurvePreset_Parabolic(object s, RoutedEventArgs e)   => ApplyPedalCurvePreset("clutch", PedalCurvePresets[3], _data.PedalsClutchCurve, _clutchCurveSliders!, _clutchCurveLabels!);
 
         // Throttle direction + range + curve sliders
-        private void ThrottleDirCheck_Click(object sender, RoutedEventArgs e) { if (_suppressEvents) return; int v = ThrottleDirCheck.IsChecked == true ? 1 : 0; _data.PedalsThrottleDir = v; _device.WriteSetting("pedals-throttle-dir", v); _plugin.SaveSettings(); }
-        private void ThrottleMinSlider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnMinMaxSliderChanged(e.NewValue, ThrottleMinSlider, _data.PedalsThrottleMax, isMin: true, ThrottleMinValue, v => { _data.PedalsThrottleMin = v; _device.WriteSetting("pedals-throttle-min", v); });
-        private void ThrottleMaxSlider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnMinMaxSliderChanged(e.NewValue, ThrottleMaxSlider, _data.PedalsThrottleMin, isMin: false, ThrottleMaxValue, v => { _data.PedalsThrottleMax = v; _device.WriteSetting("pedals-throttle-max", v); });
-        private void ThrottleY1Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, ThrottleY1Value, "", v => { _data.PedalsThrottleCurve[0] = v; _device.WriteFloat("pedals-throttle-y1", v); });
-        private void ThrottleY2Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, ThrottleY2Value, "", v => { _data.PedalsThrottleCurve[1] = v; _device.WriteFloat("pedals-throttle-y2", v); });
-        private void ThrottleY3Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, ThrottleY3Value, "", v => { _data.PedalsThrottleCurve[2] = v; _device.WriteFloat("pedals-throttle-y3", v); });
-        private void ThrottleY4Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, ThrottleY4Value, "", v => { _data.PedalsThrottleCurve[3] = v; _device.WriteFloat("pedals-throttle-y4", v); });
-        private void ThrottleY5Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, ThrottleY5Value, "", v => { _data.PedalsThrottleCurve[4] = v; _device.WriteFloat("pedals-throttle-y5", v); });
+        private void ThrottleDirCheck_Click(object sender, RoutedEventArgs e) { if (_suppressEvents) return; int v = ThrottleDirCheck.IsChecked == true ? 1 : 0; _data.PedalsThrottleDir = v; _plugin.WriteIfPedalsDetected("pedals-throttle-dir", v); _plugin.SaveSettings(); }
+        private void ThrottleMinSlider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnMinMaxSliderChanged(e.NewValue, ThrottleMinSlider, _data.PedalsThrottleMax, isMin: true, ThrottleMinValue, v => { _data.PedalsThrottleMin = v; _plugin.WriteIfPedalsDetected("pedals-throttle-min", v); });
+        private void ThrottleMaxSlider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnMinMaxSliderChanged(e.NewValue, ThrottleMaxSlider, _data.PedalsThrottleMin, isMin: false, ThrottleMaxValue, v => { _data.PedalsThrottleMax = v; _plugin.WriteIfPedalsDetected("pedals-throttle-max", v); });
+        private void ThrottleY1Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, ThrottleY1Value, "", v => { _data.PedalsThrottleCurve[0] = v; _plugin.WriteFloatIfPedalsDetected("pedals-throttle-y1", v); });
+        private void ThrottleY2Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, ThrottleY2Value, "", v => { _data.PedalsThrottleCurve[1] = v; _plugin.WriteFloatIfPedalsDetected("pedals-throttle-y2", v); });
+        private void ThrottleY3Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, ThrottleY3Value, "", v => { _data.PedalsThrottleCurve[2] = v; _plugin.WriteFloatIfPedalsDetected("pedals-throttle-y3", v); });
+        private void ThrottleY4Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, ThrottleY4Value, "", v => { _data.PedalsThrottleCurve[3] = v; _plugin.WriteFloatIfPedalsDetected("pedals-throttle-y4", v); });
+        private void ThrottleY5Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, ThrottleY5Value, "", v => { _data.PedalsThrottleCurve[4] = v; _plugin.WriteFloatIfPedalsDetected("pedals-throttle-y5", v); });
 
         // Throttle calibration
-        private void ThrottleCalStartButton_Click(object sender, RoutedEventArgs e) { _device.WriteSetting("pedals-throttle-cal-start", 1); }
-        private void ThrottleCalStopButton_Click(object sender, RoutedEventArgs e) { _device.WriteSetting("pedals-throttle-cal-stop", 1); }
+        private void ThrottleCalStartButton_Click(object sender, RoutedEventArgs e) { _plugin.WriteIfPedalsDetected("pedals-throttle-cal-start", 1); }
+        private void ThrottleCalStopButton_Click(object sender, RoutedEventArgs e) { _plugin.WriteIfPedalsDetected("pedals-throttle-cal-stop", 1); }
 
         // Brake direction + range + curve sliders
-        private void BrakeDirCheck_Click(object sender, RoutedEventArgs e) { if (_suppressEvents) return; int v = BrakeDirCheck.IsChecked == true ? 1 : 0; _data.PedalsBrakeDir = v; _device.WriteSetting("pedals-brake-dir", v); _plugin.SaveSettings(); }
-        private void BrakeAngleRatioSlider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) { if (_suppressEvents) return; int v = (int)Math.Round(e.NewValue); BrakeAngleRatioValue.Text = $"{v}%"; _data.PedalsBrakeAngleRatio = v; _device.WriteFloat("pedals-brake-angle-ratio", v); _plugin.SaveSettings(); }
-        private void BrakeMinSlider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnMinMaxSliderChanged(e.NewValue, BrakeMinSlider, _data.PedalsBrakeMax, isMin: true, BrakeMinValue, v => { _data.PedalsBrakeMin = v; _device.WriteSetting("pedals-brake-min", v); });
-        private void BrakeMaxSlider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnMinMaxSliderChanged(e.NewValue, BrakeMaxSlider, _data.PedalsBrakeMin, isMin: false, BrakeMaxValue, v => { _data.PedalsBrakeMax = v; _device.WriteSetting("pedals-brake-max", v); });
-        private void BrakeY1Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, BrakeY1Value, "", v => { _data.PedalsBrakeCurve[0] = v; _device.WriteFloat("pedals-brake-y1", v); });
-        private void BrakeY2Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, BrakeY2Value, "", v => { _data.PedalsBrakeCurve[1] = v; _device.WriteFloat("pedals-brake-y2", v); });
-        private void BrakeY3Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, BrakeY3Value, "", v => { _data.PedalsBrakeCurve[2] = v; _device.WriteFloat("pedals-brake-y3", v); });
-        private void BrakeY4Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, BrakeY4Value, "", v => { _data.PedalsBrakeCurve[3] = v; _device.WriteFloat("pedals-brake-y4", v); });
-        private void BrakeY5Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, BrakeY5Value, "", v => { _data.PedalsBrakeCurve[4] = v; _device.WriteFloat("pedals-brake-y5", v); });
+        private void BrakeDirCheck_Click(object sender, RoutedEventArgs e) { if (_suppressEvents) return; int v = BrakeDirCheck.IsChecked == true ? 1 : 0; _data.PedalsBrakeDir = v; _plugin.WriteIfPedalsDetected("pedals-brake-dir", v); _plugin.SaveSettings(); }
+        private void BrakeAngleRatioSlider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) { if (_suppressEvents) return; int v = (int)Math.Round(e.NewValue); BrakeAngleRatioValue.Text = $"{v}%"; _data.PedalsBrakeAngleRatio = v; _plugin.WriteFloatIfPedalsDetected("pedals-brake-angle-ratio", v); _plugin.SaveSettings(); }
+        private void BrakeMinSlider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnMinMaxSliderChanged(e.NewValue, BrakeMinSlider, _data.PedalsBrakeMax, isMin: true, BrakeMinValue, v => { _data.PedalsBrakeMin = v; _plugin.WriteIfPedalsDetected("pedals-brake-min", v); });
+        private void BrakeMaxSlider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnMinMaxSliderChanged(e.NewValue, BrakeMaxSlider, _data.PedalsBrakeMin, isMin: false, BrakeMaxValue, v => { _data.PedalsBrakeMax = v; _plugin.WriteIfPedalsDetected("pedals-brake-max", v); });
+        private void BrakeY1Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, BrakeY1Value, "", v => { _data.PedalsBrakeCurve[0] = v; _plugin.WriteFloatIfPedalsDetected("pedals-brake-y1", v); });
+        private void BrakeY2Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, BrakeY2Value, "", v => { _data.PedalsBrakeCurve[1] = v; _plugin.WriteFloatIfPedalsDetected("pedals-brake-y2", v); });
+        private void BrakeY3Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, BrakeY3Value, "", v => { _data.PedalsBrakeCurve[2] = v; _plugin.WriteFloatIfPedalsDetected("pedals-brake-y3", v); });
+        private void BrakeY4Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, BrakeY4Value, "", v => { _data.PedalsBrakeCurve[3] = v; _plugin.WriteFloatIfPedalsDetected("pedals-brake-y4", v); });
+        private void BrakeY5Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, BrakeY5Value, "", v => { _data.PedalsBrakeCurve[4] = v; _plugin.WriteFloatIfPedalsDetected("pedals-brake-y5", v); });
 
         // Brake calibration
-        private void BrakeCalStartButton_Click(object sender, RoutedEventArgs e) { _device.WriteSetting("pedals-brake-cal-start", 1); }
-        private void BrakeCalStopButton_Click(object sender, RoutedEventArgs e) { _device.WriteSetting("pedals-brake-cal-stop", 1); }
+        private void BrakeCalStartButton_Click(object sender, RoutedEventArgs e) { _plugin.WriteIfPedalsDetected("pedals-brake-cal-start", 1); }
+        private void BrakeCalStopButton_Click(object sender, RoutedEventArgs e) { _plugin.WriteIfPedalsDetected("pedals-brake-cal-stop", 1); }
 
         // Clutch direction + range + curve sliders
-        private void ClutchDirCheck_Click(object sender, RoutedEventArgs e) { if (_suppressEvents) return; int v = ClutchDirCheck.IsChecked == true ? 1 : 0; _data.PedalsClutchDir = v; _device.WriteSetting("pedals-clutch-dir", v); _plugin.SaveSettings(); }
-        private void ClutchMinSlider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnMinMaxSliderChanged(e.NewValue, ClutchMinSlider, _data.PedalsClutchMax, isMin: true, ClutchMinValue, v => { _data.PedalsClutchMin = v; _device.WriteSetting("pedals-clutch-min", v); });
-        private void ClutchMaxSlider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnMinMaxSliderChanged(e.NewValue, ClutchMaxSlider, _data.PedalsClutchMin, isMin: false, ClutchMaxValue, v => { _data.PedalsClutchMax = v; _device.WriteSetting("pedals-clutch-max", v); });
-        private void ClutchY1Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, ClutchY1Value, "", v => { _data.PedalsClutchCurve[0] = v; _device.WriteFloat("pedals-clutch-y1", v); });
-        private void ClutchY2Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, ClutchY2Value, "", v => { _data.PedalsClutchCurve[1] = v; _device.WriteFloat("pedals-clutch-y2", v); });
-        private void ClutchY3Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, ClutchY3Value, "", v => { _data.PedalsClutchCurve[2] = v; _device.WriteFloat("pedals-clutch-y3", v); });
-        private void ClutchY4Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, ClutchY4Value, "", v => { _data.PedalsClutchCurve[3] = v; _device.WriteFloat("pedals-clutch-y4", v); });
-        private void ClutchY5Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, ClutchY5Value, "", v => { _data.PedalsClutchCurve[4] = v; _device.WriteFloat("pedals-clutch-y5", v); });
+        private void ClutchDirCheck_Click(object sender, RoutedEventArgs e) { if (_suppressEvents) return; int v = ClutchDirCheck.IsChecked == true ? 1 : 0; _data.PedalsClutchDir = v; _plugin.WriteIfPedalsDetected("pedals-clutch-dir", v); _plugin.SaveSettings(); }
+        private void ClutchMinSlider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnMinMaxSliderChanged(e.NewValue, ClutchMinSlider, _data.PedalsClutchMax, isMin: true, ClutchMinValue, v => { _data.PedalsClutchMin = v; _plugin.WriteIfPedalsDetected("pedals-clutch-min", v); });
+        private void ClutchMaxSlider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnMinMaxSliderChanged(e.NewValue, ClutchMaxSlider, _data.PedalsClutchMin, isMin: false, ClutchMaxValue, v => { _data.PedalsClutchMax = v; _plugin.WriteIfPedalsDetected("pedals-clutch-max", v); });
+        private void ClutchY1Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, ClutchY1Value, "", v => { _data.PedalsClutchCurve[0] = v; _plugin.WriteFloatIfPedalsDetected("pedals-clutch-y1", v); });
+        private void ClutchY2Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, ClutchY2Value, "", v => { _data.PedalsClutchCurve[1] = v; _plugin.WriteFloatIfPedalsDetected("pedals-clutch-y2", v); });
+        private void ClutchY3Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, ClutchY3Value, "", v => { _data.PedalsClutchCurve[2] = v; _plugin.WriteFloatIfPedalsDetected("pedals-clutch-y3", v); });
+        private void ClutchY4Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, ClutchY4Value, "", v => { _data.PedalsClutchCurve[3] = v; _plugin.WriteFloatIfPedalsDetected("pedals-clutch-y4", v); });
+        private void ClutchY5Slider_ValueChanged(object s, RoutedPropertyChangedEventArgs<double> e) => OnIntSliderChanged(e.NewValue, ClutchY5Value, "", v => { _data.PedalsClutchCurve[4] = v; _plugin.WriteFloatIfPedalsDetected("pedals-clutch-y5", v); });
 
         // Clutch calibration
-        private void ClutchCalStartButton_Click(object sender, RoutedEventArgs e) { _device.WriteSetting("pedals-clutch-cal-start", 1); }
-        private void ClutchCalStopButton_Click(object sender, RoutedEventArgs e) { _device.WriteSetting("pedals-clutch-cal-stop", 1); }
+        private void ClutchCalStartButton_Click(object sender, RoutedEventArgs e) { _plugin.WriteIfPedalsDetected("pedals-clutch-cal-start", 1); }
+        private void ClutchCalStopButton_Click(object sender, RoutedEventArgs e) { _plugin.WriteIfPedalsDetected("pedals-clutch-cal-stop", 1); }
 
         // ===== Options tab =====
 
@@ -1264,7 +1273,7 @@ namespace MozaPlugin
             // direct cast. -1 (no selection) clamps to Auto so the plugin stays
             // in a valid state even if the combo is somehow deselected.
             int idx = FirmwareEraCombo.SelectedIndex;
-            _plugin.Settings.TelemetryWheelEra = (idx >= 0 && idx <= 3)
+            _plugin.ActiveTelemetryWheelEra = (idx >= 0 && idx <= 3)
                 ? (MozaWheelEra)idx
                 : MozaWheelEra.Auto;
             _plugin.SaveSettings();
@@ -1473,7 +1482,7 @@ namespace MozaPlugin
                 $"WireErrors:         drops={errs.FramesDropped} cksumFail={errs.ChecksumFailures} resync={errs.FrameStartScanResyncs}");
             sb.AppendLine($"DisplayDetected:    {(ts?.DisplayDetected ?? _plugin.IsDisplayDetected)}");
             sb.AppendLine($"DisplayModelName:   {Blank(ts?.DisplayModelName ?? _plugin.DisplayModelName)}");
-            sb.AppendLine($"WheelEra:           {_plugin.Settings.TelemetryWheelEra}");
+            sb.AppendLine($"WheelEra:           {_plugin.ActiveTelemetryWheelEra}");
             if (ts != null)
             {
                 var p = ts.Policy;
@@ -2128,7 +2137,7 @@ namespace MozaPlugin
                 return;
             }
             for (int i = min; i <= max; i++)
-                _device.WriteColor($"{cfg.ColorCmdPrefix}{i + 1}", r, g, b);
+                _plugin.WriteColorIfWheelDetected($"{cfg.ColorCmdPrefix}{i + 1}", r, g, b);
         }
 
         private void ExtLedClearAll_Click(object sender, RoutedEventArgs e)
@@ -2141,7 +2150,7 @@ namespace MozaPlugin
                 return;
             }
             for (int i = min; i <= max; i++)
-                _device.WriteColor($"{cfg.ColorCmdPrefix}{i + 1}", 0, 0, 0);
+                _plugin.WriteColorIfWheelDetected($"{cfg.ColorCmdPrefix}{i + 1}", 0, 0, 0);
         }
 
         private void ExtLedSendOne_Click(object sender, RoutedEventArgs e)
@@ -2155,7 +2164,7 @@ namespace MozaPlugin
                 SendLiveFrame(cfg, fillColor: (r, g, b), activeMask: 1 << idx, rangeMin: idx, rangeMax: idx, onlyIdx: idx);
                 return;
             }
-            _device.WriteColor($"{cfg.ColorCmdPrefix}{idx + 1}", r, g, b);
+            _plugin.WriteColorIfWheelDetected($"{cfg.ColorCmdPrefix}{idx + 1}", r, g, b);
         }
 
         private static int RangeMask(int min, int max)
@@ -2192,13 +2201,13 @@ namespace MozaPlugin
                     (byte)((activeMask >> 24) & 0xFF)
                 }
                 : new byte[] { (byte)(activeMask & 0xFF), (byte)((activeMask >> 8) & 0xFF) };
-            _device.WriteArray(cfg.LiveBitmaskCmd, maskBytes);
+            _plugin.WriteArrayIfWheelDetected(cfg.LiveBitmaskCmd, maskBytes);
         }
 
         private void ExtLedSendBrightness_Click(object sender, RoutedEventArgs e)
         {
             var (cfg, slider) = ((DiagLedCfg, Slider))((Button)sender).Tag;
-            _device.WriteSetting(cfg.BrightnessCmd, (int)slider.Value);
+            _plugin.WriteIfWheelDetected(cfg.BrightnessCmd, (int)slider.Value);
         }
 
         private void ExtLedSendMode_Click(object sender, RoutedEventArgs e)
@@ -2206,7 +2215,7 @@ namespace MozaPlugin
             var (cfg, modeCombo) = ((DiagLedCfg, ComboBox))((Button)sender).Tag;
             if (cfg.ModeCmd == null) return;
             if (modeCombo.SelectedIndex < 0) return;
-            _device.WriteSetting(cfg.ModeCmd, modeCombo.SelectedIndex);
+            _plugin.WriteIfWheelDetected(cfg.ModeCmd, modeCombo.SelectedIndex);
         }
 
         // ── Wheel Files tab ─────────────────────────────────────────────

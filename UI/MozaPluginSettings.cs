@@ -200,6 +200,35 @@ namespace MozaPlugin
         // ===== Profile system (SimHub native) =====
         public MozaProfileStore ProfileStore { get; set; } = new MozaProfileStore();
 
+        // Persisted schema-migration marker.
+        //   2 = first cutover: legacy per-UID slots → profile.WheelOverridesByPageGuid.
+        //   3 = full clean cutover (telemetry settings moved to overlay).
+        //   4 = mzdash folder moved from per-overlay to per-wheel-page (shared
+        //       across profiles). Folder is a library setting tied to the wheel,
+        //       not the game.
+        public int SettingsSchemaVersion { get; set; } = 0;
+
+        // Per-wheel-page mzdash folder library. Keyed by SimHub page DescriptorUniqueId
+        // GUID. Shared across all profiles — every game using the same wheel sees
+        // the same folder. Set per-wheel-page, not per-game, so the user maintains
+        // one folder per physical wheel.
+        public Dictionary<Guid, string> WheelMzdashFolderByPageGuid { get; set; }
+            = new Dictionary<Guid, string>();
+
+        // Per-wheel-page "is telemetry on for this wheel". Keyed by SimHub page GUID,
+        // shared across profiles. Whether telemetry runs for a wheel is a wheel-level
+        // decision; the per-game decision (which dashboard, which mzdash) stays on
+        // the profile's WheelOverride.
+        public Dictionary<Guid, bool> WheelTelemetryEnabledByPageGuid { get; set; }
+            = new Dictionary<Guid, bool>();
+
+        // Per-wheel-page firmware-era pick. Keyed by SimHub page GUID, stored as int
+        // (cast from MozaWheelEra). Firmware era is a property of the wheel/firmware,
+        // not the game — making it per-(game × wheel) would just force the user to
+        // re-pick the same era for every profile.
+        public Dictionary<Guid, int> WheelTelemetryEraByPageGuid { get; set; }
+            = new Dictionary<Guid, int>();
+
         // ===== Dashboard Telemetry =====
         public bool TelemetryEnabled { get; set; } = false;
 
@@ -214,21 +243,18 @@ namespace MozaPlugin
         // folder acts as fallback library when cache misses.
         public string TelemetryMzdashFolder { get; set; } = "";
 
-        // Per-wheel mzdash folder mapping. Key = lowercase 24-char wheel MCU UID hex
-        // (DetectDevices captures it on handshake). Value = absolute folder path.
-        // Populated by the Auto-detect button so swapping wheels can switch the active
-        // TelemetryMzdashFolder back to the right `_dashes/<uid>/` automatically.
+        // LEGACY (pre-2026-05-14 refactor): per-UID mzdash folder. Migration
+        // moves entries into the wheel-page overlay's TelemetryMzdashFolder.
+        [Newtonsoft.Json.JsonProperty(NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore,
+            DefaultValueHandling = Newtonsoft.Json.DefaultValueHandling.Ignore)]
         public Dictionary<string, string> WheelMzdashFolderByUid { get; set; }
             = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-        // Per-wheel dashboard telemetry slot. Keyed by lowercase 24-char wheel MCU UID
-        // hex (same key shape as WheelMzdashFolderByUid). Each entry stores the
-        // dashboard profile selection for that physical wheel so a VGS profile
-        // does not bleed onto a displayless wheel (CS V2.1, etc.) when the user
-        // hot-swaps. Read/written ONLY after the wheel-mcu-uid response populates
-        // MozaData.WheelMcuUid — never during plugin init, never during
-        // MozaWheelDeviceExtension.ApplyWheelExtensionSettings (the wheel hasn't
-        // identified itself at those points, so any key would collapse to "").
+        // LEGACY (pre-2026-05-14 refactor): per-UID telemetry slot. Migration
+        // moves entries into the wheel-page overlay's TelemetryEnabled /
+        // TelemetryProfileName / TelemetryMzdashPath.
+        [Newtonsoft.Json.JsonProperty(NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore,
+            DefaultValueHandling = Newtonsoft.Json.DefaultValueHandling.Ignore)]
         public Dictionary<string, TelemetryWheelSlot> TelemetryByWheelUid { get; set; }
             = new Dictionary<string, TelemetryWheelSlot>(StringComparer.OrdinalIgnoreCase);
 
@@ -294,6 +320,8 @@ namespace MozaPlugin
         //   Inner key:  Channel URL (e.g. "v1/gameData/Rpm").
         //   Value:      SimHub property path (e.g. "DataCorePlugin.GameData.Rpms").
         //               Empty/missing = use Telemetry.json default.
+        [Newtonsoft.Json.JsonProperty(NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore,
+            DefaultValueHandling = Newtonsoft.Json.DefaultValueHandling.Ignore)]
         public Dictionary<string, Dictionary<string, Dictionary<string, string>>> TelemetryChannelMappingsByWheel { get; set; }
             = new Dictionary<string, Dictionary<string, Dictionary<string, string>>>(StringComparer.OrdinalIgnoreCase);
 
@@ -334,117 +362,14 @@ namespace MozaPlugin
             return true;
         }
 
-        // Per-wheel-model setting slots. Keyed by wheel model name (from data.WheelModelName).
-        // The flat Wheel* properties above represent the CURRENTLY-ACTIVE wheel; on save we
-        // mirror them into the slot for the active model, and on wheel-model-detected we load
-        // the slot back into the flat properties. This keeps each physical wheel model's
-        // brightness/mode/input settings isolated when multiple SimHub device extensions exist.
+        // LEGACY (pre-2026-05-14 refactor): per-wheel-model slot dict.
+        // Migration translates entries into profile.WheelOverridesByPageGuid
+        // and clears this dict; new code never reads or writes it. Kept on
+        // the type only so the one-shot migration can deserialize legacy JSON.
+        [Newtonsoft.Json.JsonProperty(NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore,
+            DefaultValueHandling = Newtonsoft.Json.DefaultValueHandling.Ignore)]
         public Dictionary<string, PerWheelSlot> PerWheelSlots { get; set; }
             = new Dictionary<string, PerWheelSlot>(StringComparer.OrdinalIgnoreCase);
-
-        // Guards every read/write on PerWheelSlots. Serial-reader thread
-        // detects a wheel and calls LoadSlotIntoActive while the UI thread
-        // can be calling MirrorActiveToSlot from SaveSettings — Dictionary<>
-        // is not safe for concurrent writers and corrupts buckets.
-        // Newtonsoft serialization touches the dictionary outside these
-        // helpers; SimHub serializes from the UI thread on shutdown so the
-        // window with the serial reader is small but not zero.
-        private readonly object _slotsLock = new object();
-
-        /// <summary>Get the slot for a model, creating one on first access.</summary>
-        public PerWheelSlot GetOrCreateSlot(string? modelName)
-        {
-            if (string.IsNullOrEmpty(modelName)) return new PerWheelSlot();
-            lock (_slotsLock)
-            {
-                if (!PerWheelSlots.TryGetValue(modelName!, out var slot))
-                {
-                    slot = new PerWheelSlot();
-                    PerWheelSlots[modelName!] = slot;
-                }
-                return slot;
-            }
-        }
-
-        /// <summary>Copy the flat Wheel* fields into the slot for <paramref name="modelName"/>.</summary>
-        public void MirrorActiveToSlot(string? modelName)
-        {
-            if (string.IsNullOrEmpty(modelName)) return;
-            lock (_slotsLock)
-            {
-                if (!PerWheelSlots.TryGetValue(modelName!, out var slot))
-                {
-                    slot = new PerWheelSlot();
-                    PerWheelSlots[modelName!] = slot;
-                }
-                slot.WheelTelemetryMode     = WheelTelemetryMode;
-                slot.WheelIdleEffect        = WheelIdleEffect;
-                slot.WheelButtonsIdleEffect = WheelButtonsIdleEffect;
-                slot.WheelKnobIdleEffect    = WheelKnobIdleEffect;
-                slot.WheelPaddlesMode       = WheelPaddlesMode;
-                slot.WheelClutchPoint       = WheelClutchPoint;
-                slot.WheelKnobMode          = WheelKnobMode;
-                slot.WheelStickMode         = WheelStickMode;
-                slot.WheelRpmIndicatorMode  = WheelRpmIndicatorMode;
-                slot.WheelRpmDisplayMode    = WheelRpmDisplayMode;
-                slot.WheelRpmBrightness     = WheelRpmBrightness;
-                slot.WheelButtonsBrightness = WheelButtonsBrightness;
-                slot.WheelFlagsBrightness   = WheelFlagsBrightness;
-                slot.WheelESRpmBrightness   = WheelESRpmBrightness;
-                slot.WheelRpmBlinkColors    = WheelRpmBlinkColors;
-                slot.WheelKnobBackgroundColors = WheelKnobBackgroundColors;
-                slot.WheelKnobPrimaryColors    = WheelKnobPrimaryColors;
-                slot.WheelKnobRingColors       = WheelKnobRingColors;
-                slot.WheelKnobRingBrightness   = WheelKnobRingBrightness;
-                slot.WheelKnobLedMode          = WheelKnobLedMode;
-                slot.WheelButtonsLedMode       = WheelButtonsLedMode;
-                slot.WheelTelemetryIdleSpeedMs = WheelTelemetryIdleSpeedMs;
-                slot.WheelButtonsIdleSpeedMs   = WheelButtonsIdleSpeedMs;
-                slot.WheelKnobIdleSpeedMs      = WheelKnobIdleSpeedMs;
-                slot.WheelSleepMode            = WheelSleepMode;
-                slot.WheelSleepTimeoutMin      = WheelSleepTimeoutMin;
-                slot.WheelSleepSpeedMs         = WheelSleepSpeedMs;
-                slot.WheelSleepColor           = WheelSleepColor;
-            }
-        }
-
-        /// <summary>Copy the slot for <paramref name="modelName"/> into the flat Wheel* fields.</summary>
-        public void LoadSlotIntoActive(string? modelName)
-        {
-            if (string.IsNullOrEmpty(modelName)) return;
-            lock (_slotsLock)
-            {
-                if (!PerWheelSlots.TryGetValue(modelName!, out var slot)) return;
-                WheelTelemetryMode     = slot.WheelTelemetryMode;
-                WheelIdleEffect        = slot.WheelIdleEffect;
-                WheelButtonsIdleEffect = slot.WheelButtonsIdleEffect;
-                WheelKnobIdleEffect    = slot.WheelKnobIdleEffect;
-                WheelPaddlesMode       = slot.WheelPaddlesMode;
-                WheelClutchPoint       = slot.WheelClutchPoint;
-                WheelKnobMode          = slot.WheelKnobMode;
-                WheelStickMode         = slot.WheelStickMode;
-                WheelRpmIndicatorMode  = slot.WheelRpmIndicatorMode;
-                WheelRpmDisplayMode    = slot.WheelRpmDisplayMode;
-                WheelRpmBrightness     = slot.WheelRpmBrightness;
-                WheelButtonsBrightness = slot.WheelButtonsBrightness;
-                WheelFlagsBrightness   = slot.WheelFlagsBrightness;
-                WheelESRpmBrightness   = slot.WheelESRpmBrightness;
-                WheelRpmBlinkColors    = slot.WheelRpmBlinkColors;
-                WheelKnobBackgroundColors = slot.WheelKnobBackgroundColors;
-                WheelKnobPrimaryColors    = slot.WheelKnobPrimaryColors;
-                WheelKnobRingColors       = slot.WheelKnobRingColors;
-                WheelKnobRingBrightness   = slot.WheelKnobRingBrightness;
-                WheelKnobLedMode          = slot.WheelKnobLedMode;
-                WheelButtonsLedMode       = slot.WheelButtonsLedMode;
-                WheelTelemetryIdleSpeedMs = slot.WheelTelemetryIdleSpeedMs;
-                WheelButtonsIdleSpeedMs   = slot.WheelButtonsIdleSpeedMs;
-                WheelKnobIdleSpeedMs      = slot.WheelKnobIdleSpeedMs;
-                WheelSleepMode            = slot.WheelSleepMode;
-                WheelSleepTimeoutMin      = slot.WheelSleepTimeoutMin;
-                WheelSleepSpeedMs         = slot.WheelSleepSpeedMs;
-                WheelSleepColor           = slot.WheelSleepColor;
-            }
-        }
     }
 
     /// <summary>

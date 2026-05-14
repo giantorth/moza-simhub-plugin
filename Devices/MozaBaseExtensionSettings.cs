@@ -17,60 +17,60 @@ namespace MozaPlugin.Devices
         public int BaseAmbientShutdownColor { get; set; } = -1;    // packed RGB
 
         /// <summary>
-        /// Capture current base ambient state from the plugin.
+        /// Capture current base ambient state from the plugin. When
+        /// <paramref name="profile"/> is provided, prefer profile values over
+        /// the flat-field fallback — the new R5 source of truth.
         /// </summary>
-        public void CaptureFromCurrent(MozaPluginSettings settings, MozaData data)
+        public void CaptureFromCurrent(MozaPluginSettings settings, MozaData data,
+            MozaProfile? profile = null)
         {
-            BaseAmbientBrightness = settings.BaseAmbientBrightness;
-            BaseAmbientStandbyMode = settings.BaseAmbientStandbyMode;
-            BaseAmbientIndicatorState = settings.BaseAmbientIndicatorState;
-            BaseAmbientSleepMode = settings.BaseAmbientSleepMode;
-            BaseAmbientSleepTimeout = settings.BaseAmbientSleepTimeout;
-            BaseAmbientStartupColor = settings.BaseAmbientStartupColor;
-            BaseAmbientShutdownColor = settings.BaseAmbientShutdownColor;
+            int Pick(int p, int s) => p >= 0 ? p : s;
+            if (profile != null)
+            {
+                BaseAmbientBrightness     = Pick(profile.BaseAmbientBrightness,     settings.BaseAmbientBrightness);
+                BaseAmbientStandbyMode    = Pick(profile.BaseAmbientStandbyMode,    settings.BaseAmbientStandbyMode);
+                BaseAmbientIndicatorState = Pick(profile.BaseAmbientIndicatorState, settings.BaseAmbientIndicatorState);
+                BaseAmbientSleepMode      = Pick(profile.BaseAmbientSleepMode,      settings.BaseAmbientSleepMode);
+                BaseAmbientSleepTimeout   = Pick(profile.BaseAmbientSleepTimeout,   settings.BaseAmbientSleepTimeout);
+                BaseAmbientStartupColor   = Pick(profile.BaseAmbientStartupColor,   settings.BaseAmbientStartupColor);
+                BaseAmbientShutdownColor  = Pick(profile.BaseAmbientShutdownColor,  settings.BaseAmbientShutdownColor);
+            }
+            else
+            {
+                BaseAmbientBrightness = settings.BaseAmbientBrightness;
+                BaseAmbientStandbyMode = settings.BaseAmbientStandbyMode;
+                BaseAmbientIndicatorState = settings.BaseAmbientIndicatorState;
+                BaseAmbientSleepMode = settings.BaseAmbientSleepMode;
+                BaseAmbientSleepTimeout = settings.BaseAmbientSleepTimeout;
+                BaseAmbientStartupColor = settings.BaseAmbientStartupColor;
+                BaseAmbientShutdownColor = settings.BaseAmbientShutdownColor;
+            }
         }
 
         /// <summary>
-        /// Apply these settings to the plugin's settings and data model.
-        /// Does NOT write to hardware — caller is responsible for that.
+        /// Apply these settings into the active profile (single source of truth)
+        /// and mirror into <paramref name="data"/> so the UI sees them immediately.
+        /// Does NOT write to hardware — caller routes through
+        /// <c>ApplyBaseAmbientToHardware</c> after this.
         /// </summary>
-        public void ApplyTo(MozaPluginSettings settings, MozaData data)
+        public void ApplyTo(MozaPluginSettings settings, MozaData data, MozaProfile? profile = null)
         {
-            if (BaseAmbientBrightness >= 0)
-            {
-                settings.BaseAmbientBrightness = BaseAmbientBrightness;
-                data.BaseAmbientBrightness = BaseAmbientBrightness;
-            }
-            if (BaseAmbientStandbyMode >= 0)
-            {
-                settings.BaseAmbientStandbyMode = BaseAmbientStandbyMode;
-                data.BaseAmbientStandbyMode = BaseAmbientStandbyMode;
-            }
-            if (BaseAmbientIndicatorState >= 0)
-            {
-                settings.BaseAmbientIndicatorState = BaseAmbientIndicatorState;
-                data.BaseAmbientIndicatorState = BaseAmbientIndicatorState;
-            }
-            if (BaseAmbientSleepMode >= 0)
-            {
-                settings.BaseAmbientSleepMode = BaseAmbientSleepMode;
-                data.BaseAmbientSleepMode = BaseAmbientSleepMode;
-            }
-            if (BaseAmbientSleepTimeout >= 0)
-            {
-                settings.BaseAmbientSleepTimeout = BaseAmbientSleepTimeout;
-                data.BaseAmbientSleepTimeout = BaseAmbientSleepTimeout;
-            }
-            if (BaseAmbientStartupColor >= 0)
-            {
-                settings.BaseAmbientStartupColor = BaseAmbientStartupColor;
-                UnpackColor(BaseAmbientStartupColor, data.BaseAmbientStartupColor);
-            }
-            if (BaseAmbientShutdownColor >= 0)
-            {
-                settings.BaseAmbientShutdownColor = BaseAmbientShutdownColor;
-                UnpackColor(BaseAmbientShutdownColor, data.BaseAmbientShutdownColor);
-            }
+            if (BaseAmbientBrightness     >= 0) data.BaseAmbientBrightness     = BaseAmbientBrightness;
+            if (BaseAmbientStandbyMode    >= 0) data.BaseAmbientStandbyMode    = BaseAmbientStandbyMode;
+            if (BaseAmbientIndicatorState >= 0) data.BaseAmbientIndicatorState = BaseAmbientIndicatorState;
+            if (BaseAmbientSleepMode      >= 0) data.BaseAmbientSleepMode      = BaseAmbientSleepMode;
+            if (BaseAmbientSleepTimeout   >= 0) data.BaseAmbientSleepTimeout   = BaseAmbientSleepTimeout;
+            if (BaseAmbientStartupColor   >= 0) UnpackColor(BaseAmbientStartupColor,  data.BaseAmbientStartupColor);
+            if (BaseAmbientShutdownColor  >= 0) UnpackColor(BaseAmbientShutdownColor, data.BaseAmbientShutdownColor);
+
+            if (profile == null) return;
+            if (BaseAmbientBrightness     >= 0) profile.BaseAmbientBrightness     = BaseAmbientBrightness;
+            if (BaseAmbientStandbyMode    >= 0) profile.BaseAmbientStandbyMode    = BaseAmbientStandbyMode;
+            if (BaseAmbientIndicatorState >= 0) profile.BaseAmbientIndicatorState = BaseAmbientIndicatorState;
+            if (BaseAmbientSleepMode      >= 0) profile.BaseAmbientSleepMode      = BaseAmbientSleepMode;
+            if (BaseAmbientSleepTimeout   >= 0) profile.BaseAmbientSleepTimeout   = BaseAmbientSleepTimeout;
+            if (BaseAmbientStartupColor   >= 0) profile.BaseAmbientStartupColor   = BaseAmbientStartupColor;
+            if (BaseAmbientShutdownColor  >= 0) profile.BaseAmbientShutdownColor  = BaseAmbientShutdownColor;
         }
 
         private static void UnpackColor(int packed, byte[] dst)

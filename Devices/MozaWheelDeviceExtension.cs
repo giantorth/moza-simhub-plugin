@@ -169,15 +169,23 @@ namespace MozaPlugin.Devices
             _settings = new MozaWheelExtensionSettings();
 
             var plugin = MozaPlugin.Instance;
-            if (plugin != null)
-                _settings.CaptureFromCurrent(plugin.Settings, plugin.Data);
+            var settings = plugin?.Settings;
+            if (plugin != null && settings != null)
+            {
+                var profile = settings.ProfileStore?.CurrentProfile;
+                _settings.CaptureFromCurrent(settings, plugin.Data, profile, _expectedModelPrefix);
+            }
         }
 
         public override JToken GetSettings()
         {
             var plugin = MozaPlugin.Instance;
-            if (plugin != null)
-                _settings.CaptureFromCurrent(plugin.Settings, plugin.Data);
+            var settings = plugin?.Settings;
+            if (plugin != null && settings != null)
+            {
+                var profile = settings.ProfileStore?.CurrentProfile;
+                _settings.CaptureFromCurrent(settings, plugin.Data, profile, _expectedModelPrefix);
+            }
 
             return JToken.FromObject(_settings);
         }
@@ -190,7 +198,7 @@ namespace MozaPlugin.Devices
             {
                 var plugin = MozaPlugin.Instance;
                 if (plugin != null)
-                    plugin.ApplyWheelExtensionSettings(_settings);
+                    plugin.ApplyWheelExtensionSettings(_settings, _expectedModelPrefix);
             }
         }
 
