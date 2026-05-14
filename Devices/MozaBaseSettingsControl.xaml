@@ -1,0 +1,103 @@
+<UserControl x:Class="MozaPlugin.Devices.MozaBaseSettingsControl"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Padding="10">
+    <UserControl.Resources>
+        <Style x:Key="SectionHeader" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="16"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Margin" Value="0,20,0,8"/>
+        </Style>
+        <Style x:Key="FieldLabel" TargetType="TextBlock">
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Width" Value="180"/>
+        </Style>
+        <Style x:Key="SliderValue" TargetType="TextBlock">
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Width" Value="60"/>
+            <Setter Property="TextAlignment" Value="Right"/>
+            <Setter Property="Margin" Value="8,0,0,0"/>
+            <Setter Property="FontFamily" Value="Consolas"/>
+        </Style>
+        <Style x:Key="SettingSlider" TargetType="Slider">
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Width" Value="300"/>
+            <Setter Property="IsSnapToTickEnabled" Value="True"/>
+        </Style>
+    </UserControl.Resources>
+
+    <StackPanel Margin="5">
+        <TextBlock Text="MOZA Wheel Base — Ambient LEDs" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,12"/>
+
+        <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+            <Ellipse x:Name="StatusDot" Width="12" Height="12" Margin="0,0,8,0"/>
+            <TextBlock x:Name="StatusText" VerticalAlignment="Center" FontSize="14"/>
+        </StackPanel>
+
+        <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+            <TextBlock Text="Base model" Style="{StaticResource FieldLabel}" Foreground="Gray"/>
+            <TextBlock x:Name="BaseModelText" VerticalAlignment="Center" Foreground="Gray" FontFamily="Consolas"/>
+        </StackPanel>
+
+        <!-- Detection status -->
+        <StackPanel x:Name="BaseAmbientNotDetectedPanel">
+            <TextBlock Text="No base ambient LEDs detected. R9/R12 wheelbases don't ship the LED strip; this panel only activates on R21/R25/R27-class bases."
+                       Foreground="Gray" FontStyle="Italic" Margin="0,10" TextWrapping="Wrap"/>
+        </StackPanel>
+
+        <StackPanel x:Name="BasePanel" Visibility="Collapsed">
+
+            <TextBlock Text="Mode" Style="{StaticResource SectionHeader}"/>
+
+            <StackPanel Orientation="Horizontal" Margin="0,4">
+                <TextBlock Text="Indicator State" Style="{StaticResource FieldLabel}"/>
+                <ComboBox x:Name="IndicatorStateCombo" Width="140" SelectionChanged="IndicatorStateCombo_Changed">
+                    <ComboBoxItem Content="Off"/>
+                    <ComboBoxItem Content="On"/>
+                </ComboBox>
+            </StackPanel>
+
+            <StackPanel Orientation="Horizontal" Margin="0,4">
+                <TextBlock Text="Standby Animation" Style="{StaticResource FieldLabel}"/>
+                <ComboBox x:Name="StandbyModeCombo" Width="140" SelectionChanged="StandbyModeCombo_Changed">
+                    <ComboBoxItem Content="Constant"/>
+                    <ComboBoxItem Content="Breath"/>
+                    <ComboBoxItem Content="Cycle"/>
+                    <ComboBoxItem Content="Rainbow"/>
+                    <ComboBoxItem Content="Flow"/>
+                </ComboBox>
+            </StackPanel>
+
+            <TextBlock Text="Brightness" Style="{StaticResource SectionHeader}"/>
+            <StackPanel Orientation="Horizontal" Margin="0,4">
+                <TextBlock Text="Brightness" Style="{StaticResource FieldLabel}"/>
+                <Slider x:Name="BrightnessSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="255" TickFrequency="1" ValueChanged="BrightnessSlider_ValueChanged"/>
+                <TextBlock x:Name="BrightnessValue" Style="{StaticResource SliderValue}" Text="100"/>
+            </StackPanel>
+
+            <TextBlock Text="Sleep" Style="{StaticResource SectionHeader}"/>
+            <StackPanel Orientation="Horizontal" Margin="0,4">
+                <TextBlock Text="Sleep Mode" Style="{StaticResource FieldLabel}"/>
+                <ComboBox x:Name="SleepModeCombo" Width="140" SelectionChanged="SleepModeCombo_Changed">
+                    <ComboBoxItem Content="Disabled"/>
+                    <ComboBoxItem Content="Enabled"/>
+                </ComboBox>
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Margin="0,4">
+                <TextBlock Text="Sleep Timeout" Style="{StaticResource FieldLabel}"/>
+                <Slider x:Name="SleepTimeoutSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="120" TickFrequency="1" ValueChanged="SleepTimeoutSlider_ValueChanged"/>
+                <TextBlock x:Name="SleepTimeoutValue" Style="{StaticResource SliderValue}" Text="15"/>
+            </StackPanel>
+
+            <TextBlock Text="Power-on / Power-off Color" Style="{StaticResource SectionHeader}"/>
+            <StackPanel Orientation="Horizontal" Margin="0,4">
+                <TextBlock Text="Startup Color" Style="{StaticResource FieldLabel}"/>
+                <Border x:Name="StartupColorSwatch" Width="32" Height="32" BorderBrush="#555" BorderThickness="1" CornerRadius="3" Cursor="Hand" Background="Black" MouseLeftButtonUp="StartupColorSwatch_Click"/>
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Margin="0,4">
+                <TextBlock Text="Shutdown Color" Style="{StaticResource FieldLabel}"/>
+                <Border x:Name="ShutdownColorSwatch" Width="32" Height="32" BorderBrush="#555" BorderThickness="1" CornerRadius="3" Cursor="Hand" Background="Black" MouseLeftButtonUp="ShutdownColorSwatch_Click"/>
+            </StackPanel>
+        </StackPanel>
+    </StackPanel>
+</UserControl>

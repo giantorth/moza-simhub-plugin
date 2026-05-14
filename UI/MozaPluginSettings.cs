@@ -81,6 +81,17 @@ namespace MozaPlugin
         public int DashDisplayBrightness { get; set; } = 100;
         public int DashDisplayStandbyMin { get; set; } = 5;
 
+        // Wheelbase ambient LED settings (R21/R25/R27 family — 18 LEDs / 2 strips).
+        // Defaults match observed R25 capture (rainbow mode, brightness 100,
+        // startup/shutdown #66B8FF). See docs/protocol/leds/base-ambient-0x20-0x22.md.
+        public int BaseAmbientBrightness { get; set; } = 100;       // 0..255 wire range; UI exposes 0..100 mapped
+        public int BaseAmbientStandbyMode { get; set; } = 4;        // 4 = rainbow
+        public int BaseAmbientIndicatorState { get; set; } = 1;     // on
+        public int BaseAmbientSleepMode { get; set; } = 1;          // enabled
+        public int BaseAmbientSleepTimeout { get; set; } = 15;
+        public int BaseAmbientStartupColor { get; set; } = 0x66B8FF;
+        public int BaseAmbientShutdownColor { get; set; } = 0x66B8FF;
+
         // Blink colors (write-only, can't be polled — persisted here)
         // Packed as R<<16 | G<<8 | B, null = defaults not yet customized
         public int[]? WheelRpmBlinkColors { get; set; }

@@ -223,6 +223,19 @@ namespace MozaPlugin
         public readonly byte[][] DashRpmBlinkColors = InitRpmColorArray();
         public readonly byte[][] DashFlagColors = InitFlagColorArray();
 
+        // ===== Base ambient LED settings (R21/R25/R27 family — 18 LEDs / 2 strips) =====
+        // -1 = not yet read from device.
+        public volatile int BaseAmbientBrightness = -1;     // 0..255
+        public volatile int BaseAmbientStandbyMode = -1;    // 0=const, 1=?, 2=breath, 3=cycle, 4=rainbow, 5=flow
+        public volatile int BaseAmbientIndicatorState = -1; // 0=off, 1=on
+        public volatile int BaseAmbientSleepMode = -1;      // 0=disabled, 1=enabled
+        public volatile int BaseAmbientSleepTimeout = -1;   // value range TBD
+        public readonly byte[] BaseAmbientStartupColor = new byte[] { 0, 0, 0 };
+        public readonly byte[] BaseAmbientShutdownColor = new byte[] { 0, 0, 0 };
+        // Diagnostic only — stitched from group 0x07 cmd 0x01 + cmd 0x02 reads
+        // against dev 0x12 (e.g. "R25 Black # MOT-1 -V01"). Not used for gating.
+        public volatile string BaseModelName = "";
+
         // ===== FFB Equalizer (6 bands: 10/15/25/40/60/100 Hz, 0-400% where 100% = flat) =====
         public volatile int Equalizer1 = 100;
         public volatile int Equalizer2 = 100;
@@ -409,6 +422,13 @@ namespace MozaPlugin
                 case "dash-rpm-brightness":      DashRpmBrightness = value; break;
                 case "dash-flags-brightness":    DashFlagsBrightness = value; break;
 
+                // Base ambient LED settings
+                case "base-ambient-brightness":      BaseAmbientBrightness = value; break;
+                case "base-ambient-standby-mode":    BaseAmbientStandbyMode = value; break;
+                case "base-ambient-indicator-state": BaseAmbientIndicatorState = value; break;
+                case "base-ambient-sleep-mode":      BaseAmbientSleepMode = value; break;
+                case "base-ambient-sleep-timeout":   BaseAmbientSleepTimeout = value; break;
+
                 // FFB Equalizer
                 case "base-equalizer1": Equalizer1 = value; break;
                 case "base-equalizer2": Equalizer2 = value; break;
@@ -520,6 +540,17 @@ namespace MozaPlugin
             {
                 if (data.Length >= 3)
                     SetColor(WheelIdleColor, data);
+            }
+            // Base ambient startup / shutdown colors
+            else if (commandName == "base-ambient-startup-color")
+            {
+                if (data.Length >= 3)
+                    SetColor(BaseAmbientStartupColor, data);
+            }
+            else if (commandName == "base-ambient-shutdown-color")
+            {
+                if (data.Length >= 3)
+                    SetColor(BaseAmbientShutdownColor, data);
             }
             // Dash RPM colors
             else if (commandName.StartsWith("dash-rpm-color") && !commandName.Contains("blink"))
@@ -670,7 +701,7 @@ namespace MozaPlugin
             _serialPartB = "";
         }
 
-        private static string ParseNullTerminatedString(byte[] data)
+        public static string ParseNullTerminatedString(byte[] data)
         {
             int end = Array.IndexOf(data, (byte)0);
             return System.Text.Encoding.ASCII.GetString(data, 0, end < 0 ? data.Length : end).Trim();

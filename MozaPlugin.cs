@@ -56,6 +56,13 @@ namespace MozaPlugin
         private volatile bool _hubDetected;
         private volatile bool _ab9Detected;
         private volatile bool _ab9SettingsApplied;
+        // Set true on the first successful base-ambient-brightness response,
+        // which proves the connected wheelbase ships the 18-LED ambient strip
+        // (R21/R25/R27 family). R9/R12 bases don't respond on the 0x22 group,
+        // so the flag stays false and the "MOZA Wheel Base" device definition
+        // is never deployed.
+        private volatile bool _baseAmbientLedSupported;
+        private volatile bool _baseAmbientProbed; // edge guard: only fire the probe once per base detect
 
         // ===== AB9 host-rendered engine vibration =====
         //
@@ -179,6 +186,21 @@ namespace MozaPlugin
             "dash-flag-color4", "dash-flag-color5", "dash-flag-color6",
         };
 
+        // Settings read after the 0x22-group probe confirms the base ships the
+        // ambient LED strip. brightness is the probe itself — listed here too so
+        // re-syncs cover it; harmless, the second response just refreshes the
+        // already-set value.
+        private static readonly string[] BaseAmbientReadCommands = new[]
+        {
+            "base-ambient-brightness",
+            "base-ambient-standby-mode",
+            "base-ambient-indicator-state",
+            "base-ambient-sleep-mode",
+            "base-ambient-sleep-timeout",
+            "base-ambient-startup-color",
+            "base-ambient-shutdown-color",
+        };
+
         private static readonly string[] HandbrakeSettingsReadCommands = new[]
         {
             "handbrake-direction", "handbrake-min", "handbrake-max",
@@ -251,6 +273,13 @@ namespace MozaPlugin
             set => _dashDeviceExtensionActive = value;
         }
 
+        private volatile bool _baseAmbientDeviceExtensionActive;
+        internal bool BaseAmbientDeviceExtensionActive
+        {
+            get => _baseAmbientDeviceExtensionActive;
+            set => _baseAmbientDeviceExtensionActive = value;
+        }
+
         /// <summary>
         /// Tracks model prefixes with an active (loaded) device extension in this SimHub session.
         /// Used by the generic fallback device to yield when a model-specific device is active.
@@ -303,6 +332,7 @@ namespace MozaPlugin
         internal volatile bool DeviceDefinitionDeployed;
 
         internal bool IsDashDetected => _dashDetected;
+        internal bool IsBaseAmbientLedSupported => _baseAmbientLedSupported;
         internal bool IsHandbrakeDetected => _handbrakeDetected;
         internal bool IsPedalsDetected => _pedalsDetected;
         internal bool IsHubDetected => _hubDetected;
@@ -984,6 +1014,9 @@ namespace MozaPlugin
                 _baseDetected = false;
                 _data.BaseSettingsRead = false;
                 _dashDetected = false;
+                _baseAmbientLedSupported = false;
+                _baseAmbientProbed = false;
+                _data.BaseModelName = "";
                 _newWheelDetected = false;
                 _oldWheelDetected = false;
                 WheelModelInfo = null;
@@ -2072,6 +2105,9 @@ namespace MozaPlugin
         {
             _baseDetected = false;
             _dashDetected = false;
+            _baseAmbientLedSupported = false;
+            _baseAmbientProbed = false;
+            if (_data != null) _data.BaseModelName = "";
             _newWheelDetected = false;
             _oldWheelDetected = false;
             _handbrakeDetected = false;
@@ -2328,6 +2364,25 @@ namespace MozaPlugin
                 }
             }
 
+            // Base identity reads (group 0x07/01 dispatched against dev 0x12)
+            // come back labelled as "wheel-model-name" because they share the
+            // same group/cmd shape. Disambiguate by the response device id —
+            // wheel responses come from 0x17/0x15/0x13, base/main from 0x12 —
+            // and route to the diagnostic BaseModelName field instead of
+            // letting MozaData overwrite the wheel identity. Probe is
+            // scheduled in the base-mcu-temp handler below.
+            if (r.Name == "wheel-model-name" && r.DeviceId == MozaProtocol.DeviceMain
+                && r.ArrayValue != null)
+            {
+                var baseName = MozaData.ParseNullTerminatedString(r.ArrayValue);
+                if (!string.IsNullOrEmpty(baseName) && _data.BaseModelName != baseName)
+                {
+                    _data.BaseModelName = baseName;
+                    MozaLog.Debug($"[Moza] Base identity: {baseName}");
+                }
+                return;
+            }
+
             _data.UpdateFromCommand(r.Name, r.IntValue);
             if (r.ArrayValue != null)
                 _data.UpdateFromArray(r.Name, r.ArrayValue);
@@ -2560,6 +2615,25 @@ namespace MozaPlugin
                 if (profile != null)
                     ApplyProfile(profile);
                 _deviceManager.ReadSettings(BaseSettingsReadCommands);
+
+                // Capability probe for the wheelbase ambient LED strip — read
+                // base-ambient-brightness on dev 0x12. Bases that ship the
+                // strip (R21/R25/R27 family) reply on group 0xA2; bases without
+                // it (R9/R12) silently drop the read. The reply, if it arrives,
+                // is handled in the "base-ambient-brightness" case below and
+                // gates DeviceDefinitionDeployer.DeployBaseAmbient.
+                //
+                // Diagnostic identity read against dev 0x12 — same group/cmd
+                // (0x07/01) as the wheel model name read but routed to the
+                // hub/base alias. Response is intercepted ahead of
+                // MozaData.UpdateFromCommand to land in BaseModelName. Useful
+                // for log forensics regardless of whether the LEDs exist.
+                if (!_baseAmbientProbed)
+                {
+                    _baseAmbientProbed = true;
+                    _deviceManager.ReadSetting("base-ambient-brightness");
+                    _deviceManager.ReadSettingForDevice("wheel-model-name", MozaProtocol.DeviceMain);
+                }
             }
 
             switch (commandName)
@@ -2573,6 +2647,19 @@ namespace MozaPlugin
                         ApplySavedDashSettings();
                         _deviceManager.ReadSettings(DashSettingsReadCommands);
                         MozaLog.Info("[Moza] Dashboard detected");
+                    }
+                    break;
+
+                case "base-ambient-brightness":
+                    if (!_baseAmbientLedSupported)
+                    {
+                        _baseAmbientLedSupported = true;
+                        if (DeviceDefinitionDeployer.DeployBaseAmbient(_connection.DiscoveredPid))
+                            DeviceDefinitionDeployed = true;
+                        ApplySavedBaseAmbientSettings();
+                        _deviceManager.ReadSettings(BaseAmbientReadCommands);
+                        MozaLog.Info(
+                            $"[Moza] Base ambient LEDs detected (model='{(string.IsNullOrEmpty(_data.BaseModelName) ? "unknown" : _data.BaseModelName)}')");
                     }
                     break;
 
@@ -2995,6 +3082,48 @@ namespace MozaPlugin
             // bitmask-driven LEDs actually display. Subsequent read of dash-flags-indicator-mode
             // (via DashSettingsReadCommands) refreshes _data for the UI combo.
             _deviceManager.WriteSetting("dash-flags-indicator-mode", 1);
+        }
+
+        /// <summary>
+        /// Send saved base ambient LED settings after the capability probe
+        /// confirmed the strip exists. Mirrors ApplySavedDashSettings — pre-
+        /// populates _data so the UI shows the chosen values immediately,
+        /// then writes each through.
+        /// </summary>
+        private void ApplySavedBaseAmbientSettings()
+        {
+            MozaLog.Debug("[Moza] Applying saved base ambient LED settings");
+
+            _data.BaseAmbientBrightness = _settings.BaseAmbientBrightness;
+            _data.BaseAmbientStandbyMode = _settings.BaseAmbientStandbyMode;
+            _data.BaseAmbientIndicatorState = _settings.BaseAmbientIndicatorState;
+            _data.BaseAmbientSleepMode = _settings.BaseAmbientSleepMode;
+            _data.BaseAmbientSleepTimeout = _settings.BaseAmbientSleepTimeout;
+            UnpackPackedColor(_settings.BaseAmbientStartupColor, _data.BaseAmbientStartupColor);
+            UnpackPackedColor(_settings.BaseAmbientShutdownColor, _data.BaseAmbientShutdownColor);
+
+            _deviceManager.WriteSetting("base-ambient-brightness", _settings.BaseAmbientBrightness);
+            _deviceManager.WriteSetting("base-ambient-standby-mode", _settings.BaseAmbientStandbyMode);
+            _deviceManager.WriteSetting("base-ambient-indicator-state", _settings.BaseAmbientIndicatorState);
+            _deviceManager.WriteSetting("base-ambient-sleep-mode", _settings.BaseAmbientSleepMode);
+            _deviceManager.WriteSetting("base-ambient-sleep-timeout", _settings.BaseAmbientSleepTimeout);
+            WritePackedColor("base-ambient-startup-color", _settings.BaseAmbientStartupColor);
+            WritePackedColor("base-ambient-shutdown-color", _settings.BaseAmbientShutdownColor);
+        }
+
+        private static void UnpackPackedColor(int packed, byte[] dst)
+        {
+            dst[0] = (byte)((packed >> 16) & 0xFF);
+            dst[1] = (byte)((packed >> 8) & 0xFF);
+            dst[2] = (byte)(packed & 0xFF);
+        }
+
+        private void WritePackedColor(string command, int packed)
+        {
+            byte r = (byte)((packed >> 16) & 0xFF);
+            byte g = (byte)((packed >> 8) & 0xFF);
+            byte b = (byte)(packed & 0xFF);
+            _deviceManager.WriteColor(command, r, g, b);
         }
 
         /// <summary>
@@ -3863,6 +3992,37 @@ namespace MozaPlugin
                 WriteColorArray(extSettings.DashRpmColors, "dash-rpm-color", 10);
                 WriteColorArray(extSettings.DashRpmBlinkColors, "dash-rpm-blink-color", 10);
                 WriteColorArray(extSettings.DashFlagColors, "dash-flag-color", 6);
+            }
+
+            PersistSettings();
+        }
+
+        /// <summary>
+        /// Apply base ambient LED settings from the SimHub device extension
+        /// profile system. Mirror of <see cref="ApplyDashExtensionSettings"/>.
+        /// </summary>
+        internal void ApplyBaseExtensionSettings(MozaBaseExtensionSettings extSettings)
+        {
+            MozaLog.Debug("[Moza] Applying base ambient device extension settings");
+
+            extSettings.ApplyTo(_settings, _data);
+
+            if (_data.IsConnected && _baseAmbientLedSupported)
+            {
+                if (extSettings.BaseAmbientBrightness >= 0)
+                    _deviceManager.WriteSetting("base-ambient-brightness", extSettings.BaseAmbientBrightness);
+                if (extSettings.BaseAmbientStandbyMode >= 0)
+                    _deviceManager.WriteSetting("base-ambient-standby-mode", extSettings.BaseAmbientStandbyMode);
+                if (extSettings.BaseAmbientIndicatorState >= 0)
+                    _deviceManager.WriteSetting("base-ambient-indicator-state", extSettings.BaseAmbientIndicatorState);
+                if (extSettings.BaseAmbientSleepMode >= 0)
+                    _deviceManager.WriteSetting("base-ambient-sleep-mode", extSettings.BaseAmbientSleepMode);
+                if (extSettings.BaseAmbientSleepTimeout >= 0)
+                    _deviceManager.WriteSetting("base-ambient-sleep-timeout", extSettings.BaseAmbientSleepTimeout);
+                if (extSettings.BaseAmbientStartupColor >= 0)
+                    WritePackedColor("base-ambient-startup-color", extSettings.BaseAmbientStartupColor);
+                if (extSettings.BaseAmbientShutdownColor >= 0)
+                    WritePackedColor("base-ambient-shutdown-color", extSettings.BaseAmbientShutdownColor);
             }
 
             PersistSettings();

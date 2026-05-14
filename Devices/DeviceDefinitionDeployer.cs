@@ -20,8 +20,10 @@ namespace MozaPlugin.Devices
     {
         private const string DashResource = "MozaPlugin.Devices.Dash.device.json";
         private const string OldProtoResource = "MozaPlugin.Devices.WheelOldProto.device.json";
+        private const string BaseAmbientResource = "MozaPlugin.Devices.WheelBase.device.json";
         private const string DashDeviceName = "MOZA Dashboard";
         private const string OldProtoDeviceName = "MOZA Old Protocol Wheel";
+        private const string BaseAmbientDeviceName = "MOZA Wheel Base";
 
         // 0x0006 (R9 wheelbase) is the most common documented PID. The prior
         // 0x0004 placeholder doesn't match any known device. Used only when
@@ -53,6 +55,16 @@ namespace MozaPlugin.Devices
         /// <summary>Deploy the embedded dashboard device definition.</summary>
         public static bool DeployDashboard(string? discoveredPid)
             => DeployFromResource(DashDeviceName, DashResource, discoveredPid);
+
+        /// <summary>
+        /// Deploy the embedded "Wheel Base" device definition exposing the
+        /// 18-LED ambient telemetry strip. Caller must have already verified
+        /// the connected base actually has the strip (via the
+        /// base-ambient-brightness read probe in MozaPlugin) — bases without
+        /// it (R9/R12) should never see this file deployed.
+        /// </summary>
+        public static bool DeployBaseAmbient(string? discoveredPid)
+            => DeployFromResource(BaseAmbientDeviceName, BaseAmbientResource, discoveredPid);
 
         /// <summary>
         /// Deploy the old-protocol wheel device definition.

@@ -16,6 +16,10 @@ namespace MozaPlugin.Devices
         public const string DashGuid          = "c97a4d00-a66d-4e2f-a9b4-e7fc348dcc33";
         public const string WheelGenericGuid  = "ed153fcb-774d-4cea-97db-5f7096cd1099";
         public const string WheelOldProtoGuid = "5e70f006-ba71-4987-9e88-840d650b12ef";
+        // Wheelbase ambient LED strip (18 LEDs across two physical 9-LED strips).
+        // Deployed only for bases that respond to a base-ambient-brightness probe
+        // (R21 / R25 / R27 family). R9 / R12 don't have this strip — no device.
+        public const string BaseAmbientGuid   = "b8361c60-1bbd-4497-8cb4-af5df7db7251";
 
         /// <summary>Marker prefix returned by GetWheelModelPrefix for old-protocol devices.</summary>
         public const string OldProtocolMarker = "__old__";
@@ -151,6 +155,10 @@ namespace MozaPlugin.Devices
         /// <summary>Returns true if the DeviceTypeID is a known dashboard device.</summary>
         public static bool IsDashDevice(string deviceTypeId) =>
             !string.IsNullOrEmpty(deviceTypeId) && Matches(deviceTypeId, DashGuid);
+
+        /// <summary>Returns true if the DeviceTypeID is the wheel base ambient LED device.</summary>
+        public static bool IsBaseAmbientDevice(string deviceTypeId) =>
+            !string.IsNullOrEmpty(deviceTypeId) && Matches(deviceTypeId, BaseAmbientGuid);
 
         /// <summary>Check if deviceTypeId matches an id exactly or as a prefix (for _UserProject/_Embedded suffixes).</summary>
         private static bool Matches(string deviceTypeId, string id) =>

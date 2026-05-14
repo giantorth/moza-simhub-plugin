@@ -424,6 +424,68 @@ namespace MozaPlugin.Protocol
             AddCommand("ab9-natural-damping",      "ab9", 0x1F, 0x1F, new byte[] { 0xB0, 0x00 }, 1, "int");
             AddCommand("ab9-natural-friction",     "ab9", 0x1F, 0x1F, new byte[] { 0xB2, 0x00 }, 1, "int");
             AddCommand("ab9-max-torque-limit",     "ab9", 0x1F, 0x1F, new byte[] { 0xA9, 0x00 }, 1, "int");
+
+            // ===== BASE AMBIENT LEDS (device: main / dev 0x12, write group 0x20, read group 0x22) =====
+            // Two physical 9-LED strips on the wheelbase body of higher-torque
+            // bases (R21 / R25 / R27 family — verified on R25 capture
+            // 2026-05-05). Frame layout: 7E [N] 20 12 [cmd] [value] [chk].
+            // Read responses arrive on group 0xA2 (write echoes on 0xA0).
+            // Plugin gates deployment of the base device definition on whether
+            // a 0xA2 response to base-ambient-brightness arrives — bases
+            // without the strip (R9 / R12) silently drop the read.
+            // See docs/protocol/leds/base-ambient-0x20-0x22.md.
+
+            // Live RPM telemetry (write-only, group 0x20). Two named cmds per
+            // strip — strip index baked into cmd-ID prefix matches the
+            // wheel-telemetry-rpm-colors/wheel-send-rpm-telemetry pattern.
+            // Color chunks carry up to 5 LEDs × 4 bytes [idx, R, G, B] = 20B;
+            // the second chunk per strip is shorter (4 LEDs = 16B).
+            AddCommand("base-ambient-rpm-colors-strip0", "main", 0xFF, 0x20, new byte[] { 0x1A, 0x00 }, 20, "array");
+            AddCommand("base-ambient-rpm-colors-strip1", "main", 0xFF, 0x20, new byte[] { 0x1A, 0x01 }, 20, "array");
+            AddCommand("base-ambient-send-rpm-strip0",   "main", 0xFF, 0x20, new byte[] { 0x1B, 0x00 },  4, "array");
+            AddCommand("base-ambient-send-rpm-strip1",   "main", 0xFF, 0x20, new byte[] { 0x1B, 0x01 },  4, "array");
+
+            // Configuration (read group 0x22, write group 0x20).
+            AddCommand("base-ambient-indicator-state", "main", 0x22, 0x20, new byte[] { 0x1C }, 1, "int");
+            AddCommand("base-ambient-standby-mode",    "main", 0x22, 0x20, new byte[] { 0x1D }, 1, "int");
+
+            // Per-mode standby interval (BE u16 ms). Each standby mode (0..5)
+            // stores its own interval register independently.
+            for (byte m = 0; m < 6; m++)
+                AddCommand($"base-ambient-standby-interval-mode{m}", "main", 0x22, 0x20, new byte[] { 0x1E, m }, 2, "int");
+
+            // Brightness 0..255. PitHouse uses cmd `1F FF` on the wire even
+            // though rs21_parameter.db lists `1F 02` — the `0xFF` form is the
+            // capture-verified one and the only one the firmware honours.
+            AddCommand("base-ambient-brightness", "main", 0x22, 0x20, new byte[] { 0x1F, 0xFF }, 1, "int");
+
+            // Per-LED static colors. cmd `0x20 [strip] [mode] [led]` + RGB.
+            // strip = 0/1, mode = 1 (constant) / 2 (breath), led = 0..8.
+            // Only LedDeviceManager + UI path that touches all 36 needs these
+            // registered; we add them now so any future per-LED settings UI
+            // can use them without revisiting the database.
+            for (byte strip = 0; strip < 2; strip++)
+                for (byte mode = 1; mode <= 2; mode++)
+                    for (byte led = 0; led < 9; led++)
+                        AddCommand(
+                            $"base-ambient-led-color-strip{strip}-mode{mode}-led{led}",
+                            "main", 0x22, 0x20,
+                            new byte[] { 0x20, strip, mode, led }, 3, "array");
+
+            AddCommand("base-ambient-sleep-mode",      "main", 0x22, 0x20, new byte[] { 0x21 }, 1, "int");
+            AddCommand("base-ambient-sleep-timeout",   "main", 0x22, 0x20, new byte[] { 0x22 }, 2, "int");
+            AddCommand("base-ambient-breath-interval", "main", 0x22, 0x20, new byte[] { 0x23, 0x01 }, 2, "int");
+
+            // Per-LED sleep colors. cmd `0x25 [strip] 0x01 [led]` + RGB.
+            for (byte strip = 0; strip < 2; strip++)
+                for (byte led = 0; led < 9; led++)
+                    AddCommand(
+                        $"base-ambient-sleep-led-color-strip{strip}-led{led}",
+                        "main", 0x22, 0x20,
+                        new byte[] { 0x25, strip, 0x01, led }, 3, "array");
+
+            AddCommand("base-ambient-startup-color",  "main", 0x22, 0x20, new byte[] { 0x26 }, 3, "array");
+            AddCommand("base-ambient-shutdown-color", "main", 0x22, 0x20, new byte[] { 0x27 }, 3, "array");
         }
 
         private static void AddCommand(string name, string device, byte readGroup, byte writeGroup,
