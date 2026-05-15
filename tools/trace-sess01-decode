@@ -1,0 +1,360 @@
+#!/usr/bin/env python3
+"""Decode sess=0x01 sub-msg streams from a MOZA wire-trace JSONL file.
+
+Sess=0x01 (channel-protocol management session) carries five sub-msg
+types interleaved in both directions:
+
+  type=0x00 h2b   end / ack marker        [size=1][body=0x00 or 0x01]
+  type=0x01 h2b   tier-def subscription   [size][seq u8][N x 16-byte channel record]
+  type=0x03 b2h   wheel handshake response[size=4][01 00 00 00]
+  type=0x04 b2h   catalog URL announcement[size=url_len+1][idx u8][URL ASCII]
+  type=0x05 h2b   string value push       [size=2+strlen][idx u8][flag u8 = 0x80|len][ASCII]
+  type=0x06 both  seq-ack                 [size=4][seq u32 LE]
+  type=0x07 h2b   init / version          [size=4][02 00 00 00]
+
+Reference: docs/protocol/sessions/session-0x01-channel-protocol.md.
+
+Usage:
+    tools/trace-sess01-decode latest
+    tools/trace-sess01-decode SimHub/Logs/moza-wire-20260515-091203.jsonl
+    tools/trace-sess01-decode latest --dashboard "Simple Rally Mini Dash"
+    tools/trace-sess01-decode latest --only 0x05  # only string emits
+    tools/trace-sess01-decode latest --json
+"""
+import argparse
+import json
+import struct
+import sys
+import zlib
+from collections import defaultdict
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Optional
+
+sys.path.insert(0, str(Path(__file__).parent))
+from moza_trace import load_trace, resolve_trace, Frame
+
+
+SUBMSG_NAMES = {
+    0x00: "end-mark",
+    0x01: "tier-def",
+    0x03: "wh-hshake",
+    0x04: "catalog",
+    0x05: "string",
+    0x06: "seq-ack",
+    0x07: "init",
+}
+
+
+@dataclass
+class SubMsg:
+    t: float
+    direction: str
+    session: int
+    chunk_seq: int
+    sub_type: int
+    body: bytes
+    # Per-type decoded fields
+    catalog_idx: Optional[int] = None
+    catalog_url: Optional[str] = None
+    string_idx: Optional[int] = None
+    string_flag: Optional[int] = None
+    string_value: Optional[str] = None
+    ack_seq: Optional[int] = None
+    init_version: Optional[int] = None
+    handshake_value: Optional[int] = None
+    end_value: Optional[int] = None
+
+
+def strip_crc(payload: bytes) -> bytes:
+    """Strip 4-byte CRC32 trailer if it matches the preceding payload."""
+    if len(payload) < 5:
+        return payload
+    wire_crc = struct.unpack_from('<I', payload, len(payload) - 4)[0]
+    actual = zlib.crc32(payload[:-4]) & 0xFFFFFFFF
+    if actual == wire_crc:
+        return payload[:-4]
+    return payload
+
+
+def extract_chunks(frames: list[Frame]) -> list[tuple[float, str, int, int, bytes]]:
+    """Yield (t, dir, session, seq, net_payload) for every sess=0x01 type=0x01
+    chunk in both directions. CRC32 stripped if it validates.
+
+    Two frame shapes need handling, neither fully decoded by moza_trace.Frame:
+      * h2b 7E-wrapped: [7E][N][grp][dev][7C][00][sess][type][seqlo][seqhi][data...][chk]
+        (moza_trace.decode_frame decodes this correctly into f.session/.stype/.seq).
+      * b2h: SimHub-side captures emit DIRECT [C3][71][7C][00][sess][type][seq][seq][data...]
+        with no 7E wrapper and no checksum, while PitHouse-side bridge captures emit
+        7E-wrapped [7E][N][C3][71][7C][00][sess][type][seq][seq][data...][chk]. moza_trace
+        only handles the direct form, so parse b2h raw bytes manually.
+    """
+    out = []
+    for f in frames:
+        raw = f.raw
+        if f.dir == 'h2b':
+            # Trust moza_trace for h2b — its decoder handles 7E-wrapped h2b.
+            if f.session != 0x01 or f.stype != 0x01 or f.seq < 0:
+                continue
+            payload = raw[10:-5] if len(raw) > 15 else raw[10:]
+        elif f.dir == 'b2h':
+            sess = stype = seq = -1
+            payload = b''
+            if len(raw) >= 10 and raw[0] == 0x7E and raw[2] == 0xC3 \
+                    and raw[4] == 0x7C and raw[5] == 0x00:
+                sess = raw[6]
+                stype = raw[7]
+                seq = raw[8] | (raw[9] << 8)
+                # 7E-wrapped — last byte is the frame checksum.
+                payload = raw[10:-1] if len(raw) > 11 else raw[10:]
+            elif len(raw) >= 8 and raw[0] == 0xC3 \
+                    and raw[2] == 0x7C and raw[3] == 0x00:
+                sess = raw[4]
+                stype = raw[5]
+                seq = raw[6] | (raw[7] << 8)
+                payload = raw[8:]
+            else:
+                continue
+            if sess != 0x01 or stype != 0x01 or seq < 0:
+                continue
+        else:
+            continue
+        net = strip_crc(payload)
+        if net:
+            out.append((f.t, f.dir, 0x01, seq if f.dir == 'b2h' else f.seq, net))
+    return out
+
+
+def walk_submsgs(net: bytes, t: float, direction: str, session: int,
+                 seq: int) -> list[SubMsg]:
+    """Walk sub-msg [type u8][size_LE u32][body] records packed end-to-end."""
+    out = []
+    i = 0
+    while i + 5 <= len(net):
+        sub_type = net[i]
+        size = struct.unpack_from('<I', net, i + 1)[0]
+        # Tolerance for noise / framing bugs: any sub-msg larger than the
+        # remaining buffer or larger than a reasonable cap is treated as
+        # garbage and we advance by one byte.
+        if size > 0x10000 or i + 5 + size > len(net):
+            i += 1
+            continue
+        body = net[i + 5:i + 5 + size]
+        msg = SubMsg(t=t, direction=direction, session=session,
+                     chunk_seq=seq, sub_type=sub_type, body=bytes(body))
+
+        if sub_type == 0x00 and size == 1:
+            msg.end_value = body[0]
+        elif sub_type == 0x03 and size == 4:
+            msg.handshake_value = struct.unpack_from('<I', body, 0)[0]
+        elif sub_type == 0x04 and size >= 2:
+            msg.catalog_idx = body[0]
+            url_bytes = body[1:]
+            if all(0x20 <= b < 0x7F for b in url_bytes):
+                try:
+                    msg.catalog_url = url_bytes.decode('ascii')
+                except UnicodeDecodeError:
+                    msg.catalog_url = url_bytes.hex()
+        elif sub_type == 0x05 and size >= 2:
+            msg.string_idx = body[0]
+            msg.string_flag = body[1]
+            ascii_bytes = body[2:]
+            try:
+                msg.string_value = ascii_bytes.decode('ascii', errors='replace')
+            except Exception:
+                msg.string_value = ascii_bytes.hex()
+        elif sub_type == 0x06 and size == 4:
+            msg.ack_seq = struct.unpack_from('<I', body, 0)[0]
+        elif sub_type == 0x07 and size == 4:
+            msg.init_version = struct.unpack_from('<I', body, 0)[0]
+        out.append(msg)
+        i += 5 + size
+    return out
+
+
+def reassemble_per_direction(
+        chunks: list[tuple[float, str, int, int, bytes]]) -> dict[str, list[SubMsg]]:
+    """For each direction, dedup chunks by seq and walk sub-msgs against the
+    reassembled byte stream. Sub-msgs frequently span chunk boundaries, so
+    naive per-chunk walking misses or mangles ~10% of records."""
+    per_dir: dict[str, list[SubMsg]] = {'h2b': [], 'b2h': []}
+    for direction in ('h2b', 'b2h'):
+        # seq -> (first_t, payload)
+        by_seq: dict[int, tuple[float, bytes]] = {}
+        for t, d, sess, seq, payload in chunks:
+            if d != direction:
+                continue
+            if seq not in by_seq:
+                by_seq[seq] = (t, payload)
+        if not by_seq:
+            continue
+        # Reassemble in seq order, track offset → seq + timestamp
+        data = bytearray()
+        offset_to_seq: list[tuple[int, int, float]] = []  # (offset, seq, t)
+        for seq in sorted(by_seq.keys()):
+            t, payload = by_seq[seq]
+            offset_to_seq.append((len(data), seq, t))
+            data.extend(payload)
+
+        # Walk sub-msgs over the full reassembled buffer
+        i = 0
+        while i + 5 <= len(data):
+            sub_type = data[i]
+            size = struct.unpack_from('<I', data, i + 1)[0]
+            if size > 0x10000 or i + 5 + size > len(data):
+                i += 1
+                continue
+            # Map offset → owning chunk's (seq, t)
+            owning_seq = -1
+            owning_t = 0.0
+            for off, sq, ts in offset_to_seq:
+                if off <= i:
+                    owning_seq = sq
+                    owning_t = ts
+                else:
+                    break
+            sub_msgs = walk_submsgs(data[i:i + 5 + size], owning_t, direction,
+                                    0x01, owning_seq)
+            per_dir[direction].extend(sub_msgs)
+            i += 5 + size
+    return per_dir
+
+
+def decode(trace_path: Path, only_types: Optional[set[int]] = None,
+           catalog_filter: Optional[str] = None) -> dict:
+    frames = load_trace(trace_path)
+    chunks = extract_chunks(frames)
+    per_dir = reassemble_per_direction(chunks)
+
+    # Build catalog map from b2h type=0x04 records for cross-reference.
+    idx_to_url: dict[int, str] = {}
+    for msg in per_dir.get('b2h', []):
+        if msg.sub_type == 0x04 and msg.catalog_idx is not None and msg.catalog_url:
+            idx_to_url[msg.catalog_idx] = msg.catalog_url
+
+    # Phase markers (group 0x55 dev 0x55).
+    phase_markers = []
+    for f in frames:
+        if f.group == 0x55 and f.dev == 0x55:
+            phase_markers.append({
+                't': f.t, 'dir': f.dir,
+                'hex': f.raw.hex(),
+            })
+
+    # Merge + sort by time
+    merged = []
+    for direction in ('h2b', 'b2h'):
+        for msg in per_dir.get(direction, []):
+            if only_types and msg.sub_type not in only_types:
+                continue
+            merged.append(msg)
+    merged.sort(key=lambda m: m.t)
+
+    return {
+        'path': str(trace_path),
+        'frame_count': len(frames),
+        'chunk_count': len(chunks),
+        'submsg_count': sum(len(v) for v in per_dir.values()),
+        'catalog': idx_to_url,
+        'submsgs': merged,
+        'phase_markers': phase_markers,
+    }
+
+
+def format_row(msg: SubMsg, idx_to_url: dict[int, str]) -> str:
+    name = SUBMSG_NAMES.get(msg.sub_type, f"0x{msg.sub_type:02X}")
+    extra = ""
+    if msg.sub_type == 0x04:
+        extra = f"idx={msg.catalog_idx} url={msg.catalog_url!r}"
+    elif msg.sub_type == 0x05:
+        url = idx_to_url.get(msg.string_idx or -1, "(unknown)")
+        flag_ok = (msg.string_flag is not None
+                   and (msg.string_flag & 0x80)
+                   and (msg.string_flag & 0x7F) == len(msg.string_value or ""))
+        extra = (f"idx={msg.string_idx} url={url} "
+                 f"flag=0x{msg.string_flag:02X}{'' if flag_ok else ' !!'} "
+                 f"value={msg.string_value!r}")
+    elif msg.sub_type == 0x06:
+        extra = f"ack_seq={msg.ack_seq}"
+    elif msg.sub_type == 0x07:
+        extra = f"version={msg.init_version}"
+    elif msg.sub_type == 0x03:
+        extra = f"value={msg.handshake_value}"
+    elif msg.sub_type == 0x00:
+        extra = f"end={msg.end_value}"
+    else:
+        extra = "body=" + msg.body.hex()
+    return (f"  {msg.t:8.3f}s {msg.direction:3s} seq={msg.chunk_seq:5d} "
+            f"sub=0x{msg.sub_type:02X}({name:9s}) {extra}")
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Decode sess=0x01 sub-msgs from a wire trace.")
+    ap.add_argument("trace", nargs="?", default="latest",
+                    help="Trace file path, substring, or 'latest'")
+    ap.add_argument("--dashboard", help="Filter type=0x04 catalog to this dashboard's URLs (info only)")
+    ap.add_argument("--only", type=lambda s: set(int(x, 0) for x in s.split(',')),
+                    help="Comma-separated sub-msg types to show (e.g. 0x05 or 0x04,0x05)")
+    ap.add_argument("--json", action="store_true", help="Emit JSON instead of human table")
+    args = ap.parse_args()
+
+    path = resolve_trace(args.trace)
+    print(f"# Trace: {path}", file=sys.stderr)
+    result = decode(path, only_types=args.only)
+
+    if args.json:
+        out = {
+            'path': result['path'],
+            'frame_count': result['frame_count'],
+            'chunk_count': result['chunk_count'],
+            'submsg_count': result['submsg_count'],
+            'catalog': result['catalog'],
+            'submsgs': [
+                {
+                    't': m.t, 'dir': m.direction, 'seq': m.chunk_seq,
+                    'sub_type': m.sub_type,
+                    'sub_name': SUBMSG_NAMES.get(m.sub_type, f"0x{m.sub_type:02X}"),
+                    'catalog_idx': m.catalog_idx, 'catalog_url': m.catalog_url,
+                    'string_idx': m.string_idx, 'string_flag': m.string_flag,
+                    'string_value': m.string_value,
+                    'ack_seq': m.ack_seq, 'init_version': m.init_version,
+                    'handshake_value': m.handshake_value, 'end_value': m.end_value,
+                    'body_hex': m.body.hex(),
+                }
+                for m in result['submsgs']
+            ],
+            'phase_markers': result['phase_markers'],
+        }
+        print(json.dumps(out, indent=2))
+        return
+
+    print(f"# Frames: {result['frame_count']}  Chunks(sess=01,type=01): {result['chunk_count']}  Sub-msgs: {result['submsg_count']}")
+    if result['catalog']:
+        print(f"\n# Catalog (b2h type=0x04 announcements, {len(result['catalog'])} URLs):")
+        for idx in sorted(result['catalog'].keys()):
+            print(f"    idx={idx:3d} {result['catalog'][idx]}")
+    if result['phase_markers']:
+        print(f"\n# Phase markers (group 0x55 dev 0x55, {len(result['phase_markers'])} total):")
+        for pm in result['phase_markers']:
+            print(f"    {pm['t']:8.3f}s {pm['dir']:3s} {pm['hex']}")
+
+    print(f"\n# Sub-msgs (chronological):")
+    for msg in result['submsgs']:
+        print(format_row(msg, result['catalog']))
+
+    # Quick string-channel summary
+    string_msgs = [m for m in result['submsgs'] if m.sub_type == 0x05]
+    if string_msgs:
+        per_idx: dict[int, list[str]] = defaultdict(list)
+        for m in string_msgs:
+            per_idx[m.string_idx or -1].append(m.string_value or "")
+        print(f"\n# String emits by channel (type=0x05, {len(string_msgs)} total):")
+        for idx in sorted(per_idx.keys()):
+            url = result['catalog'].get(idx, '(unknown)')
+            values = per_idx[idx]
+            unique = sorted(set(values))
+            print(f"    idx={idx:3d} {url:55s} count={len(values):4d} unique={unique}")
+
+
+if __name__ == "__main__":
+    main()

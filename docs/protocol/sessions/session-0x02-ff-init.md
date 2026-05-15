@@ -72,6 +72,33 @@ names) and kind=11 is the FFB-property catalog (~250 increment/decrement
 parameter names). See [`../findings/2026-05-07-sess02-ff-kinds-reference.md`](../findings/2026-05-07-sess02-ff-kinds-reference.md)
 for the body decoding.
 
+### Body decode — kind=8 and kind=11 record envelope (2026-05-15)
+
+Both inflated catalogs use the **same record envelope**: a header, a
+UTF-16-BE name, and a per-record TLV trailer whose `type` determines the
+value layout:
+
+```
+record = [id:u16 BE] [name_len:u32 BE] [UTF-16BE name (name_len bytes)] [TLV trailer]
+TLV trailer = [type:u32 BE] [reserved:u8] [value: type-determined layout]
+```
+
+| `type` | Trailer total | Value layout | Where seen |
+|------:|--------------:|--------------|------------|
+| 0  | 5 B  | (no value; reserved byte = `0x01`) | RpmAbsolute / RpmPercent slot records (kind=8) |
+| 2  | 9 B  | `[u32 BE]` | enum / index / bool wheel settings (kind=8) |
+| 4  | 13 B | `[u64 BE]` (integer property, e.g. brightness=80, breath interval=3000 ms) | kind=8 |
+| 6  | 13 B | `[u64 BE]` interpreted as `double BE` (e.g. `equalizerGain1 = 90.0`, `naturalDamper = 42.0`) | kind=8 |
+| 10 | 9 + strlen B | `[strlen:u32 BE] [UTF-16BE string]` (e.g. `__location → "en_US"`) | kind=8 |
+| 9  | variable | nested preset block (UTF-16-LE-encoded inner sub-records, partially decoded) | kind=8 |
+
+`kind=11` uses the same envelope but only emits records with the
+simplest trailer shape (`type=0`, name-only), one per FFB property name
+(`decrementEqualizerGain1`, …). `kind=8` emits the full mix.
+
+Full byte-exact examples and the type=9 inner-block partial decode live
+in [`../findings/2026-05-15-sess02-kind8-tlv-and-preset-block.md`](../findings/2026-05-15-sess02-kind8-tlv-and-preset-block.md).
+
 ## **Do not replay captured kind=8 / kind=11 bytes verbatim**
 
 The kind=8 and kind=11 records from a PitHouse capture cannot be shipped
@@ -119,10 +146,18 @@ beyond what the wheel's input handler can recover from cleanly.
 
 ## Required work before re-enabling kind=8 / kind=11 emission
 
-1. Decode the inner structure of kind=8 sub-format B (the wheel-config
+1. ~~Decode the inner structure of kind=8 sub-format B (the wheel-config
    property records — sub-format A is already understood). Identify
    which fields are wheel-static (constants the host can replay) vs
-   session-derived.
+   session-derived.~~ **Done 2026-05-15** for trailer types 0/2/4/6/10
+   — see the TLV trailer table above and
+   [`../findings/2026-05-15-sess02-kind8-tlv-and-preset-block.md`](../findings/2026-05-15-sess02-kind8-tlv-and-preset-block.md).
+   Type=9 (nested preset blocks) is partially decoded — outer envelope
+   known, inner field semantics still TBD. Most type=4/6 values are
+   user-settable wheel settings (brightness, EQ gains, intervals); these
+   are session-derived in the sense that they reflect user state at
+   record-emission time, not in the wheel-validates-cryptographic-token
+   sense.
 2. Decode `kind=11` body record boundaries (currently parsed as a flat
    `[id:u32 BE][name_len:u32 BE][name:UTF-16-BE]` stream — verify there
    are no embedded sub-fields or session-derived values).

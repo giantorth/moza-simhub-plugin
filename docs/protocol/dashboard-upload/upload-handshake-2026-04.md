@@ -28,6 +28,14 @@ Small-file flow (2025-11 firmware, `pithouse-switch-list-delete-upload-reupload.
 
 **Device-side reply seq is independent from the host's seq counter on the same session.** Real wheel starts its file-transfer reply seq at `port + 1` (e.g. port 6 → first wheel→host data chunk at seq `0x07`). Sim previously reused the host's `_upload_next_seq` counter, which on a port-6 upload started replies at the host's last seq + 1 (≈ `0x11`); PitHouse silently dropped those out-of-window chunks. Fixed via `_ft_reply_next_seq[session]` initialised to `port + 1`.
 
+**Wheel-side ack session ≠ host upload session (verified 2026-05-14).** When the host uploads on `sess=0x05` (or any session in the 0x05..0x09 dynamic range), the wheel acks on **`sess=0x04`** — both fc:00 chunk acks AND the type=0x01 progress + type=0x11 complete sub-msgs land on b2h sess=0x04. Verified across two consecutive uploads (ETS2-ATS, Simple Rally Mini Dash) in `sim/logs/bridge-20260514-170002.jsonl`: b2h sess=0x05 was 0–25 frames total across both uploads while b2h sess=0x04 carried 5+1 type=0x01/0x11 sub-msgs per upload at the expected per-round cadence (one type=0x01 per host type=0x03 sub-msg, then one type=0x11 once deflate EOF reached).
+
+This is the **same "linked session pairs" pattern** [`../sessions/chunk-format.md`](../sessions/chunk-format.md) calls out for the 0x03↔0x0A pair. For upload, the pair is `host_upload_session ↔ wheel_session_0x04`.
+
+The ack sub-msg body echoes the REMOTE staging path as a `0x70` TLV (UTF-16LE `/_moza_filetransfer_md5_<hex>`) — even though the host's outbound metadata never carried a REMOTE TLV (current PitHouse uses two LOCAL `0x8C` TLVs only). The wheel derives the staging path from the host-declared MD5 and echoes it back as part of its progress + complete acks.
+
+**Plugin implementation gap.** `WheelUploadCoordinator.NoteInboundChunk` filters by `session == ActiveSession`. For uploads on host session 0x05, `ActiveSession = 0x05` so b2h sess=0x04 acks are dropped on the floor — the coordinator's `_subMsg1Response` / `_subMsg2Response` wait events never fire from real wheel replies, and the wire-format-fallback path (Legacy ↔ New) can misfire when the new format actually worked. Fix: feed b2h sess=0x04 sub-msgs into the coordinator alongside the upload session's traffic, walk them with the 6-byte sub-msg parser, and fire the ack events on the observed type=0x01 / type=0x11 boundaries.
+
 **Per-round progress ack.** For each new type=0x03 round detected in the buffer, sim emits another type=0x01 with the latest `bytes_written` value. Without this, PitHouse halts the upload after the first round (the protocol behaves like a per-round flow-control credit). `_ft_rounds_acked[session]` tracks how many rounds have been acked so duplicate keepalive timers don't re-fire on the same round.
 
 **Stuck-state recovery.** Sim reload (`mcp__wheel-sim-windows__sim_reload` then `sim_start`) appears to Windows as a USB disconnect → reconnect, forcing PitHouse to drop its cached "upload in progress" state and re-handshake cleanly. Required after any PitHouse retry-loop wedges (UI stuck on "resources syncing" with no wire activity).
@@ -47,10 +55,10 @@ For every message, `status == xor_over_body_bytes`. Example (file2 `type=0x01` r
 **Message layout** (confirmed, replaces earlier speculation):
 
 ```
-[type:1] [size_LE:u32] [pad:1]             — 6-byte header
+[type:1] [size_LE:u16] [pad:3]             — 6-byte header (size is u16 LE, not u32)
 [pad:2 = 00 00]                            — body begins here
-[REMOTE path TLV]                          — 0x70 0x00 + UTF-16LE + 00 00
-[LOCAL  path TLV]                          — 0x8A/0x8C 0x00 + UTF-16LE + 00 00  (firmware-dependent)
+[LOCAL path TLV  #1]                       — 0x8A/0x8C 0x00 + UTF-16LE + 00 00  (firmware-dependent)
+[LOCAL path TLV  #2 OR REMOTE path TLV]    — see firmware notes below
 [flag:1 = 0x10]
 [md5:16]
 [bytes_written:u32 BE]
@@ -60,6 +68,28 @@ For every message, `status == xor_over_body_bytes`. Example (file2 `type=0x01` r
 ```
 
 `size_LE` counts every byte after the first 6 (i.e. `msg_len = size + 6`). The two `00 00` bytes that follow the 6-byte header look like they could be extra header pad, but they are part of the body and contribute to the XOR (as zeros they are no-ops).
+
+**Second TLV firmware variance:**
+
+| Firmware | Second TLV | Content |
+|----------|------------|---------|
+| 2025-11 (PCAP captures) | `0x70 0x00` REMOTE | Wheel-side staging path `/home/root/_moza_filetransfer_md5_<md5hex>` (`UTF-16LE NUL-term`) |
+| 2026-04+ (PCAP captures, retained for legacy parity) | `0x70 0x00` REMOTE | Same shape as 2025-11 |
+| 2026-05+ (current PitHouse, bridge capture `sim/logs/bridge-20260514-170002.jsonl`) | `0x8C 0x00` LOCAL | **Identical duplicate** of TLV #1 (same Windows source path, no REMOTE path at all in metadata) |
+
+On 2026-05+ PitHouse the wheel-side staging path
+(`/tmp/_moza_filetransfer_md5_<md5>`) appears only **inside the
+type=0x03 content body** (the deflate stream's pre-zlib path TLV
+block), not in the type=0x02 metadata. The metadata now carries only
+the source Windows path, repeated twice. Reason for the duplication
+is unknown — likely a fixed-slot artifact retained from when the
+second slot was REMOTE.
+
+**XOR status verified on 2026-05-14 bridge capture
+(`sim/logs/bridge-20260514-170002.jsonl`).** Upload #2's type=0x02
+metadata body[319] = `0x4B`; `XOR(body[0..318]) = 0x4B`. Confirmed
+bit-exact across all 2144 session-data chunks of upload #2 (every
+per-chunk CRC32-LE matched as well).
 
 **Sim impact.** The pre-2026-04-24 sim emitted a 4-byte `ff ff ff ff` trailer — 3 bytes longer than the real wheel — and set `size_LE = body_len` assuming an 8-byte header. Both errors compounded: PitHouse parsed size field, walked N bytes into the body, and its internal state machine's `next_message_offset` pointer landed 3 bytes past the real message end, at which point the sentinel scan / status XOR check failed and PitHouse sat on "resources syncing" waiting for a message it would never recognise. `build_file_transfer_response` in `sim/wheel_sim.py` now emits a 1-byte XOR status byte and sets `size = body_len + 2`.
 
@@ -88,7 +118,7 @@ Large dashboards (≥ ~10KB compressed) are split across many type=0x03 sub-msgs
 [zlib_or_raw_deflate_chunk]                    — `78 9c` magic only on FIRST sub-msg; subsequent sub-msgs carry raw deflate continuation at the same byte offset
 ```
 
-Observed `size_LE = 0x1120 = 4384` for every sub-msg in a 506KB upload on the user's 2026-04 PitHouse; under the 8B reading the zlib data starts 769 bytes into each sub-msg. Under the corrected 6B reading the same data starts at body[1267] in chunk0 and body[290] in continuations.
+Observed `size_LE = 0x1120 = 4384` for every type=0x03 sub-msg in a 506KB upload on the user's 2026-04 PitHouse. Continuation deflate data starts at **body[291]** in every chunk (immediately after the 12-byte position envelope at body[279:291] — see [`per-chunk-trailer.md`](per-chunk-trailer.md)). For chunk 0 specifically, body[291:611] carries the uncompressed bundle preamble (file table) and `78 9c` zlib magic lands at body[611] for upload #2 (varies with file count / path lengths).
 
 **Reassembly algorithm — legacy fallback** (`_parse_upload` in `sim/wheel_sim.py`):
 

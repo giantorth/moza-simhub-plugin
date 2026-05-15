@@ -248,6 +248,21 @@ Most new channels only need step 1 — set `simhub_property` (and optional `simh
 
 To add a new `@internal/` sentinel channel: set the sentinel in `Telemetry.json`, then extend the `switch` in `MozaPlugin.ResolveInternalChannel(string path)` to return the computed `double`. No UI changes — internal channels are filtered out of the mapping grid automatically.
 
+### String-typed channels (out-of-band on sess=0x01)
+
+Channels declared with `compression: "string"` in `Telemetry.json` (`TrackId`, `CarModel`, `SessionTypeName`, `Flag_Name`, `patch/TrackName`, `patch/DisplayTrackName`, vehicle tags, tyre compound types, etc. — 23 in total) **do not bit-pack into the value frame**. They ride a separate transport: `type=0x05` sub-msgs on session 0x01 with `[type=0x05][size_LE u32 = 2+strlen][channel_idx u8][0x80|strlen u8][ASCII strlen bytes]`. Full wire-format reference: [`protocol/sessions/session-0x01-channel-protocol.md`](protocol/sessions/session-0x01-channel-protocol.md); discovery details: [`protocol/findings/2026-05-14-sess01-channel-protocol-and-string-values.md`](protocol/findings/2026-05-14-sess01-channel-protocol-and-string-values.md).
+
+Plumbing inside the plugin:
+
+- **`DashboardProfileStore.BuildMultiStreamProfile` / `BuildProfileFromCatalog` / `BuildPerWidgetProfile`** route any URL whose Telemetry.json compression is `"string"` to `MultiStreamProfile.StringChannels` (separate from the bit-packed `Tiers` list). The wheel does NOT expect string-typed entries in any `type=0x01` tier-def, so a `string` compression must NEVER be assigned a `CompressionTable` entry — that would land the channel in a bit-packed slot the firmware refuses to bind.
+- **`ChannelCatalogParser.FindIdxByUrl(url)`** maps a URL string to its 1-based catalog idx as announced by the wheel on b2h sess=0x01 `type=0x04` records. The wheel re-indexes URLs per dashboard, so this lookup is the authoritative source; idx values cannot be hardcoded per channel.
+- **`StringValueBuilder.Build(channelIdx, value)`** builds the type=0x05 sub-msg body. Output is byte-exact against the captured PitHouse wire (verified against `imola`→idx7 and `ks_laguna_seca`→idx7 from `bridge-20260514-204307.jsonl`). Max strlen 127 — high bit of the flag byte is the string-type signal, low 7 bits are the length.
+- **`TelemetrySender.TickEmitStringValues()`** runs immediately after `TickEmitValueFrames` in the steady-state tick loop. Per-URL state dict (`_stringChannelState`) tracks the last value + last-emit `Environment.TickCount` so the wire only carries a re-send when the value changes, with a 2-second keepalive floor when it doesn't. Records are chunked via `TierDefinitionBuilder.ChunkMessage(session: 0x01, seq: ref _session01OutboundSeq)` so the existing chunk CRC + framing path is reused.
+- **Test mode** uses the channel's `TestSignal.StringValue` (assigned at dashboard-load by `TestSignalCatalog.Resolve` when `data_type == "string"`, defaulting to `"DEMO"`). The bit-packed test path's `TestSignalGenerator.Compute` returns `0.0` for string channels — the string is read directly off `TestSignal.StringValue`, not through the numeric pipeline.
+- **Live SimHub property wiring is NOT yet implemented.** When the game is running but TestMode is off, the emitter currently re-emits the static `TestSignal.StringValue` ("DEMO" by default) — placeholder until per-channel SimHub property reads land. See the `TODO(2026-05-15)` in `TickEmitStringValues`.
+
+Cadence observed from PitHouse (single-channel `TrackId` sample): bursts of 3–6 retransmits on value-change, 10–30 s silence at steady state. Plugin re-implements this approximately with the 2-second keepalive floor plus event-driven sends on value-change.
+
 ### Dashboard Switch State Machine
 
 `MozaPlugin.ApplyTelemetryDashboardFromProfile(MozaProfile)` is the single entry point for binding the wheel's displayed dashboard to whatever the current SimHub game profile saved. It fires from `ApplyProfile` at plugin Init / game-switch and from `PollStatus`'s retry loop (driven by `_pendingProfileDashboardKey`). Returns `true` once the apply has resolved (or been permanently dropped), `false` to defer.

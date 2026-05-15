@@ -1,0 +1,121 @@
+#!/usr/bin/env python3
+"""Live-tail the current bridge JSONL and print only non-routine frames.
+
+Mirrors the ROUTINE filter from ``bridge-non-routine`` but streams as new
+frames are appended (uses ``stream_bridge`` from ``moza_bridge``). Intended
+for spotting one-off events like dashboard uploads in real time.
+
+Usage:
+    tools/bridge-live-non-routine                # tail latest, EOF start
+    tools/bridge-live-non-routine --from-start   # replay full file first
+    tools/bridge-live-non-routine --capture FILE
+    tools/bridge-live-non-routine --no-dash      # also drop dashboard session traffic
+"""
+import argparse
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from moza_bridge import resolve_bridge, stream_bridge
+
+# Reuse the canonical routine set from bridge-non-routine. Keep this list in
+# sync with that script — anything that's "constant baseline noise" goes here.
+ROUTINE = {
+    ("h2b", 0x2D, 0x13, "f5"),
+    ("h2b", 0x41, 0x17, "fd"),
+    ("h2b", 0x43, 0x17, "7d"),
+    ("h2b", 0x43, 0x17, "fc"),
+    ("h2b", 0x5A, 0x1B, "00"),
+    ("h2b", 0x5D, 0x1B, "01"),
+    ("h2b", 0x25, 0x19, "01"),
+    ("h2b", 0x25, 0x19, "02"),
+    ("h2b", 0x25, 0x19, "03"),
+    ("h2b", 0x40, 0x17, "1f"),
+    ("h2b", 0x40, 0x17, "27"),
+    ("h2b", 0x40, 0x17, "1e"),
+    ("h2b", 0x40, 0x17, "1d"),
+    ("h2b", 0x40, 0x17, "1c"),
+    ("h2b", 0x40, 0x17, "1b"),
+    ("h2b", 0x40, 0x17, "20"),
+    ("h2b", 0x40, 0x17, "21"),
+    ("h2b", 0x40, 0x17, "23"),
+    ("h2b", 0x40, 0x17, "24"),
+    ("h2b", 0x40, 0x17, "28"),
+    ("h2b", 0x40, 0x17, "29"),
+    ("h2b", 0x40, 0x17, "2a"),
+    ("h2b", 0x0E, 0x12, "00"),
+    ("h2b", 0x1F, 0x12, "4f"),
+    ("h2b", 0x2B, 0x13, "02"),
+    ("h2b", 0x43, 0x14, "00"),
+    ("h2b", 0x43, 0x15, "00"),
+    ("h2b", 0x43, 0x17, "00"),
+    ("h2b", 0x0E, 0x13, "00"),
+    ("h2b", 0x0E, 0x17, "00"),
+    ("h2b", 0x0E, 0x19, "00"),
+    ("h2b", 0x3F, 0x17, "1a"),
+    ("h2b", 0x3F, 0x17, "19"),
+    ("b2h", 0xC0, 0x71, "1f"),
+    ("b2h", 0xC0, 0x71, "27"),
+    ("b2h", 0xC0, 0x71, "1e"),
+    ("b2h", 0xC0, 0x71, "1d"),
+    ("b2h", 0xC0, 0x71, "1c"),
+    ("b2h", 0xC0, 0x71, "1b"),
+    ("b2h", 0xC0, 0x71, "20"),
+    ("b2h", 0xC0, 0x71, "21"),
+    ("b2h", 0xC0, 0x71, "23"),
+    ("b2h", 0xC0, 0x71, "24"),
+    ("b2h", 0xC0, 0x71, "28"),
+    ("b2h", 0xC0, 0x71, "29"),
+    ("b2h", 0xC0, 0x71, "2a"),
+    ("b2h", 0xDA, 0xB1, "00"),
+    ("b2h", 0xDD, 0xB1, "01"),
+    ("b2h", 0xA5, 0x91, "01"),
+    ("b2h", 0xA5, 0x91, "02"),
+    ("b2h", 0xA5, 0x91, "03"),
+    ("b2h", 0xC3, 0x71, "fc"),
+    ("b2h", 0xC3, 0x71, "7c"),
+    ("b2h", 0xC3, 0x71, "80"),
+    ("b2h", 0x9F, 0x21, "4f"),
+    ("b2h", 0x8E, 0x21, "00"),
+    ("b2h", 0x8E, 0x71, "00"),
+    ("b2h", 0xAB, 0x31, "02"),
+    ("b2h", 0xBF, 0x71, "1a"),
+    ("b2h", 0xBF, 0x71, "19"),
+}
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    ap.add_argument("--capture", help="Bridge JSONL (default: latest in sim/logs/)")
+    ap.add_argument("--from-start", action="store_true",
+                    help="Replay file from beginning before tailing")
+    ap.add_argument("--no-dash", action="store_true",
+                    help="Also drop dashboard session traffic (sess-data on grp 0x43/0xC3)")
+    args = ap.parse_args()
+
+    path = resolve_bridge(args.capture)
+    print(f"# tailing {path}", file=sys.stderr, flush=True)
+
+    try:
+        for f in stream_bridge(path, follow=True, from_start=args.from_start):
+            if not f.payload:
+                continue
+            prefix = f.payload[:1].hex()
+            key = (f.dir, f.grp, f.dev, prefix)
+            if key in ROUTINE:
+                continue
+            if args.no_dash:
+                if f.grp in (0x43, 0xC3) and f.dev in (0x14, 0x15, 0x17, 0x71):
+                    if prefix in ("7c", "fc", "80"):
+                        continue
+            print(f"{f.t:.3f} {f.dir} grp=0x{f.grp:02x} dev=0x{f.dev:02x} "
+                  f"payload={f.payload.hex()}", flush=True)
+    except KeyboardInterrupt:
+        return
+
+
+if __name__ == "__main__":
+    main()

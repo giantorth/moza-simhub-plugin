@@ -52,11 +52,18 @@ Active-dashboard state is carried instead by the channel-config burst's `28:00` 
 
 A host that relies on the configJson state blob alone for active-dashboard tracking will desync from the wheel after any restart cycle (host re-applies its saved profile; wheel keeps rendering whatever it was rendering). The only positive in-protocol confirmation of a switch is the wheel's echo of `kind=4` FF-records on session 0x02, which only fires when the host actually sends a switch — not at startup.
 
-### configJson state `rootDirPath` changed between firmware versions
+### configJson state `rootDirPath` — `/home/moza/resource` (current)
 
-| Firmware | `rootDirPath` | `rootPath` (enableManager/disableManager) |
-|----------|---------------|-------------------------------------------|
-| 2025-11 | `/home/moza/resource` | `/home/moza/resource/dashes` |
-| 2026-04 | `/home/root/resource` | `/home/root/resource/dashes` |
+Current PitHouse (2026-05+, bridge capture `sim/logs/bridge-20260514-170002.jsonl`) reports:
 
-Sim updated 2026-04-24 to emit the `/home/root` variant. Previewed upload paths in session 0x04 type=0x03 sub-msg use `/home/root/resource/dashes/<Name>.mzdash` (flat — no subdirectory unlike older `/home/moza/resource/dashes/<Name>/<Name>.mzdash`).
+| Field | Value |
+|-------|-------|
+| `rootDirPath` | `/home/moza/resource` |
+| `rootPath` (enableManager / disableManager) | `/home/moza/resource/dashes` |
+
+Upload destination paths in the type=0x03 content sub-msg are
+`/home/moza/resource/dashes/<DisplayName>/<DisplayName>.mzdash` (per-
+dashboard subdirectory). PNG resources land at
+`/home/moza/resource/images/MD5/<md5hex>.png`. A 2026-04 sim-side
+change briefly emitted a `/home/root/resource` variant; current
+PitHouse + firmware use `/home/moza/resource`, so emit that.
