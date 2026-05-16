@@ -314,8 +314,19 @@ namespace MozaPlugin.Telemetry.TestMode
 
             // --- String fields (sess=0x01 type=0x05 out-of-band) ---
             // Distinct per-channel test value lets the wheel display unambiguously
-            // tell which channel reached the screen — "STR-TrackId" vs "STR-CarModel"
-            // vs the previous single literal "DEMO" which made every widget indistinguishable.
+            // tell which channel reached the screen — "Šìm Ĥüƀ-TrackId" vs
+            // "Šìm Ĥüƀ-CarModel" 
+            //
+            // Prefix spells "SimHub" with one diacritic glyph swapped in per
+            // letter — caron S, grave i, plain Latin m, circumflex H,
+            // diaeresis u, stroked b. All six characters are Latin / Latin
+            // Extended-A / Latin Extended-B in the Basic Multilingual Plane;
+            // 2 bytes each in UTF-8. The 2026-05-15 torture-prefix test
+            // confirmed BMP Latin / Cyrillic / Greek / CJK all render, while
+            // the emoji 🏁 (4-byte UTF-8) does not —
+            // so anything beyond U+FFFF is off the menu. See
+            // docs/protocol/findings/2026-05-15-string-values-are-utf8-not-ascii.md.
+            const string TestPrefix = "ŠìmĤüb";
             string[] stringChannels =
             {
                 "MapName", "DisplayMapName", "TrackId", "TrackCode", "TrackConfig",
@@ -325,7 +336,7 @@ namespace MozaPlugin.Telemetry.TestMode
                 "DestinationCity",
             };
             foreach (var name in stringChannels)
-                Add(name, TestSignal.StringConstant_("STR-" + name));
+                Add(name, TestSignal.StringConstant_(TestPrefix + "-" + name));
         }
 
         private static void Add(string name, TestSignal signal)

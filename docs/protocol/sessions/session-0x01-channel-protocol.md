@@ -30,7 +30,7 @@ by stride `5 + size`. Chunks themselves use the standard
 | 0x01 | h2b | **Tier-def (subscription)** | `[type][size][seq u8][N × 16B channel records]` |
 | 0x03 | b2h | Wheel handshake response | `[type][size=4][01 00 00 00]` |
 | 0x04 | b2h | **Catalog URL announcement** | `[type][size = url_len+1][idx u8][URL ASCII]` |
-| 0x05 | h2b | **String value push** | `[type][size = 2+strlen][idx u8][0x80\|strlen u8][ASCII]` |
+| 0x05 | h2b | **String value push** | `[type][size = 2+strlen][idx u8][0x80\|strlen u8][UTF-8]` |
 | 0x06 | both | Seq-ack | `[type][size=4][seq u32 LE]` |
 | 0x07 | h2b | Init / version | `[type][size=4][02 00 00 00]` (version=2) |
 
@@ -93,14 +93,24 @@ doesn't expect it.
 Self-contained per-string-channel value record:
 
 ```
-[type=0x05] [size_LE u32 = 2 + strlen] [channel_idx u8] [flag u8 = 0x80 | strlen] [ASCII strlen bytes, no NUL]
+[type=0x05] [size_LE u32 = 2 + strlen] [channel_idx u8] [flag u8 = 0x80 | strlen] [UTF-8 strlen bytes, no NUL]
 ```
 
-- ASCII only. UTF-16 is **not** used here. (`patch/TrackName` and similar are
-  pushed as e.g. `imola`, `ks_laguna_seca` — the raw game-side identifier.)
+- **Encoding: UTF-8.** Confirmed 2026-05-15 on CS Pro firmware against the test
+  prefix `áéíñçüöß°` — the wheel's text widget rendered the actual accented
+  glyphs from their UTF-8 byte sequences (`C3 A1`, `C3 A9`, …). ASCII fallback
+  silently corrupts non-ASCII chars (turning `Viñedos` → `Vi?edos`) and
+  Latin-1 sends raw high bytes that the wheel renders as missing-glyph
+  placeholders (no font slot at 0xF1 alone). UTF-16 is **not** used. The
+  PitHouse capture used as the original reference (`imola`/`ks_laguna_seca`)
+  is pure ASCII, which decodes identically under UTF-8 — the earlier
+  "ASCII only" wording was a sample-size artefact.
 - `flag = 0x80 | strlen` — the 0x80 bit is the "string value" type flag;
-  the low 7 bits redundantly carry the length. **Max strlen = 127 bytes**,
-  matching the `range: "1~100 character"` declarations in Telemetry.json.
+  the low 7 bits redundantly carry the length. **Max strlen = 127 BYTES**,
+  not characters; a value with multi-byte UTF-8 sequences holds correspondingly
+  fewer codepoints (~42 CJK chars, ~63 European accented chars). Truncation
+  is by byte and may split a multi-byte sequence; the wheel renders the
+  trailing orphan as a placeholder.
 - No NUL terminator. Length is authoritative from `size_LE` and from the
   `flag` byte's low 7 bits (they must agree: `flag & 0x7F == size - 2`).
 - `channel_idx` is the idx from the catalog announcement (type=0x04).

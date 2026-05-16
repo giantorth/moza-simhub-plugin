@@ -437,11 +437,15 @@ class Ab9Simulator:
         """Group 0x20: FFB effect allocation + parameter pushes.
 
         Sub-commands observed:
-          cmd 0x07 <type> — allocate effect, reply `7E 02 A0 21 07 <idx>`
-          cmd 0x0E <v>    — init / channel count, reply ack
-          cmd 0x13 <hi> <lo> — commit / mask, reply ack
-          cmd 0x0A 01 ... — gear-shift vibration parameter push, reply ack
-          (others)        — reply ack
+          cmd 0x07 <type>      — allocate effect, reply `7E 02 A0 21 07 <idx>`
+          cmd 0x0E <v>         — init / channel count, reply ack
+          cmd 0x13 <hi> <lo>   — commit / mask, reply ack
+          cmd 0x0A 0x01 ...    — gear-shift vibration parameter push, reply ack
+          cmd 0x0A 0x05 ...    — host-rendered engine-vibration refresh, reply ack
+          cmd 0x0B 0x02/0x03   — engine-pulse ON/OFF pair, reply ack
+          cmd 0x0D 0x01/02/03/05 — keepalive + RPM-track + sparse triggers, reply ack
+          cmd 0x08 0x04/0x06   — signed-pair low-rate engine-cycle signal, reply ack
+          (others)             — reply ack with generic ffb_sub_<hi>_<lo> tag
         """
         if not payload:
             self._tag('ffb_empty')
@@ -454,8 +458,11 @@ class Ab9Simulator:
             self._tag('ffb_alloc')
             return [build_frame(GRP_FFB | 0x80, DEV_AB9_RSP,
                                 bytes([0x07, self.next_effect_index & 0xFF]))]
-        if sub == 0x0A:
-            self._tag('ffb_param')
+        # Sub-cmds with a 2-byte (hi/lo) ID — tag each lo for diagnostics so the
+        # MCP counters expose what the plugin is emitting.
+        if sub in (0x0A, 0x0B, 0x0D, 0x08) and len(payload) >= 2:
+            sub_lo = payload[1]
+            self._tag(f'ffb_{sub:02x}_{sub_lo:02x}')
             return [_ACK_GRP20]
         if sub == 0x0E:
             self._tag('ffb_init')

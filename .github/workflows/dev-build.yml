@@ -130,9 +130,13 @@ jobs:
           release_url="https://github.com/${GITHUB_REPOSITORY}/releases/tag/dev-${SHORT_SHA}"
           commit_url="https://github.com/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}"
           # Build the payload entirely inside jq so every interpolated value is
-          # JSON-encoded safely. Unicode-safe slicing keeps us under Discord's
-          # embed limits (title 256 chars, description 4096 chars).
-          payload=$(jq -n \
+          # JSON-encoded safely. -a forces ASCII-only output so any non-ASCII
+          # character (e.g. em-dash) is emitted as \uXXXX, eliminating any risk
+          # of mis-encoded UTF-8 bytes on the Windows runner. Unicode-safe
+          # slicing keeps us under Discord's embed limits (title 256 chars,
+          # description 4096 chars).
+          payload_file=$(mktemp)
+          jq -an \
             --arg dev_version "$DEV_VERSION" \
             --arg short_sha   "$SHORT_SHA" \
             --arg commit_url  "$commit_url" \
@@ -151,22 +155,28 @@ jobs:
                 ),
                 color: 3447003
               }]
-            }')
+            }' > "$payload_file"
+          # Strip any leading UTF-8 BOM (some Windows tooling adds one) and any
+          # CR bytes — both are rejected by Discord's JSON parser.
+          python -c "import sys, pathlib; p=pathlib.Path(sys.argv[1]); b=p.read_bytes(); b=b.lstrip(b'\xef\xbb\xbf').replace(b'\r', b''); p.write_bytes(b)" "$payload_file"
           response_file=$(mktemp)
           http_code=$(curl -sS -o "$response_file" -w '%{http_code}' \
             -H "Content-Type: application/json" \
-            -X POST -d "$payload" "$DISCORD_WEBHOOK_URL") || http_code="000"
+            -X POST --data-binary "@$payload_file" "$DISCORD_WEBHOOK_URL") || http_code="000"
           if [[ "$http_code" =~ ^2[0-9][0-9]$ ]]; then
             echo "Discord notification sent (HTTP $http_code)."
           else
             echo "::warning::Discord notification failed (HTTP $http_code)"
-            echo "Payload:"
-            echo "$payload"
+            echo "Payload bytes ($(wc -c < "$payload_file")):"
+            cat "$payload_file"
+            echo
+            echo "Payload first 32 bytes (hex):"
+            head -c 32 "$payload_file" | od -An -tx1
             echo "Response body:"
             cat "$response_file" || true
             echo
           fi
-          rm -f "$response_file"
+          rm -f "$response_file" "$payload_file"
 
       - name: Prune dev-<sha> releases superseded by a stable
         env:

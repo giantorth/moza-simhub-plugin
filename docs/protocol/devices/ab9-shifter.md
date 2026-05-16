@@ -1,6 +1,8 @@
 ## AB9 active shifter (2026-04-24)
 
-Captures: `usb-capture/AB9/{Shifter mode change,PitHouse settings change,Launch and H-pattern gear engage,SQ gear change}.pcapng` plus event-time spreadsheet `Moza AB9.xlsx`. Captured on Windows host with PitHouse driving the shifter while wheelbase was also attached.
+**Status (2026-05-15)**: full PitHouse-replicating implementation in `Devices/MozaAb9DeviceManager.cs` — FFB init handshake, multi-stream worker (engine-vib `0x0A 0x05`, pulse pair `0x0B 0x02/03`, triggers `0x0D 0x01/02/03/05`, low-rate signed pair `0x08 0x04/06`), corrected `0x1E` read group, bus-hint detection. Verified on real AB9 hardware: detection latches to "AB9 connected" within ~1 s, engine rumble fires with intensity/frequency sliders driving amplitude and oscillator period, H-pattern + slider config + gear-shift vibration all working.
+
+Captures: `usb-capture/AB9/{Shifter mode change,PitHouse settings change,Launch and H-pattern gear engage,SQ gear change}.pcapng` plus event-time spreadsheet `Moza AB9.xlsx`. Captured on Windows host with PitHouse driving the shifter while wheelbase was also attached. Engine-vibration streams decoded against `sim/logs/ab9-game-20260513.jsonl` (PitHouse + Assetto Corsa, 942,634 frames, 40.9 min) — see `tools/ab9-decode-session` for the analysis pipeline.
 
 ### USB enumeration
 

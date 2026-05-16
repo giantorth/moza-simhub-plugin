@@ -24,7 +24,7 @@ All communication goes over a single COM serial interface. Device IDs are addres
 | hpattern / sequential | 26 | `0x1A` | [`shifter-0x1A.md`](shifter-0x1A.md) | H-pattern and sequential shifter share this device ID; distinguish via `shifter-type` setting |
 | handbrake | 27 | `0x1B` | [`handbrake-0x1B.md`](handbrake-0x1B.md) | |
 | estop | 28 | `0x1C` | [`estop-0x1C.md`](estop-0x1C.md) | Emergency stop button |
-| AB9 active shifter | — | — | [`ab9-shifter.md`](ab9-shifter.md) | Separate USB device. Settings sent via `Group 0x1F → dev 0x12` |
+| AB9 active shifter | 18 | `0x12` | [`ab9-shifter.md`](ab9-shifter.md) | Separate USB composite (VID `0x346E` PID `0x1000`) with its own dev `0x12`. Writes on `Group 0x1F`, reads on `Group 0x1E` (1-byte cmd payload, 2-byte BE responses on `0x9E`), engine-vibration multi-stream on `Group 0x20` |
 
 Response device IDs have their nibbles swapped: base `0x13` → response `0x31`, wheel `0x17` → `0x71`, etc. Response group IDs have `0x80` added. See [`../wire/frame-format.md`](../wire/frame-format.md) for full response encoding rules.
 

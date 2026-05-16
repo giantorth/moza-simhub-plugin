@@ -136,7 +136,13 @@ Out-of-band string-channel value record:
 
 Notes:
 
-- ASCII only, no NUL terminator. UTF-16 encoding is **not** used on this path.
+- ~~ASCII only, no NUL terminator. UTF-16 encoding is **not** used on this path.~~
+  **Superseded 2026-05-15**: the encoding is **UTF-8**, not ASCII. The
+  `imola` / `ks_laguna_seca` captures used here are pure ASCII, which is a
+  UTF-8 subset, so the wire bytes don't distinguish the two — but a live
+  test with `áéíñçüöß°` on the CS Pro confirmed the wheel decodes multi-byte
+  UTF-8 sequences and renders the correct glyphs. UTF-16 remains ruled out.
+  See [`../sessions/session-0x01-channel-protocol.md`](../sessions/session-0x01-channel-protocol.md#type0x05--string-value-push-h2b).
 - `flag = 0x80 | strlen` — the 0x80 bit is a "string value" flag; low 7 bits
   redundantly carry the length. Max practical string is 127 bytes, matching
   the `range: "1~100 character"` declarations on string-typed Telemetry.json
