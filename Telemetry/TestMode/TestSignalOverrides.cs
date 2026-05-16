@@ -27,7 +27,11 @@ namespace MozaPlugin.Telemetry.TestMode
             Add("Throttle",       TestSignal.Sweep(0, 1, periodMs: 4000));
             Add("Brake",          TestSignal.Sweep(0, 1, periodMs: 4000, phaseOffsetMs: 2000));
             Add("Clutch",         TestSignal.Sweep(0, 1, periodMs: 6000));
-            Add("Boost",          TestSignal.Sweep(0, 1, periodMs: 5000));
+            // Compression `percent_1` encodes value × 10 clamped to [0, 1000].
+            // The wheel widget renders raw/1000 as a 0–100% bar, so the test
+            // sweep must be 0–100, not 0–1 — otherwise the encoder only fills
+            // the bottom 1% of the bar and the dashboard reads as blank.
+            Add("Boost",          TestSignal.Sweep(0, 100, periodMs: 5000));
             Add("WheelSpin",      TestSignal.Sweep(0, 1, periodMs: 3000));
             Add("EngineBrake",    TestSignal.Step(0, 5, stepMs: 2000));
             Add("Handbrake",      TestSignal.Sweep(0, 1, periodMs: 7000));
@@ -85,7 +89,8 @@ namespace MozaPlugin.Telemetry.TestMode
 
             Add("SectorIndex",          TestSignal.Step(0, 2, stepMs: 10000));
             Add("SectorsCount",         TestSignal.Constant_(3));
-            Add("TrackPositionPercent", TestSignal.Sweep(0, 1, periodMs: 10000));
+            // 0–100 not 0–1 — percent_1 expects percentage input, see Boost above.
+            Add("TrackPositionPercent", TestSignal.Sweep(0, 100, periodMs: 10000));
             Add("TrackPositionMeters",  TestSignal.Sweep(0, 5000, periodMs: 10000));
             Add("TrackLength",          TestSignal.Constant_(5000));
             // Gap-to-others are not clocks; sweep within plausible bounds.
@@ -308,8 +313,9 @@ namespace MozaPlugin.Telemetry.TestMode
             Add("TrackLimitsStepsPerPenalty", TestSignal.Constant_(3));
             Add("TrackLimitsStepsPerPoint",   TestSignal.Constant_(1));
             Add("CarSettings_MaxGears",       TestSignal.Constant_(7));
-            Add("CarSettings_CurrentDisplayedRPMPercent", TestSignal.Sweep(0, 1, periodMs: 5000));
-            Add("CarSettings",                TestSignal.Sweep(0, 1, periodMs: 5000));
+            // percent_1 compression — sweep 0–100 not 0–1, same reason as Boost above.
+            Add("CarSettings_CurrentDisplayedRPMPercent", TestSignal.Sweep(0, 100, periodMs: 5000));
+            Add("CarSettings",                TestSignal.Sweep(0, 100, periodMs: 5000));
             Add("PacketTime",                 TestSignal.Constant_(0));
 
             // --- String fields (sess=0x01 type=0x05 out-of-band) ---
