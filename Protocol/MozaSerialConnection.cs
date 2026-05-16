@@ -33,6 +33,16 @@ namespace MozaPlugin.Protocol
         // streamed at ~91 Hz from MozaPlugin's worker thread. Latest-wins is
         // correct — only the freshest period needs to reach the wire.
         Ab9EngineVibration = 11,
+        // AB9 secondary FFB sub-streams. Each lane is latest-wins because
+        // stale frames carry stale phase/magnitude values; the worker
+        // recomputes from current RPM at the next tick. Pairs (0x0B 0x02/0x03
+        // and 0x08 0x04/0x06) share a lane because they're emitted back-to-back
+        // and the device pairs them by tag/phase, not by independent ordering.
+        Ab9EnginePulse = 12,
+        Ab9TriggerA = 13,        // 0x0D 0x02 + 0x0D 0x03 (flat ~9 Hz keepalive)
+        Ab9TriggerRpm = 14,      // 0x0D 0x05 (RPM-tracking trigger)
+        Ab9TriggerExtra = 15,    // 0x0D 0x01 (newly-observed sub-cmd)
+        Ab9LowRate = 16,         // 0x08 0x04 + 0x08 0x06 (signed-pair low-rate)
     }
 
     /// <summary>
@@ -49,7 +59,7 @@ namespace MozaPlugin.Protocol
 
     public class MozaSerialConnection : IDisposable
     {
-        private const int StreamSlotCount = 12;
+        private const int StreamSlotCount = 17;
 
         // Ports currently held by a live MozaSerialConnection. Probe path skips
         // these so the AB9 manager (or any future second connection) can't open

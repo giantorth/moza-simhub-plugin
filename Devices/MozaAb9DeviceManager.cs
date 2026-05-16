@@ -65,6 +65,7 @@ namespace MozaPlugin.Devices
 
         private readonly MozaSerialConnection _connection;
         private volatile bool _detected;
+        private volatile bool _ffbInitSent;
 
         public bool Detected => _detected;
         public bool IsConnected => _connection.IsConnected;
@@ -113,6 +114,7 @@ namespace MozaPlugin.Devices
         {
             _connection.Disconnect();
             _detected = false;
+            _ffbInitSent = false;
         }
 
         /// <summary>
@@ -137,11 +139,20 @@ namespace MozaPlugin.Devices
         public void SendIdentityProbe()
         {
             if (!_connection.IsConnected) return;
+            // Full cascade as PitHouse sends it (sim/logs/ab9-game-20260513.jsonl
+            // t=0.002, t=0.034). The previous shorter cascade missed groups 04,
+            // 05, 07, 0F, 10 — any of those responses could have been the first
+            // structurally-matching ab9-* parse for detection.
             SendRawProbe(0x09, null);
-            SendRawProbe(0x02, null);
+            SendRawProbe(0x04, new byte[] { 0x00, 0x00, 0x00, 0x00 });
             SendRawProbe(0x06, null);
-            SendRawProbe(0x08, new byte[] { 0x02 });
+            SendRawProbe(0x02, new byte[] { 0x00 });
+            SendRawProbe(0x05, new byte[] { 0x00, 0x00, 0x00, 0x00 });
+            SendRawProbe(0x07, new byte[] { 0x01 });
+            SendRawProbe(0x0F, new byte[] { 0x01 });
             SendRawProbe(0x11, new byte[] { 0x04 });
+            SendRawProbe(0x08, new byte[] { 0x01 });
+            SendRawProbe(0x10, new byte[] { 0x00 });
         }
 
         private void SendRawProbe(byte group, byte[]? payload)
@@ -187,12 +198,35 @@ namespace MozaPlugin.Devices
         public void RequestAllStoredSettings()
         {
             if (!_connection.IsConnected) return;
-            ReadCommand("ab9-mode");
-            foreach (var slider in AllSliders)
-            {
-                if (SliderCommands.TryGetValue(slider, out var name))
-                    ReadCommand(name);
-            }
+            // Reads use group 0x1E with a single-byte cmd-id payload — distinct
+            // from the 0x1F + 3-byte-payload write format. See ab9-shifter.md
+            // "Read group is 0x1E" section. PitHouse polls these continuously at
+            // ~66 Hz throughout a session; the plugin only needs the initial
+            // burst to populate the UI.
+            SendAb9Read(0xD3); // mode
+            SendAb9Read(0xD6); // mech-resistance
+            SendAb9Read(0xAF); // spring
+            SendAb9Read(0xB0); // natural-damping
+            SendAb9Read(0xB2); // natural-friction
+            SendAb9Read(0xA9); // max-torque-limit
+            SendAb9Read(0xD4); // status-d4
+            SendAb9Read(0x5D); // status-5d
+            SendAb9Read(0xD7); // shifter-x analog
+            SendAb9Read(0xD8); // shifter-y analog
+        }
+
+        private void SendAb9Read(byte cmdId)
+        {
+            if (!_connection.IsConnected) return;
+            // Wire: 7E 01 1E 12 <cmdId> <chk>
+            var frame = new byte[6];
+            frame[0] = MozaProtocol.MessageStart;
+            frame[1] = 0x01;
+            frame[2] = 0x1E;
+            frame[3] = MozaProtocol.DeviceAb9;
+            frame[4] = cmdId;
+            frame[5] = MozaProtocol.CalculateWireChecksum(frame, 5);
+            _connection.Send(frame);
         }
 
         private bool WriteSliderRaw(string commandName, byte value)
@@ -206,13 +240,62 @@ namespace MozaPlugin.Devices
             return true;
         }
 
-        private void ReadCommand(string commandName)
+        // ===== FFB init handshake (Group 0x20 / cmds 0x0E, 0x07, 0x13) =====
+        //
+        // PitHouse sends this once at session connect before any FFB streaming.
+        // Exact byte-for-byte order from ab9-game-20260513.jsonl (t_rel 0.082..0.115):
+        //   0e02            ffb-init type 2
+        //   0e01            ffb-init type 1
+        //   0703            alloc effect type 0x03 (sim returns slot idx 0x01)
+        //   0709            alloc effect type 0x09 (sim returns slot idx 0x02)
+        //   0709            alloc effect type 0x09 (sim returns slot idx 0x03)
+        //   0701            alloc effect type 0x01 (sim returns slot idx 0x04)
+        //   0704            alloc effect type 0x04 (sim returns slot idx 0x05)
+        //   0701            alloc effect type 0x01 (sim returns slot idx 0x06)
+        //   130000          commit (mask 0x0000)
+        //
+        // The 1-byte slot indices returned by 0x07 ACKs are device-side internal
+        // handles and are NOT the same as the 16-bit slot IDs used in 0x0A 0x05
+        // streaming frames (those are runtime Windows DirectInput effect handles).
+        // The plugin uses a fixed slot table on the streaming side and ignores
+        // the 0x07 response indices.
+
+        private static readonly byte[] FfbAllocSequence = new byte[]
         {
-            var cmd = MozaCommandDatabase.Get(commandName);
-            if (cmd == null) return;
-            var msg = cmd.BuildReadMessage(MozaProtocol.DeviceAb9);
-            if (msg != null)
-                _connection.Send(msg);
+            0x03, 0x09, 0x09, 0x01, 0x04, 0x01,
+        };
+
+        /// <summary>
+        /// Emit the session-start FFB handshake exactly as PitHouse does. Idempotent
+        /// per connection — re-sending it would re-allocate slots on the device
+        /// side, so the plugin only fires it once per detect event (reset on
+        /// disconnect).
+        /// </summary>
+        public void SendFfbInitSequence()
+        {
+            if (!_connection.IsConnected) return;
+            if (_ffbInitSent) return;
+            _ffbInitSent = true;
+
+            SendFfbControl(new byte[] { 0x0E, 0x02 });
+            SendFfbControl(new byte[] { 0x0E, 0x01 });
+            foreach (var effectType in FfbAllocSequence)
+                SendFfbControl(new byte[] { 0x07, effectType });
+            SendFfbControl(new byte[] { 0x13, 0x00, 0x00 });
+            MozaLog.Debug("[Moza/AB9] Sent FFB init handshake (0e02/0e01/07×6/13)");
+        }
+
+        private void SendFfbControl(byte[] payload)
+        {
+            // Wire: 7E <len> 20 12 <payload...> <chk>
+            var frame = new byte[5 + payload.Length];
+            frame[0] = MozaProtocol.MessageStart;
+            frame[1] = (byte)payload.Length;
+            frame[2] = 0x20;
+            frame[3] = MozaProtocol.DeviceAb9;
+            System.Buffer.BlockCopy(payload, 0, frame, 4, payload.Length);
+            frame[frame.Length - 1] = MozaProtocol.CalculateWireChecksum(frame, frame.Length - 1);
+            _connection.Send(frame);
         }
 
         // ===== Host-rendered engine vibration (Group 0x20 / cmd 0x0A 0x05) =====
@@ -229,6 +312,11 @@ namespace MozaPlugin.Devices
         // Length byte 0x13 = 19 = cmd-id(2) + slot(2) + 7-zero + period(3)
         //                       + tag(1) + 4-zero.
         public const ushort SilentSlotId = 0x0000;
+        // Primary engine-vib slot. PitHouse's runtime DI handle for the dominant
+        // slot in the 2026-05-13 capture; the device firmware doesn't validate
+        // this against allocated effects (slot IDs are host-side DI handles),
+        // so any consistent value works. Keeping the captured value matches
+        // PitHouse byte-for-byte for any tool that diffs against the capture.
         public const ushort DefaultEngineVibSlotId = 0x1996;
         public const uint MinPeriodTicks = 0x64;
         public const uint MaxPeriodTicks = 0xFFFFFF;
@@ -264,6 +352,182 @@ namespace MozaPlugin.Devices
             // frame[19..22] trailing zeros
             frame[23] = MozaProtocol.CalculateWireChecksum(frame, 23);
             _connection.SendStream(StreamKind.Ab9EngineVibration, frame);
+            return true;
+        }
+
+        // ===== Engine-pulse pair (Group 0x20 / cmd 0x0B 0x02 + 0x0B 0x03) =====
+        //
+        // 22-byte frames emitted as paired ON/OFF half-cycles. The 16-bit phase
+        // counter at offset 6-7 (duplicated at 8-9, the device cross-checks)
+        // advances per emitted pair. Amplitude16 at offset 19-20 is intensity-
+        // derived for ON, zero for OFF. Constants `ff fa` at offset 16-17 and
+        // `04` tag at offset 18 verbatim from PitHouse.
+        //
+        // The doc's "engine vibration intensity" slider drives the ON amplitude;
+        // PitHouse drove `0x2328` (9000 decimal) at ~68 % captured intensity.
+
+        // Match PitHouse's observed full-intensity amplitude. Linear-scale 0..100
+        // from the user's "engine vibration intensity" slider through this value.
+        private const ushort EnginePulseAmpFullScale = 0x2328;
+
+        /// <summary>
+        /// Push an engine-pulse ON/OFF pair. The pair shares <paramref name="phase"/>
+        /// — the device pairs the two frames by phase value, not by arrival order.
+        /// <paramref name="intensity0to100"/> drives the ON amplitude; OFF is always zero.
+        /// </summary>
+        public bool SendEnginePulsePair(ushort phase, int intensity0to100)
+        {
+            if (!_connection.IsConnected) return false;
+            if (intensity0to100 < 0) intensity0to100 = 0;
+            if (intensity0to100 > 100) intensity0to100 = 100;
+            ushort amp = (ushort)Math.Round(intensity0to100 / 100.0 * EnginePulseAmpFullScale);
+
+            var on  = BuildEnginePulseFrame(0x02, phase, amp);
+            var off = BuildEnginePulseFrame(0x03, phase, 0x0000);
+            _connection.SendStream(StreamKind.Ab9EnginePulse, on);
+            // OFF immediately follows on the wire because the lane is latest-wins:
+            // queue the ON first so it goes out, then enqueue OFF to overwrite the
+            // slot for the next drain pass. Result: ON, OFF land back-to-back in
+            // the right order matching PitHouse's pair cadence.
+            _connection.Send(off);
+            return true;
+        }
+
+        private static byte[] BuildEnginePulseFrame(byte subLo, ushort phase, ushort amplitude)
+        {
+            // Wire: 7E 16 20 12 0B XX 00 00 00 00 [ph ph][ph ph] 00×6 FF FA 04 [amp_hi amp_lo] 00
+            //       len 0x16 = 22 = payload (2 sub-cmd + 20 fixed)
+            var frame = new byte[27];
+            frame[0]  = MozaProtocol.MessageStart;
+            frame[1]  = 0x16;
+            frame[2]  = 0x20;
+            frame[3]  = MozaProtocol.DeviceAb9;
+            frame[4]  = 0x0B;
+            frame[5]  = subLo;
+            // frame[6..9] zero
+            frame[10] = (byte)(phase >> 8);
+            frame[11] = (byte)(phase & 0xFF);
+            frame[12] = (byte)(phase >> 8);
+            frame[13] = (byte)(phase & 0xFF);
+            // frame[14..19] zero
+            frame[20] = 0xFF;
+            frame[21] = 0xFA;
+            frame[22] = 0x04;
+            frame[23] = (byte)(amplitude >> 8);
+            frame[24] = (byte)(amplitude & 0xFF);
+            // frame[25] zero (trailing)
+            frame[26] = MozaProtocol.CalculateWireChecksum(frame, 26);
+            return frame;
+        }
+
+        // ===== Low-rate signed pair (Group 0x20 / cmd 0x08 0x04 + 0x08 0x06) =====
+        //
+        // 11-byte frames carrying an engine-cycle phase signal as a signed-16 pair:
+        //   0x08 0x04 has -magnitude, 0x08 0x06 has +magnitude.
+        // Constants `00 64 04` at offset 4-6 (envelope amp 100, tag 0x04). Sparse:
+        // PitHouse fired ~0.35 Hz across the session.
+
+        /// <summary>
+        /// Push the signed-magnitude low-rate pair. The plugin's caller drives this
+        /// from an engine-cycle phase accumulator (advances per engine cycle).
+        /// </summary>
+        public bool SendLowRatePair(short magnitude)
+        {
+            if (!_connection.IsConnected) return false;
+            var neg = BuildLowRateFrame(0x04, (short)(-magnitude));
+            var pos = BuildLowRateFrame(0x06, magnitude);
+            _connection.SendStream(StreamKind.Ab9LowRate, neg);
+            _connection.Send(pos);
+            return true;
+        }
+
+        private static byte[] BuildLowRateFrame(byte subLo, short magnitude)
+        {
+            // Wire: 7E 0B 20 12 08 XX [mag_hi mag_lo] 00 64 04 00 00 00 00 <chk>
+            //       len 0x0B = 11 = payload (2 sub-cmd + 9)
+            var frame = new byte[16];
+            frame[0]  = MozaProtocol.MessageStart;
+            frame[1]  = 0x0B;
+            frame[2]  = 0x20;
+            frame[3]  = MozaProtocol.DeviceAb9;
+            frame[4]  = 0x08;
+            frame[5]  = subLo;
+            frame[6]  = (byte)((ushort)magnitude >> 8);
+            frame[7]  = (byte)((ushort)magnitude & 0xFF);
+            frame[8]  = 0x00;
+            frame[9]  = 0x64;
+            frame[10] = 0x04;
+            // frame[11..14] zero
+            frame[15] = MozaProtocol.CalculateWireChecksum(frame, 15);
+            return frame;
+        }
+
+        // ===== Trigger sub-cmds (Group 0x20 / cmd 0x0D 0x01/02/03/05) =====
+        //
+        // 3-byte frames with a single payload byte (always 0x01 observed).
+        // 0x0D 0x02 + 0x0D 0x03 are a paired flat-rate keepalive (~9 Hz).
+        // 0x0D 0x05 is an RPM-tracking trigger (1.3..32 Hz with state).
+        // 0x0D 0x01 is sparse (~0.10 Hz), newly observed in the 2026-05-13 capture.
+
+        public enum Ab9Trigger : byte
+        {
+            // Values are the sub-cmd lo byte on the wire.
+            Sparse    = 0x01,
+            KeepaliveA = 0x02,
+            KeepaliveB = 0x03,
+            RpmTrack  = 0x05,
+        }
+
+        public bool SendTrigger(Ab9Trigger trigger)
+        {
+            if (!_connection.IsConnected) return false;
+            // Wire: 7E 03 20 12 0D XX 01 <chk>
+            var frame = new byte[8];
+            frame[0] = MozaProtocol.MessageStart;
+            frame[1] = 0x03;
+            frame[2] = 0x20;
+            frame[3] = MozaProtocol.DeviceAb9;
+            frame[4] = 0x0D;
+            frame[5] = (byte)trigger;
+            frame[6] = 0x01;
+            frame[7] = MozaProtocol.CalculateWireChecksum(frame, 7);
+
+            // Route each trigger to its own lane so back-to-back same-kind pushes
+            // don't coalesce, while still letting stale ones drop if the worker
+            // falls behind.
+            var lane = trigger switch
+            {
+                Ab9Trigger.KeepaliveA => StreamKind.Ab9TriggerA,
+                Ab9Trigger.KeepaliveB => StreamKind.Ab9TriggerA,
+                Ab9Trigger.RpmTrack   => StreamKind.Ab9TriggerRpm,
+                Ab9Trigger.Sparse     => StreamKind.Ab9TriggerExtra,
+                _                     => StreamKind.Ab9TriggerExtra,
+            };
+            _connection.SendStream(lane, frame);
+            return true;
+        }
+
+        /// <summary>
+        /// Emit the paired keepalive triggers (0x0D 0x02 + 0x0D 0x03). PitHouse
+        /// fires them within sub-ms of each other; we queue both into the same
+        /// lane so the second naturally follows the first onto the wire.
+        /// </summary>
+        public bool SendKeepalivePair()
+        {
+            if (!_connection.IsConnected) return false;
+            SendTrigger(Ab9Trigger.KeepaliveA);
+            // Second keepalive uses the one-shot FIFO so it can't be overwritten
+            // by another KeepaliveA before it reaches the wire.
+            var b = new byte[8];
+            b[0] = MozaProtocol.MessageStart;
+            b[1] = 0x03;
+            b[2] = 0x20;
+            b[3] = MozaProtocol.DeviceAb9;
+            b[4] = 0x0D;
+            b[5] = (byte)Ab9Trigger.KeepaliveB;
+            b[6] = 0x01;
+            b[7] = MozaProtocol.CalculateWireChecksum(b, 7);
+            _connection.Send(b);
             return true;
         }
 

@@ -412,18 +412,64 @@ namespace MozaPlugin.Protocol
             AddCommand("handbrake-cal-start", "handbrake", 0xFF, 94, new byte[] { 3 }, 2, "int");
             AddCommand("handbrake-cal-stop",  "handbrake", 0xFF, 94, new byte[] { 4 }, 2, "int");
 
-            // ===== AB9 ACTIVE SHIFTER (device: ab9, dev id 0x12, group 0x1F write / 0x1F read) =====
-            // Per docs/AB9-poc-plan.md and docs/protocol/devices/ab9-shifter.md.
-            // Wire format: 7E 03 1F 12 <cmdHi> <cmdLo> <value> <checksum>. Single-byte
-            // payload for sliders/mode. Response group on the wire is 0x9F; the parser
-            // toggles bit7 back to 0x1F before matching, so both Read- and WriteGroup
-            // are 0x1F here.
-            AddCommand("ab9-mode",                 "ab9", 0x1F, 0x1F, new byte[] { 0xD3, 0x00 }, 1, "int");
-            AddCommand("ab9-mech-resistance",      "ab9", 0x1F, 0x1F, new byte[] { 0xD6, 0x00 }, 1, "int");
-            AddCommand("ab9-spring",               "ab9", 0x1F, 0x1F, new byte[] { 0xAF, 0x00 }, 1, "int");
-            AddCommand("ab9-natural-damping",      "ab9", 0x1F, 0x1F, new byte[] { 0xB0, 0x00 }, 1, "int");
-            AddCommand("ab9-natural-friction",     "ab9", 0x1F, 0x1F, new byte[] { 0xB2, 0x00 }, 1, "int");
-            AddCommand("ab9-max-torque-limit",     "ab9", 0x1F, 0x1F, new byte[] { 0xA9, 0x00 }, 1, "int");
+            // ===== AB9 ACTIVE SHIFTER (device: ab9, dev id 0x12) =====
+            // Reverse-engineered from PitHouse against sim/ab9_sim.py (2026-05-13
+            // session + earlier 2026-04-24 real-hardware USB captures). See
+            // docs/protocol/devices/ab9-shifter.md.
+            //
+            // Important: reads and writes use *different* groups with *different*
+            // payload shapes:
+            //   WRITE: 7E 03 1F 12 <cmdHi> 00 <value>  <chk>   (CommandId = [cmdHi, 0x00], payload 1B)
+            //   READ : 7E 01 1E 12 <cmdHi>             <chk>   (CommandId = [cmdHi],       payload 0)
+            //   RESP : 7E 03 9E 21 <cmdHi> <val_hi> <val_lo> <chk>   (parsed as group 0x1E, 2B BE value)
+            // The write entries below cover the WRITE + write-echo (0x9F) path; the
+            // matching "-read" entries below cover the READ + read-response (0x9E) path.
+            // Both must exist for the parser to identify what the AB9 sent back —
+            // detection of "AB9 is alive" hinges on a parsed response whose Name
+            // starts with "ab9-".
+            //
+            // The write entries have ReadGroup = 0xFF so MozaCommand.BuildReadMessage
+            // returns null on them (forces callers through the read-side entries).
+            // The -read entries have WriteGroup = 0xFF (read-only).
+            AddCommand("ab9-mode",                 "ab9", 0xFF, 0x1F, new byte[] { 0xD3, 0x00 }, 1, "int");
+            AddCommand("ab9-mech-resistance",      "ab9", 0xFF, 0x1F, new byte[] { 0xD6, 0x00 }, 1, "int");
+            AddCommand("ab9-spring",               "ab9", 0xFF, 0x1F, new byte[] { 0xAF, 0x00 }, 1, "int");
+            AddCommand("ab9-natural-damping",      "ab9", 0xFF, 0x1F, new byte[] { 0xB0, 0x00 }, 1, "int");
+            AddCommand("ab9-natural-friction",     "ab9", 0xFF, 0x1F, new byte[] { 0xB2, 0x00 }, 1, "int");
+            AddCommand("ab9-max-torque-limit",     "ab9", 0xFF, 0x1F, new byte[] { 0xA9, 0x00 }, 1, "int");
+
+            // Read-side entries: single-byte CommandId, 2-byte BE response value.
+            // Cover stored-setting reads PitHouse polls at ~66 Hz throughout a
+            // session (see ab9-game-20260513.jsonl).
+            AddCommand("ab9-mode-read",            "ab9", 0x1E, 0xFF, new byte[] { 0xD3 }, 2, "int");
+            AddCommand("ab9-mech-resistance-read", "ab9", 0x1E, 0xFF, new byte[] { 0xD6 }, 2, "int");
+            AddCommand("ab9-spring-read",          "ab9", 0x1E, 0xFF, new byte[] { 0xAF }, 2, "int");
+            AddCommand("ab9-natural-damping-read", "ab9", 0x1E, 0xFF, new byte[] { 0xB0 }, 2, "int");
+            AddCommand("ab9-natural-friction-read","ab9", 0x1E, 0xFF, new byte[] { 0xB2 }, 2, "int");
+            AddCommand("ab9-max-torque-limit-read","ab9", 0x1E, 0xFF, new byte[] { 0xA9 }, 2, "int");
+            AddCommand("ab9-shifter-x-read",       "ab9", 0x1E, 0xFF, new byte[] { 0xD7 }, 2, "int");
+            AddCommand("ab9-shifter-y-read",       "ab9", 0x1E, 0xFF, new byte[] { 0xD8 }, 2, "int");
+            AddCommand("ab9-status-d4-read",       "ab9", 0x1E, 0xFF, new byte[] { 0xD4 }, 2, "int");
+            AddCommand("ab9-status-5d-read",       "ab9", 0x1E, 0xFF, new byte[] { 0x5D }, 2, "int");
+
+            // Identity-probe response entries. AB9 responds to the PitHouse-style
+            // probe cascade on groups 0x09/0x02/0x04/0x05/0x06/0x07/0x08/0x0F/0x10/0x11.
+            // Without these, AB9 probe responses get matched against base-* commands
+            // (because dev id 0x12 collides with the wheelbase main) and detection
+            // misses them. The bus-hint passed to MozaResponseParser.Parse("ab9")
+            // filters base-* out so the ab9-id-* entries match first.
+            // CommandId = [] (empty wildcard) — match any cmdId byte; the response
+            // group alone disambiguates which probe response this is.
+            AddCommand("ab9-presence",  "ab9", 0x09, 0xFF, new byte[] { }, 2,  "array");
+            AddCommand("ab9-id-02",     "ab9", 0x02, 0xFF, new byte[] { }, 4,  "array");
+            AddCommand("ab9-id-04",     "ab9", 0x04, 0xFF, new byte[] { }, 4,  "array");
+            AddCommand("ab9-id-05",     "ab9", 0x05, 0xFF, new byte[] { }, 4,  "array");
+            AddCommand("ab9-id-06",     "ab9", 0x06, 0xFF, new byte[] { }, 12, "array");
+            AddCommand("ab9-id-07",     "ab9", 0x07, 0xFF, new byte[] { }, 17, "array");
+            AddCommand("ab9-id-08",     "ab9", 0x08, 0xFF, new byte[] { }, 17, "array");
+            AddCommand("ab9-id-0f",     "ab9", 0x0F, 0xFF, new byte[] { }, 17, "array");
+            AddCommand("ab9-id-10",     "ab9", 0x10, 0xFF, new byte[] { }, 17, "array");
+            AddCommand("ab9-id-11",     "ab9", 0x11, 0xFF, new byte[] { }, 2,  "array");
 
             // ===== BASE AMBIENT LEDS (device: main / dev 0x12, write group 0x20, read group 0x22) =====
             // Two physical 9-LED strips on the wheelbase body of higher-torque

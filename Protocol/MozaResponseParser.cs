@@ -20,8 +20,15 @@ namespace MozaPlugin.Protocol
     {
         /// <summary>
         /// Returns null for unrecognized messages, false for filtered noise.
+        ///
+        /// <paramref name="busHint"/> overrides the auto-derived device hint. Provide
+        /// "ab9" when parsing a frame received on the AB9's serial connection — the
+        /// AB9 main and wheelbase main share the same numeric dev id (0x12), so
+        /// without an explicit bus hint the parser will mis-route AB9 responses
+        /// against base-* commands and filter out the ab9-* commands that should
+        /// have matched.
         /// </summary>
-        public static ParsedResponse? Parse(byte[] data)
+        public static ParsedResponse? Parse(byte[] data, string? busHint = null)
         {
             if (data == null || data.Length < 3)
                 return null;
@@ -99,6 +106,14 @@ namespace MozaPlugin.Protocol
             // arrival order, breaking auto-detect folder lookup.
             if (deviceHint == null && deviceId == MozaProtocol.DeviceMain)
                 deviceHint = "base";
+
+            // Explicit bus override — AB9 main and wheelbase main both use
+            // dev id 0x12, so the above auto-derivation tags AB9 frames as
+            // "base". When the caller knows the frame came in on the AB9
+            // serial connection, force the hint to "ab9" so the parser
+            // matches against ab9-* commands instead of base-* ones.
+            if (busHint != null)
+                deviceHint = busHint;
 
             // Group-indexed scan: skips ~99% of the command database for any
             // given inbound message. CommandId may contain 0xFF wildcards so we

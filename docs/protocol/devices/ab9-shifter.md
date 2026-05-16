@@ -153,19 +153,117 @@ This rules out paths 1 (group `0x43` push to AB9), 2 (HID-OUT on EP `0x03`), and
 
 The wheelbase has a two-command pattern for gear-shift vibration: cmd `0x2E` (Group 0x29) is the stored intensity, and cmd `0x76` (Group 0x2D, `76 00 01` fire-and-forget) is a per-shift trigger that the SimHub plugin fires from game telemetry — needed because paddle-shifters are just buttons with no native shift semantics. **The AB9 needs no such trigger** because its H-pattern lever has a built-in mechanical engagement sensor; the device knows when a shift happened before the host does (the HID joystick-button event is the *output* of that internal detection, not its trigger). Searching all AB9 captures (the 2026-04-24 PitHouse-only set plus the 2026-05-13 PitHouse+AC session) shows zero short fire-and-forget commands targeting AB9 dev 0x12 during any shift event, and no SimHub plugin or PitHouse code path is observed to fire one. Conclusion: **the AB9 protocol surface intentionally has no host-side shift-trigger command**. The plugin's AB9 device manager correctly omits a `SendShiftEvent` method (see `Devices/MozaAb9DeviceManager.cs`); attempting to add one would have nothing to fire.
 
-#### Remaining open schema questions
+### FFB session-init handshake decoded (2026-05-15, full-session pass)
 
-- The two 16-bit fields in `0x0B 0x02/03` (payload offset 4-7, always equal within a frame, ranging 0..65535 across frames) — bipolar envelope samples vs per-pulse phase marker still ambiguous.
-- `0x0D 0x02/0x03` runs flat at ~9 Hz regardless of RPM, frequency, or intensity (verified across all six (RPM × freq × intensity) cells in this session). `0x0D 0x05` rate tracks the combination of frequency, RPM, and intensity in a sub-linear way that no single-variable model captures cleanly:
-  - idle, 100 Hz, 100% → 3.3 Hz
-  - idle, 200 Hz, 100% → 5.2 Hz
-  - idle, 200 Hz, 25% → 5.1 Hz (intensity-insensitive at idle)
-  - idle, 50 Hz, 100% → 1.3 Hz
-  - redline, 200 Hz, 25% → 32.0 Hz
-  - redline, 200 Hz, 100% → 19.5 Hz (intensity *lowers* the rate at redline)
-  - redline, 50 Hz, 100% → 8.5 Hz
+Full-session decode against `sim/logs/ab9-game-20260513.jsonl` (942,634 frames, 40.9 min) via `tools/ab9-decode-session`. The session-connect FFB handshake before any streaming is **exactly**:
 
-  The intensity sign flip between idle and redline suggests `0x0D 0x05` is gated on per-slot effect-update budget, which gets divided across more slots at higher intensity.
-- Purpose of the eight zero bytes between slot ID and period in `0x0A 0x05`, and the four trailing zeros. Static across freq/intensity/RPM sweeps — possibly waveform-shape or envelope fields exercised only by stored-config writes (`0x0A 0x01` form), not the continuous refresh.
-- Slot ID → period-band mapping. **The "slot ID maps to a period band" model from earlier rows of this section is not airtight.** Slot `0x1478` carries periods in the 9-13 M range at idle+50 Hz, the 9.3-13.1 M range at the redline+200 Hz harmonic stream, **and 365-426 K range during a mid-RPM cruising window (gear-shift test)**. Slot IDs are runtime FFB effect handles that PitHouse re-uses across very different period ranges depending on the active effect mix; we don't have a clean rule yet.
-- The `0x0B 0x02/0x03` engine-pulse frames appear sporadically (~0.1-0.15 Hz at idle, up to 42 Hz at redline) but are **not** gear-shift triggered. Rate did not increase during "shifting a lot" with engine-vib off; if anything it dropped slightly (0.15 → 0.10 Hz). They appear to be engine-model artifacts (firing-cycle pulse events from PitHouse's internal engine simulator), not user-action triggered.
+```
+t_rel   dir  payload (hex)                        meaning
+0.0822  h2b  20 12 0e 02                          ffb-init type 2
+0.0823  h2b  20 12 0e 01                          ffb-init type 1
+0.0823  h2b  20 12 07 03                          alloc effect type 0x03  → b2h 07 01  (slot idx 0x01)
+0.0881  h2b  20 12 07 09                          alloc effect type 0x09  → b2h 07 02  (slot idx 0x02)
+0.0948  h2b  20 12 07 09                          alloc effect type 0x09  → b2h 07 03  (slot idx 0x03)
+0.0989  h2b  20 12 07 01                          alloc effect type 0x01  → b2h 07 04  (slot idx 0x04)
+0.1029  h2b  20 12 07 04                          alloc effect type 0x04  → b2h 07 05  (slot idx 0x05)
+0.1106  h2b  20 12 07 01                          alloc effect type 0x01  → b2h 07 06  (slot idx 0x06)
+0.1147  h2b  20 12 13 00 00                       commit (mask = 0x0000)
+0.1147  h2b  20 12 0a 01 0f 5a … 0e 00 64 04 …    vib-config snapshot (intensity = 0x0f5a / 30 %)
+```
+
+The b2h ACK from the 0x07 alloc requests returns a **1-byte index** (0x01..0x06 sequential) — this is the *internal effect handle on the device side*, completely separate from the 16-bit "slot ID" used in `0x0A 0x05` streaming frames (which are host-side DirectInput effect handles). The two never appear together in any binding frame; the device firmware must internally map the streaming-frame slot ID through its own routing logic. **For plugin replication, the 0x07/0x0E/0x13 handshake is purely a session-warm-up; we never need to thread the returned 1-byte indices into later streaming frames.**
+
+Effect-type bytes in the six 0x07 allocations: `03, 09, 09, 01, 04, 01`. The repeated allocations of the same type (two `09`s, two `01`s) suggest a "request N slots of this kind" pattern. No new alloc frames appeared anywhere later in the session — slots are allocated once at connect and reused for the entire session.
+
+The capture also begins with the PitHouse-style identity probe cascade (groups `0x09`, `0x04`, `0x06`, `0x02`, `0x05`, `0x07`, `0x0f`, `0x11`, `0x08`, `0x10` — identical to the current plugin's probe except the plugin's order is `09 → 02 → 06 → 08 → 11` only, missing 04/05/07/0f/10) followed by **stored-setting reads on `Group 0x1E` with single-byte cmd payload**, then the FFB handshake.
+
+### Read group is `0x1E` (single-byte cmd), not `0x1F` (2026-05-15)
+
+The 2026-04-24 USB capture analysis above mapped slider WRITES on `Group 0x1F` with payload `<cmdId> 0x00 <value>` (3-byte). The 2026-05-13 session capture proves READS use a **different group with a different payload shape**:
+
+```
+Write:  7E 03 1F 12 <cmdId> 00 <val>          (3-byte payload)
+Read:   7E 01 1E 12 <cmdId>                    (1-byte payload — JUST the cmd-id)
+Resp:   7E 03 9E 21 <cmdId> <val_hi> <val_lo>  (3-byte payload — cmd + BE 16-bit value)
+```
+
+Read group `0x1E` toggles to `0x9E` for the response (response bit set). Sliders return **2-byte BE values** (e.g. `00 64` = 100, `00 23` = 35). Analog axis cmds (`0xD7`, `0xD8`) use the full 16-bit range (`66 e7`, `80 01`).
+
+Frequencies during a 40-min session: PitHouse polls 0x1E at **66 Hz** continuously — far more than just a one-shot read on connect. The plugin's current `MozaCommandDatabase` registers `ab9-*` commands with `ReadGroup = WriteGroup = 0x1F` and 1-byte payload, so its read frames have the wrong group AND wrong shape; the real device will not respond to them, which is why the "Probing → AB9 connected" status latch never flips on the AB9 panel.
+
+### Streaming sub-stream schemas (2026-05-15)
+
+Full-session decode resolves the doc's previous "open schema questions" below:
+
+#### `0x0B 0x02 / 0x0B 0x03` engine-pulse pair — 22 byte payload
+
+```
+0B XX [00 00 00 00] [pp pp] [pp pp] [00 00 00 00 00 00] [FF FA] 04 [aa aa] [dd] [00 00]
+   sub  4 zero pad   ╰─ phase counter (16-bit BE, duplicated) ─╯   const   tag amp16  duty pad
+```
+
+- `XX = 0x02` (pulse-on) or `0x03` (pulse-off). Pulses come in tightly-spaced ON/OFF pairs (sub-ms apart) that share the same phase counter value.
+- **Phase counter (offset 6-7 = offset 8-9, duplicated within frame)** is a 16-bit BE counter that advances monotonically across the session; advance per pair scales with RPM (small advance at idle, large advance at redline). **It is NOT a bipolar envelope sample** — the duplicated 16-bit field was the same value, not two independent samples. The duplication is likely a "phase / phase-mirror" or "expected / actual" position pair the device cross-checks.
+- `FF FA` at offset 16-17: constant signed-16 envelope param (-6 or near-max unsigned). Unchanged across all observations.
+- Tag byte `0x04` at offset 18: matches the same tag used in `0x0A 0x05`. Constant.
+- **Amplitude16 (offset 19-20)**: `23 28` = 9000 in `0x0B 0x02`, `00 00` in `0x0B 0x03`. So 0x0B 0x03 is literally "this pulse with amplitude = 0" — encoding the OFF half of a square-wave pulse as a separate frame rather than a single-frame on/off envelope.
+- **Duty byte (offset 21)**: `0x28 = 40` in 0x0B 0x02, `0x00` in 0x0B 0x03. Likely the device-side mixer level for this slot.
+
+Implementation rule: monotonic phase counter that advances per-pulse-pair (RPM-driven cadence drives the rate); amplitude/duty derived from intensity slider; constants verbatim.
+
+#### `0x08 0x04 / 0x08 0x06` low-rate signed-pair — 11 byte payload
+
+```
+08 XX [mm mm] [00 64] 04 [00 00 00 00 00]
+   sub  ╰ 16-bit signed BE  const tag  trailing zeros
+```
+
+Decoded from a typical frame sequence (timestamps in seconds):
+
+| t_rel  | 0x08 0x04 (mm) | 0x08 0x06 (mm) | magnitude |
+|---|---|---|---|
+| 53.6041 | `ff e8` (-24)  | `00 18` (+24)  | 24  |
+| 53.6266 | `fe d9` (-295) | `01 27` (+295) | 295 |
+| 53.6353 | `fe 5d` (-419) | `01 a3` (+419) | 419 |
+| 53.6672 | `fd fb` (-517) | `02 05` (+517) | 517 |
+
+`0x08 0x04` and `0x08 0x06` are a **signed bipolar pair** — they carry equal-magnitude opposite-sign values, paired sub-ms apart in time. The magnitude tracks a slow engine-cycle / RPM-position signal (monotonically advancing in this window).
+
+The `00 64 04` at offset 4-6 of the args is constant: `0x0064 = 100` (likely an envelope amplitude/scale), `0x04` is the tag matching `0x0A 0x05` and `0x0B 0x02/03`.
+
+Frequency: ~0.35 Hz across the session (sparse). Likely fires per engine cycle (firing-stroke phase signal), independent of the higher-rate `0x0B` pulse train.
+
+Implementation rule: state-driven by an RPM-cycle phase accumulator; emit the pair when the accumulator crosses a threshold; magnitude = current phase position.
+
+#### `0x0D 0x01` (newly observed, was missing from the 2026-05-13 doc) — 3 byte payload
+
+```
+0D 01 [01]
+```
+
+3-byte frame, payload `0x0D 0x01 0x01`. First occurrence at t_rel = 53.60 s (not at session start). 241 frames over the session, ~0.10 Hz. Same shape as `0x0D 0x02/03/05`. Purpose unresolved; for plugin replication, emit at the same low rate as `0x0D 0x02/03` since the sim accepts it with the generic FFB ACK.
+
+#### Slot-ID table observed (2026-05-15 update)
+
+```
+slot      count     first  last   period range
+0x1996    80,286    112.27 1363.76  0x050032 .. 0x6f0457
+0x1478    63,467    158.51 2050.01  0x1200b9 .. 0xc807d0
+0x0000    46,584     26.65 2453.56  0x00008a .. 0xa60682     (silent keepalive)
+0x0624    15,204   1096.26 2050.16  0x050032 .. 0x8e0594
+0x0ccb     6,613     48.82  878.13  0x1300c4 .. 0xa60682
+0x0c48       360    862.68 2050.10  0x1100b2 .. 0x8e0594
+… 33 more transient slots, each <100 frames, with `0x0106` stride increments
+```
+
+The 33 transient slots with `0x0106` (262) stride strongly suggest **Windows DirectInput allocates effect handles in 262-byte increments** — these are PitHouse's session-internal handle churn as it reconfigures effects during slider drags, **not protocol-meaningful slot indexes from the device side**.
+
+For plugin replication, a **fixed slot table** is sufficient: `0x1996` for primary engine-vib, `0x1478` for secondary harmonic, `0x0000` for silent keepalive. The sim ACKs every slot ID generically and PitHouse's slot choices are random session-to-session anyway — the device firmware ultimately routes through its own 0x07-allocated effect indices, not the streaming-frame slot IDs.
+
+### Remaining open schema questions (post-2026-05-15)
+
+These survive the full-session decode and are likely not blockers for plugin replication:
+
+- The `0x0D 0x05` rate model — sub-linear with `(freq × RPM × intensity)`, intensity-sign flips at idle vs redline. For replication, drive it from the same per-RPM-cycle phase accumulator as `0x0B 0x02/03` and `0x08 0x04/06`; the rate will fall out of the cadence naturally without needing a closed-form rate model.
+- The eight zero bytes between slot ID and period in `0x0A 0x05`, and the four trailing zeros — static across all observations; treat as fixed protocol padding.
+- The `FF FA` constant in `0x0B 0x02/03` and the `0E 00 64 04` tail in `0x0A 0x01` vib-config — neither varies across intensity/RPM sweeps; treat as fixed protocol padding for replication.

@@ -763,12 +763,49 @@ namespace MozaPlugin
         // the latter only delivers ~64 Hz under the default 15.6 ms Windows clock
         // granularity. Latest-wins stream lane in MozaSerialConnection means a
         // late tick just discards the previous frame from the slot — no FIFO
-        // pile-up. We target 91 Hz; the actual wire rate is whatever the OS
-        // scheduler delivers and that is harmless.
+        // pile-up.
+        //
+        // The 11 ms tick drives the dominant 0x0A 0x05 stream at ~91 Hz. Other
+        // sub-streams (engine-pulse pair, triggers, low-rate signed pair) fire
+        // at lower rates derived from RPM. Sub-stream rates from the 2026-05-13
+        // PitHouse capture inventory:
+        //   0x0A 0x05      ~87 Hz (every tick)
+        //   0x0D 0x02/03    9 Hz keepalive pair (every 12 ticks ≈ 132 ms)
+        //   0x0B 0x02/03    1.7 → 34.6 Hz with RPM (RPM-scaled)
+        //   0x0D 0x05       1.3 → 32 Hz with RPM (RPM-scaled)
+        //   0x08 0x04/06    ~0.35 Hz across session (every ~256 ticks)
+        //   0x0D 0x01       ~0.10 Hz (sparse, every ~910 ticks)
+        // Sub-streams gate on `active` (game running + intensity > 0 + RPM > idle)
+        // — when silent we keep the 0x0A 0x05 keepalive going at slot 0x0000 so
+        // the device's FFB-stack pipe stays warm, but skip the lower-rate streams.
+        private const int Ab9TickPeriodMs = 11;
+
+        // Tick counters between firings of each sub-stream. The "base" intervals
+        // are at idle (RPM ~800). At higher RPM, the divisor scales down to fire
+        // more often (`base / rpm_factor`, where rpm_factor = rpm / 800).
+        private const int KeepalivePairBaseTicks = 12;     // ~9 Hz
+        private const int EnginePulsePairBaseTicks = 62;   // ~1.5 Hz at idle
+        private const int RpmTrackBaseTicks = 80;          // ~1.1 Hz at idle
+        private const int LowRatePairBaseTicks = 260;      // ~0.35 Hz
+        private const int SparseTriggerBaseTicks = 920;    // ~0.10 Hz
+        private const double Ab9IdleRpm = 800.0;
+
+        // Worker state: tick counter + monotonic phase counter for 0x0B pair.
+        // The phase counter is 16-bit BE; PitHouse advances it per emitted pair.
+        // We mirror that — pre-increment-by-RPM-scaled-step so the value tracks
+        // engine speed.
+        private int _ab9TickCount;
+        private ushort _ab9PulsePhase;
+        // 16-bit signed magnitude accumulator for 0x08 0x04/06. PitHouse drove
+        // this monotonically over short windows then reset/decremented at engine-
+        // cycle boundaries. The exact trigger rule isn't decoded yet (see
+        // ab9-shifter.md), so we approximate by advancing by 100 per emission.
+        private short _ab9LowRatePhase;
+
         private void Ab9EngineVibrationLoop()
         {
             long stopwatchFreq = System.Diagnostics.Stopwatch.Frequency;
-            long periodTicks = stopwatchFreq * 11 / 1000;   // ~11 ms = 91 Hz
+            long periodTicks = stopwatchFreq * Ab9TickPeriodMs / 1000;
             long next = System.Diagnostics.Stopwatch.GetTimestamp() + periodTicks;
             while (!_ab9EngineVibStop)
             {
@@ -807,6 +844,8 @@ namespace MozaPlugin
             bool gameOn = _latestGameRunning;
 
             bool active = gameOn && intensity > 0 && rpm > 100.0 && freqHz > 0.0;
+
+            // ── 0x0A 0x05 engine-vibration refresh — every tick ──────────────
             uint period;
             if (active)
             {
@@ -825,14 +864,60 @@ namespace MozaPlugin
                 // revision starts validating the period field strictly.
                 period = 0x100000;
             }
-
             _ab9Manager.SendEngineVibrationStream(active, period);
+
             if (active != _ab9EngineVibActive)
             {
                 _ab9EngineVibActive = active;
                 MozaLog.Debug($"[Moza/AB9] engine-vib {(active ? "active" : "silent")} "
                               + $"(rpm={rpm:F0} freq={freqHz:F1}Hz period={period})");
             }
+
+            // Lower-rate sub-streams only when actively rumbling. Keeping them off
+            // at idle matches what PitHouse does (silent keepalive only).
+            if (!active)
+            {
+                _ab9TickCount++;
+                return;
+            }
+
+            int tick = ++_ab9TickCount;
+            double rpmFactor = Math.Max(1.0, rpm / Ab9IdleRpm);
+
+            // ── 0x0D 0x02/03 keepalive pair ── flat ~9 Hz regardless of RPM
+            if (tick % KeepalivePairBaseTicks == 0)
+                _ab9Manager.SendKeepalivePair();
+
+            // ── 0x0B 0x02/03 engine-pulse pair ── RPM-scaled rate
+            int pulseInterval = Math.Max(2, (int)(EnginePulsePairBaseTicks / rpmFactor));
+            if (tick % pulseInterval == 0)
+            {
+                // Advance phase counter by a step proportional to RPM × freq so it
+                // matches PitHouse's "monotonic, RPM-driven" cadence. The captured
+                // increments ranged ~32..110 per emitted pair; scale to that range.
+                ushort step = (ushort)Math.Min(0xFFFF, (int)(32 + 78 * Math.Min(1.0, rpmFactor / 10.0)));
+                unchecked { _ab9PulsePhase += step; }
+                _ab9Manager.SendEnginePulsePair(_ab9PulsePhase, intensity);
+            }
+
+            // ── 0x0D 0x05 RPM-tracking trigger ── scales with RPM × freq × intensity
+            int rpmTrackInterval = Math.Max(2, (int)(RpmTrackBaseTicks / rpmFactor));
+            if (tick % rpmTrackInterval == 0)
+                _ab9Manager.SendTrigger(MozaAb9DeviceManager.Ab9Trigger.RpmTrack);
+
+            // ── 0x08 0x04/06 low-rate signed pair ── sparse engine-cycle phase
+            if (tick % LowRatePairBaseTicks == 0)
+            {
+                unchecked { _ab9LowRatePhase += 100; }
+                // Saturate at ±32000 then wrap — keeps the magnitude in a
+                // reasonable range while still tracking long-term phase.
+                if (_ab9LowRatePhase > 32000) _ab9LowRatePhase = -32000;
+                _ab9Manager.SendLowRatePair(_ab9LowRatePhase);
+            }
+
+            // ── 0x0D 0x01 sparse trigger ── purpose unresolved, mirror PitHouse rate
+            if (tick % SparseTriggerBaseTicks == 0)
+                _ab9Manager.SendTrigger(MozaAb9DeviceManager.Ab9Trigger.Sparse);
         }
 
         // Resolve a dashboard name to its parsed MultiStreamProfile without firing
@@ -2575,17 +2660,27 @@ namespace MozaPlugin
             // Filter firmware debug noise before parsing.
             if (data[0] == MozaProtocol.FirmwareDebugGroup) return;
 
-            var result = MozaResponseParser.Parse(data);
+            // Bus-hint "ab9" disambiguates from base-* commands (the AB9 main and
+            // wheelbase main share device id 0x12 numerically — without the hint
+            // the parser auto-tags as "base" and filters out every ab9-* match).
+            var result = MozaResponseParser.Parse(data, busHint: "ab9");
             if (!result.HasValue) return;
 
             var r = result.Value;
             if (r.Name == null || !r.Name.StartsWith("ab9-", StringComparison.Ordinal))
                 return;
 
+            bool rising = !_ab9Detected;
             _ab9Manager.MarkDetected();
-            if (!_ab9Detected)
+            if (rising)
             {
                 _ab9Detected = true;
+                // Push the PitHouse-style FFB session-init handshake (alloc / init
+                // / commit) once on the rising edge. Without it the device's FFB
+                // stack is uninitialised and engine-vibration streaming has no
+                // effect. The manager guards against re-sending across reconnects.
+                try { _ab9Manager.SendFfbInitSequence(); }
+                catch (Exception ex) { MozaLog.Warn($"[Moza/AB9] FFB init failed: {ex.Message}"); }
                 ApplyAb9ToHardware(_settings?.ProfileStore?.CurrentProfile);
             }
 
