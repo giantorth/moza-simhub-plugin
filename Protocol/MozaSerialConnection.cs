@@ -215,11 +215,13 @@ namespace MozaPlugin.Protocol
         /// <see cref="MozaProbeTarget.Ab9"/>.
         /// <paramref name="disableProbeFallback"/> hard-disables the legacy
         /// probe fallback. Default (null) leaves it armed for the case where
-        /// the registry-based discovery returns zero MOZA devices total —
-        /// then the probe runs as a last resort so users on systems without
-        /// USB PnP enumeration (Wine/Proton, broken driver install) can still
-        /// connect. When the registry sees at least one MOZA device, the probe
-        /// is suppressed regardless of this flag — see <see cref="FindMozaPort"/>.
+        /// the registry returned no matching MOZA device — then the probe
+        /// runs against the unclassified ports as a last resort so users on
+        /// systems without USB PnP enumeration (Wine/Proton, broken driver
+        /// install) can still connect. The probe never writes bytes at a
+        /// port the registry already pinned to a non-matching MOZA PID, and
+        /// reduces to a no-op when every COM port is classified — see
+        /// <see cref="FindMozaPort"/>.
         /// </summary>
         public MozaSerialConnection(
             Func<string?, bool>? pidFilter,
@@ -835,17 +837,18 @@ namespace MozaPlugin.Protocol
         ///      USB subsystem populates the registry tree). Returns directly
         ///      if any port satisfies the PID filter — no serial bytes
         ///      written, identity settled at the registry layer.
-        ///   2. Legacy serial-probe fallback. Only runs when the registry
-        ///      returned <em>zero</em> MOZA devices total — that's the signal
-        ///      that the registry path itself is broken on this machine
-        ///      (Wine/Proton without USB enumeration, driver missing).
-        ///      When the registry returns at least one MOZA device but none
-        ///      matching <paramref name="pidFilter"/>, the probe is
-        ///      suppressed: the registry's "no" answer is trusted, which
-        ///      prevents the AB9-manager probe storm that disrupted non-MOZA
-        ///      serial peripherals on Windows users without an AB9 attached.
-        ///      <paramref name="disableProbeFallback"/> hard-disables the
-        ///      probe even in the empty-registry case (user opt-out via
+        ///   2. Legacy serial-probe fallback. Runs when the registry didn't
+        ///      give us a direct match. Honours the registry classifications
+        ///      it does have: ports the registry already pinned to a PID
+        ///      matching <paramref name="pidFilter"/> are claimed
+        ///      immediately without serial bytes; ports pinned to a
+        ///      mismatching MOZA PID are skipped (so we never re-send a
+        ///      base/hub/AB9 probe at hardware we've already identified —
+        ///      this also preserves the original "no AB9 probe storm at a
+        ///      Windows wheelbase-only user" behaviour because every COM
+        ///      port ends up classified). Only unclassified ports actually
+        ///      receive probe writes. <paramref name="disableProbeFallback"/>
+        ///      hard-disables the probe (user opt-out via
         ///      <c>DisableSerialProbeFallback</c>).
         ///
         /// <paramref name="preferredPort"/> tilts the registry result selection
@@ -863,6 +866,14 @@ namespace MozaPlugin.Protocol
             // so we can distinguish "the registry is working but our PID
             // isn't there" from "the registry sees nothing at all".
             var allRegistryPorts = MozaPortDiscovery.Instance.Enumerate();
+
+            // Per-port lookup we'll reuse in the probe loops below so the
+            // probe never writes bytes at a port whose PID is already
+            // known to belong to a different device category.
+            var registryByPort = new Dictionary<string, MozaPortDiscovery.PortInfo>(
+                allRegistryPorts.Count, StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < allRegistryPorts.Count; i++)
+                registryByPort[allRegistryPorts[i].PortName] = allRegistryPorts[i];
 
             // Filter through the existing string-based pidFilter contract.
             var matchingPorts = pidFilter == null
@@ -890,26 +901,12 @@ namespace MozaPlugin.Protocol
                 return (chosen.PortName, FormatPid(chosen.Pid), false);
             }
 
-            // No matching port. Decide whether to probe.
-            if (allRegistryPorts.Count > 0)
-            {
-                // Registry is working — it sees at least one MOZA device but
-                // none for our filter. Trust that "no" answer; probing here
-                // would re-introduce the AB9 probe storm on Windows users
-                // who have a wheelbase but no AB9 attached.
-                MozaLog.Debug(
-                    $"[Moza] Registry has {allRegistryPorts.Count} MOZA device(s) but none match this connection's PID filter — skipping probe (trust registry)");
-                return (null, null, false);
-            }
-
             if (disableProbeFallback?.Invoke() == true)
             {
                 MozaLog.Debug(
-                    "[Moza] No MOZA device in registry; DisableSerialProbeFallback is on so probe is skipped");
+                    "[Moza] No matching MOZA device in registry; DisableSerialProbeFallback is on so probe is skipped");
                 return (null, null, false);
             }
-
-            MozaLog.Debug("[Moza] No MOZA device in registry, falling back to serial probe");
 
             // Probe-based discovery: try opening each COM port and sending a Moza read command.
             // This works under Proton/Wine where COM ports are symlinked to /dev/ttyACM*.
@@ -921,6 +918,39 @@ namespace MozaPlugin.Protocol
                 int nb = ExtractPortNumber(b);
                 return nb.CompareTo(na); // Descending - check high ports first
             });
+
+            // Count probe-eligible ports — anything the registry hasn't already
+            // pinned to a non-matching PID. If the registry covers every COM
+            // port with non-matching classifications, there's nothing left to
+            // probe, so we skip the probe entirely and preserve the historical
+            // "trust the registry's no answer" behaviour (this is what kept
+            // the AB9 probe storm off Windows users with a wheelbase but no
+            // AB9). When at least one unclassified-or-matching port exists,
+            // we let the probe run — the per-port guard inside each loop
+            // skips registry-classified non-matching ports one by one.
+            int probeEligible = 0;
+            for (int i = 0; i < ports.Length; i++)
+            {
+                if (!registryByPort.TryGetValue(ports[i], out var info))
+                {
+                    probeEligible++;
+                    continue;
+                }
+                if (pidFilter == null || pidFilter(FormatPid(info.Pid)))
+                    probeEligible++;
+            }
+            if (probeEligible == 0 && allRegistryPorts.Count > 0)
+            {
+                MozaLog.Debug(
+                    $"[Moza] Registry classifies all {ports.Length} COM port(s); none match this connection's PID filter — skipping probe (trust registry)");
+                return (null, null, false);
+            }
+
+            if (allRegistryPorts.Count == 0)
+                MozaLog.Debug("[Moza] No MOZA device in registry, falling back to serial probe");
+            else
+                MozaLog.Debug(
+                    $"[Moza] Registry classifies {registryByPort.Count} of {ports.Length} COM port(s); probing the remainder");
 
             // 600ms budget per port — SerialPort.Open can hang indefinitely under Wine
             // if another process holds the tty. Background-thread the probe so one bad
@@ -935,6 +965,34 @@ namespace MozaPlugin.Protocol
             // a spurious wheel-presence response every probe cycle.
             bool IsHeldByPeer(string port) => _activePorts.ContainsKey(port);
 
+            // Registry-aware guard for a single port. Three outcomes:
+            //   * unclassified  → return false, caller probes the port.
+            //   * matching PID  → write `decided` with a no-probe direct
+            //                     claim using the registry-reported PID.
+            //   * mismatching   → write `decided` = (null, null, false)
+            //                     and caller `continue`s past this port.
+            // Centralised so AB9 and BaseAndHub branches share identical
+            // behaviour and log lines.
+            bool RegistrySaysSkip(string port, out (string?, string?, bool) decided)
+            {
+                decided = (null, null, false);
+                if (!registryByPort.TryGetValue(port, out var info)) return false;
+                string pidStr = FormatPid(info.Pid);
+                if (pidFilter == null || pidFilter(pidStr))
+                {
+                    MozaLog.Debug(
+                        $"[Moza] Port {port} already classified by registry as PID={pidStr} ({MozaUsbIds.Describe(info.Pid)}) — claiming without probe");
+                    decided = (port, pidStr, false);
+                    return true;
+                }
+                MozaLog.Debug(
+                    $"[Moza] Port {port} classified by registry as PID={pidStr} ({MozaUsbIds.Describe(info.Pid)}) — not for this connection, skipping probe");
+                // Sentinel: mismatching classification — caller treats as
+                // "skip and continue" by checking decided.Item1 == null
+                // && we returned true.
+                return true;
+            }
+
             if (probeTarget == MozaProbeTarget.Ab9)
             {
                 // AB9 main device id (0x12) is shared with the wheelbase Main
@@ -947,10 +1005,19 @@ namespace MozaPlugin.Protocol
                 // the wheelbase always does. A 0xAB reply means "this is a
                 // wheelbase" → skip. Only ports that don't respond to the base
                 // probe get the AB9 probe.
+                //
+                // The base-disambig probe is suppressed entirely for ports
+                // the registry already pinned to a wheelbase PID — that's
+                // exactly the leak the per-port registry guard fixes.
                 foreach (var port in ports)
                 {
                     if (cancel?.Invoke() == true) return (null, null, false);
                     if (IsHeldByPeer(port)) continue;
+                    if (RegistrySaysSkip(port, out var decided))
+                    {
+                        if (decided.Item1 != null) return decided;
+                        continue;
+                    }
 
                     var (baseResp, baseReach) = ProbeWithTimeout(port, 600, ProbeKind.Base);
                     if (!baseReach) { unreachable.Add(port); continue; }
@@ -980,6 +1047,11 @@ namespace MozaPlugin.Protocol
             {
                 if (cancel?.Invoke() == true) return (null, null, false);
                 if (IsHeldByPeer(port)) continue;
+                if (RegistrySaysSkip(port, out var decided))
+                {
+                    if (decided.Item1 != null) return decided;
+                    continue;
+                }
 
                 var (responded, reachable) = ProbeWithTimeout(port, 600, ProbeKind.Base);
                 if (responded)
@@ -995,6 +1067,10 @@ namespace MozaPlugin.Protocol
                 if (cancel?.Invoke() == true) return (null, null, false);
                 if (unreachable.Contains(port)) continue;
                 if (IsHeldByPeer(port)) continue;
+                // Pass 1 already short-circuited on registry-matching ports
+                // via RegistrySaysSkip, so a registry-classified port reaching
+                // here is guaranteed mismatching — skip without re-logging.
+                if (registryByPort.ContainsKey(port)) continue;
 
                 var (responded, _) = ProbeWithTimeout(port, 600, ProbeKind.Hub);
                 if (responded)
