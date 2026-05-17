@@ -70,6 +70,26 @@ namespace MozaPlugin.Telemetry.Frames
         private volatile Dictionary<string, int>? _idxByUrl;
         private volatile int _lastActivityMs;
         private int _lastParseLen;
+        // u32 value of the most-recently-seen wheel-side END marker
+        // (tag 0x06 size 0x00000004 value u32) inside a catalog push.
+        // PitHouse echoes this exact value as the END marker of its own
+        // tier-def emissions — the wheel uses it as a tier-def version
+        // handshake; non-matching END = treated as duplicate / unbound
+        // (verified 2026-05-17 from sim/logs/bridge-20260517-070054.jsonl:
+        // wheel END=42 → PH tier-def END=42; wheel END=43 → PH tier-def
+        // END=43; wheel END=68 → PH retransmits END=68 each time).
+        // Updated inside AppendChunkIfNew when a 0x06 marker is observed.
+        private volatile uint _lastWheelEndMarker;
+        // Tick when the END marker last changed value. Useful for "wait
+        // until the wheel has emitted its post-switch END" gating.
+        private volatile int _lastWheelEndMarkerTickMs;
+
+        /// <summary>u32 value of the most-recently-seen wheel-side END
+        /// marker (tag 0x06) in a catalog push. PitHouse echoes this in
+        /// its own tier-def END markers as a version handshake — see
+        /// field docs.</summary>
+        public uint LastWheelEndMarker => _lastWheelEndMarker;
+        public int LastWheelEndMarkerTickMs => _lastWheelEndMarkerTickMs;
 
         /// <summary>Latest parsed catalog (idx-1 positional, "" for unannounced
         /// gaps). Null until the first parse succeeds. Reads are volatile.</summary>
@@ -178,6 +198,25 @@ namespace MozaPlugin.Telemetry.Frames
                 }
                 for (int i = 0; i < length; i++)
                     buf.Add(chunkBytes[offset + i]);
+                // Scan the FULL session buffer (not just the new chunk —
+                // the END marker may straddle chunk boundaries) for the
+                // most recent tag 0x06 size=4 record and capture its u32
+                // value. Iterate forward so the LAST seen wins.
+                int bcnt = buf.Count;
+                for (int ci = 0; ci + 8 < bcnt; ci++)
+                {
+                    if (buf[ci] != 0x06) continue;
+                    if (buf[ci + 1] != 0x04 || buf[ci + 2] != 0 || buf[ci + 3] != 0 || buf[ci + 4] != 0) continue;
+                    uint val = (uint)(buf[ci + 5]
+                        | (buf[ci + 6] << 8)
+                        | (buf[ci + 7] << 16)
+                        | (buf[ci + 8] << 24));
+                    if (val != _lastWheelEndMarker)
+                    {
+                        _lastWheelEndMarker = val;
+                        _lastWheelEndMarkerTickMs = Environment.TickCount;
+                    }
+                }
             }
             _lastActivityMs = Environment.TickCount;
             if (firstChunkOnSession)

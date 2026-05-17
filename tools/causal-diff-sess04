@@ -1,0 +1,160 @@
+#!/usr/bin/env python3
+"""Causal diff: find what host activity precedes the wheel's sess=04
+device-init in PitHouse vs ours.
+
+Anchors t=0 at the host's sess=01 open (the start of the connect
+handshake) in each capture. Lists every h2b frame in the +0..+3s
+window with grp/dev/cmd. Highlights frames present in PitHouse but
+absent in ours (and vice versa).
+
+Goal: identify the SPECIFIC frame(s) PitHouse sends that triggers the
+wheel to device-init sess=04 — so we can send those frames too.
+"""
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent))
+from moza_trace import load_trace, Frame
+from moza_bridge import load_bridge, BFrame
+
+
+def find_h2b_sess_open(frames, sess: int) -> float | None:
+    """Find first h2b session-open (type=0x81) for given session."""
+    for f in frames:
+        if isinstance(f, Frame):
+            if f.dir == 'h2b' and f.session == sess and f.stype == 0x81:
+                return f.t
+        else:  # BFrame
+            if f.dir == 'h2b' and f.is_session_data and f.sess_id == sess and f.sess_type == 0x81:
+                return f.t_rel
+    return None
+
+
+def find_b2h_sess_open(frames, sess: int) -> float | None:
+    for f in frames:
+        if isinstance(f, Frame):
+            if f.dir == 'b2h' and f.session == sess and f.stype == 0x81:
+                return f.t
+        else:
+            if f.dir == 'b2h' and f.is_session_data and f.sess_id == sess and f.sess_type == 0x81:
+                return f.t_rel
+    return None
+
+
+def frame_signature(f) -> tuple:
+    """Return a (grp, dev, cmd) tuple identifying the frame type.
+    For session-data frames, use a more specific signature including sess and stype."""
+    if isinstance(f, Frame):
+        raw = f.raw
+        if len(raw) < 5: return ('short',)
+        # h2b: 7e <N> grp dev cmd ...
+        grp, dev, cmd = raw[2], raw[3], raw[4]
+    else:
+        if not f.raw: return ('short',)
+        raw = f.raw
+        if len(raw) < 5: return ('short',)
+        grp, dev, cmd = raw[2], raw[3], raw[4]
+    # session-data: 7c 00 <sess> <stype>
+    if cmd == 0x7c and len(raw) >= 8:
+        sess = raw[6]; stype = raw[7]
+        return (grp, dev, 'sess', sess, f'stype={stype:02x}')
+    # ack fc 00 <sess>
+    if cmd == 0xfc and len(raw) >= 7:
+        sess = raw[6]
+        return (grp, dev, 'ack', sess)
+    return (grp, dev, cmd)
+
+
+def collect_h2b_in_window(frames, t0: float, t_window: float):
+    """Collect h2b frames in [t0, t0+t_window). Returns list of (rel_t, sig, raw_hex)."""
+    out = []
+    for f in frames:
+        t = f.t if isinstance(f, Frame) else f.t_rel
+        if t < t0 or t >= t0 + t_window: continue
+        if f.dir != 'h2b': continue
+        sig = frame_signature(f)
+        raw = f.raw if isinstance(f, Frame) else f.raw
+        out.append((t - t0, sig, raw.hex()))
+    return out
+
+
+def main():
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--ours", default=None, help="Our wire trace (latest if omitted)")
+    ap.add_argument("--pithouse", default="/home/rorth/src/moza-simhub-plugin/sim/logs/bridge-20260514-170002.jsonl")
+    ap.add_argument("--window", type=float, default=3.5, help="seconds after sess=01 open to inspect")
+    args = ap.parse_args()
+
+    from moza_trace import resolve_trace
+    our_path = resolve_trace(args.ours)
+    print(f"OURS:     {our_path}")
+    print(f"PITHOUSE: {args.pithouse}")
+
+    our = load_trace(our_path)
+    ph = load_bridge(args.pithouse)
+
+    # Anchor: host sess=01 open in each
+    our_anchor = find_h2b_sess_open(our, 1)
+    ph_anchor = find_h2b_sess_open(ph, 1)
+    print(f"\nAnchor: host sess=01 open at OURS t={our_anchor}, PitHouse t={ph_anchor}")
+    if our_anchor is None or ph_anchor is None:
+        print("Missing anchor; aborting."); return
+
+    # Wheel sess=04 device-init
+    our_s4 = find_b2h_sess_open(our, 0x04)
+    ph_s4 = find_b2h_sess_open(ph, 0x04)
+    print(f"Wheel sess=04 device-init: OURS={our_s4} (rel={our_s4-our_anchor if our_s4 else None}), "
+          f"PitHouse={ph_s4} (rel={ph_s4-ph_anchor if ph_s4 else None})")
+
+    # Collect h2b in window after anchor for both
+    our_frames = collect_h2b_in_window(our, our_anchor, args.window)
+    ph_frames = collect_h2b_in_window(ph, ph_anchor, args.window)
+    print(f"\nh2b frames in +0..+{args.window}s window: OURS={len(our_frames)}, PitHouse={len(ph_frames)}")
+
+    # Build signature multisets
+    from collections import Counter
+    our_sigs = Counter(f[1] for f in our_frames)
+    ph_sigs = Counter(f[1] for f in ph_frames)
+
+    # Signatures only in PitHouse (we don't send these)
+    print(f"\n== Frame signatures PitHouse sends, OURS does NOT (or fewer times):")
+    for sig, count in ph_sigs.most_common():
+        ours_count = our_sigs.get(sig, 0)
+        if count > ours_count:
+            # Find first occurrence in PitHouse
+            first = next((f for f in ph_frames if f[1] == sig), None)
+            t = first[0] if first else 0
+            hex_s = first[2] if first else ''
+            print(f"  PH={count:3} OURS={ours_count:3}  sig={sig}  first_at=+{t*1000:7.1f}ms hex={hex_s[:60]}")
+
+    print(f"\n== Frame signatures OURS sends, PitHouse does NOT:")
+    for sig, count in our_sigs.most_common():
+        ph_count = ph_sigs.get(sig, 0)
+        if count > ph_count and (count - ph_count) >= 3:
+            first = next((f for f in our_frames if f[1] == sig), None)
+            t = first[0] if first else 0
+            hex_s = first[2] if first else ''
+            print(f"  OURS={count:3} PH={ph_count:3}  sig={sig}  first_at=+{t*1000:7.1f}ms hex={hex_s[:60]}")
+
+    # CRITICAL: chronological dump of PitHouse h2b leading to wheel sess=04 open
+    if ph_s4 is not None:
+        window_until = ph_s4 - ph_anchor
+        print(f"\n== PitHouse h2b CHRONO until wheel sess=04 open at +{window_until*1000:.1f}ms:")
+        for t, sig, hx in ph_frames:
+            if t >= window_until: break
+            print(f"  +{t*1000:7.1f}ms {sig}  {hx[:80]}")
+        print(f"  >>> +{window_until*1000:.1f}ms WHEEL DEVICE-INITS SESS=04 <<<")
+
+    # And ours in the same RELATIVE window
+    if ph_s4 is not None:
+        window_until = ph_s4 - ph_anchor
+        print(f"\n== OURS h2b CHRONO in same +0..+{window_until*1000:.1f}ms window:")
+        ph_sigs_in_window = set(sig for t, sig, _ in ph_frames if t < window_until)
+        for t, sig, hx in our_frames:
+            if t >= window_until: break
+            tag = " *UNIQUE TO US*" if sig not in ph_sigs_in_window else ""
+            print(f"  +{t*1000:7.1f}ms {sig}{tag}  {hx[:80]}")
+
+
+if __name__ == '__main__':
+    main()

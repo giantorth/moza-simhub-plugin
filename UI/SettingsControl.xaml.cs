@@ -8,6 +8,7 @@ using System.Windows.Shapes;
 using System.Windows.Threading;
 using MozaPlugin.Devices;
 using MozaPlugin.Telemetry;
+using MozaPlugin.Telemetry.Dashboard;
 using MozaPlugin.Telemetry.Era;
 using MozaPlugin.UI;
 using SerialTrafficCapture = MozaPlugin.Diagnostics.SerialTrafficCapture;
@@ -153,6 +154,7 @@ namespace MozaPlugin
                 RefreshAb9Tab();
                 InitTelemetryTab();
                 RefreshExtendedLedGroups();
+                RefreshDashboardUploadTab();
                 RefreshWheelFilesTab();
                 RefreshDiagnosticsTab();
             }
@@ -1316,7 +1318,7 @@ namespace MozaPlugin
             if (_plugin.Settings.DisableSerialProbeFallback)
                 fallbackState = "DISABLED";
             else if (ports.Count > 0)
-                fallbackState = "armed (idle — registry has MOZA device(s))";
+                fallbackState = "armed (probes only unclassified COM ports)";
             else
                 fallbackState = "armed (active — registry empty)";
             sb.AppendLine($"Source:         Registry  (probe fallback: {fallbackState})");
@@ -2216,6 +2218,235 @@ namespace MozaPlugin
             if (cfg.ModeCmd == null) return;
             if (modeCombo.SelectedIndex < 0) return;
             _plugin.WriteIfWheelDetected(cfg.ModeCmd, modeCombo.SelectedIndex);
+        }
+
+        // ── Dashboard Upload tab ─────────────────────────────────────────
+        // Lets the user pick a .mzdash file (or a library entry) and push it
+        // to the connected wheel via TelemetrySender.TriggerManualUpload.
+        // Status panel reflects the WheelUploadCoordinator's latest ack:
+        // in-flight flag, bytes_written / total_size, status byte.
+
+        // Source bytes + name held in the UI while the user picks; pushed to
+        // the uploader on UploadNow_Click. Decouples picking from uploading
+        // so the user can review the parsed name/MD5 before sending.
+        private byte[]? _uploadPickedContent;
+        private string _uploadPickedName = "";
+        private string _uploadPickedSourceLabel = "";
+        // Directory the mzdash file lives in. Used to find sibling PNGs at
+        // <dir>/Resource/MD5/<hex>.png for the multi-file upload bundle.
+        // Empty for library/embedded picks.
+        private string _uploadPickedSourceDirectory = "";
+        private bool _uploadLibrarySeeded;
+
+        private void UploadSourceRadio_Click(object sender, RoutedEventArgs e)
+        {
+            if (_suppressEvents) return;
+            bool libMode = UploadSourceLibraryRadio?.IsChecked == true;
+            if (UploadFilePanel != null)
+                UploadFilePanel.Visibility = libMode ? Visibility.Collapsed : Visibility.Visible;
+            if (UploadLibraryPanel != null)
+                UploadLibraryPanel.Visibility = libMode ? Visibility.Visible : Visibility.Collapsed;
+            if (libMode) SeedUploadLibrary(force: false);
+        }
+
+        private void UploadPickFile_Click(object sender, RoutedEventArgs e)
+        {
+            var dlg = new Microsoft.Win32.OpenFileDialog
+            {
+                Filter = "Moza dashboard (*.mzdash)|*.mzdash|All files (*.*)|*.*",
+                Title = "Pick a .mzdash file to upload",
+            };
+            if (dlg.ShowDialog() != true) return;
+            try
+            {
+                byte[] bytes = System.IO.File.ReadAllBytes(dlg.FileName);
+                _uploadPickedContent = bytes;
+                _uploadPickedName = System.IO.Path.GetFileNameWithoutExtension(dlg.FileName) ?? "";
+                _uploadPickedSourceLabel = dlg.FileName;
+                _uploadPickedSourceDirectory = System.IO.Path.GetDirectoryName(dlg.FileName) ?? "";
+                if (UploadPickedFileText != null)
+                    UploadPickedFileText.Text = dlg.FileName;
+            }
+            catch (Exception ex)
+            {
+                System.Windows.MessageBox.Show($"Failed to read .mzdash file:\n{ex.Message}",
+                    "Moza", System.Windows.MessageBoxButton.OK,
+                    System.Windows.MessageBoxImage.Error);
+            }
+        }
+
+        private void UploadLibraryRefresh_Click(object sender, RoutedEventArgs e)
+        {
+            SeedUploadLibrary(force: true);
+        }
+
+        private void SeedUploadLibrary(bool force)
+        {
+            if (UploadLibraryCombo == null) return;
+            if (_uploadLibrarySeeded && !force) return;
+            using (_suppressor.Begin())
+            {
+                string? prev = UploadLibraryCombo.SelectedItem as string;
+                UploadLibraryCombo.Items.Clear();
+                var seen = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                if (_plugin.DashCache != null)
+                {
+                    foreach (var name in _plugin.DashCache.CachedNames)
+                        if (seen.Add(name)) UploadLibraryCombo.Items.Add(name);
+                }
+                foreach (var p in _plugin.DashProfileStore.BuiltinProfiles)
+                    if (seen.Add(p.Name)) UploadLibraryCombo.Items.Add(p.Name);
+                if (!string.IsNullOrEmpty(prev) && UploadLibraryCombo.Items.Contains(prev))
+                    UploadLibraryCombo.SelectedItem = prev;
+                else if (UploadLibraryCombo.Items.Count > 0 && UploadLibraryCombo.SelectedItem == null)
+                    UploadLibraryCombo.SelectedIndex = 0;
+            }
+            _uploadLibrarySeeded = true;
+        }
+
+        private void UploadLibraryCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_suppressEvents) return;
+            if (UploadLibraryCombo?.SelectedItem is not string name || string.IsNullOrEmpty(name))
+                return;
+            byte[]? bytes = ResolveLibraryDashboardBytes(name);
+            if (bytes == null)
+            {
+                _uploadPickedContent = null;
+                _uploadPickedName = "";
+                _uploadPickedSourceLabel = "";
+                _uploadPickedSourceDirectory = "";
+                if (UploadStatusText != null)
+                    UploadStatusText.Text = $"Cannot resolve raw bytes for \"{name}\" — pick a local file instead.";
+                return;
+            }
+            _uploadPickedContent = bytes;
+            _uploadPickedName = name;
+            _uploadPickedSourceLabel = $"library: {name}";
+            // Library/folder entries: try to resolve the source dir from
+            // DashCache so widget PNG assets can be looked up. Builtins from
+            // embedded resources have no dir → single-file upload.
+            _uploadPickedSourceDirectory = ResolveLibraryDashboardDirectory(name);
+            if (UploadStatusText != null && UploadStatusText.Text.StartsWith("Cannot resolve"))
+                UploadStatusText.Text = "idle";
+        }
+
+        /// <summary>
+        /// Resolve the on-disk directory for a library-picked dashboard so the
+        /// upload bundle can find sibling PNG widget assets at
+        /// <c>&lt;dir&gt;/Resource/MD5/&lt;hex&gt;.png</c>. Returns empty when
+        /// the dashboard came from the wheel cache or an embedded builtin
+        /// (no source directory) — the upload then ships single-file.
+        /// </summary>
+        private string ResolveLibraryDashboardDirectory(string name)
+        {
+            if (_plugin.DashCache == null) return "";
+            string? filePath = _plugin.DashCache.TryGetFolderFilePath(name);
+            if (string.IsNullOrEmpty(filePath)) return "";
+            return System.IO.Path.GetDirectoryName(filePath) ?? "";
+        }
+
+        private byte[]? ResolveLibraryDashboardBytes(string name)
+        {
+            if (_plugin.DashCache != null)
+            {
+                var bytes = _plugin.DashCache.TryGetRawContent(name);
+                if (bytes != null) return bytes;
+            }
+            // Builtins: read from the embedded resource (mirrors
+            // MozaPlugin.ApplyTelemetrySettings' builtin fallback).
+            foreach (var p in _plugin.DashProfileStore.BuiltinProfiles)
+            {
+                if (!string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)) continue;
+                string resourceName = $"MozaPlugin.Data.Dashes.{p.Name.Replace(" ", "_")}.mzdash";
+                var assembly = System.Reflection.Assembly.GetExecutingAssembly();
+                using var stream = assembly.GetManifestResourceStream(resourceName);
+                if (stream == null) return null;
+                using var ms = new System.IO.MemoryStream();
+                stream.CopyTo(ms);
+                return ms.ToArray();
+            }
+            return null;
+        }
+
+        private void UploadNow_Click(object sender, RoutedEventArgs e)
+        {
+            var ts = _plugin.TelemetrySender;
+            if (ts == null)
+            {
+                if (UploadStatusText != null)
+                    UploadStatusText.Text = "Telemetry sender unavailable (plugin not initialised).";
+                return;
+            }
+            if (_uploadPickedContent == null || _uploadPickedContent.Length == 0)
+            {
+                if (UploadStatusText != null)
+                    UploadStatusText.Text = "Pick a .mzdash file or library entry first.";
+                return;
+            }
+            string name = !string.IsNullOrEmpty(_uploadPickedName) ? _uploadPickedName : "dashboard";
+            string? sourceDir = string.IsNullOrEmpty(_uploadPickedSourceDirectory)
+                ? null
+                : _uploadPickedSourceDirectory;
+            bool queued = ts.TriggerManualUpload(_uploadPickedContent, name, sourceDir);
+            if (UploadStatusText != null)
+            {
+                UploadStatusText.Text = queued
+                    ? $"Upload queued — pushing \"{name}\" to the wheel…"
+                    : "Upload not started — wheel not connected or no management session yet.";
+            }
+        }
+
+        private void RefreshDashboardUploadTab()
+        {
+            if (UploadInfoNameText == null) return; // tab template not yet realized
+            var ts = _plugin.TelemetrySender;
+
+            string activeName = ts?.MzdashName ?? "";
+            string displayName = !string.IsNullOrEmpty(_uploadPickedName)
+                ? _uploadPickedName
+                : (!string.IsNullOrEmpty(activeName) ? activeName : "—");
+            UploadInfoNameText.Text = displayName;
+
+            int rawSize = _uploadPickedContent?.Length ?? ts?.MzdashContent?.Length ?? 0;
+            UploadInfoRawSizeText.Text = rawSize > 0 ? $"{rawSize:N0} bytes" : "—";
+
+            byte[]? bytes = _uploadPickedContent ?? ts?.MzdashContent;
+            UploadInfoMd5Text.Text = bytes != null && bytes.Length > 0
+                ? FileTransferBuilder.Md5Hex(FileTransferBuilder.ComputeMd5(bytes))
+                : "—";
+
+            bool inFlight = ts?.IsUploadInFlight ?? false;
+            UploadInfoInFlightText.Text = inFlight ? "yes" : "no";
+            UploadInfoInFlightText.Foreground = inFlight ? Brushes.Goldenrod : Brushes.Gray;
+
+            uint bw = ts?.UploadLastBytesWritten ?? 0;
+            uint total = ts?.UploadLastTotalSize ?? 0;
+            UploadInfoProgressText.Text = total == 0
+                ? "—"
+                : $"{bw:N0} / {total:N0}" + (bw == total && total != 0 ? "  (complete)" : "");
+
+            byte status = ts?.UploadLastStatusByte ?? 0;
+            UploadInfoStatusByteText.Text = status == 0 ? "—" : $"0x{status:X2}";
+
+            // Surface an automatic status hint when an upload finishes so the
+            // user doesn't have to interpret bw == total themselves.
+            if (UploadStatusText != null && !inFlight && total != 0)
+            {
+                if (bw == total)
+                    UploadStatusText.Text = $"Upload complete (bytes_written={bw} == total_size={total}, status=0x{status:X2})";
+                else if (UploadStatusText.Text.StartsWith("Upload queued"))
+                    UploadStatusText.Text = $"Upload stopped (bytes_written={bw} / total_size={total}, status=0x{status:X2})";
+            }
+
+            // Enable the upload button only when the wheel is connected and a
+            // management session has been negotiated — TriggerManualUpload
+            // rejects otherwise.
+            if (UploadNowButton != null)
+                UploadNowButton.IsEnabled = ts != null
+                    && _uploadPickedContent != null
+                    && _uploadPickedContent.Length > 0
+                    && _data.IsConnected;
         }
 
         // ── Wheel Files tab ─────────────────────────────────────────────

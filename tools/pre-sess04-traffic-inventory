@@ -1,0 +1,180 @@
+#!/usr/bin/env python3
+"""Inventory ALL h2b traffic in the window from host sess=01 open to
+wheel sess=04 device-init across multiple bridge captures.
+
+Looking for: signatures that appear in EVERY pre-sess=04 window but
+that our plugin doesn't send. Those are candidate triggers.
+
+Classifies each frame by (grp, dev, first 1-2 cmd bytes) and reports
+per-capture presence + count.
+"""
+import sys, struct
+from pathlib import Path
+from collections import defaultdict, Counter
+
+sys.path.insert(0, str(Path(__file__).parent))
+from moza_bridge import load_bridge
+from moza_trace import load_trace, resolve_trace
+
+
+def frame_sig(grp, dev, payload):
+    """Return a fingerprint tuple for grouping frames by 'type'."""
+    if not payload: return (grp, dev, None, None)
+    cmd1 = payload[0]
+    cmd2 = payload[1] if len(payload) > 1 else None
+    # For session-data (7c 00 ...) — collapse to per-session+stype
+    if cmd1 == 0x7C and len(payload) >= 4 and payload[1] == 0x00:
+        return (grp, dev, '7c', f"sess={payload[2]:02x}/stype={payload[3]:02x}")
+    # For ack (fc 00 ...) — collapse to per-session ack
+    if cmd1 == 0xFC and len(payload) >= 3 and payload[1] == 0x00:
+        return (grp, dev, 'fc', f"sess={payload[2]:02x}")
+    # For value frame (7d 23) — collapse
+    if cmd1 == 0x7D and cmd2 == 0x23:
+        return (grp, dev, '7d23', None)
+    # For 0x0E register reads — show the reg_id
+    if grp == 0x0E and len(payload) >= 3 and payload[0] == 0x00:
+        reg = payload[1] | (payload[2] << 8)
+        return (grp, dev, '00', f"reg=0x{reg:04x}")
+    # Generic: (grp, dev, cmd1, cmd2)
+    return (grp, dev, cmd1, cmd2)
+
+
+def find_sess_open_h2b(frames, sess):
+    for f in frames:
+        if f.dir=='h2b' and f.is_session_data and f.sess_id==sess and f.sess_type==0x81:
+            return f.t_rel
+    return None
+
+
+def find_sess_open_b2h(frames, sess):
+    for f in frames:
+        if f.dir=='b2h' and f.is_session_data and f.sess_id==sess and f.sess_type==0x81:
+            return f.t_rel
+    return None
+
+
+def collect_h2b_sigs(path, window_end_t):
+    """Return Counter of frame signatures in h2b until window_end_t (relative to anchor)."""
+    frames = load_bridge(path)
+    if not frames: return None, None
+    anchor = find_sess_open_h2b(frames, 1)
+    if anchor is None: return None, None
+    sess04_t = find_sess_open_b2h(frames, 4)
+    end_t = anchor + window_end_t
+    if sess04_t and sess04_t < end_t:
+        # cap at sess=04 open so we only look at the trigger window
+        end_t = sess04_t
+    sigs = Counter()
+    for f in frames:
+        if f.dir != 'h2b' or f.t_rel < anchor or f.t_rel >= end_t: continue
+        sig = frame_sig(f.grp, f.dev, f.payload)
+        sigs[sig] += 1
+    return sigs, sess04_t - anchor if sess04_t else None
+
+
+def collect_h2b_sigs_ours(trace_arg, window_end_rel):
+    """Same but for our wire trace."""
+    path = resolve_trace(trace_arg)
+    frames = load_trace(path)
+    anchor = None
+    for f in frames:
+        if f.dir=='h2b' and f.session==1 and f.stype==0x81:
+            anchor = f.t; break
+    if anchor is None: return None
+    sigs = Counter()
+    for f in frames:
+        if f.dir != 'h2b': continue
+        if f.t < anchor or f.t - anchor >= window_end_rel: continue
+        raw = f.raw
+        if len(raw) < 5: continue
+        grp, dev = raw[2], raw[3]
+        payload = raw[4:-1] if len(raw) > 5 else raw[4:]  # exclude ck
+        sig = frame_sig(grp, dev, payload)
+        sigs[sig] += 1
+    return sigs
+
+
+def main():
+    base = Path("/home/rorth/src/moza-simhub-plugin/sim/logs")
+    # Pick captures spanning April 28 — May 14
+    captures = sorted(base.glob("bridge-*.jsonl"))
+
+    # Filter to non-empty
+    captures = [c for c in captures if c.stat().st_size > 50000]
+    # Take first 10 to keep things manageable
+    captures = captures[:10]
+
+    # Collect sigs per capture
+    cap_sigs = {}
+    cap_sess04 = {}
+    for c in captures:
+        sigs, sess04 = collect_h2b_sigs(c, window_end_t=3.0)
+        if sigs is None: continue
+        cap_sigs[c.name] = sigs
+        cap_sess04[c.name] = sess04
+    print(f"Loaded {len(cap_sigs)} captures")
+    for name, s4 in cap_sess04.items():
+        s4_str = f"+{s4*1000:.0f}ms" if s4 else "NEVER"
+        print(f"  {name}: sess=04 {s4_str}, {sum(cap_sigs[name].values())} h2b frames")
+
+    # Our latest trace
+    print(f"\nLoading our trace...")
+    our_sigs = collect_h2b_sigs_ours("moza-wire-20260516-185810", window_end_rel=3.0)
+    if our_sigs is None:
+        print("  Failed"); return
+    print(f"  {sum(our_sigs.values())} h2b frames in first 3s after sess=01 open")
+
+    # Build a master signature set
+    all_sigs = set()
+    for sigs in cap_sigs.values(): all_sigs.update(sigs.keys())
+
+    # For each sig: % captures where present (with sess=04 outcome)
+    # Filter to signatures that appear in ≥80% of captures with sess=04
+    captures_with_s4 = [n for n, s4 in cap_sess04.items() if s4 is not None]
+    n_s4 = len(captures_with_s4)
+    print(f"\nCaptures with sess=04 open: {n_s4}/{len(cap_sigs)}")
+
+    print(f"\nSIGS in ≥80% of sess=04 captures BUT NOT in our trace:")
+    rows = []
+    for sig in all_sigs:
+        # Skip session-data (we DO send sess=01/02/03 data — different question)
+        if sig[2] == '7c': continue
+        # Skip generic acks
+        if sig[2] == 'fc': continue
+        s4_present = sum(1 for n in captures_with_s4 if sig in cap_sigs.get(n, {}))
+        our_count = our_sigs.get(sig, 0)
+        if n_s4 == 0: continue
+        pct = s4_present / n_s4
+        if pct >= 0.8 and our_count == 0:
+            # avg count per capture
+            avg = sum(cap_sigs[n][sig] for n in captures_with_s4 if sig in cap_sigs[n]) / s4_present
+            rows.append((avg, pct, sig, s4_present))
+    rows.sort(key=lambda x: -x[0])
+    print(f"  {len(rows)} signatures meet criteria; top by avg count:")
+    for avg, pct, sig, present in rows[:40]:
+        grp, dev, cmd1, cmd2 = sig
+        sig_str = f"grp=0x{grp:02x} dev=0x{dev:02x} cmd=0x{cmd1:02x}" if isinstance(cmd1, int) else f"grp=0x{grp:02x} dev=0x{dev:02x} {cmd1}"
+        if cmd2 is not None:
+            sig_str += f" {cmd2:02x}" if isinstance(cmd2, int) else f" {cmd2}"
+        print(f"    avg={avg:5.1f}/cap  in {present}/{n_s4} caps  {sig_str}")
+
+    # Now show what WE send that PitHouse doesn't (might be confusing the wheel)
+    print(f"\nSIGS we send heavily in first 3s that PitHouse doesn't:")
+    ours_only = []
+    for sig, our_count in our_sigs.items():
+        if sig[2] == '7c': continue
+        if sig[2] == 'fc': continue
+        present_in_ph = sum(1 for n in captures_with_s4 if sig in cap_sigs.get(n, {}))
+        if our_count >= 3 and present_in_ph == 0:
+            ours_only.append((our_count, sig))
+    ours_only.sort(reverse=True)
+    for count, sig in ours_only[:30]:
+        grp, dev, cmd1, cmd2 = sig
+        sig_str = f"grp=0x{grp:02x} dev=0x{dev:02x} cmd=0x{cmd1:02x}" if isinstance(cmd1, int) else f"grp=0x{grp:02x} dev=0x{dev:02x} {cmd1}"
+        if cmd2 is not None:
+            sig_str += f" {cmd2:02x}" if isinstance(cmd2, int) else f" {cmd2}"
+        print(f"    OURS={count} (PH=0)  {sig_str}")
+
+
+if __name__ == '__main__':
+    main()

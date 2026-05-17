@@ -1,0 +1,143 @@
+#!/usr/bin/env python3
+"""Report what FF record kinds our plugin emits on sess=02 vs what PitHouse
+emits. Highlights missing kinds that may explain why the wheel doesn't
+engage the file-transfer ack channel (sess=04 device-init).
+
+Usage:
+    tools/sess02-emit-gap                          # latest trace vs default bridge
+    tools/sess02-emit-gap --ours <wire-trace>
+    tools/sess02-emit-gap --pithouse <bridge>
+"""
+import sys, struct
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent))
+from moza_trace import load_trace, resolve_trace
+from moza_bridge import load_bridge
+
+KIND_NAMES = {
+    2: "init_nonce", 4: "DASH_SWITCH", 7: "init_enum",
+    8: "init_payload_a (channel catalog)", 9: "periodic",
+    10: "wheel_state_a", 11: "init_payload_b (ffb props)",
+    14: "wheel_payload", 15: "host_setting", 16: "wheel_state_b",
+}
+
+
+def extract_ff_kinds_sess02_h2b(frames, is_bridge):
+    """Reassemble h2b sess=02 chunks in seq order, walk FF records,
+    return list of (kind, size, salt, body_offset_in_first_chunk_time)."""
+    chunks = {}
+    for f in frames:
+        if is_bridge:
+            if f.dir != 'h2b' or not f.is_session_data: continue
+            if f.sess_id != 2 or f.sess_type != 0x01: continue
+            seq = f.sess_seq
+            t = f.t_rel
+            data = f.sess_data
+        else:
+            if f.dir != 'h2b' or f.session != 2 or f.stype != 0x01: continue
+            seq = f.seq
+            t = f.t
+            data = f.raw[10:-5] if len(f.raw) > 15 else f.raw[10:]
+        if seq not in chunks:
+            chunks[seq] = (t, data)
+    seqs = sorted(chunks)
+    if not seqs: return []
+    # Concatenate in seq order (skip retransmits — already de-duped)
+    buf = b''
+    seq_starts = []  # (offset_in_buf, seq, t)
+    expected = seqs[0]
+    for s in seqs:
+        if s == expected:
+            seq_starts.append((len(buf), s, chunks[s][0]))
+            buf += chunks[s][1]
+            expected += 1
+        else: break
+
+    records = []
+    pos = 0
+    while pos < len(buf):
+        if buf[pos] != 0xff:
+            nxt = buf.find(b'\xff', pos)
+            if nxt < 0 or nxt - pos > 200: break
+            pos = nxt
+            continue
+        if pos + 13 > len(buf): break
+        size = struct.unpack_from('<I', buf, pos+1)[0]
+        salt = struct.unpack_from('<I', buf, pos+5)[0]
+        kind = struct.unpack_from('<I', buf, pos+9)[0]
+        if size > 16384 or pos + 13 + size > len(buf): break
+        # Find the t of the seq that contains this offset
+        rec_t = 0.0
+        for off, s, t in seq_starts:
+            if off > pos: break
+            rec_t = t
+        records.append({'pos': pos, 'kind': kind, 'size': size, 'salt': salt, 't': rec_t})
+        pos += 13 + size
+    return records
+
+
+def main():
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--ours", default=None)
+    ap.add_argument("--pithouse", default="/home/rorth/src/moza-simhub-plugin/sim/logs/bridge-20260514-170002.jsonl")
+    ap.add_argument("--anchor-sess01", action='store_true',
+                    help="report timing relative to host sess=01 open instead of trace start")
+    args = ap.parse_args()
+
+    ours_path = resolve_trace(args.ours)
+    our = load_trace(ours_path)
+    ph = load_bridge(args.pithouse)
+
+    # Find sess=01 open anchors
+    def anchor_h(frames, is_bridge):
+        for f in frames:
+            if is_bridge:
+                if f.dir=='h2b' and f.is_session_data and f.sess_id==1 and f.sess_type==0x81:
+                    return f.t_rel
+            else:
+                if f.dir=='h2b' and f.session==1 and f.stype==0x81:
+                    return f.t
+        return None
+    our_anchor = anchor_h(our, False) or 0
+    ph_anchor = anchor_h(ph, True) or 0
+
+    print(f"OURS:     {ours_path}")
+    print(f"PITHOUSE: {args.pithouse}")
+    print(f"Anchors: ours sess=01 open @ {our_anchor:.3f}s; PitHouse @ {ph_anchor:.3f}s")
+
+    our_recs = extract_ff_kinds_sess02_h2b(our, False)
+    ph_recs = extract_ff_kinds_sess02_h2b(ph, True)
+
+    print(f"\nOurs   h2b sess=02 FF records ({len(our_recs)} total):")
+    for r in our_recs[:12]:
+        kn = KIND_NAMES.get(r['kind'], '?')
+        rel = r['t'] - our_anchor
+        print(f"  kind={r['kind']:3} ({kn})  size={r['size']:5}  +{rel*1000:7.1f}ms")
+
+    print(f"\nPitHouse h2b sess=02 FF records ({len(ph_recs)} total):")
+    for r in ph_recs[:12]:
+        kn = KIND_NAMES.get(r['kind'], '?')
+        rel = r['t'] - ph_anchor
+        print(f"  kind={r['kind']:3} ({kn})  size={r['size']:5}  +{rel*1000:7.1f}ms")
+
+    # The gap
+    our_kinds = set(r['kind'] for r in our_recs)
+    ph_kinds = set(r['kind'] for r in ph_recs)
+    missing = ph_kinds - our_kinds
+    extra = our_kinds - ph_kinds
+    print(f"\n== GAP: kinds PitHouse emits but OURS does NOT ==")
+    for k in sorted(missing):
+        kn = KIND_NAMES.get(k, '?')
+        ph_count = sum(1 for r in ph_recs if r['kind'] == k)
+        first_t = next((r['t'] for r in ph_recs if r['kind'] == k), 0) - ph_anchor
+        first_size = next((r['size'] for r in ph_recs if r['kind'] == k), 0)
+        print(f"  kind={k} ({kn})  PH count={ph_count}  first +{first_t*1000:7.1f}ms  size={first_size}")
+    print(f"\n== Kinds OURS emits but PitHouse does NOT ==")
+    for k in sorted(extra):
+        kn = KIND_NAMES.get(k, '?')
+        print(f"  kind={k} ({kn})")
+
+
+if __name__ == '__main__':
+    main()

@@ -65,29 +65,35 @@ final tier with NO trailing enable.
 [0x06] [04 00 00 00] [marker_value: u32 LE]
 ```
 
-`marker_value` = `0` for the **first broadcast**, **max chIdx seen in
-the tier-def so far** for every subsequent broadcast. Verified
-2026-05-15 against `sim/logs/bridge-20260514-204307.jsonl` (Simple
-Rally Mini Dash): PitHouse's tier-def includes idx=1..6 + idx=9
-(`patch/TrackPositionPercent`) in the fast tier + idx=8 (TrackLength)
-in the slow tier. Channel count = 8, but **end-marker emits 9** —
-the max chIdx among the records, NOT the channel count. Earlier
-plugin code used `channelsPerBroadcast` which gave 8 for SR and
-broke widget binding for that dashboard while accidentally matching
-for Mono/Grids where max-idx == channel count.
+`marker_value` is a **handshake echo from the wheel**, NOT a channel
+count. The wheel pushes its own `0x06 04 00 00 00 <u32>` end-marker
+as the final record of its post-switch catalog stream (b2h sess=0x01);
+PitHouse echoes that exact u32 in its subsequent tier-def emissions.
+The wheel treats the END marker as a tier-def version handshake — a
+host tier-def with an END value that doesn't match what the wheel
+just announced is treated as a duplicate / stale and the wheel does
+not commit widget bindings.
 
-Wheel sensitivity: the user's W17 / CS Pro firmware rejects binding
-for tier-defs with the wrong end-marker value. "These wheels are very
-particular about the channel ordering and any mistake whatsoever will
-break the link" — verified by flipping plugin from `channelsPerBroadcast`
-(8) to `max-chIdx-seen` (9) on SR and observing the dashboard finally
-update with test data.
+Verified 2026-05-17 via `tools/tierdef-decode` against
+`sim/logs/bridge-20260517-070054.jsonl` across two PitHouse-initiated
+switches:
 
-For dashboards where channel idxes are contiguous (no gaps), max-chIdx
-== channel count by coincidence — the off-by-one only surfaces when
-the catalog has a gap (SR has gap at idx=7/TrackId being a string and
-not in the bit-packed tier, so fast tier ends at idx=9 with idx=7,8
-skipped).
+| Switch | Wheel END (b2h sess=0x01) | PitHouse tier-def END |
+|--------|---------------------------|------------------------|
+| slot=10 Rally V5 | 42 at k4+1023 ms | 42 (#117, #118 retransmits) |
+| slot=2 Grids | 43 at k4+481 ms; 68 at k4+1484 ms | 43 first emission, then 68 (11 retransmits) |
+
+Full observed END sequence across one session: 6 → 16 → 23 → 32 → 41
+→ 43 → 64 (monotonically advancing on dashboard changes / catalog
+growth — exact increment is not a simple formula). The first
+emission of a fresh session uses 0 (cold-start, before the wheel
+has pushed any END marker).
+
+Implementation: track the most recent value from the wheel's b2h
+sess=0x01 stream and echo it on every tier-def emission. All
+broadcasts inside one tier-def emission share the same END value.
+The plugin's `ChannelCatalogParser.LastWheelEndMarker` field
+provides this for `TierDefinitionBuilder`.
 
 #### Per-tier enable
 
@@ -136,18 +142,19 @@ increment monotonically across all sub-tiers, so the wheel sees flag
 slots `0..(broadcasts × subCount - 1)`.
 
 ```
-broadcast 0:  tier(flag=0) tier(flag=1) ... tier(flag=N-1) end-marker(0)
+broadcast 0:  tier(flag=0) tier(flag=1) ... tier(flag=N-1) end-marker(wheelEND)
               enable(flag=0) ... enable(flag=N-1)
-broadcast 1:  tier(flag=N) ... tier(flag=2N-1) end-marker(maxChIdxSeen)
+broadcast 1:  tier(flag=N) ... tier(flag=2N-1) end-marker(wheelEND)
               enable(flag=N) ... enable(flag=2N-1)
 ... (4 broadcasts total)
-broadcast 3:  tier(flag=3N) ... tier(flag=4N-1) end-marker(maxChIdxSeen)
+broadcast 3:  tier(flag=3N) ... tier(flag=4N-1) end-marker(wheelEND)
               (no trailing enable on last broadcast)
 ```
 
-`maxChIdxSeen` = the highest `chIdx` value written across ALL tier
-records in this tier-def message (cumulative, not per-broadcast). See
-"Per-tier end-marker" above for the SR-specific verification.
+`wheelEND` = the wheel's most-recent `0x06 04 00 00 00 <u32>` END
+marker echoed back from its catalog stream. All broadcasts inside one
+tier-def emission share the same value. See § "Per-tier end-marker"
+above for the handshake-echo decode.
 
 Rally V4 (3 sub-tiers, 5+2+1 channels per broadcast):
 12 total flag slots = 4 broadcasts × 3 sub-tiers.

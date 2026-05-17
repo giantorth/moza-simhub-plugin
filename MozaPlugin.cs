@@ -26,6 +26,25 @@ namespace MozaPlugin
     {
         internal static MozaPlugin? Instance { get; private set; }
 
+        // Process-scoped persistent wire infrastructure. SimHub reloads
+        // the plugin on game switch (End() → new Init() within ~1 s); the
+        // wheel's sess=0x09 dashboard-binding state requires ~10-14 s of
+        // host silence after session close before it'll re-engage,
+        // verified 2026-05-08 in
+        // findings/2026-05-08-wheel-sess09-timeout.md. By keeping the
+        // connection and telemetry sender alive across plugin instance
+        // recycle, we never actually close the wheel sessions on game
+        // switch — wheel never sees the reload, no settle wait needed.
+        // The new plugin instance simply re-attaches its event handlers
+        // and re-applies per-game settings.
+        //
+        // Disposed only when:
+        //   - SimHub process exits (OS reclaims everything)
+        //   - The serial connection drops (wheel unplugged) — caught in
+        //     Init's "still connected?" check, refreshed on next reload
+        private static MozaSerialConnection? s_persistentConnection;
+        private static TelemetrySender? s_persistentTelemetrySender;
+
         private MozaSerialConnection _connection = null!;
         private MozaData _data = null!;
         private MozaDeviceManager _deviceManager = null!;
@@ -40,6 +59,10 @@ namespace MozaPlugin
         private MozaHidReader _hidReader = null!;
         private PluginManager _pluginManager = null!;
         private TelemetrySender? _telemetrySender;
+        // True if Init reused the persistent connection/sender from a
+        // prior plugin instance. End() respects this flag and skips
+        // disposing them so the next Init can pick up where we left off.
+        private bool _usingPersistentWire;
         internal DashboardProfileStore DashProfileStore { get; } = new DashboardProfileStore();
         internal DashboardCache DashCache { get; private set; } = null!;
 
@@ -507,14 +530,34 @@ namespace MozaPlugin
                 // See Protocol/MozaUsbIds.cs and docs/protocol/devices/usb-ids.md.
                 Func<bool> disableProbeFallback = () =>
                     _settings != null && _settings.DisableSerialProbeFallback;
-                _connection = new MozaSerialConnection(
-                    pid => MozaUsbIds.IsWheelbasePid(pid)
-                           || MozaUsbIds.IsHubPid(pid)
-                           || !MozaUsbIds.IsKnownMozaPid(pid),
-                    MozaProbeTarget.BaseAndHub,
-                    disableProbeFallback);
-                if (!string.IsNullOrEmpty(_settings.LastWheelbasePort))
-                    _connection.LastPortName = _settings.LastWheelbasePort;
+                // Reuse the persistent connection from a prior plugin
+                // instance if it's still connected — this keeps wheel
+                // sessions alive across SimHub game-switch plugin reloads
+                // and avoids the ~10 s sess=0x09 settle wait.
+                if (s_persistentConnection != null && s_persistentConnection.IsConnected)
+                {
+                    _connection = s_persistentConnection;
+                    _usingPersistentWire = true;
+                    MozaLog.Info("[Moza] Reusing persistent serial connection from prior plugin instance");
+                }
+                else
+                {
+                    if (s_persistentConnection != null)
+                    {
+                        // Stale handle — connection lost between reloads.
+                        try { s_persistentConnection.Dispose(); } catch { }
+                        s_persistentConnection = null;
+                    }
+                    _connection = new MozaSerialConnection(
+                        pid => MozaUsbIds.IsWheelbasePid(pid)
+                               || MozaUsbIds.IsHubPid(pid)
+                               || !MozaUsbIds.IsKnownMozaPid(pid),
+                        MozaProbeTarget.BaseAndHub,
+                        disableProbeFallback);
+                    if (!string.IsNullOrEmpty(_settings.LastWheelbasePort))
+                        _connection.LastPortName = _settings.LastWheelbasePort;
+                    s_persistentConnection = _connection;
+                }
                 _connection.MessageReceived += OnMessageReceived;
                 _connection.Disconnected += OnSerialDisconnected;
 
@@ -591,15 +634,50 @@ namespace MozaPlugin
                 _hidReader = new MozaHidReader(_data);
                 _hidReader.Start();
 
-                _telemetrySender = new TelemetrySender(_connection);
+                // Reuse the persistent telemetry sender from a prior
+                // plugin instance if it's alive and the connection it
+                // was using is the same one we just reused. Sessions stay
+                // open across plugin reload — no Stop+Start cycle, no
+                // 11 s settle wait.
+                if (s_persistentTelemetrySender != null
+                    && !s_persistentTelemetrySender.IsDisposedFlag
+                    && _usingPersistentWire)
+                {
+                    _telemetrySender = s_persistentTelemetrySender;
+                    MozaLog.Info(
+                        "[Moza] Reusing persistent telemetry sender from prior plugin instance " +
+                        $"(state={_telemetrySender.State}, sessions kept alive)");
+                }
+                else
+                {
+                    if (s_persistentTelemetrySender != null)
+                    {
+                        try { s_persistentTelemetrySender.Dispose(); } catch { }
+                        s_persistentTelemetrySender = null;
+                    }
+                    _telemetrySender = new TelemetrySender(_connection);
+                    s_persistentTelemetrySender = _telemetrySender;
+                }
+                // Propagate the hot-renegotiation feature flag from settings.
+                // Reading from settings here (rather than via a callback) is
+                // fine because the flag is JSON-ignored and only set
+                // programmatically at runtime — see MozaPluginSettings.
+                _telemetrySender.EnableHotRenegotiation = _settings.EnableHotRenegotiation;
+                MozaLog.Info(
+                    $"[Moza] Hot re-negotiation feature flag: " +
+                    $"settings={_settings.EnableHotRenegotiation} " +
+                    $"sender={_telemetrySender.EnableHotRenegotiation}");
                 // Reset the start-request gate when the dashboard pipeline parks
                 // itself (sess=0x09 retry exhaust). Without this clear, the next
                 // wheel hot-swap or user toggle would early-out in
                 // StartTelemetryIfReady() because the gate is still latched at 1.
-                _telemetrySender.DashboardPipelineParked += (_, __) =>
-                {
-                    Interlocked.Exchange(ref _telemetryStartRequested, 0);
-                };
+                _telemetrySender.DashboardPipelineParked += OnDashboardPipelineParked;
+
+                // Mirror wheel-initiated dashboard switches (user pressed a
+                // wheel-side knob/button). TelemetrySender has already armed
+                // its hot-reneg burst at the new slot; we just need to sync
+                // our profile state + UI to match what the wheel committed.
+                _telemetrySender.WheelInitiatedSwitch += OnWheelInitiatedSwitch;
 
                 // Initialize dashboard cache for download-on-connect.
                 string cacheDir = System.IO.Path.Combine(
@@ -991,14 +1069,38 @@ namespace MozaPlugin
             catch { }
             try
             {
+                if (_telemetrySender != null)
+                {
+                    _telemetrySender.DashboardPipelineParked -= OnDashboardPipelineParked;
+                    _telemetrySender.WheelInitiatedSwitch -= OnWheelInitiatedSwitch;
+                }
+            }
+            catch { }
+            try
+            {
                 if (_subscribedProfileStore != null)
                     _subscribedProfileStore.CurrentProfileChanged -= OnProfileChanged;
                 _subscribedProfileStore = null;
             }
             catch { }
 
-            // 4. Stop telemetry send loop before tearing down connection.
-            _telemetrySender?.Stop();
+            // 4. Persistent wire infrastructure (connection + telemetry
+            //    sender) survives plugin reload. If we own the static refs,
+            //    skip Stop+Dispose so wheel sessions stay open across
+            //    SimHub game switch; the next Init() picks them up and
+            //    re-attaches handlers without paying the 11 s sess=0x09
+            //    settle wait. If the user toggles telemetry off via the
+            //    UI (or hot-swap clears the singleton), normal Stop+
+            //    Dispose path runs.
+            bool keepWireAlive = _usingPersistentWire
+                                 || (_connection != null && _connection == s_persistentConnection
+                                     && _telemetrySender != null
+                                     && _telemetrySender == s_persistentTelemetrySender);
+
+            if (!keepWireAlive)
+            {
+                _telemetrySender?.Stop();
+            }
 
             // Stop the wire-traffic capture singleton so its file handle is
             // released and the ring stops accumulating across plugin reloads.
@@ -1010,10 +1112,27 @@ namespace MozaPlugin
             try { _deviceManager?.Dispose(); } catch { }
 
             // 6. Dispose I/O sources before dropping Instance so late callbacks
-            //    see a live (but shutting-down) instance, not null.
+            //    see a live (but shutting-down) instance, not null. Skip
+            //    sender + connection if we're keeping the wire alive for
+            //    the next plugin instance.
             _hidReader?.Dispose();
-            _telemetrySender?.Dispose();
-            _connection?.Dispose();
+            if (!keepWireAlive)
+            {
+                _telemetrySender?.Dispose();
+                _connection?.Dispose();
+                // Static refs become stale once disposed — clear them so
+                // the next Init takes the cold-start path.
+                if (_connection == s_persistentConnection)
+                    s_persistentConnection = null;
+                if (_telemetrySender == s_persistentTelemetrySender)
+                    s_persistentTelemetrySender = null;
+            }
+            else
+            {
+                MozaLog.Info(
+                    "[Moza] End: keeping persistent wire (connection + telemetry sender) alive " +
+                    "across plugin reload — wheel sessions remain open, no settle wait on next Init");
+            }
             try
             {
                 if (_ab9Manager != null)
@@ -1367,22 +1486,22 @@ namespace MozaPlugin
             sender.Profile = profile;
             sender.MzdashContent = mzdashContent;
             sender.MzdashName = mzdashName;
-            // // Track the source directory so the upload bundle can find sibling
-            // // PNG widget assets at <dir>/Resource/MD5/<hex>.png. User-picked
-            // // file → dir of that file. Library-picked → folder profile's path.
-            // // Builtins from embedded resources → empty (single-file upload).
-            // string mzdashSourceDir = "";
-            // if (!string.IsNullOrEmpty(telemPath) && System.IO.File.Exists(telemPath))
-            // {
-            //     mzdashSourceDir = System.IO.Path.GetDirectoryName(telemPath) ?? "";
-            // }
-            // else if (!string.IsNullOrEmpty(telemName) && DashCache != null)
-            // {
-            //     string? folderPath = DashCache.TryGetFolderFilePath(telemName);
-            //     if (!string.IsNullOrEmpty(folderPath))
-            //         mzdashSourceDir = System.IO.Path.GetDirectoryName(folderPath!) ?? "";
-            // }
-            // sender.MzdashSourceDirectory = mzdashSourceDir;
+            // Track the source directory so the upload bundle can find sibling
+            // PNG widget assets at <dir>/Resource/MD5/<hex>.png. User-picked
+            // file → dir of that file. Library-picked → folder profile's path.
+            // Builtins from embedded resources → empty (single-file upload).
+            string mzdashSourceDir = "";
+            if (!string.IsNullOrEmpty(telemPath) && System.IO.File.Exists(telemPath))
+            {
+                mzdashSourceDir = System.IO.Path.GetDirectoryName(telemPath) ?? "";
+            }
+            else if (!string.IsNullOrEmpty(telemName) && DashCache != null)
+            {
+                string? folderPath = DashCache.TryGetFolderFilePath(telemName);
+                if (!string.IsNullOrEmpty(folderPath))
+                    mzdashSourceDir = System.IO.Path.GetDirectoryName(folderPath!) ?? "";
+            }
+            sender.MzdashSourceDirectory = mzdashSourceDir;
 
 
 
@@ -1972,33 +2091,21 @@ namespace MozaPlugin
                     string bindEvidence = wheelOnTargetSlot
                         ? "wheel-reported slot"
                         : "prior host kind=4";
-                    // If the catalog re-sync probe fired in this plugin
-                    // instance, the wheel was on the wrong dashboard at
-                    // tier-def emit time (or had an incomplete catalog for
-                    // the right one). The probe's kind=4 updates the
-                    // wheel's slot-indicator quickly, but observed
-                    // 2026-05-14: the wheel does NOT fully load the new
-                    // dashboard's widget renderer until the host closes &
-                    // re-opens sessions. Without RestartForSwitch, value
-                    // frames stream over the wire but render to nothing —
-                    // user sees test pattern not appearing despite the
-                    // wheel reporting it's on the right slot. So whenever
-                    // the probe fired, we MUST cycle the pipeline.
-                    //
-                    // (Even when IsTierDefFullyBound is true after probe-
-                    // nudged catalog re-advertisement — the catalog is
-                    // necessary but not sufficient. The wheel only commits
-                    // the visual transition through a full session
-                    // restart. That's the 22 s "double-wait" cost; can't
-                    // be avoided without breaking the user's test pattern.)
+                    // Catalog re-sync probe fired this instance — the
+                    // wheel was on the wrong dashboard at tier-def emit
+                    // time (or had an incomplete catalog for the right
+                    // one). Trigger a fresh hot-switch burst to the same
+                    // slot so the wheel re-advertises catalog and we
+                    // re-emit tier-def with the new END marker echoed
+                    // back. With EnableHotRenegotiation on, this avoids
+                    // the full Stop+Start cycle.
                     if (sender.HasCatalogResyncProbeFired)
                     {
-                        MozaLog.Info($"[Moza] Profile dashboard '{targetName}' (slot {slot}) bound ({bindEvidence}) but probe fired this instance (source: {sourceTag}); cycling pipeline so wheel commits transition");
+                        MozaLog.Info($"[Moza] Profile dashboard '{targetName}' (slot {slot}) bound ({bindEvidence}) but probe fired this instance (source: {sourceTag}); re-triggering switch to refresh binding");
                         ActiveTelemetryProfileName = targetName;
                         ActiveTelemetryMzdashPath = mzdashPath;
                         PersistSettings();
-                        ApplyTelemetrySettings();
-                        sender.RestartForSwitch();
+                        OnDashboardSwitched((uint)slot);
                         RaiseDashboardSelectionChanged();
                         _lastAppliedDashboardKey = key;
                         return true;
@@ -2139,6 +2246,87 @@ namespace MozaPlugin
                 ApplyTelemetrySettings();
                 sender.RestartForSwitch();
                 return;
+            }
+        }
+
+        /// <summary>Named handler for <see cref="TelemetrySender.DashboardPipelineParked"/>
+        /// so it can be unsubscribed cleanly on plugin reload. Resets the
+        /// telemetry-start gate so a subsequent hot-swap / user toggle can
+        /// re-attempt starting.</summary>
+        private void OnDashboardPipelineParked(object? sender, EventArgs e)
+        {
+            Interlocked.Exchange(ref _telemetryStartRequested, 0);
+        }
+
+        /// <summary>
+        /// Handler for <see cref="TelemetrySender.WheelInitiatedSwitch"/> —
+        /// the user pressed a wheel-side dash-cycle control and the wheel
+        /// committed to a new dashboard. TelemetrySender has already armed
+        /// the hot-reneg burst at the new slot; our job here is to stage
+        /// the matching profile on the sender so the queued tier-def
+        /// emissions carry the right channel set.
+        ///
+        /// **Does NOT update <see cref="ActiveTelemetryProfileName"/> or
+        /// persist anything.** The profile's saved <c>TelemetryDashboardKey</c>
+        /// is the user's intent for this game; wheel-side navigation is
+        /// transient and should not clobber it. Cold start and game switch
+        /// re-apply the saved profile preference (see
+        /// <see cref="ApplyTelemetryDashboardFromProfile"/>); between those
+        /// events the wheel state is allowed to diverge.
+        /// </summary>
+        private void OnWheelInitiatedSwitch(int slot)
+        {
+            try
+            {
+                var sender = _telemetrySender;
+                if (sender == null || !sender.Enabled) return;
+
+                var state = WheelStateForDiagnostics;
+                if (state == null || state.ConfigJsonList == null
+                    || slot < 0 || slot >= state.ConfigJsonList.Count)
+                {
+                    MozaLog.Warn(
+                        $"[Moza] WheelInitiatedSwitch slot={slot}: cannot resolve dashboard name " +
+                        $"(state={(state == null ? "null" : "ok")}, " +
+                        $"listCount={state?.ConfigJsonList?.Count ?? -1}). " +
+                        $"Tier-def burst will use stale profile.");
+                    return;
+                }
+
+                string newName = state.ConfigJsonList[slot];
+                if (string.IsNullOrEmpty(newName))
+                {
+                    MozaLog.Warn($"[Moza] WheelInitiatedSwitch slot={slot}: configJsonList entry is empty");
+                    return;
+                }
+
+                // Resolve to a MultiStreamProfile and stage it on the
+                // sender so the queued tier-def burst carries the right
+                // channel set. NO writes to persisted settings.
+                var resolved = ResolveDashboardProfileByName(newName);
+                if (resolved == null)
+                {
+                    MozaLog.Warn(
+                        $"[Moza] WheelInitiatedSwitch slot={slot} ('{newName}'): " +
+                        $"profile not found in cache or builtins. Tier-def will use stale profile.");
+                    return;
+                }
+
+                MozaLog.Info(
+                    $"[Moza] WheelInitiatedSwitch slot={slot} ('{newName}'): " +
+                    $"staging resolved profile on sender (saved profile preference unchanged)");
+                sender.Profile = resolved;
+
+                // Tell the UI dropdown to re-populate. It reads
+                // sender.WheelReportedSlot directly when building the
+                // selection (not ActiveTelemetryProfileName), so the
+                // dropdown now reflects the wheel's actual current dash
+                // without touching the persisted profile preference.
+                RaiseDashboardSelectionChanged();
+            }
+            catch (Exception ex)
+            {
+                MozaLog.Warn($"[Moza] OnWheelInitiatedSwitch handler error: {ex.Message}");
             }
         }
 
@@ -4779,19 +4967,29 @@ namespace MozaPlugin
             // (when new overlay has it off) or stays idle when new overlay wants
             // it on. Also re-stages the sender's profile so its tier-def matches
             // the new game's overlay dashboard selection.
+            //
+            // We DO NOT stop or pause the sender here: the tick timer drives
+            // parity polls (load-bearing — wheel disengages within ~5 min
+            // without them), the hot-switch tier-def burst, and TestMode
+            // overrides. Profile telemetry-disabled is signalled via the
+            // ProfileTelemetryEnabled flag instead; the sender's live
+            // value/string/enable emit gates consult it and stay silent
+            // while keeping sessions + parity polls + TestMode alive.
             try
             {
                 bool wantOn = ActiveTelemetryEnabled;
                 var sender = _telemetrySender;
+                if (sender != null)
+                    sender.ProfileTelemetryEnabled = wantOn;
                 if (wantOn)
                 {
                     ApplyTelemetrySettings();
                     StartTelemetryIfReady();
                 }
-                else if (sender != null && sender.Enabled)
+                else
                 {
-                    MozaLog.Debug("[Moza] New profile has telemetry disabled — stopping sender");
-                    sender.Stop();
+                    // Clear the start-requested gate so a later wantOn flip
+                    // goes through StartTelemetryIfReady's full guarded path.
                     Interlocked.Exchange(ref _telemetryStartRequested, 0);
                 }
             }

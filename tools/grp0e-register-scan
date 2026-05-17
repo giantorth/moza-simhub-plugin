@@ -1,0 +1,162 @@
+#!/usr/bin/env python3
+"""Characterize PitHouse's grp=0x0E dev=0x12 register-read pattern.
+
+Across one or more bridge captures:
+  * Inventory which reg_ids PitHouse reads in the first N seconds
+  * Show wheel reply values per reg_id (constant vs varying across captures)
+  * Quantify timing: when does the scan start, what's the cadence
+  * Cross-check: does the wheel device-init sess=04 only AFTER the scan begins?
+
+Usage:
+    tools/grp0e-register-scan                              # all bridge captures
+    tools/grp0e-register-scan bridge-20260514-170002.jsonl # single capture
+    tools/grp0e-register-scan --window 5 ...               # widen the inspection window
+"""
+import sys, struct, json, glob
+from pathlib import Path
+from collections import defaultdict, Counter
+
+sys.path.insert(0, str(Path(__file__).parent))
+from moza_bridge import load_bridge
+
+
+def find_sess01_anchor(frames):
+    for f in frames:
+        if f.dir == 'h2b' and f.is_session_data and f.sess_id == 1 and f.sess_type == 0x81:
+            return f.t_rel
+    return None
+
+
+def find_sess_open_b2h(frames, sess):
+    for f in frames:
+        if f.dir == 'b2h' and f.is_session_data and f.sess_id == sess and f.sess_type == 0x81:
+            return f.t_rel
+    return None
+
+
+def analyze(path, window_s=5.0):
+    name = Path(path).name
+    print(f"\n{'='*70}\n  {name}\n{'='*70}")
+    try:
+        frames = load_bridge(path)
+    except Exception as e:
+        print(f"  load failed: {e}"); return None
+    if not frames:
+        print("  empty"); return None
+
+    anchor = find_sess01_anchor(frames)
+    if anchor is None:
+        print("  no sess=01 open found; skip"); return None
+    sess04_t = find_sess_open_b2h(frames, 0x04)
+    sess06_t = find_sess_open_b2h(frames, 0x06)
+    sess09_t = find_sess_open_b2h(frames, 0x09)
+    print(f"  anchor (host sess=01 open): t={anchor:.3f}")
+    print(f"  wheel sess=04 open: {'+%.1fms' % ((sess04_t-anchor)*1000) if sess04_t else 'NEVER'}")
+    print(f"  wheel sess=06 open: {'+%.1fms' % ((sess06_t-anchor)*1000) if sess06_t else 'NEVER'}")
+    print(f"  wheel sess=09 open: {'+%.1fms' % ((sess09_t-anchor)*1000) if sess09_t else 'NEVER'}")
+
+    # Collect all grp=0x0E h2b in window
+    reads = []  # (t_rel_anchor, reg_id, raw_hex)
+    replies = []  # (t_rel_anchor, reg_id, value_bytes, raw_hex)
+    for f in frames:
+        t_rel = f.t_rel - anchor
+        if t_rel < -0.5 or t_rel > window_s: continue
+        if f.dir == 'h2b' and f.grp == 0x0E and f.dev == 0x12:
+            # Expected: payload = [00, reg_lo, reg_hi]
+            if len(f.payload) >= 3 and f.payload[0] == 0x00:
+                reg = f.payload[1] | (f.payload[2] << 8)
+                reads.append((t_rel, reg, f.raw.hex()))
+        elif f.dir == 'b2h' and f.grp == 0x8E and f.dev == 0x21:
+            # Expected: payload = [00, reg_lo, reg_hi, v0, v1, v2, v3]
+            if len(f.payload) >= 7 and f.payload[0] == 0x00:
+                reg = f.payload[1] | (f.payload[2] << 8)
+                value = bytes(f.payload[3:7])
+                replies.append((t_rel, reg, value, f.raw.hex()))
+
+    print(f"\n  h2b grp=0x0E dev=0x12 reads: {len(reads)} in window")
+    print(f"  b2h grp=0x8E dev=0x21 replies: {len(replies)} in window")
+
+    if reads:
+        first_t = reads[0][0]
+        last_t = reads[-1][0]
+        print(f"  first read at +{first_t*1000:.1f}ms; last at +{last_t*1000:.1f}ms")
+        # Cadence
+        if len(reads) >= 2:
+            deltas = [reads[i+1][0] - reads[i][0] for i in range(len(reads)-1)]
+            avg = sum(deltas)/len(deltas)
+            print(f"  read cadence: avg={avg*1000:.1f}ms median={sorted(deltas)[len(deltas)//2]*1000:.1f}ms")
+
+        # Distinct reg_ids in order of first appearance
+        seen_reg = []
+        seen_set = set()
+        for _, r, _ in reads:
+            if r not in seen_set:
+                seen_set.add(r); seen_reg.append(r)
+        print(f"  distinct reg_ids ({len(seen_reg)}): {[hex(r) for r in seen_reg[:30]]}{'...' if len(seen_reg)>30 else ''}")
+
+    return {
+        'name': name,
+        'anchor': anchor,
+        'sess04_rel': (sess04_t - anchor) if sess04_t else None,
+        'sess09_rel': (sess09_t - anchor) if sess09_t else None,
+        'first_read_rel': reads[0][0] if reads else None,
+        'reg_ids_in_order': [(r, v) for _, r, v in reads],
+        'replies': replies,
+    }
+
+
+def cross_capture_summary(results):
+    """After analyzing multiple captures, look for invariants."""
+    print(f"\n{'='*70}\n  CROSS-CAPTURE SUMMARY\n{'='*70}")
+    # Did wheel sess=04 open in every capture where reads happened?
+    print(f"\n  Capture                              sess04   first_read  num_reads")
+    for r in results:
+        if r is None: continue
+        s4 = f"+{r['sess04_rel']*1000:.0f}ms" if r['sess04_rel'] else "NEVER"
+        fr = f"+{r['first_read_rel']*1000:.0f}ms" if r['first_read_rel'] else "NEVER"
+        nr = len(r['reg_ids_in_order'])
+        print(f"  {r['name']:<37} {s4:>8}   {fr:>8}    {nr}")
+
+    # For all captures combined: per reg_id, list reply values
+    print(f"\n  Per-reg_id reply values across captures:")
+    reg_values = defaultdict(list)  # reg_id -> [(capture, value_hex)]
+    for r in results:
+        if r is None: continue
+        # Group replies by reg_id within this capture (first reply only)
+        seen = set()
+        for t, reg, val, _ in r['replies']:
+            if reg in seen: continue
+            seen.add(reg)
+            reg_values[reg].append((r['name'][:30], val.hex()))
+    for reg in sorted(reg_values.keys()):
+        items = reg_values[reg]
+        unique_vals = set(v for _, v in items)
+        marker = "*VARIES*" if len(unique_vals) > 1 else "(const) "
+        sample = items[0][1]
+        print(f"    reg=0x{reg:04x} {marker} sample={sample} seen_in={len(items)} caps")
+
+
+def main():
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("path", nargs="?", help="Specific bridge file, or omit for all")
+    ap.add_argument("--window", type=float, default=10.0)
+    args = ap.parse_args()
+
+    base = Path("/home/rorth/src/moza-simhub-plugin/sim/logs")
+    if args.path:
+        paths = [base / args.path if not Path(args.path).is_absolute() else Path(args.path)]
+    else:
+        paths = sorted(base.glob("bridge-*.jsonl"))[:8]  # first 8 to keep output small
+
+    results = []
+    for p in paths:
+        if not p.exists() or p.stat().st_size == 0: continue
+        results.append(analyze(p, window_s=args.window))
+
+    if len(results) > 1:
+        cross_capture_summary(results)
+
+
+if __name__ == '__main__':
+    main()

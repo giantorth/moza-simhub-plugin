@@ -64,6 +64,7 @@ namespace MozaPlugin.Telemetry.Frames
         /// </summary>
         private static byte[] BuildTierDefinitionMessageType02(MultiStreamProfile profile, byte flagBase,
              System.Collections.Generic.IReadOnlyList<string> wheelCatalog,
+            uint endMarkerCounter,
             byte? prevFlagBase = null, int prevTierCount = 0, int prevSubPerBroadcast = 0)
         {
             using var ms = new MemoryStream();
@@ -71,14 +72,22 @@ namespace MozaPlugin.Telemetry.Frames
 
             var idxByUrl = ChannelCatalogParser.BuildIdxByUrl(wheelCatalog);
 
-            // Track max chIdx ever written so END_MARKER can use it
-            // (PitHouse-faithful: bridge-20260514-204307 SR emit shows END=9
-            // when the tier-def contains idx=9 (patch/TPP), even though
-            // total channel count is only 8 (7 fast + 1 slow). Previous
-            // plugin used channelsPerBroadcast which would emit END=8 —
-            // off by one, and "any mistake in channel ordering breaks the
-            // link" per user feedback 2026-05-15).
-            int maxIdxSeen = 0;
+            // END u32 = caller-supplied session-scoped monotonic counter
+            // (verified 2026-05-17 from sim/logs/bridge-20260517-070054.jsonl
+            // via tools/tierdef-decode: PitHouse emits a monotonically-
+            // advancing counter for the END u32 value — observed sequence
+            // 0 → 6 → 21 → 33 → 42 → 43 → 68 → 100 across one capture's
+            // tier-def emissions, completely unrelated to maxChIdx. For
+            // switch #1 maxChIdx=6 but END=33/42; for switch #2 maxChIdx=20
+            // but END=43/68.
+            //
+            // Previously this builder emitted maxChIdxSeen (assumed from a
+            // single-capture spot-check in bridge-20260514-204307). That was
+            // wrong: the value isn't a channel count. The earlier finding
+            // 2026-04-30-dashboard-switch-3f27.md § "End-marker u32
+            // semantics" already noted "0, 9, 21, 30, 42, 54, 76, 90, 96,
+            // 104 observed. Not a channel count. Likely a wheel-internal
+            // cumulative slot counter." That finding is now confirmed.
             void WriteTier(byte flag, IReadOnlyList<ChannelDefinition> channels)
             {
                 // Drop channels with chIdx=0 (URL not in wheel catalog) — W17
@@ -102,7 +111,6 @@ namespace MozaPlugin.Telemetry.Frames
                 w.Write(flag);
                 foreach (var (chIndex, ch) in resolved)
                 {
-                    if (chIndex > maxIdxSeen) maxIdxSeen = chIndex;
                     uint compCode = LookupCompressionCode(ch.Compression);
                     w.Write((uint)chIndex);
                     w.Write(compCode);
@@ -111,17 +119,11 @@ namespace MozaPlugin.Telemetry.Frames
                 }
             }
 
-            void WriteEndMarker(uint count)
+            void WriteEndMarker()
             {
                 w.Write((byte)0x06);
                 w.Write((uint)4);
-                // PitHouse end marker counts seen in capture
-                // wireshark/csp/start-game-change-dash.pcapng vary (147, 159)
-                // and 0 (in startup capture's first batches). Semantics
-                // unconfirmed; using cumulative channel record count emitted
-                // so far as a non-zero placeholder — wheel ignored count=0
-                // version, try non-zero variant.
-                w.Write(count);
+                w.Write(endMarkerCounter);
             }
 
             void WriteEnable(byte flag)
@@ -189,11 +191,14 @@ namespace MozaPlugin.Telemetry.Frames
                 int baseTier = b * subPerBroadcast;
                 for (int s = 0; s < subPerBroadcast; s++)
                     WriteTier(FlagFor(baseTier + s), profile.Tiers[baseTier + s].Channels);
-                // END_MARKER value = max chIdx seen in tier-def so far
-                // (PitHouse SR: END=9 because tier-def includes idx=9
-                // patch/TrackPositionPercent). First broadcast still uses
-                // 0 per the captured warmup behavior.
-                WriteEndMarker(b == 0 ? 0u : (uint)maxIdxSeen);
+                // END u32 = the caller-supplied session counter, identical
+                // across every broadcast inside one emission. PitHouse
+                // emits the SAME END value for all broadcasts of a single
+                // tier-def emission (verified switch #1 broadcasts 2+3
+                // both END=42; switch #2 broadcasts 2-13 all END=68 in
+                // bridge-20260517-070054.jsonl). The counter advances on
+                // the NEXT emission, not within this one.
+                WriteEndMarker();
                 if (b < broadcastCount - 1)
                 {
                     for (int s = 0; s < subPerBroadcast; s++)
@@ -322,6 +327,7 @@ namespace MozaPlugin.Telemetry.Frames
             bool includeEnableEntries,
             bool useWheelCatalogIndices,
             System.Collections.Generic.IReadOnlyList<string>? wheelCatalog,
+            uint endMarkerCounter = 0,
             byte? prevFlagBase = null, int prevTierCount = 0, int prevSubPerBroadcast = 0)
         {
             // Type02 path: emit PitHouse-exact section ordering observed in
@@ -339,7 +345,7 @@ namespace MozaPlugin.Telemetry.Frames
             if (useWheelCatalogIndices && wheelCatalog != null && profile.Tiers.Count > 0)
             {
                 return BuildTierDefinitionMessageType02(profile, flagBase, wheelCatalog,
-                    prevFlagBase, prevTierCount, prevSubPerBroadcast);
+                    endMarkerCounter, prevFlagBase, prevTierCount, prevSubPerBroadcast);
             }
 
             using var ms = new MemoryStream();

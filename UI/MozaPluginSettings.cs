@@ -191,6 +191,21 @@ namespace MozaPlugin
         [Newtonsoft.Json.JsonIgnore]
         public bool EnableAutoTestOnConnect { get; set; } = false;
 
+        // Hot dashboard re-negotiation — when true, SwitchToProfile emits FF
+        // kind=4 and re-emits tier-def on the still-open sess=0x01/0x02 instead
+        // of doing a Stop+11s-sleep+Start cycle. Matches PitHouse behaviour
+        // verified 2026-05-17 in sim/logs/bridge-20260517-* captures: sessions
+        // 0x01/0x02/0x03 stay open across switches, tier-def re-emitted without
+        // preamble. JSON-ignored so the default here is the only switch —
+        // avoids stale persisted values during prototype work.
+        //
+        // PROTOTYPE: defaulted to TRUE for the 2026-05-17 hot-reneg validation
+        // build. Flip to false (or revert this commit) to restore the existing
+        // Stop+Start behaviour. Default will be re-evaluated once captures
+        // confirm the hot path is stable.
+        [Newtonsoft.Json.JsonIgnore]
+        public bool EnableHotRenegotiation { get; set; } = true;
+
         /// <summary>
         /// Persisted slot the auto-test most recently switched TO. On next
         /// run the harness picks the OTHER of {Core, Grids} so each launch

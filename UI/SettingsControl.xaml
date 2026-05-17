@@ -947,6 +947,119 @@
                 </ScrollViewer>
             </TabItem>
 
+            <TabItem Header="Upload">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="10,5">
+
+                        <!-- Work-in-progress banner: dashboard upload isn't functional yet
+                             on current firmware. Wheel never opens the file-transfer ack
+                             channel (sess=0x04) in response to our connect handshake, so
+                             the type=0x01 ready ack never arrives and the upload times out.
+                             Investigation tools live in tools/causal-diff-sess04,
+                             tools/pre-sess04-traffic-inventory, tools/grp0e-register-scan.
+                             Banner stays until upload completes end-to-end on at least one
+                             wheel + firmware combo. -->
+                        <Border Background="#3D2E00" BorderBrush="#FFB300" BorderThickness="2"
+                                CornerRadius="3" Padding="12,10" Margin="0,0,0,12">
+                            <StackPanel>
+                                <TextBlock FontSize="16" FontWeight="Bold" Foreground="#FFD54F"
+                                           Text="⚠  Not working yet"/>
+                                <TextBlock TextWrapping="Wrap" Foreground="#FFE082" FontSize="11" Margin="0,4,0,0"
+                                           Text="Dashboard upload is in development and does NOT currently push files to the wheel. The UI here builds the upload bundle and starts the handshake, but the wheel doesn't engage the file-transfer state machine on our connect sequence, so the upload times out without writing anything. Nothing here is destructive — the button is safe to click, it just won't apply your dashboard. Use PitHouse for real uploads in the meantime."/>
+                            </StackPanel>
+                        </Border>
+
+                        <TextBlock Text="Dashboard Upload" Style="{StaticResource SectionHeader}"/>
+                        <TextBlock TextWrapping="Wrap" Foreground="Gray" FontSize="11" Margin="0,0,0,8"
+                                   Text="Push a .mzdash file to the connected wheel. Pick a local file or choose from the dashboard library (wheel-cached + folder + builtin), then click Upload now. Status reflects the latest wheel ack sub-msg (type=0x01 progress / type=0x11 complete) — bytes_written should rise toward total_size and end equal on a clean upload."/>
+
+                        <!-- Source: file picker -->
+                        <TextBlock Text="Source" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                            <RadioButton x:Name="UploadSourceFileRadio" Content="Local .mzdash file"
+                                         GroupName="UploadSource" IsChecked="True"
+                                         Margin="0,0,16,0" VerticalAlignment="Center"
+                                         Click="UploadSourceRadio_Click"/>
+                            <RadioButton x:Name="UploadSourceLibraryRadio" Content="Dashboard library"
+                                         GroupName="UploadSource"
+                                         VerticalAlignment="Center"
+                                         Click="UploadSourceRadio_Click"/>
+                        </StackPanel>
+
+                        <StackPanel x:Name="UploadFilePanel" Orientation="Horizontal" Margin="0,0,0,6">
+                            <Button Content="Pick .mzdash…" Padding="6,2" Margin="0,0,8,0"
+                                    Click="UploadPickFile_Click"/>
+                            <TextBlock x:Name="UploadPickedFileText" VerticalAlignment="Center"
+                                       Foreground="Gray" FontSize="11"
+                                       Text="(no file selected)" TextTrimming="CharacterEllipsis"
+                                       MaxWidth="500"/>
+                        </StackPanel>
+
+                        <StackPanel x:Name="UploadLibraryPanel" Orientation="Horizontal" Margin="0,0,0,6"
+                                    Visibility="Collapsed">
+                            <TextBlock Text="Dashboard:" VerticalAlignment="Center" Width="100"/>
+                            <ComboBox x:Name="UploadLibraryCombo" Width="280" Margin="0,0,8,0"
+                                      SelectionChanged="UploadLibraryCombo_SelectionChanged"/>
+                            <Button Content="Refresh list" Padding="6,2"
+                                    Click="UploadLibraryRefresh_Click"/>
+                        </StackPanel>
+
+                        <!-- Action + status -->
+                        <Separator Margin="0,8,0,8"/>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                            <Button x:Name="UploadNowButton" Content="Upload now" Padding="10,3"
+                                    MinWidth="120" Click="UploadNow_Click"/>
+                            <TextBlock x:Name="UploadStatusText" VerticalAlignment="Center"
+                                       Foreground="Gray" FontSize="11" Margin="12,0,0,0"
+                                       Text="idle"/>
+                        </StackPanel>
+
+                        <Grid Margin="0,0,0,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="160"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Dashboard name:" Foreground="Gray" FontSize="11" Margin="0,2"/>
+                            <TextBlock Grid.Row="0" Grid.Column="1" x:Name="UploadInfoNameText"
+                                       FontFamily="Consolas" FontSize="11" Margin="0,2" Text="—"/>
+
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Raw size:" Foreground="Gray" FontSize="11" Margin="0,2"/>
+                            <TextBlock Grid.Row="1" Grid.Column="1" x:Name="UploadInfoRawSizeText"
+                                       FontFamily="Consolas" FontSize="11" Margin="0,2" Text="—"/>
+
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="MD5:" Foreground="Gray" FontSize="11" Margin="0,2"/>
+                            <TextBlock Grid.Row="2" Grid.Column="1" x:Name="UploadInfoMd5Text"
+                                       FontFamily="Consolas" FontSize="11" Margin="0,2" Text="—"/>
+
+                            <TextBlock Grid.Row="3" Grid.Column="0" Text="In flight:" Foreground="Gray" FontSize="11" Margin="0,2"/>
+                            <TextBlock Grid.Row="3" Grid.Column="1" x:Name="UploadInfoInFlightText"
+                                       FontFamily="Consolas" FontSize="11" Margin="0,2" Text="—"/>
+
+                            <TextBlock Grid.Row="4" Grid.Column="0" Text="Last ack bytes_written / total:" Foreground="Gray" FontSize="11" Margin="0,2"/>
+                            <TextBlock Grid.Row="4" Grid.Column="1" x:Name="UploadInfoProgressText"
+                                       FontFamily="Consolas" FontSize="11" Margin="0,2" Text="—"/>
+
+                            <TextBlock Grid.Row="5" Grid.Column="0" Text="Last ack status byte:" Foreground="Gray" FontSize="11" Margin="0,2"/>
+                            <TextBlock Grid.Row="5" Grid.Column="1" x:Name="UploadInfoStatusByteText"
+                                       FontFamily="Consolas" FontSize="11" Margin="0,2" Text="—"/>
+                        </Grid>
+
+                        <TextBlock TextWrapping="Wrap" Foreground="Gray" FontSize="11" Margin="0,12,0,0"
+                                   Text="Note: Uploads require the wheel to be connected and a management session negotiated. PNG resources referenced by widgets are not yet bundled — single-file mzdash uploads only (Gap 2 of the upload protocol implementation plan)."/>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
             <TabItem Header="Wheel Files">
                 <DockPanel Margin="10,5">
                     <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">

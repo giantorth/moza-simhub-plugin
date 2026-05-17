@@ -1097,8 +1097,25 @@ namespace MozaPlugin.Devices
                                 _plugin.ActiveTelemetryMzdashPath) + "]");
                 }
 
-                // Restore selection by saved name.
-                string selectedName = _plugin.ActiveTelemetryProfileName;
+                // Select what the wheel is ACTUALLY on (ground truth),
+                // falling back to the saved profile preference when the
+                // wheel hasn't reported a slot yet. Wheel-side knob
+                // switches don't update ActiveTelemetryProfileName (they
+                // mustn't clobber the profile's saved preference) so
+                // reading the saved name here would show stale info
+                // whenever the user has switched dashes via the wheel.
+                string? selectedName = null;
+                var sender = _plugin.TelemetrySender;
+                if (sender != null && state != null && state.ConfigJsonList != null
+                    && sender.WheelReportedSlot >= 0
+                    && sender.WheelReportedSlot < state.ConfigJsonList.Count)
+                {
+                    string wheelName = state.ConfigJsonList[sender.WheelReportedSlot];
+                    if (!string.IsNullOrEmpty(wheelName))
+                        selectedName = wheelName;
+                }
+                if (string.IsNullOrEmpty(selectedName))
+                    selectedName = _plugin.ActiveTelemetryProfileName;
                 if (!string.IsNullOrEmpty(selectedName))
                 {
                     for (int i = 0; i < TelemetryProfileCombo.Items.Count; i++)
@@ -1312,17 +1329,22 @@ namespace MozaPlugin.Devices
             if (active != null && state != null && state.ConfigJsonList.Count > 0
                 && idx >= 0 && idx < state.ConfigJsonList.Count)
             {
-                // Save the new profile name but DON'T apply it yet.
-                // Profile change (ApplyTelemetrySettings) is deferred to
-                // after the new tier-def is sent so value frames stay
-                // coherent with the old tier-def during the catalog wait.
-                // PitHouse trace: tier-def is sent AFTER FF-SWITCH, not before.
+                // Save the new profile name. OnDashboardSwitched(slot) calls
+                // ApplyTelemetrySettings + SwitchToProfile, which (a) honours
+                // the EnableHotRenegotiation feature flag, and (b) emits the
+                // FF kind=4 from a single place so future refactors can keep
+                // the kind=4-then-tier-def ordering intact.
+                //
+                // Previous code did `SendDashboardSwitch + OnDashboardSwitched()`
+                // (the slotless variant), which bypassed SwitchToProfile and
+                // unconditionally hit RestartForSwitch — even when the hot
+                // path was enabled. See sim/logs/moza-wire-20260517-091917
+                // for the wire-trace evidence.
                 _plugin.ActiveTelemetryProfileName = selected;
                 _plugin.ActiveTelemetryMzdashPath = "";
                 _plugin.SaveSettings();
 
-                active.SendDashboardSwitch((uint)idx);
-                _plugin.OnDashboardSwitched();
+                _plugin.OnDashboardSwitched((uint)idx);
 
                 UpdateTelemetryProfileInfo();
                 if (TelemetryMappingsExpander.IsExpanded) PopulateChannelMappingGrid();

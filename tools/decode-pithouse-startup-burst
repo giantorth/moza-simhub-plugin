@@ -1,0 +1,119 @@
+#!/usr/bin/env python3
+"""Decode PitHouse's sess=02 startup data burst that triggers wheel
+sess=04 device-init.
+
+At +1960ms after sess=01/02 open, PitHouse starts sending session-data
+on sess=02 with payload starting `ff <size:4 LE> <token:4> <count:4 LE>`.
+The wheel device-inits sess=04 ~43ms later.
+
+This tool reassembles those chunks in seq order and tries to decode each
+file/structure within the burst.
+"""
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent))
+from moza_bridge import load_bridge
+
+
+def main():
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--path", default="/home/rorth/src/moza-simhub-plugin/sim/logs/bridge-20260514-170002.jsonl")
+    ap.add_argument("--max-seq", type=int, default=20,
+                    help="Reassemble seq=3..N on sess=02 (default 20 covers the startup burst)")
+    args = ap.parse_args()
+
+    frames = load_bridge(args.path)
+
+    # Reassemble h2b sess=02 stype=01 chunks in seq order. Strip trailing
+    # 4-byte CRC32 + 1-byte cksum from each chunk's data section.
+    chunks = {}  # seq -> body bytes
+    for f in frames:
+        if f.dir != 'h2b' or not f.is_session_data: continue
+        if f.sess_id != 2 or f.sess_type != 0x01: continue
+        seq = f.sess_seq
+        if seq < 3 or seq > args.max_seq: continue
+        # f.sess_data already excludes the leading 6 bytes (7c 00 sess type seq:2)
+        # but still includes trailing CRC32+ck. Strip them.
+        body = f.sess_data
+        if len(body) > 5:
+            body = body[:-5]
+        if seq not in chunks:
+            chunks[seq] = (f.t_rel, body)
+
+    seqs = sorted(chunks)
+    if not seqs:
+        print("No sess=02 h2b chunks found in seq range")
+        return
+
+    print(f"Found h2b sess=02 chunks at seqs {seqs[:10]}...{seqs[-3:]} ({len(seqs)} total)")
+    for s in seqs:
+        t, body = chunks[s]
+        print(f"  seq={s} t=+{t*1000:.1f}ms len={len(body)} hex[:80]={body[:80].hex()}")
+
+    # Concatenate the bodies in seq order
+    buf = b''
+    expected = seqs[0]
+    for s in seqs:
+        if s == expected:
+            buf += chunks[s][1]
+            expected += 1
+        else:
+            print(f"  GAP at seq={s} (expected {expected}); stopping reassembly")
+            break
+
+    print(f"\nReassembled buffer: {len(buf)} bytes")
+    print(f"  First 64: {buf[:64].hex()}")
+
+    # The buffer is a SEQUENCE of file-transfer records, each with format:
+    # [ff][size:4 LE][token/CRC:4][count:4 LE][some struct][zlib payload]
+    # Walk through and extract each record.
+    pos = 0
+    rec = 0
+    while pos < len(buf):
+        if buf[pos] != 0xff:
+            print(f"\n@{pos}: expected ff marker, got {buf[pos]:02x} — stop")
+            break
+        if pos + 13 > len(buf):
+            print(f"\n@{pos}: only {len(buf)-pos} bytes left, can't parse header"); break
+
+        size = int.from_bytes(buf[pos+1:pos+5], 'little')
+        token = buf[pos+5:pos+9]
+        count = int.from_bytes(buf[pos+9:pos+13], 'little')
+        print(f"\n=== RECORD {rec} @offset {pos} ===")
+        print(f"  size_LE: 0x{size:08x} ({size})")
+        print(f"  token:   {token.hex()}")
+        print(f"  count:   0x{count:08x} ({count})")
+        print(f"  preview: {buf[pos:pos+min(64, len(buf)-pos)].hex()}")
+
+        # Try to find zlib magic 78 9c or 78 da within the next 100 bytes
+        for zoff in range(13, min(100, len(buf) - pos)):
+            if pos + zoff + 1 >= len(buf): break
+            if buf[pos+zoff] == 0x78 and buf[pos+zoff+1] in (0x9c, 0xda, 0x01, 0x5e):
+                # Possible zlib stream
+                import zlib
+                end = pos + zoff
+                # Try to decompress various lengths
+                for try_len in range(20, min(size + 20, len(buf) - end)):
+                    try:
+                        decomp = zlib.decompress(buf[end:end+try_len])
+                        print(f"  zlib at @+{zoff} (abs={end}): {try_len}B compressed -> {len(decomp)}B")
+                        print(f"    decompressed[:200]: {decomp[:200]}")
+                        break
+                    except (zlib.error, Exception):
+                        continue
+                break
+
+        # Advance to next record. Assume record consumes size+13 bytes total
+        # (5-byte ff+size header, 4-byte token, 4-byte count, then size body).
+        if size > 0 and pos + 13 + size <= len(buf):
+            pos += 13 + size
+        else:
+            # Fall back to size-based advance
+            pos += 13
+        rec += 1
+        if rec > 12: break
+
+
+if __name__ == '__main__':
+    main()
