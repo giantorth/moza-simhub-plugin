@@ -499,17 +499,6 @@ namespace MozaPlugin.Devices
             _plugin.UpdateActiveWheelOverlay(o => o.WheelKnobRingColors = packed);
         }
 
-        private void KnobRingBrightnessSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-        {
-            if (_suppressEvents || _plugin == null) return;
-            int val = (int)Math.Round(e.NewValue);
-            KnobRingBrightnessValue.Text = $"{val}";
-            _data!.KnobRingBrightness = val;
-            _plugin.UpdateActiveWheelOverlay(o => o.WheelKnobRingBrightness = val);
-            _plugin.WriteIfWheelDetected("wheel-knob-brightness", val);
-            _plugin.SaveSettings();
-        }
-
         private void ColorSwatch_Click(object sender, MouseButtonEventArgs e)
         {
             if (_suppressEvents || _plugin == null) return;
@@ -748,11 +737,6 @@ namespace MozaPlugin.Devices
                             }
                         }
 
-                        if (_data.KnobRingBrightness >= 0 && !KnobRingBrightnessSlider.IsMouseCaptureWithin)
-                        {
-                            KnobRingBrightnessSlider.Value = _data.KnobRingBrightness;
-                            KnobRingBrightnessValue.Text = $"{_data.KnobRingBrightness}";
-                        }
                     }
                 }
 

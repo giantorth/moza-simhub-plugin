@@ -26,6 +26,7 @@ namespace MozaPlugin.Devices
             Array.Empty<Color>(), Array.Empty<Color>(), 1.0, 1.0, 1.0, 1.0);
         private double _lastBrightness = -1;
         private double _lastButtonsBrightness = -1;
+        private double _lastEncodersBrightness = -1;
 
         private Color[]? _lastKnobs;
 
@@ -103,6 +104,7 @@ namespace MozaPlugin.Devices
                 _lastKnobBitmask = -1;
                 _lastBrightness = -1;
                 _lastButtonsBrightness = -1;
+                _lastEncodersBrightness = -1;
                 _lastKnobSendTime = DateTime.MinValue;
                 _lastKnobActivityTime = DateTime.MinValue;
                 _ledsAwake = false;
@@ -483,6 +485,16 @@ namespace MozaPlugin.Devices
                 {
                     _lastButtonsBrightness = buttonsBrightness;
                     plugin.DeviceManager.WriteSetting("wheel-buttons-brightness", (int)(buttonsBrightness * 100));
+                    anySent = true;
+                }
+
+                // Knob ring brightness: SimHub's per-LED-type "encoders" brightness slider
+                // drives the same wheel-knob-brightness setting that the device-page slider
+                // writes. Only wheels with knob ring LEDs (CS Pro / KS Pro) accept this.
+                if (isNewWheel && modelInfo?.KnobRingLeds != null && encodersBrightness != _lastEncodersBrightness)
+                {
+                    _lastEncodersBrightness = encodersBrightness;
+                    plugin.DeviceManager.WriteSetting("wheel-knob-brightness", (int)(encodersBrightness * 100));
                     anySent = true;
                 }
 
