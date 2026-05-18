@@ -400,7 +400,9 @@ namespace MozaPlugin
                 case "wheel-flags-brightness":       WheelFlagsBrightness = value; break;
                 case "wheel-idle-mode":              WheelIdleMode = value; break;
                 case "wheel-idle-timeout":           WheelIdleTimeout = value; break;
-                case "wheel-idle-speed":             WheelIdleSpeed = value; break;
+                // wheel-idle-speed handled in UpdateFromArray — payload is
+                // [mode, ms_msb, ms_lsb], so the ParseIntValue of all 3 bytes
+                // (mode<<16)|ms is wrong. The array path extracts ms.
                 case "wheel-paddles-mode":           WheelPaddlesMode = value - 1; break; // raw 1/2/3 → display 0/1/2
                 case "wheel-clutch-point":           WheelClutchPoint = value; break;
                 case "wheel-knob-mode":              WheelKnobMode = value; break;
@@ -540,6 +542,17 @@ namespace MozaPlugin
             {
                 if (data.Length >= 3)
                     SetColor(WheelIdleColor, data);
+            }
+            // Wheel sleep-light speed: 3-byte payload [mode, ms_msb, ms_lsb].
+            // The slider in the UI stores a single ms value (for whichever mode
+            // is currently selected on the wheel), so we extract only the ms
+            // portion. Storing the raw 3-byte big-endian int would yield
+            // (mode<<16)|ms, which the slider clamps and the bundle would
+            // round-trip incorrectly on next launch.
+            else if (commandName == "wheel-idle-speed")
+            {
+                if (data.Length >= 3)
+                    WheelIdleSpeed = (data[1] << 8) | data[2];
             }
             // Base ambient startup / shutdown colors
             else if (commandName == "base-ambient-startup-color")

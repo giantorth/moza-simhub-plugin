@@ -157,8 +157,11 @@ namespace MozaPlugin
             "wheel-buttons-idle-effect",
             "wheel-knob-idle-effect",
             "wheel-knob-led-mode", "wheel-buttons-led-mode",
-            "wheel-idle-mode", "wheel-idle-timeout",
             "wheel-rpm-brightness", "wheel-buttons-brightness", "wheel-flags-brightness",
+            // Sleep-light reads — captured into MozaData for UI and seeded into
+            // WheelSleepByPageGuid (per-wheel-page) via SeedSleepBundleFromResponse
+            // so the wheel's current sleep state is remembered and re-applied
+            // on the next launch.
             "wheel-idle-mode", "wheel-idle-timeout", "wheel-idle-speed",
             "wheel-idle-color",
             "wheel-paddles-mode", "wheel-clutch-point", "wheel-knob-mode", "wheel-stick-mode",
@@ -2841,6 +2844,13 @@ namespace MozaPlugin
             if (r.ArrayValue != null)
                 _data.UpdateFromArray(r.Name, r.ArrayValue);
 
+            // Seed per-wheel-page sleep-light bundle from wheel-reported values.
+            // Without this, the wheel's current mode/timeout/speed/color is only
+            // mirrored into _data and never persisted, so the UI shows it but
+            // the next launch's ApplyWheelToHardware writes -1 sentinels and the
+            // wheel's mode/speed/color drift away from what the user saw.
+            SeedSleepBundleFromResponse(r);
+
             // Extended LED group presence — any response to a brightness/mode/color
             // command from one of the named groups proves it exists in firmware.
             // Maps the user-facing prefix back to the rs21_parameter.db group ID.
@@ -4781,6 +4791,72 @@ namespace MozaPlugin
                 _settings.WheelSleepByPageGuid[g.Value] = bundle;
             }
             return bundle;
+        }
+
+        /// <summary>
+        /// Capture wheel-reported sleep-light values into the per-wheel-page
+        /// bundle in <see cref="MozaPluginSettings.WheelSleepByPageGuid"/>.
+        /// Only seeds fields that are still at their sentinel (-1 / null) — the
+        /// user's explicit UI selections take precedence and are preserved.
+        ///
+        /// Without this, reads of wheel-idle-mode/timeout/speed/color only land
+        /// in <see cref="MozaData"/> and never persist, so on the next launch
+        /// the bundle is empty for unset fields and ApplyWheelToHardware leaves
+        /// the wheel's mode/speed/color untouched even though we just observed
+        /// them. The user perception is "sleep settings aren't remembered."
+        ///
+        /// Called from <see cref="HandleParsedResponse"/> after MozaData has
+        /// updated, so we can read either the parsed <see cref="ParsedResponse"/>
+        /// fields directly (for the array case) or the mirrored _data values.
+        /// </summary>
+        private void SeedSleepBundleFromResponse(ParsedResponse r)
+        {
+            if (r.Name == null) return;
+            if (r.Name != "wheel-idle-mode" && r.Name != "wheel-idle-timeout"
+                && r.Name != "wheel-idle-speed" && r.Name != "wheel-idle-color")
+                return;
+            var bundle = GetOrCreateActiveWheelSleep();
+            if (bundle == null) return;
+            bool changed = false;
+            switch (r.Name)
+            {
+                case "wheel-idle-mode":
+                    if (bundle.Mode < 0 && r.IntValue >= 0)
+                    {
+                        bundle.Mode = r.IntValue;
+                        changed = true;
+                    }
+                    break;
+                case "wheel-idle-timeout":
+                    if (bundle.TimeoutMin < 0 && r.IntValue > 0)
+                    {
+                        bundle.TimeoutMin = r.IntValue;
+                        changed = true;
+                    }
+                    break;
+                case "wheel-idle-speed":
+                    // Payload [mode, ms_msb, ms_lsb] — store only the ms part to
+                    // match the slider's single-value contract.
+                    if (bundle.SpeedMs < 0 && r.ArrayValue != null && r.ArrayValue.Length >= 3)
+                    {
+                        int ms = (r.ArrayValue[1] << 8) | r.ArrayValue[2];
+                        if (ms > 0)
+                        {
+                            bundle.SpeedMs = ms;
+                            changed = true;
+                        }
+                    }
+                    break;
+                case "wheel-idle-color":
+                    if (bundle.Color == null && r.ArrayValue != null && r.ArrayValue.Length >= 3)
+                    {
+                        int packed = (r.ArrayValue[0] << 16) | (r.ArrayValue[1] << 8) | r.ArrayValue[2];
+                        bundle.Color = new[] { packed };
+                        changed = true;
+                    }
+                    break;
+            }
+            if (changed) PersistSettings();
         }
 
         /// <summary>
