@@ -197,6 +197,31 @@ namespace MozaPlugin.Telemetry
             { 250, 500, 1000, 2000, 3000, 5000, 7000, 10000, 12000, 15000 };
         private const int S09RetryMaxRounds = 10;
 
+        // Sess=0x02 engagement watchdog. The wheel must send at least one
+        // inbound chunk on sess=FlagByte (channel-token assignments / post-
+        // subscription state) for value-frame rendering to be alive. When it
+        // doesn't, dashboard layout still renders but every channel sits at
+        // its initial/zero default — see diag bundle
+        // CS-Pro-1stLaunchAfterDll-20260518: wheel went silent for 17s on
+        // initial connect, never acked any session open, and never engaged
+        // sess=0x02 despite the plugin sending 4304 value frames into the
+        // void. _session02FirstInboundUtcTicks gates the watchdog: once
+        // non-zero (set in OnMessageDuringPreamble when sess=FlagByte
+        // inbound arrives) engagement is confirmed and the watchdog stays
+        // dormant for the lifetime of the session.
+        private long _session02FirstInboundUtcTicks;
+        private int _activeStateEnteredTickCount;
+        private int _s02ReArmRounds;
+        private int _s02ReArmLastTickCount;
+        // Backoff schedule: first re-arm 3s after entering Active so a
+        // healthy wheel that just took a bit longer to respond isn't
+        // pestered. Subsequent rounds widen to total ~40s across 5
+        // attempts before escalating to RestartForSwitch.
+        private static readonly int[] S02ReArmBackoffMs =
+            { 3_000, 5_000, 7_000, 10_000, 15_000 };
+        private const int S02ReArmMaxRounds = 5;
+        private const int S02InitialGraceMs = 3_000;
+
         // Two distinct gates, both implemented as DateTime.UtcNow.Ticks
         // timestamps. They share the same 11 s wait constant but serve
         // different purposes:
@@ -1560,6 +1585,10 @@ namespace MozaPlugin.Telemetry
             _session09ReplySent = false;
             _s09RetryRounds = 0;
             _s09RetryLastTickCount = 0;
+            _session02FirstInboundUtcTicks = 0;
+            _activeStateEnteredTickCount = 0;
+            _s02ReArmRounds = 0;
+            _s02ReArmLastTickCount = 0;
             _session02OutboundSeq = 0;
             _session01OutboundSeq = 0;
             // Symmetry with the other per-session seq resets: a fresh
@@ -2036,14 +2065,24 @@ namespace MozaPlugin.Telemetry
 
             // Reclaim any HOST-managed sessions left open by a prior SimHub
             // crash/kill. Don't touch 0x04..0x10 — those are wheel-managed.
+            // TryCloseSession waits for the fc:00 ack: when the wheel acks,
+            // the close has definitively been processed and we can re-open
+            // against a clean state immediately. When it times out (silent
+            // wheel — bundle CS-Pro-1stLaunchAfterDll-20260518 saw 17s of
+            // wheel silence on connect), we proceed regardless and the
+            // sess=0x02 engagement watchdog recovers post-Active. The
+            // fixed Thread.Sleep(100) the old code used was strictly
+            // worse: wasted time on healthy wheels, not enough for slow
+            // ones, and no confirmation either way.
             MozaLog.Debug("[Moza] Closing any stale host sessions (0x01..0x03)...");
+            const int CloseAckTimeoutMs = 500;
             for (byte port = 1; port <= 0x03; port++)
             {
                 if (!_connection.IsConnected) return;
-                SendSessionClose(port);
+                bool acked = TryCloseSession(port, CloseAckTimeoutMs);
+                MozaLog.Debug(
+                    $"[Moza] SessionClose 0x{port:X2} {(acked ? "acked" : "no ack within " + CloseAckTimeoutMs + "ms")}");
             }
-            // Brief settle so the wheel processes the closes before we re-open.
-            System.Threading.Thread.Sleep(100);
 
             byte mgmtPort = TryOpenSession(MgmtSession, OpenAckTimeoutMs);
             if (_state == TelemetryState.Idle || !_connection.IsConnected) return;
@@ -2138,6 +2177,45 @@ namespace MozaPlugin.Telemetry
                 MozaLog.Debug(
                     $"[Moza] OpenSession 0x{session:X2}: ignoring stale ack for 0x{_lastAckedSession:X2}");
                 try { _ackReceived.Reset(); } catch (ObjectDisposedException) { return 0; }
+                _lastAckedSession = 0;
+            }
+        }
+
+        /// <summary>
+        /// Send a SessionClose for the given session and wait up to
+        /// <paramref name="timeoutMs"/> for the matching fc:00 ack. Returns
+        /// true on ack, false on timeout. Reuses the same ack path as
+        /// <see cref="TryOpenSession"/> — the wheel signals close
+        /// acceptance with fc:00 [session] just as it does for open
+        /// acceptance.
+        ///
+        /// Best-effort: a timeout is NOT fatal. Callers proceed with the
+        /// subsequent open regardless; firmwares that omit close-acks
+        /// degrade to the prior blind-blast behavior.
+        /// </summary>
+        private bool TryCloseSession(byte session, int timeoutMs)
+        {
+            try { _ackReceived.Reset(); } catch (ObjectDisposedException) { return false; }
+            _lastAckedSession = 0;
+            _lastAckedSeq = -1;
+
+            SendSessionClose(session);
+
+            var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+            while (true)
+            {
+                int remaining = (int)(deadline - DateTime.UtcNow).TotalMilliseconds;
+                if (remaining <= 0) return false;
+
+                bool gotSignal;
+                try { gotSignal = _ackReceived.Wait(remaining); }
+                catch (ObjectDisposedException) { return false; }
+                if (!gotSignal) return false;
+
+                if (_lastAckedSession == session) return true;
+
+                // Stale ack for a different session — discard and keep waiting.
+                try { _ackReceived.Reset(); } catch (ObjectDisposedException) { return false; }
                 _lastAckedSession = 0;
             }
         }
@@ -3174,6 +3252,14 @@ namespace MozaPlugin.Telemetry
                             _sessionAckSeq = seq;
                         SendSessionAck(FlagByte, (ushort)seq);
 
+                        // First inbound on sess=FlagByte is the engagement
+                        // gate — once set, TickSession02EngagementWatchdog
+                        // stays dormant. Subsequent inbound chunks don't
+                        // touch the timestamp (no rolling update needed;
+                        // the watchdog only cares about first engagement).
+                        if (_session02FirstInboundUtcTicks == 0)
+                            _session02FirstInboundUtcTicks = System.DateTime.UtcNow.Ticks;
+
                         // Track wheel-reported dashboard slot. The wheel emits
                         // a type-04 record on sess=0x02 b2h after each
                         // dashboard switch (and as part of its initial state
@@ -3594,6 +3680,7 @@ namespace MozaPlugin.Telemetry
                 TickRetryS09IfNotEstablished();
                 TickConfigJsonGapEscalation();
                 TickConfigJsonStuckWatchdog();
+                TickSession02EngagementWatchdog();
                 TickGrowSubscriptionIfCatalogStable();
 
                 _tickCounter++;
@@ -3654,6 +3741,11 @@ namespace MozaPlugin.Telemetry
                 }
 
                 TransitionTo(TelemetryState.Active, "preamble countdown elapsed");
+                // Anchor for TickSession02EngagementWatchdog's grace
+                // window — the watchdog only starts counting against the
+                // wheel once we've actually entered Active (and thus
+                // emitted tier-def + initial value frames).
+                _activeStateEnteredTickCount = Environment.TickCount;
                 ApplySubscription(force: false);
 
                 _tickCounter = 0;
@@ -4458,6 +4550,94 @@ namespace MozaPlugin.Telemetry
                     MozaLog.Warn($"[Moza] RestartForSwitch from stuck-state watchdog failed: {ex.Message}");
                 }
             });
+        }
+
+        /// <summary>
+        /// Stuck-state watchdog for sess=0x02 engagement. The wheel must
+        /// send at least one inbound chunk on sess=FlagByte (channel-
+        /// token assignments / post-subscription state) for value-frame
+        /// rendering to be alive. When it doesn't, dashboard layout still
+        /// renders but every channel sits at its initial/zero default —
+        /// see diag bundle CS-Pro-1stLaunchAfterDll-20260518.
+        ///
+        /// Re-arm sequence (close+open+init+resubscribe) is the same
+        /// handshake <see cref="ProbeAndOpenSessions"/> runs at start,
+        /// replayed against the now-alive wheel. Budget capped at
+        /// <see cref="S02ReArmMaxRounds"/>; on exhaustion escalates to
+        /// <see cref="RestartForSwitch"/> (matches the precedent in
+        /// <see cref="TickConfigJsonStuckWatchdog"/>).
+        ///
+        /// Skip conditions:
+        ///   - Not in Active state (the start path owns its own probe)
+        ///   - Engagement already confirmed (_session02FirstInboundUtcTicks
+        ///     non-zero — any prior inbound on sess=FlagByte sets it)
+        ///   - Re-arm budget exhausted (escalation already queued)
+        ///   - Within initial grace OR backoff window
+        /// </summary>
+        private void TickSession02EngagementWatchdog()
+        {
+            if (_state != TelemetryState.Active) return;
+            if (!_connection.IsConnected) return;
+            if (_session02FirstInboundUtcTicks != 0) return;
+            if (_s02ReArmRounds >= S02ReArmMaxRounds) return;
+            // Racy: if a tick fires before TickPreamble stamped the
+            // Active-entry tick (shouldn't happen because both run on
+            // the same tick thread, but cheap defense), skip silently.
+            if (_activeStateEnteredTickCount == 0) return;
+
+            int now = Environment.TickCount;
+            if (_s02ReArmRounds == 0)
+            {
+                // Initial grace: a healthy wheel that just took a beat
+                // longer to send channel-token assignments shouldn't be
+                // pestered. ~3 s covers the observed PitHouse cadence.
+                if ((now - _activeStateEnteredTickCount) < S02InitialGraceMs) return;
+            }
+            else
+            {
+                int gateMs = S02ReArmBackoffMs[Math.Min(_s02ReArmRounds - 1, S02ReArmBackoffMs.Length - 1)];
+                if ((now - _s02ReArmLastTickCount) < gateMs) return;
+            }
+
+            _s02ReArmRounds++;
+            _s02ReArmLastTickCount = now;
+
+            MozaLog.Warn(
+                $"[Moza] sess=0x02 no inbound observed; re-arm round " +
+                $"{_s02ReArmRounds}/{S02ReArmMaxRounds} — close+open+init+resubscribe");
+
+            try
+            {
+                const int ReArmAckTimeoutMs = 500;
+                TryCloseSession(0x02, ReArmAckTimeoutMs);
+                TryOpenSession(0x02, ReArmAckTimeoutMs);
+                SendSessionInitHandshake();
+                ApplySubscription(force: true);
+            }
+            catch (Exception ex)
+            {
+                MozaLog.Warn(
+                    $"[Moza] sess=0x02 re-arm round {_s02ReArmRounds} failed: {ex.Message}");
+            }
+
+            if (_s02ReArmRounds >= S02ReArmMaxRounds)
+            {
+                MozaLog.Warn(
+                    $"[Moza] sess=0x02 re-arm budget exhausted after {S02ReArmMaxRounds} rounds " +
+                    "— escalating to full RestartForSwitch (Stop+Start cycle)");
+                // Defer RestartForSwitch to a worker thread so the rest of
+                // the current tick can complete without operating on torn-
+                // down state — same pattern as TickConfigJsonStuckWatchdog.
+                System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+                {
+                    try { RestartForSwitch(); }
+                    catch (Exception ex)
+                    {
+                        MozaLog.Warn(
+                            $"[Moza] RestartForSwitch from sess=0x02 watchdog failed: {ex.Message}");
+                    }
+                });
+            }
         }
 
         /// <summary>Widget-state poll cycle. Cycle of 80 slots at one frame per
