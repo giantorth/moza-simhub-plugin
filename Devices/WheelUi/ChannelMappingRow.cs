@@ -6,20 +6,19 @@ using MozaPlugin.Telemetry;
 namespace MozaPlugin.Devices.WheelUi
 {
     /// <summary>
-    /// Row backing the per-wheel telemetry channel-mapping DataGrid. Holds the
+    /// Row backing the per-wheel telemetry channel-mapping list. Holds the
     /// channel metadata (name/url/package level/compression) read from the
     /// wheel's catalog, the user-edited SimHub property mapping, and the
-    /// filtered ComboBox autocomplete state.
+    /// inline-editor state (filter text + pending selection + visibility flag).
     /// </summary>
     internal sealed class ChannelMappingRow : INotifyPropertyChanged
     {
-        // Min characters before the filter activates. Below this the dropdown
-        // stays empty — SimHub's full property list (1500+ entries) can't be
-        // virtualized smoothly at 1-2 char matches.
-        private const int MinSearchChars = 3;
         // Cap filtered results — protects against substrings like "data"
-        // matching half the universe. User narrows further; 200 is enough.
-        private const int MaxFilteredResults = 200;
+        // matching half the universe. The ListBox virtualizes, but a 1500-item
+        // unfiltered render with no virtualization at all (just-typed first
+        // char) would still cost layout time; this keeps the inline editor
+        // snappy.
+        private const int MaxFilteredResults = 500;
 
         public string Name { get; set; } = "";
         public string Url { get; set; } = "";
@@ -40,24 +39,22 @@ namespace MozaPlugin.Devices.WheelUi
                 // new path and the user doesn't see a stale value matched
                 // against an unrelated property name.
                 CurrentValueText = "";
-                UpdateFilteredProperties();
             }
         }
 
         /// <summary>
         /// Master snapshot of every SimHub property name (set once by the populator
-        /// from <see cref="MozaPlugin.GetAllSimHubPropertyNames"/>). The ComboBox
-        /// dropdown does NOT bind to this directly — filter into
-        /// <see cref="FilteredProperties"/> on each keystroke.
+        /// from <see cref="MozaPlugin.GetAllSimHubPropertyNames"/>). The inline
+        /// editor's ListBox does NOT bind to this directly — filter into
+        /// <see cref="FilteredProperties"/> on each EditFilter keystroke.
         /// </summary>
         public IReadOnlyList<string> AllProperties { get; set; } = KnownSimHubProperties.Paths;
 
         private IReadOnlyList<string> _filteredProperties = Array.Empty<string>();
         /// <summary>
-        /// Live filtered subset of <see cref="AllProperties"/>. Bound to
-        /// ComboBox.ItemsSource. Swapped wholesale (immutable-list swap) on
-        /// each keystroke — Clear+Add would race a mid-click on a dropdown item
-        /// and lose the SelectedItem reference.
+        /// Live filtered subset of <see cref="AllProperties"/>. Bound to the
+        /// inline editor's ListBox.ItemsSource. Immutable-list swap on each
+        /// keystroke — Clear+Add would race a mid-click on a list item.
         /// </summary>
         public IReadOnlyList<string> FilteredProperties
         {
@@ -68,29 +65,6 @@ namespace MozaPlugin.Devices.WheelUi
                 PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredProperties)));
             }
         }
-
-        private bool _isDropDownOpen;
-        /// <summary>
-        /// TwoWay-bound to ComboBox.IsDropDownOpen. Auto-opened by the filter
-        /// step on user input when there are matches; closed when the typed
-        /// text is an exact property name.
-        /// </summary>
-        public bool IsDropDownOpen
-        {
-            get => _isDropDownOpen;
-            set
-            {
-                if (_isDropDownOpen == value) return;
-                _isDropDownOpen = value;
-                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsDropDownOpen)));
-            }
-        }
-
-        /// <summary>
-        /// Gate that suppresses auto-open during the initial populate. Set true
-        /// by the populator after the row is wired into the grid.
-        /// </summary>
-        public bool AllowDropdownOpen { get; set; }
 
         private string _currentValueText = "";
         public string CurrentValueText
@@ -104,43 +78,126 @@ namespace MozaPlugin.Devices.WheelUi
             }
         }
 
+        // ── Inline-editor state ────────────────────────────────────────
+
+        private bool _isEditing;
+        /// <summary>
+        /// Drives the inline editor panel's visibility. Set to true via
+        /// <see cref="BeginEdit"/> (user clicked the pencil icon), back to
+        /// false via <see cref="CommitEdit"/> / <see cref="CancelEdit"/>.
+        /// </summary>
+        public bool IsEditing
+        {
+            get => _isEditing;
+            private set
+            {
+                if (_isEditing == value) return;
+                _isEditing = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsEditing)));
+            }
+        }
+
+        private string _editFilter = "";
+        /// <summary>
+        /// TextBox-backed filter inside the inline editor. Empty string = show
+        /// the full property list (the user has explicitly opened the editor,
+        /// so there's no "min 3 chars" gate). Substring + ordinal-ignore-case
+        /// match against <see cref="AllProperties"/>, capped at
+        /// <c>MaxFilteredResults</c>.
+        /// </summary>
+        public string EditFilter
+        {
+            get => _editFilter;
+            set
+            {
+                var v = value ?? "";
+                if (_editFilter == v) return;
+                _editFilter = v;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EditFilter)));
+                UpdateFilteredProperties();
+            }
+        }
+
+        private string _pendingProperty = "";
+        /// <summary>
+        /// ListBox-backed selection inside the inline editor. Two-way bound
+        /// to ListBox.SelectedItem. Applied to <see cref="SimHubProperty"/>
+        /// on <see cref="CommitEdit"/>; discarded on <see cref="CancelEdit"/>.
+        /// </summary>
+        public string PendingProperty
+        {
+            get => _pendingProperty;
+            set
+            {
+                var v = value ?? "";
+                if (_pendingProperty == v) return;
+                _pendingProperty = v;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PendingProperty)));
+            }
+        }
+
+        /// <summary>
+        /// Open the inline editor: seed the filter empty (full list visible)
+        /// and the pending selection to the row's current SimHub property so
+        /// the user sees their current choice highlighted in the list.
+        /// </summary>
+        public void BeginEdit()
+        {
+            _editFilter = "";
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EditFilter)));
+            PendingProperty = SimHubProperty;
+            UpdateFilteredProperties();
+            IsEditing = true;
+        }
+
+        /// <summary>
+        /// Apply the pending selection to <see cref="SimHubProperty"/> and
+        /// collapse the editor. The SimHubProperty setter raises
+        /// PropertyChanged, which the populator's listener wires through to
+        /// <see cref="MozaPlugin.SetChannelMapping"/> for persistence.
+        /// </summary>
+        public void CommitEdit()
+        {
+            SimHubProperty = PendingProperty;
+            IsEditing = false;
+        }
+
+        /// <summary>
+        /// Discard the pending selection and collapse the editor.
+        /// </summary>
+        public void CancelEdit()
+        {
+            PendingProperty = SimHubProperty;
+            IsEditing = false;
+        }
+
         private void UpdateFilteredProperties()
         {
-            string query = _simHubProperty;
-            if (string.IsNullOrEmpty(query) || query.Length < MinSearchChars)
+            string query = _editFilter;
+            var src = AllProperties;
+            if (src == null || src.Count == 0)
             {
                 FilteredProperties = Array.Empty<string>();
-                if (AllowDropdownOpen) IsDropDownOpen = false;
                 return;
             }
 
-            // Build off-bind then swap. Previous list reference stays alive
-            // while any in-flight click on a dropdown item finishes committing.
+            // Empty filter = full list (capped). The user explicitly opened
+            // the editor so a flood of options is the expected starting point.
+            bool noFilter = string.IsNullOrEmpty(query);
+
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var list = new List<string>(MaxFilteredResults);
-            bool exactMatchSeen = false;
-            var src = AllProperties;
-            if (src != null)
+            var list = new List<string>(Math.Min(src.Count, MaxFilteredResults));
+            for (int i = 0; i < src.Count; i++)
             {
-                for (int i = 0; i < src.Count; i++)
-                {
-                    var p = src[i];
-                    if (string.IsNullOrEmpty(p)) continue;
-                    if (p.IndexOf(query, StringComparison.OrdinalIgnoreCase) < 0) continue;
-                    if (!seen.Add(p)) continue;
-                    list.Add(p);
-                    if (string.Equals(p, query, StringComparison.OrdinalIgnoreCase))
-                        exactMatchSeen = true;
-                    if (list.Count >= MaxFilteredResults) break;
-                }
+                var p = src[i];
+                if (string.IsNullOrEmpty(p)) continue;
+                if (!noFilter && p.IndexOf(query, StringComparison.OrdinalIgnoreCase) < 0) continue;
+                if (!seen.Add(p)) continue;
+                list.Add(p);
+                if (list.Count >= MaxFilteredResults) break;
             }
 
             FilteredProperties = list;
-
-            // Typed text matches a property exactly = user picked / typed full
-            // path; close. Otherwise auto-open while filter has hits.
-            if (!AllowDropdownOpen) return;
-            IsDropDownOpen = !exactMatchSeen && list.Count > 0;
         }
 
         public event PropertyChangedEventHandler? PropertyChanged;

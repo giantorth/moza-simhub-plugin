@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Linq;
 using System.Windows;
@@ -139,7 +140,7 @@ namespace MozaPlugin.Devices
             MozaLog.Debug(
                 $"[Moza] UI: DashboardSelectionChanged handler — selected='{_plugin.ActiveTelemetryProfileName}'");
             PopulateDashboardCombo();
-            PopulateChannelMappingGrid();
+            PopulateChannelMappingList();
         }
 
         private bool ResolvePlugin()
@@ -1254,9 +1255,11 @@ namespace MozaPlugin.Devices
 
                 PopulateDashboardCombo();
                     UpdateFolderInfo();
-                // CHANNEL MAPPINGS is always-on (no expander gate). Seed the grid
-                // once _plugin is resolved + start the 2 Hz value poller.
-                PopulateChannelMappingGrid();
+                // CHANNEL MAPPINGS is always-on (no expander gate). Bind the
+                // ItemsControl to its ObservableCollection once, then seed the
+                // list + start the 2 Hz value poller.
+                TelemetryChannelList.ItemsSource = _channelRows;
+                PopulateChannelMappingList();
                 StartMappingValueTimer();
             }
         }
@@ -1339,11 +1342,17 @@ namespace MozaPlugin.Devices
         /// </summary>
         private bool _dashComboFromWheelState;
 
-        // Signature of the data feeding the channel-mapping grid. Composed from
+        // Signature of the data feeding the channel-mapping list. Composed from
         // (profile-ref-hash, tier-count, total-channel-count, string-channel-count,
         // catalog-count) — any change means the wheel sent more data and we should
         // rebuild. -1 means "never populated".
         private long _lastMappingDataSignature = -1;
+
+        // Observable backing for the CHANNEL MAPPINGS ItemsControl. Bound once
+        // in InitTelemetryUI; PopulateChannelMappingList clears + repopulates
+        // in place so the XAML never needs to rebind ItemsSource.
+        private readonly ObservableCollection<ChannelMappingRow> _channelRows
+            = new ObservableCollection<ChannelMappingRow>();
 
         private long ComputeMappingDataSignature()
         {
@@ -1382,10 +1391,10 @@ namespace MozaPlugin.Devices
             // chunks: a one-shot populate on first byte misses the rest. Re-poll
             // every tick using a cheap signature (profile-ref + tier/channel
             // counts + catalog count) and rebuild only when the signature
-            // actually changes. PopulateChannelMappingGrid snapshots the
+            // actually changes. PopulateChannelMappingList snapshots the
             // signature itself so other call sites also keep this in sync.
             long sig = ComputeMappingDataSignature();
-            if (sig != _lastMappingDataSignature) PopulateChannelMappingGrid();
+            if (sig != _lastMappingDataSignature) PopulateChannelMappingList();
 
             bool enabled = _plugin.ActiveTelemetryEnabled;
             var active = _plugin.TelemetrySender;
@@ -1536,7 +1545,7 @@ namespace MozaPlugin.Devices
 
                 _plugin.OnDashboardSwitched((uint)idx);
 
-                    PopulateChannelMappingGrid();
+                    PopulateChannelMappingList();
                 return;
             }
 
@@ -1547,7 +1556,7 @@ namespace MozaPlugin.Devices
                 _plugin.ActiveTelemetryMzdashPath = "";
                 _plugin.SaveSettings();
                 _plugin.OnDashboardSwitched();
-                    PopulateChannelMappingGrid();
+                    PopulateChannelMappingList();
                 return;
             }
             if (!selected.StartsWith("[Custom:"))
@@ -1556,7 +1565,7 @@ namespace MozaPlugin.Devices
                 _plugin.ActiveTelemetryMzdashPath = "";
                 _plugin.SaveSettings();
                 _plugin.OnDashboardSwitched();
-                    PopulateChannelMappingGrid();
+                    PopulateChannelMappingList();
             }
         }
 
@@ -1586,7 +1595,7 @@ namespace MozaPlugin.Devices
                 }
             }
 
-            PopulateChannelMappingGrid();
+            PopulateChannelMappingList();
         }
 
         private void TelemetryLoadMzdash_Click(object sender, RoutedEventArgs e)
@@ -1617,7 +1626,7 @@ namespace MozaPlugin.Devices
                 TelemetryProfileCombo.SelectedIndex = TelemetryProfileCombo.Items.Count - 1;
             }
 
-            PopulateChannelMappingGrid();
+            PopulateChannelMappingList();
         }
 
         private void TelemetrySetFolder_Click(object sender, RoutedEventArgs e)
@@ -1783,8 +1792,7 @@ namespace MozaPlugin.Devices
         private void MappingValueTimer_Tick(object? sender, EventArgs e)
         {
             if (_plugin == null) return;
-            if (TelemetryChannelGrid.ItemsSource is not IEnumerable<ChannelMappingRow> rows) return;
-            foreach (var row in rows)
+            foreach (var row in _channelRows)
             {
                 if (string.IsNullOrEmpty(row.SimHubProperty))
                 {
@@ -1796,38 +1804,80 @@ namespace MozaPlugin.Devices
             }
         }
 
-        // Reset SelectAll to caret-at-end on dropdown open so filter-typing isn't clobbered.
-        private void TelemetryPropCombo_DropDownOpened(object sender, EventArgs e)
-        {
-            if (sender is not ComboBox cb) return;
-            cb.Dispatcher.BeginInvoke(new Action(() =>
-            {
-                if (cb.Template?.FindName("PART_EditableTextBox", cb) is TextBox tb)
-                {
-                    int len = tb.Text?.Length ?? 0;
-                    tb.SelectionStart = len;
-                    tb.SelectionLength = 0;
-                }
-            }), DispatcherPriority.Background);
-        }
-
         private void TelemetryResetMappings_Click(object sender, RoutedEventArgs e)
         {
             if (_plugin == null) return;
             // Restore each channel to its Telemetry.json default before clearing
             // the override dict — otherwise the live profile keeps the user's
             // last typed value until the next telemetry restart.
-            if (TelemetryChannelGrid.ItemsSource is IEnumerable<ChannelMappingRow> rows)
-            {
-                foreach (var row in rows)
-                    _plugin.UpdateActiveChannelMapping(row.Url, "");
-            }
+            foreach (var row in _channelRows)
+                _plugin.UpdateActiveChannelMapping(row.Url, "");
             _plugin.ClearCurrentDashboardMappings();
-            PopulateChannelMappingGrid();
+            PopulateChannelMappingList();
             TelemetryMappingStatus.Text = $"Reset to defaults at {DateTime.Now:HH:mm:ss}";
         }
 
-        // Subscribed once per row by PopulateChannelMappingGrid. Auto-saves the
+        // ── Inline editor handlers ─────────────────────────────────────
+        // Each row's pencil button passes the bound ChannelMappingRow via Tag;
+        // OK / Cancel buttons inside the editor do the same. The row model
+        // owns the editor state (IsEditing / EditFilter / PendingProperty),
+        // so the click handlers stay one-liners.
+
+        private void EditMapping_Click(object sender, RoutedEventArgs e)
+        {
+            if ((sender as FrameworkElement)?.Tag is not ChannelMappingRow row) return;
+            // Close any other row that's editing — only one inline editor
+            // expanded at a time to keep the list scannable.
+            foreach (var r in _channelRows)
+                if (!ReferenceEquals(r, row) && r.IsEditing) r.CancelEdit();
+            row.BeginEdit();
+            // Focus the filter TextBox once the row's editor container is
+            // visible. The Loaded event on the container would be reliable,
+            // but the cheaper path is a Dispatcher.BeginInvoke at Render
+            // priority so the visual tree has rebuilt by the time we run.
+            Dispatcher.BeginInvoke(new Action(() => FocusInlineFilter(row)), DispatcherPriority.Render);
+        }
+
+        private void CommitMapping_Click(object sender, RoutedEventArgs e)
+        {
+            if ((sender as FrameworkElement)?.Tag is not ChannelMappingRow row) return;
+            row.CommitEdit();
+        }
+
+        private void CancelMapping_Click(object sender, RoutedEventArgs e)
+        {
+            if ((sender as FrameworkElement)?.Tag is not ChannelMappingRow row) return;
+            row.CancelEdit();
+        }
+
+        private void FocusInlineFilter(ChannelMappingRow row)
+        {
+            // Walk the ItemsControl's container for this row to find the
+            // EditFilterBox TextBox and steal focus. Item containers are
+            // ContentPresenter (default ItemsControl); the named TextBox lives
+            // inside that container's template-instance.
+            if (TelemetryChannelList == null) return;
+            var container = TelemetryChannelList.ItemContainerGenerator.ContainerFromItem(row) as FrameworkElement;
+            if (container == null) return;
+            var tb = FindDescendant<TextBox>(container, "EditFilterBox");
+            tb?.Focus();
+            tb?.SelectAll();
+        }
+
+        private static T? FindDescendant<T>(DependencyObject root, string name) where T : FrameworkElement
+        {
+            int count = VisualTreeHelper.GetChildrenCount(root);
+            for (int i = 0; i < count; i++)
+            {
+                var child = VisualTreeHelper.GetChild(root, i);
+                if (child is T fe && fe.Name == name) return fe;
+                var nested = FindDescendant<T>(child, name);
+                if (nested != null) return nested;
+            }
+            return null;
+        }
+
+        // Subscribed once per row by PopulateChannelMappingList. Auto-saves the
         // mapping (debounced 500ms inside SaveSettings) AND live-rewires the
         // active profile's channel — no telemetry restart needed because the
         // wire format (tier-def, channel indices, compression) is unchanged.
@@ -1841,41 +1891,51 @@ namespace MozaPlugin.Devices
             TelemetryMappingStatus.Text = $"Saved at {DateTime.Now:HH:mm:ss}";
         }
 
-        private void PopulateChannelMappingGrid()
+        private void PopulateChannelMappingList()
         {
             // Snapshot the data signature so the RefreshTelemetryStatus growth
             // detector doesn't re-trigger every 500ms for already-current data.
             _lastMappingDataSignature = ComputeMappingDataSignature();
-            if (_plugin == null) { TelemetryChannelGrid.ItemsSource = null; return; }
 
-            // Unsubscribe from prior rows so stale rows can be GC'd and we don't
-            // double-fire OnMappingRowPropertyChanged when the same plugin
-            // instance re-populates the grid (dashboard switch, Reset).
-            if (TelemetryChannelGrid.ItemsSource is IEnumerable<ChannelMappingRow> oldRows)
+            // Unsubscribe from prior rows so stale rows can be GC'd and we
+            // don't double-fire OnMappingRowPropertyChanged when re-populating
+            // (dashboard switch, Reset, catalog growth).
+            foreach (var r in _channelRows) r.PropertyChanged -= OnMappingRowPropertyChanged;
+            _channelRows.Clear();
+
+            if (_plugin == null)
             {
-                foreach (var r in oldRows) r.PropertyChanged -= OnMappingRowPropertyChanged;
+                SetMappingListLoading(true);
+                return;
             }
 
             var result = ChannelMappingRowFactory.Build(_plugin);
             if (result.Rows == null)
             {
-                TelemetryChannelGrid.ItemsSource = null;
+                // No profile + no catalog yet — show loading state, leave the
+                // header hidden so we don't render a bare table.
+                SetMappingListLoading(true);
                 if (!string.IsNullOrEmpty(result.StatusText))
                     TelemetryMappingStatus.Text = result.StatusText;
                 return;
             }
 
-            TelemetryChannelGrid.ItemsSource = result.Rows;
-            // Now that initial-state filter passes have run with dropdown auto-open
-            // suppressed, allow further user-typed input to open the dropdown.
-            // Also subscribe for auto-save on every edit.
+            SetMappingListLoading(false);
             foreach (var r in result.Rows)
             {
-                r.AllowDropdownOpen = true;
                 r.PropertyChanged += OnMappingRowPropertyChanged;
+                _channelRows.Add(r);
             }
             if (!string.IsNullOrEmpty(result.StatusText))
                 TelemetryMappingStatus.Text = result.StatusText;
+        }
+
+        private void SetMappingListLoading(bool loading)
+        {
+            if (TelemetryChannelListLoading != null)
+                TelemetryChannelListLoading.Visibility = loading ? Visibility.Visible : Visibility.Collapsed;
+            if (TelemetryChannelListHeader != null)
+                TelemetryChannelListHeader.Visibility = loading ? Visibility.Collapsed : Visibility.Visible;
         }
 
     }

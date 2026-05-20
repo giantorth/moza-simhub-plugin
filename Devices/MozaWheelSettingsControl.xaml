@@ -13,6 +13,10 @@
                 <ResourceDictionary Source="pack://application:,,,/MozaPlugin;component/Themes/MozaIcons.xaml"/>
             </ResourceDictionary.MergedDictionaries>
 
+            <!-- WPF built-in bool → Visibility converter; used by the inline
+                 channel-mapping editor to show/hide its panel based on row.IsEditing. -->
+            <BooleanToVisibilityConverter x:Key="BoolToVisibility"/>
+
             <!-- Legacy keys for existing markup — BasedOn the redesign equivalents -->
             <Style x:Key="SectionHeader" TargetType="TextBlock" BasedOn="{StaticResource SectionTitleText}">
                 <Setter Property="Margin" Value="0,20,0,8"/>
@@ -284,65 +288,167 @@
                     <ctrl:SectionCard Title="CHANNEL MAPPINGS"
                                       Icon="{StaticResource IconDiag}">
                         <StackPanel>
-                            <TextBlock Text="Enter 2+ letters to search available SimHub properties"
+                            <TextBlock Text="Click the pencil on a row to pick a SimHub property"
                                        Style="{StaticResource MutedHintText}" TextWrapping="Wrap" Margin="0,0,0,10"/>
-                            <!-- No MaxHeight + ScrollBars disabled: the grid expands to full
-                                 content height and the surrounding SimHub ScrollViewer handles
-                                 page scrolling. Otherwise the DataGrid's internal ScrollViewer
-                                 captures mouse-wheel events when the cursor is over the list. -->
-                            <DataGrid x:Name="TelemetryChannelGrid" AutoGenerateColumns="False"
-                                      HeadersVisibility="Column" CanUserAddRows="False" CanUserDeleteRows="False"
-                                      GridLinesVisibility="Horizontal" Margin="0,0,0,10"
-                                      ScrollViewer.VerticalScrollBarVisibility="Disabled"
-                                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                                      ScrollViewer.CanContentScroll="False"
-                                      EnableRowVirtualization="False" EnableColumnVirtualization="True">
-                                <DataGrid.Columns>
-                                    <DataGridTextColumn Header="Channel" Binding="{Binding Name}" IsReadOnly="True" Width="180"/>
-                                    <DataGridTemplateColumn Header="SimHub property" Width="*">
-                                        <DataGridTemplateColumn.CellTemplate>
-                                            <DataTemplate>
-                                                <!-- Bypass the custom MozaCombo ControlTemplate (which doesn't
-                                                     handle editable mode + readable foreground on the inner
-                                                     TextBox). Use WPF's default ComboBox style + explicit
-                                                     theme colours so search text is legible on dark cells. -->
-                                                <ComboBox Style="{x:Null}"
-                                                          IsEditable="True"
-                                                          IsTextSearchEnabled="False"
-                                                          StaysOpenOnEdit="True"
-                                                          MaxDropDownHeight="320"
-                                                          Foreground="{DynamicResource TextBrush}"
-                                                          Background="{DynamicResource BgCard2Brush}"
-                                                          BorderBrush="{DynamicResource BorderBrightBrush}"
-                                                          VirtualizingStackPanel.IsVirtualizing="True"
-                                                          VirtualizingStackPanel.VirtualizationMode="Recycling"
-                                                          ItemsSource="{Binding FilteredProperties}"
-                                                          IsDropDownOpen="{Binding IsDropDownOpen, Mode=TwoWay}"
-                                                          Text="{Binding SimHubProperty, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay}"
-                                                          DropDownOpened="TelemetryPropCombo_DropDownOpened"/>
-                                            </DataTemplate>
-                                        </DataGridTemplateColumn.CellTemplate>
-                                    </DataGridTemplateColumn>
-                                    <DataGridTextColumn Header="Current value"
-                                                        Binding="{Binding CurrentValueText}"
-                                                        IsReadOnly="True" Width="140">
-                                        <DataGridTextColumn.ElementStyle>
-                                            <Style TargetType="TextBlock">
-                                                <Setter Property="TextAlignment" Value="Right"/>
-                                                <Setter Property="HorizontalAlignment" Value="Right"/>
-                                                <Setter Property="VerticalAlignment" Value="Center"/>
-                                                <Setter Property="FontFamily" Value="{StaticResource FontMono}"/>
-                                            </Style>
-                                        </DataGridTextColumn.ElementStyle>
-                                        <DataGridTextColumn.HeaderStyle>
-                                            <Style TargetType="DataGridColumnHeader"
-                                                   BasedOn="{StaticResource {x:Type DataGridColumnHeader}}">
-                                                <Setter Property="HorizontalContentAlignment" Value="Right"/>
-                                            </Style>
-                                        </DataGridTextColumn.HeaderStyle>
-                                    </DataGridTextColumn>
-                                </DataGrid.Columns>
-                            </DataGrid>
+
+                            <!-- Loading state: shown while ChannelMappingRowFactory.Build returns
+                                 null (no profile + no wheel catalog yet). Code-behind toggles
+                                 Visibility from PopulateChannelMappingList. -->
+                            <TextBlock x:Name="TelemetryChannelListLoading"
+                                       Text="Loading channel mappings…"
+                                       Style="{StaticResource MutedHintText}"
+                                       FontStyle="Italic"
+                                       Margin="0,4,0,10"
+                                       Visibility="Visible"/>
+
+                            <!-- Static three-column header (30 / 40 / 30). Mirrors the row
+                                 template's column proportions so values line up. -->
+                            <Grid x:Name="TelemetryChannelListHeader" Margin="0,0,0,4" Visibility="Collapsed">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="3*"/>
+                                    <ColumnDefinition Width="4*"/>
+                                    <ColumnDefinition Width="3*"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Channel"
+                                           Style="{StaticResource MutedHintText}"
+                                           FontWeight="SemiBold" Padding="10,4"/>
+                                <TextBlock Grid.Column="1" Text="SimHub property"
+                                           Style="{StaticResource MutedHintText}"
+                                           FontWeight="SemiBold" Padding="10,4"/>
+                                <TextBlock Grid.Column="2" Text="Current value"
+                                           Style="{StaticResource MutedHintText}"
+                                           FontWeight="SemiBold" TextAlignment="Right" Padding="10,4"/>
+                            </Grid>
+
+                            <!-- Static list (no DataGrid) — one row per channel mapping. Each
+                                 row's middle column shows the bound SimHub property as plain
+                                 text + a pencil icon that toggles the row's inline editor. -->
+                            <ItemsControl x:Name="TelemetryChannelList" Margin="0,0,0,10">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <StackPanel>
+                                            <!-- Row -->
+                                            <Grid Margin="0,2">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="3*"/>
+                                                    <ColumnDefinition Width="4*"/>
+                                                    <ColumnDefinition Width="3*"/>
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Grid.Column="0"
+                                                           Text="{Binding Name}"
+                                                           VerticalAlignment="Center"
+                                                           Padding="10,4"
+                                                           Foreground="{DynamicResource TextBrush}"
+                                                           TextTrimming="CharacterEllipsis"/>
+                                                <!-- SimHub property cell: text + pencil button. -->
+                                                <Grid Grid.Column="1" Margin="10,4">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock Grid.Column="0"
+                                                               Text="{Binding SimHubProperty}"
+                                                               VerticalAlignment="Center"
+                                                               FontFamily="{DynamicResource FontMono}"
+                                                               Foreground="{DynamicResource TextBrush}"
+                                                               TextTrimming="CharacterEllipsis"/>
+                                                    <Button Grid.Column="1"
+                                                            Click="EditMapping_Click"
+                                                            Tag="{Binding}"
+                                                            ToolTip="Edit SimHub property binding"
+                                                            Width="26" Height="22"
+                                                            Padding="2"
+                                                            Margin="6,0,0,0"
+                                                            Background="Transparent"
+                                                            BorderThickness="0"
+                                                            Cursor="Hand">
+                                                        <Path Data="{StaticResource IconEdit}"
+                                                              Stretch="Uniform"
+                                                              Width="14" Height="14"
+                                                              Stroke="{DynamicResource TextDimBrush}"
+                                                              StrokeThickness="1.5"
+                                                              Fill="{x:Null}"
+                                                              StrokeLineJoin="Round"
+                                                              StrokeStartLineCap="Round"
+                                                              StrokeEndLineCap="Round"/>
+                                                    </Button>
+                                                </Grid>
+                                                <TextBlock Grid.Column="2"
+                                                           Text="{Binding CurrentValueText}"
+                                                           VerticalAlignment="Center"
+                                                           TextAlignment="Right"
+                                                           Padding="10,4"
+                                                           Foreground="{DynamicResource TextBrush}"
+                                                           FontFamily="{DynamicResource FontMono}"/>
+                                            </Grid>
+
+                                            <!-- Inline editor — visible only when row.IsEditing == true.
+                                                 Filter TextBox + virtualized ListBox + Cancel/OK. -->
+                                            <Border Margin="20,4,20,8"
+                                                    Background="{DynamicResource BgCard2Brush}"
+                                                    BorderBrush="{DynamicResource BorderBrightBrush}"
+                                                    BorderThickness="1"
+                                                    CornerRadius="4"
+                                                    Padding="10"
+                                                    Visibility="{Binding IsEditing,
+                                                                Converter={StaticResource BoolToVisibility}}">
+                                                <StackPanel>
+                                                    <Grid Margin="0,0,0,8">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*"/>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <TextBox Grid.Column="0"
+                                                                 x:Name="EditFilterBox"
+                                                                 Text="{Binding EditFilter,
+                                                                       UpdateSourceTrigger=PropertyChanged,
+                                                                       Mode=TwoWay}"
+                                                                 FontFamily="{DynamicResource FontMono}"
+                                                                 Padding="8,4"
+                                                                 Foreground="{DynamicResource TextBrush}"
+                                                                 Background="{DynamicResource BgDeepBrush}"
+                                                                 BorderBrush="{DynamicResource BorderBrush}"
+                                                                 BorderThickness="1"/>
+                                                        <Button Grid.Column="1"
+                                                                Content="CANCEL"
+                                                                Margin="6,0,0,0"
+                                                                Click="CancelMapping_Click"
+                                                                Tag="{Binding}"/>
+                                                        <Button Grid.Column="2"
+                                                                Content="OK"
+                                                                MinWidth="60"
+                                                                Margin="6,0,0,0"
+                                                                Click="CommitMapping_Click"
+                                                                Tag="{Binding}"/>
+                                                    </Grid>
+                                                    <ListBox ItemsSource="{Binding FilteredProperties}"
+                                                             SelectedItem="{Binding PendingProperty, Mode=TwoWay}"
+                                                             MaxHeight="240"
+                                                             Background="{DynamicResource BgDeepBrush}"
+                                                             Foreground="{DynamicResource TextBrush}"
+                                                             BorderBrush="{DynamicResource BorderBrush}"
+                                                             BorderThickness="1"
+                                                             VirtualizingStackPanel.IsVirtualizing="True"
+                                                             VirtualizingStackPanel.VirtualizationMode="Recycling"
+                                                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                                             ScrollViewer.VerticalScrollBarVisibility="Auto">
+                                                        <ListBox.ItemTemplate>
+                                                            <DataTemplate>
+                                                                <TextBlock Text="{Binding}"
+                                                                           FontFamily="{DynamicResource FontMono}"
+                                                                           FontSize="12"
+                                                                           Foreground="{DynamicResource TextBrush}"
+                                                                           Padding="6,3"/>
+                                                            </DataTemplate>
+                                                        </ListBox.ItemTemplate>
+                                                    </ListBox>
+                                                </StackPanel>
+                                            </Border>
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
                             <StackPanel Orientation="Horizontal">
                                 <Button Content="RESET TO DEFAULTS" Click="TelemetryResetMappings_Click"/>
                                 <TextBlock x:Name="TelemetryMappingStatus"
