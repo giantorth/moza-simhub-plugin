@@ -271,7 +271,7 @@
   <data name="Button_JoinDiscord" xml:space="preserve"><value>加入 Discord</value></data>
   <data name="Button_SponsorDevelopment" xml:space="preserve"><value>赞助开发</value></data>
   <data name="Button_Kofi" xml:space="preserve"><value>在 Ko-fi 上支持我</value></data>
-  <data name="Tooltip_Github" xml:space="preserve"><value>github.com/giantorth/moza-simhub-plugin</value></data>
+  <data name="Tooltip_Github" xml:space="preserve"><value>github.com/giantorth/AZOM</value></data>
   <data name="Tooltip_JoinDiscord" xml:space="preserve"><value>加入项目 Discord</value></data>
   <data name="Tooltip_Sponsor" xml:space="preserve"><value>github.com/sponsors/giantorth</value></data>
   <data name="Tooltip_Kofi" xml:space="preserve"><value>ko-fi.com/giantorth</value></data>

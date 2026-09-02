@@ -270,7 +270,7 @@
   <data name="Button_JoinDiscord" xml:space="preserve"><value>Tham gia Discord</value></data>
   <data name="Button_SponsorDevelopment" xml:space="preserve"><value>Tài trợ phát triển</value></data>
   <data name="Button_Kofi" xml:space="preserve"><value>Ủng hộ tôi trên Ko-fi</value></data>
-  <data name="Tooltip_Github" xml:space="preserve"><value>github.com/giantorth/moza-simhub-plugin</value></data>
+  <data name="Tooltip_Github" xml:space="preserve"><value>github.com/giantorth/AZOM</value></data>
   <data name="Tooltip_JoinDiscord" xml:space="preserve"><value>Tham gia Discord của dự án</value></data>
   <data name="Tooltip_Sponsor" xml:space="preserve"><value>github.com/sponsors/giantorth</value></data>
   <data name="Tooltip_Kofi" xml:space="preserve"><value>ko-fi.com/giantorth</value></data>
