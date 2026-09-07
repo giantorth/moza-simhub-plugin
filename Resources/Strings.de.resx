@@ -742,7 +742,7 @@ Id: {2}</value></data>
   <data name="SliderLabel_WheelbaseLfeSource" xml:space="preserve"><value>Quelle für Wheelbase-LFE</value></data>
   <data name="Option_WheelbaseLfeSourcePlugin" xml:space="preserve"><value>LFE-Tab des Plugins</value></data>
   <data name="Option_WheelbaseLfeSourceShakeIt" xml:space="preserve"><value>SimHub ShakeIt</value></data>
-  <data name="Status_WheelbaseLfeShakeItUnavailable" xml:space="preserve"><value>Erfordert SimHub 9.12 oder neuer.</value></data>
+  <data name="Status_WheelbaseLfeShakeItUnavailable" xml:space="preserve"><value>Erfordert SimHub 9.12 oder neuer — es wird der LFE-Tab des Plugins verwendet.</value></data>
   <data name="Status_WheelbaseLfeSourceRestartRequired" xml:space="preserve"><value>Gerätedefinition aktualisiert. SimHub zum Anwenden neu starten.</value></data>
   <data name="SliderLabel_ForzaCompatMode" xml:space="preserve"><value>Forza Horizon-Kompatibilität</value></data>
   <data name="Label_BaseGraphMode" xml:space="preserve"><value>Diagramm</value></data>
@@ -775,4 +775,5 @@ Id: {2}</value></data>
   <data name="Upload_StatusComplete" xml:space="preserve"><value>Abgeschlossen - 100 %</value></data>
   <data name="Upload_StatusStopped" xml:space="preserve"><value>Gestoppt - {0} %</value></data>
   <data name="Section_UploadSource" xml:space="preserve"><value>UPLOAD-QUELLE</value></data>
+  <data name="Banner_LegacyLfeMigrated_Body" xml:space="preserve"><value>Die Wheelbase-LFE-Haptik ist jetzt Teil des MOZA-Wheelbase-Geräts — fügen Sie dieses Gerät hinzu, um Ihre Effekte zu übernehmen.</value></data>
 </root>

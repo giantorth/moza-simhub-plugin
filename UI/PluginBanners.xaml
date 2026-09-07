@@ -142,5 +142,30 @@
             </Grid>
         </Border>
 
+        <!-- 4. One-time notice that the pre-1.6 "Wheelbase LFE haptics" device was
+             folded into the model-named wheelbase device. Shown while
+             LegacyLfeMigrationPending; cleared by the import itself (see
+             MozaBaseDeviceExtension.TryImportLegacySettings) or by Dismiss. -->
+        <Border x:Name="LegacyLfeBanner"
+                Visibility="Collapsed" Margin="0,8,0,0"
+                BorderBrush="{StaticResource CyanBrush}" BorderThickness="1"
+                Background="{StaticResource BgDeepBrush}" CornerRadius="4" Padding="12,8">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0"
+                           Text="{x:Static res:Strings.Banner_LegacyLfeMigrated_Body}"
+                           FontFamily="{StaticResource FontUi}" FontSize="12.5" FontWeight="SemiBold"
+                           Foreground="{StaticResource CyanBrush}"
+                           TextWrapping="Wrap" VerticalAlignment="Center"/>
+                <Button Grid.Column="1" x:Name="LegacyLfeDismissButton"
+                        Content="{x:Static res:Strings.Button_Dismiss}"
+                        VerticalAlignment="Center" Margin="12,0,0,0"
+                        Click="LegacyLfeDismiss_Click"/>
+            </Grid>
+        </Border>
+
     </StackPanel>
 </UserControl>

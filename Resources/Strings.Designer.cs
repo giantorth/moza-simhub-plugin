@@ -833,5 +833,6 @@ namespace MozaPlugin.Resources
         public static string Upload_StatusComplete => Get("Upload_StatusComplete");
         public static string Upload_StatusStopped => Get("Upload_StatusStopped");
         public static string Section_UploadSource => Get("Section_UploadSource");
+        public static string Banner_LegacyLfeMigrated_Body => Get("Banner_LegacyLfeMigrated_Body");
     }
 }

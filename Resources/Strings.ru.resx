@@ -742,7 +742,7 @@ Id: {2}</value></data>
   <data name="SliderLabel_WheelbaseLfeSource" xml:space="preserve"><value>Источник LFE базы</value></data>
   <data name="Option_WheelbaseLfeSourcePlugin" xml:space="preserve"><value>Вкладка LFE плагина</value></data>
   <data name="Option_WheelbaseLfeSourceShakeIt" xml:space="preserve"><value>SimHub ShakeIt</value></data>
-  <data name="Status_WheelbaseLfeShakeItUnavailable" xml:space="preserve"><value>Требуется SimHub 9.12 или новее.</value></data>
+  <data name="Status_WheelbaseLfeShakeItUnavailable" xml:space="preserve"><value>Требуется SimHub 9.12 или новее — используется вкладка LFE плагина.</value></data>
   <data name="Status_WheelbaseLfeSourceRestartRequired" xml:space="preserve"><value>Определение устройства обновлено. Перезапустите SimHub для применения.</value></data>
   <data name="SliderLabel_ForzaCompatMode" xml:space="preserve"><value>Совместимость с Forza Horizon</value></data>
   <data name="Label_BaseGraphMode" xml:space="preserve"><value>График</value></data>
@@ -775,4 +775,5 @@ Id: {2}</value></data>
   <data name="Upload_StatusComplete" xml:space="preserve"><value>Завершено - 100%</value></data>
   <data name="Upload_StatusStopped" xml:space="preserve"><value>Остановлено - {0}%</value></data>
   <data name="Section_UploadSource" xml:space="preserve"><value>ИСТОЧНИК ЗАГРУЗКИ</value></data>
+  <data name="Banner_LegacyLfeMigrated_Body" xml:space="preserve"><value>Тактильная отдача LFE базы теперь часть устройства базы MOZA — добавьте это устройство, чтобы перенести ваши эффекты.</value></data>
 </root>

@@ -41,6 +41,23 @@ namespace MozaPlugin.Settings
     /// </summary>
     public class MozaPluginSettings
     {
+        /// <summary>
+        /// Defaults for an install with no settings file yet — the ONE place the code
+        /// can tell "brand new user" from "upgraded from a build that predates the
+        /// field", since a missing field just deserializes to its initializer.
+        ///
+        /// Used by both the ReadCommonSettings create-if-not-found factory and
+        /// ProfileCoordinator.ClearSettings, which resets to a fresh install and must
+        /// not silently hand the user a worse configuration than a real fresh install.
+        /// Anything set here MUST keep its conservative value in the field initializer
+        /// so an existing settings file is never retroactively changed.
+        /// </summary>
+        public static MozaPluginSettings CreateForNewInstall() => new MozaPluginSettings
+        {
+            TelemetryEnabledDefaultForNewWheels = true,
+            WheelbaseLfeSource = WheelbaseLfeSource.ShakeIt,
+        };
+
         // Wheel LED mode settings (-1 = not yet saved).
         // Backing-field-volatile auto-properties: torn reads are possible when
         // LoadSlotIntoActive (serial-reader thread) writes while the UI/telemetry
@@ -300,7 +317,31 @@ namespace MozaPlugin.Settings
         // SimHub ShakeIt haptics device would sum on the wire, so exactly one owns
         // it. ShakeIt mode is what puts HapticsFeature in the base's device.json,
         // so switching redeploys the definition and asks for a SimHub restart.
+        //
+        // The initializer stays PluginTab deliberately: an existing settings file
+        // has no such key, and flipping it here would silently hide a user's
+        // configured LFE tab. New installs get ShakeIt via CreateForNewInstall, and
+        // upgraders who were using the pre-1.6 haptics device get it via the
+        // LegacyLfeDeviceMigrated one-shot below.
         public WheelbaseLfeSource WheelbaseLfeSource { get; set; } = WheelbaseLfeSource.PluginTab;
+
+        // One-shot marker for the migration off the pre-1.6 "Wheelbase LFE haptics"
+        // device (DeviceTypeID F208F60B-…), which was code-registered and vanished
+        // when v1.6 replaced it with the per-model wheelbase device's Haptics
+        // section. See Devices/Extensions/LegacyBaseDeviceMigration.cs and
+        // MozaPlugin.Init. Latched whether or not an orphan was found, so a user
+        // who later picks the plugin LFE tab is never flipped back.
+        public bool LegacyLfeDeviceMigrated { get; set; }
+
+        // An orphaned pre-1.6 haptics device was found and its settings have not
+        // been carried into a per-model wheelbase device yet. Drives the one-time
+        // banner; cleared by the import or by the user dismissing it.
+        public bool LegacyLfeMigrationPending { get; set; }
+
+        // InstanceId of that orphaned device (its folder under
+        // PluginsData/Common/Devices). Empty = nothing to import. The folder itself
+        // is never deleted — consumption is recorded here, not on disk.
+        public string LegacyLfeMigrationInstanceId { get; set; } = "";
 
         // ~1/min pull of the wheel display's own log via session FF kind=14,
         // acked with kind=15 (which clears those lines on the device). No UI —

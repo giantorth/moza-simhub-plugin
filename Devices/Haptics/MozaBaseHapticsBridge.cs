@@ -134,7 +134,56 @@ namespace MozaPlugin.Devices.Haptics
             return (containers, applied);
         }
 
-        /// <summary>Every distinct profile object reachable from the settings — the Profiles list plus CurrentProfile.</summary>
+        /// <summary>
+        /// True when this Haptics section still looks untouched — no effect switched
+        /// on in any profile.
+        ///
+        /// Gates the pre-1.6 settings import: a user who already moved to the new
+        /// device by hand and rebuilt their effects there must never have that
+        /// overwritten. The shipped defaults leave every stock effect disabled, and a
+        /// profile with nothing enabled drives nothing, so "nothing enabled" is a safe
+        /// proxy for "never configured".
+        ///
+        /// Returns false when the hosted plugin has not been constructed yet — unknown
+        /// is not "safe to overwrite", and the caller retries on its next pass.
+        /// </summary>
+        public static bool IsProfilePristine(object motorsDeviceExtension)
+        {
+            if (!IsSupported) return false;
+
+            try
+            {
+                var settings = GetHostedSettings(motorsDeviceExtension);
+                if (settings == null) return false;
+
+                foreach (var profile in ProfilesToWalk(settings))
+                    if (AnyContainerEnabled(GetProp(profile, "EffectsContainers"), depth: 0))
+                        return false;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                MozaLog.Debug($"[AZOM] Could not inspect the wheelbase Haptics profile: {ex.Message}");
+                return false;
+            }
+        }
+
+        // Groups hold their children under the same member name, so recurse — a
+        // disabled group full of enabled effects is still user work. Depth-capped
+        // because this walks a user-editable tree.
+        private static bool AnyContainerEnabled(object? containers, int depth)
+        {
+            if (depth > 8 || !(containers is System.Collections.IEnumerable list)) return false;
+
+            foreach (var container in list)
+            {
+                if (GetProp(container, "IsEnabled") is bool enabled && enabled)
+                    return true;
+                if (AnyContainerEnabled(GetProp(container, "EffectsContainers"), depth + 1))
+                    return true;
+            }
+            return false;
+        }
 
         /// <summary>Every distinct profile object reachable from the settings — the Profiles list plus CurrentProfile.</summary>
         internal static IEnumerable<object> ProfilesToWalk(object settings)

@@ -765,8 +765,33 @@ DeviceDriver.Display(
 | `DevicesDefaults/StandardDevicesTemplatesOnline/` | Downloaded templates | — |
 | `DevicesDefaults/*.shdevice` | Instantiated device defaults (UUID-named JSON files) | — |
 | `PluginsData/Common/Devices/index.json` | Active device instances | — |
+| `PluginsData/Common/Devices/<InstanceId>/settings.json` | One device instance's saved settings | — |
 | `PluginsData/DevicesDesccriptorCache.json` | Template metadata cache | — |
 | `DevicesLogos/` | Device images by GUID (PNG files) | — |
+
+#### Device instance settings on disk
+
+`index.json` is only a roster — `{ "Instances": [ { "InstanceId", "DeviceTypeName" } ], "LastActiveDevice", "ForceIndentedSaving" }`. Each instance's actual state lives in its own folder, named by the location SimHub itself computes:
+
+```csharp
+public string GetSettingsPath() =>          // DeviceInstance, 9.12.0
+    "PluginsData\\Common\\Devices\\" + (RootInstance?.InstanceId ?? InstanceId);
+```
+
+```jsonc
+{ "InstanceId": "…", "DeviceTypeID": "<descriptor GUID>_UserProject",
+  "Settings":          { "LEDS": { … }, "Haptics": { … } },   // keyed by CompositeCode
+  "ExtensionSettings": { "MozaBaseDeviceExtension": { … } },  // per DeviceExtension
+  "DeviceTypeName": "MOZA R16", "Enabled": true, … }
+```
+
+Two consequences worth knowing:
+
+- **`Settings` is keyed by `CompositeCode`, but only for a composed device.** `CompositeDeviceInstance.GetSettings` builds `Dictionary<CompositeCode, JToken>` over its children, and `SetSettings` splits it back the same way, calling `LoadDefaultSettings()` on any child the dictionary does not mention. A device added as a standalone root serializes its own settings **directly**, with no wrapper — so code reading a saved blob has to handle both shapes.
+- **A ShakeIt haptics device carries its whole effect tree here**, not in a shared profile store: `Settings.Haptics.Profiles[].EffectsContainers[]` plus `activeProfileId`, `LastGameProfiles`, `GlobalGain` and `DeviceControlsSettings`. Both `ShakeItV3DeviceInstance<,>` (code-registered) and `StandardProtocolMotorsDeviceExtension` (declarative) serialize it identically as `JToken.FromObject(shakeITV3PluginBase.Settings)` and load it by reconstructing `ShakeITV3PluginDevice` from the token, so the blob transfers verbatim between the two paths. `DeviceInstance.SetSettings(JToken, bool)` is `public abstract` on the version-stable base type, so no reflection is needed to drive that — but both implementations wrap their body in `Application.Current.Dispatcher.Invoke`, which **deadlocks if called from the data thread**. Marshal with `BeginInvoke`.
+- **`LedModuleDevice.SetSettings` indexes `dictionary["ledModuleSettings"]` unconditionally** and throws `KeyNotFoundException` when it is absent. Validate a hand-supplied blob before handing it over.
+
+The folder survives orphaning: SimHub deletes it only when the user removes the device, so settings belonging to a `DeviceTypeID` that no longer resolves stay readable indefinitely. That is what makes a plugin-side migration off a retired device identity possible — see [`docs/DEVELOPMENT.md`](DEVELOPMENT.md#device-extensions-devices) § Migrating off the pre-1.6 wheelbase devices.
 
 ### Gotchas and Practical Notes
 

@@ -27,6 +27,15 @@ namespace MozaPlugin.Devices.Extensions
         public bool LfeChannelDefaultsNormalized { get; set; }
 
         /// <summary>
+        /// One-shot marker: the pre-1.6 wheelbase device's settings have been carried
+        /// into this device instance, or deliberately skipped because it was already
+        /// configured. Latched either way so the import is attempted exactly once per
+        /// device instance and can never overwrite later user edits.
+        /// See <see cref="LegacyBaseDeviceMigration"/>.
+        /// </summary>
+        public bool LegacyLfeImported { get; set; }
+
+        /// <summary>
         /// Capture current base ambient state from the plugin. When
         /// <paramref name="profile"/> is provided, prefer profile values over
         /// the flat-field fallback — the new R5 source of truth.

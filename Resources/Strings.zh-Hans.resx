@@ -742,7 +742,7 @@ Id: {2}</value></data>
   <data name="SliderLabel_WheelbaseLfeSource" xml:space="preserve"><value>轮基 LFE 来源</value></data>
   <data name="Option_WheelbaseLfeSourcePlugin" xml:space="preserve"><value>插件 LFE 选项卡</value></data>
   <data name="Option_WheelbaseLfeSourceShakeIt" xml:space="preserve"><value>SimHub ShakeIt</value></data>
-  <data name="Status_WheelbaseLfeShakeItUnavailable" xml:space="preserve"><value>需要 SimHub 9.12 或更高版本。</value></data>
+  <data name="Status_WheelbaseLfeShakeItUnavailable" xml:space="preserve"><value>需要 SimHub 9.12 或更高版本 — 当前使用插件的 LFE 选项卡。</value></data>
   <data name="Status_WheelbaseLfeSourceRestartRequired" xml:space="preserve"><value>设备定义已更新。请重启 SimHub 以应用。</value></data>
   <data name="SliderLabel_ForzaCompatMode" xml:space="preserve"><value>Forza Horizon 兼容性</value></data>
   <data name="Label_BaseGraphMode" xml:space="preserve"><value>图表</value></data>
@@ -775,4 +775,5 @@ Id: {2}</value></data>
   <data name="Upload_StatusComplete" xml:space="preserve"><value>已完成 - 100%</value></data>
   <data name="Upload_StatusStopped" xml:space="preserve"><value>已停止 - {0}%</value></data>
   <data name="Section_UploadSource" xml:space="preserve"><value>上传来源</value></data>
+  <data name="Banner_LegacyLfeMigrated_Body" xml:space="preserve"><value>底座 LFE 触感已并入 MOZA 底座设备 — 添加该设备即可迁移你的效果。</value></data>
 </root>

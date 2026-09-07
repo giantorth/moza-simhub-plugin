@@ -58,9 +58,20 @@ namespace MozaPlugin
         // live plugin through Instance; these forwarders keep the worker the
         // single wire owner.
 
-        /// <summary>True when the user routed wheelbase LFE to SimHub's ShakeIt motors editor rather than the plugin's own LFE tab.</summary>
+        /// <summary>
+        /// True when the user routed wheelbase LFE to SimHub's ShakeIt motors editor
+        /// rather than the plugin's own LFE tab.
+        ///
+        /// Gated on <see cref="Devices.Haptics.MozaBaseHapticsBridge.IsSupported"/>: the
+        /// declarative HapticsFeature path needs SimHub 9.12. Without the gate a settings
+        /// file that says ShakeIt would, on a 9.11 host, write a definition that host
+        /// cannot build AND silence the plugin's own LFE worker with nothing to replace
+        /// it. Gating here rather than at the setter keeps the stored value a preference,
+        /// so it starts working by itself once the user updates SimHub.
+        /// </summary>
         internal bool WheelbaseLfeRoutedToShakeIt =>
-            Settings?.WheelbaseLfeSource == LfeSource.ShakeIt;
+            Settings?.WheelbaseLfeSource == LfeSource.ShakeIt
+            && Devices.Haptics.MozaBaseHapticsBridge.IsSupported;
 
         /// <summary>True when the base's device definition should carry a HapticsFeature block: LFE-capable firmware AND the user routed LFE to ShakeIt.</summary>
         internal bool WheelbaseWantsShakeItHaptics => WheelbaseLfeRoutedToShakeIt && _data.BaseSupportsLfe;

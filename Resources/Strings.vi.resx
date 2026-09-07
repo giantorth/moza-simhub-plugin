@@ -742,7 +742,7 @@ Id: {2}</value></data>
   <data name="SliderLabel_WheelbaseLfeSource" xml:space="preserve"><value>Nguồn LFE của đế lái</value></data>
   <data name="Option_WheelbaseLfeSourcePlugin" xml:space="preserve"><value>Thẻ LFE của plugin</value></data>
   <data name="Option_WheelbaseLfeSourceShakeIt" xml:space="preserve"><value>SimHub ShakeIt</value></data>
-  <data name="Status_WheelbaseLfeShakeItUnavailable" xml:space="preserve"><value>Cần SimHub 9.12 trở lên.</value></data>
+  <data name="Status_WheelbaseLfeShakeItUnavailable" xml:space="preserve"><value>Yêu cầu SimHub 9.12 trở lên — đang dùng thẻ LFE của plugin.</value></data>
   <data name="Status_WheelbaseLfeSourceRestartRequired" xml:space="preserve"><value>Đã cập nhật định nghĩa thiết bị. Khởi động lại SimHub để áp dụng.</value></data>
   <data name="SliderLabel_ForzaCompatMode" xml:space="preserve"><value>Khả năng tương thích Forza Horizon</value></data>
   <data name="Label_BaseGraphMode" xml:space="preserve"><value>Biểu đồ</value></data>
@@ -775,4 +775,5 @@ Id: {2}</value></data>
   <data name="Upload_StatusComplete" xml:space="preserve"><value>Hoàn tất - 100%</value></data>
   <data name="Upload_StatusStopped" xml:space="preserve"><value>Đã dừng - {0}%</value></data>
   <data name="Section_UploadSource" xml:space="preserve"><value>NGUỒN TẢI LÊN</value></data>
+  <data name="Banner_LegacyLfeMigrated_Body" xml:space="preserve"><value>Phản hồi rung LFE của đế đã chuyển vào thiết bị đế MOZA — hãy thêm thiết bị đó để chuyển các hiệu ứng của bạn.</value></data>
 </root>

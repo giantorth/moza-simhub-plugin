@@ -73,7 +73,7 @@ namespace MozaPlugin
             {
                 _data = new MozaData();
                 _settings = this.ReadCommonSettings<MozaPluginSettings>("MozaPluginSettings",
-                    () => new MozaPluginSettings { TelemetryEnabledDefaultForNewWheels = true });
+                    MozaPluginSettings.CreateForNewInstall);
                 _fsr1Cm1Mapping = new Fsr1Cm1MappingCoordinator(this);
                 _profileCoordinator = new ProfileCoordinator(this);
                 _channelMapping = new ChannelMappingCoordinator(this);
@@ -166,6 +166,34 @@ namespace MozaPlugin
                 // resolution (current-wheel page lookup, per-page settings dicts)
                 // depends on it throughout runtime.
                 MozaDeviceConstants.InitializeRegistry();
+
+                // v1.6 replaced the code-registered "Wheelbase LFE haptics" device
+                // with the per-model wheelbase device's Haptics section. An upgraded
+                // settings file has no WheelbaseLfeSource key, so it deserializes to
+                // PluginTab and the replacement device gets no HapticsFeature at all
+                // — the feature silently vanishes for someone who was using it. If
+                // that device's orphaned settings are still on disk, route LFE to
+                // ShakeIt and flag the effects for import. Runs after
+                // InitializeRegistry: the scan resolves per-model base DeviceTypeIDs
+                // through that registry.
+                if (!_settings.LegacyLfeDeviceMigrated)
+                {
+                    _settings.LegacyLfeDeviceMigrated = true;
+                    var legacy = LegacyBaseDeviceMigration.Scan();
+
+                    // Someone who already found the Options toggle and rebuilt their
+                    // effects on the new device is done — don't touch their choice.
+                    if (legacy.HasAnything && !legacy.PerModelHapticsConfigured)
+                    {
+                        if (legacy.Haptics != null)
+                            _settings.WheelbaseLfeSource = WheelbaseLfeSource.ShakeIt;
+                        _settings.LegacyLfeMigrationInstanceId = legacy.InstanceId;
+                        _settings.LegacyLfeMigrationPending = true;
+                        MozaLog.Info(
+                            "[AZOM] Migrating the pre-1.6 wheelbase device settings — LFE routed to "
+                            + "SimHub ShakeIt; effects transfer once the model-named device is added");
+                    }
+                }
 
                 // Restore blink colors from settings (write-only, can't be polled from device)
                 MozaProfile.UnpackColorsInto(_settings.WheelRpmBlinkColors, _data.WheelRpmBlinkColors);

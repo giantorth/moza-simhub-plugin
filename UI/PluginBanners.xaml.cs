@@ -84,6 +84,7 @@ namespace MozaPlugin.UI
             // progress line (progress + completion are event-driven instead).
             if (!UpdateInstallCoordinator.Instance.InstallInProgress) RefreshUpdateBanner();
             RefreshSdkPrompt();
+            RefreshLegacyLfeBanner();
         }
 
         // ===== 1. Status hints =====
@@ -292,6 +293,30 @@ namespace MozaPlugin.UI
                 try { plugin!.PersistSettings(); } catch { /* best-effort */ }
             }
             RefreshSdkPrompt();
+        }
+
+        // ===== 4. Pre-1.6 wheelbase haptics migration =====
+
+        // Stays up across the restart AND the "add the model-named device" step, so
+        // it is persisted rather than session-scoped. Cleared by the import itself
+        // once the settings actually land on the new device.
+        private void RefreshLegacyLfeBanner()
+        {
+            var s = MozaPlugin.Instance?.Settings;
+            LegacyLfeBanner.Visibility =
+                s != null && s.LegacyLfeMigrationPending ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        private void LegacyLfeDismiss_Click(object sender, RoutedEventArgs e)
+        {
+            var plugin = MozaPlugin.Instance;
+            var s = plugin?.Settings;
+            if (s != null && s.LegacyLfeMigrationPending)
+            {
+                s.LegacyLfeMigrationPending = false;
+                try { plugin!.PersistSettings(); } catch { /* best-effort */ }
+            }
+            RefreshLegacyLfeBanner();
         }
 
         // Open a URL via the OS shell (browser on Windows; winebrowser → xdg-open

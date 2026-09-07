@@ -52,6 +52,12 @@ namespace MozaPlugin.Devices.Extensions
         // plenty for a re-assert that only matters after a profile switch.
         private int _providerInstallTick = ProviderInstallEveryNFrames;
         private const int ProviderInstallEveryNFrames = 60;
+        // Pre-1.6 settings import: reached a terminal decision (imported, skipped
+        // because the device was already configured, or nothing to import). Until
+        // then it re-checks on the same ~1 Hz cadence, because the Haptics section
+        // only appears after the user restarts SimHub with the new definition.
+        private bool _legacyImportSettled;
+        private int _legacyImportTick;
         // SimHub's motors (Haptics) sub-device, present only when the definition
         // declares HapticsFeature. Held so the channels-provider swap can be
         // re-asserted every tick.
@@ -220,6 +226,173 @@ namespace MozaPlugin.Devices.Extensions
             return null;
         }
 
+        private LedModuleDevice? FindLedDevice()
+        {
+            try
+            {
+                foreach (var instance in LinkedDevice.GetInstances())
+                {
+                    if (instance is LedModuleDevice lmd && lmd.ledModuleSettings != null)
+                        return lmd;
+                }
+            }
+            catch (Exception ex)
+            {
+                MozaLog.Debug($"[AZOM] Could not locate the LEDs sub-device: {ex.Message}");
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Carry the pre-1.6 wheelbase device's settings into this one.
+        ///
+        /// Up to v1.5.7 the wheelbase was two SimHub devices — a code-registered
+        /// "Wheelbase LFE haptics" one and the shared "MOZA Wheel Base" LED one. v1.6
+        /// replaced both with this per-model composite, orphaning the originals and
+        /// everything the user had configured on them. Their saved settings survive on
+        /// disk (see <see cref="LegacyBaseDeviceMigration"/>) and both old and new
+        /// sub-devices serialise identically, so the transfer is a straight
+        /// <c>SetSettings</c> handoff of a JToken.
+        ///
+        /// Three things make this safe to run unattended:
+        ///
+        /// • It never overwrites configured state. The Haptics half runs only while
+        ///   <see cref="MozaBaseHapticsBridge.IsProfilePristine"/> holds; a user who
+        ///   already moved across by hand is left alone and the migration is marked
+        ///   done rather than retried.
+        /// • It runs from DataUpdate, not Init. SimHub calls the extension's Init
+        ///   BEFORE the sub-devices' own SetSettings during LoadDevices, so importing
+        ///   any earlier would just be overwritten by SimHub's own load.
+        /// • The writes go through Dispatcher.BeginInvoke. Both SetSettings paths
+        ///   expect the UI thread (the motors one does a blocking Dispatcher.Invoke
+        ///   internally, which would deadlock if called from the data thread), and
+        ///   BeginInvoke keeps this tick non-blocking.
+        /// </summary>
+        private void TryImportLegacySettings()
+        {
+            try
+            {
+                var plugin = MozaPlugin.Instance;
+                var settings = plugin?.Settings;
+                if (plugin == null || settings == null) return;
+
+                // Already handled for this device instance, or Init found nothing to do.
+                if (_settings.LegacyLfeImported || string.IsNullOrEmpty(settings.LegacyLfeMigrationInstanceId))
+                {
+                    _legacyImportSettled = true;
+                    return;
+                }
+
+                var legacy = LegacyBaseDeviceMigration.Scan();
+                if (!legacy.HasAnything)
+                {
+                    Settle(plugin, imported: false);
+                    return;
+                }
+
+                var motors = legacy.Haptics != null ? FindMotorsDevice() as DeviceInstance : null;
+                // The Haptics section only exists once the user restarts SimHub with a
+                // definition carrying HapticsFeature. Keep waiting rather than settling.
+                if (legacy.Haptics != null && motors == null) return;
+
+                if (motors != null && !MozaBaseHapticsBridge.IsProfilePristine(motors))
+                {
+                    MozaLog.Info("[AZOM] Wheelbase Haptics already has effects configured — "
+                               + "leaving it alone and marking the pre-1.6 migration done");
+                    Settle(plugin, imported: false);
+                    return;
+                }
+
+                // The legacy shared definition was a fixed 18-LED strip; per-model
+                // definitions carry the real geometry (12 on an R16). Transplanting
+                // across a size change would address LEDs that do not exist.
+                LedModuleDevice? leds = null;
+                if (legacy.Leds != null)
+                {
+                    int modelLeds = BaseModelInfo.LedsPerStripForPrefix(_modelPrefix) * 2;
+                    if (modelLeds == LegacyBaseDeviceMigration.LegacyBaseLedCount)
+                        leds = FindLedDevice();
+                    else
+                        MozaLog.Info(
+                            $"[AZOM] Not importing the pre-1.6 ambient LED profile: it was written for "
+                            + $"{LegacyBaseDeviceMigration.LegacyBaseLedCount} LEDs, this base has {modelLeds}");
+                }
+
+                var dispatcher = System.Windows.Application.Current?.Dispatcher;
+                if (dispatcher == null) return;   // no WPF yet; retry next pass
+
+                // Settle before dispatching: the callback is asynchronous and this
+                // method runs again ~1 s later, which would otherwise queue a second
+                // import over the first.
+                Settle(plugin, imported: motors != null);
+
+                dispatcher.BeginInvoke((Action)(() => ImportOnUiThread(motors, leds, legacy)));
+            }
+            catch (Exception ex)
+            {
+                MozaLog.Warn($"[AZOM] Pre-1.6 wheelbase settings import failed: {ex.Message}");
+                _legacyImportSettled = true;
+            }
+        }
+
+        /// <summary>
+        /// Mark the import handled for this device instance and clear the banner.
+        ///
+        /// <paramref name="imported"/> also latches the shipped-defaults pass, because
+        /// MozaLfeEffectDefaults.ApplyTo is authoritative rather than shape-matched —
+        /// it rewrites every container to "all effects off, oscillator 1" and would
+        /// wipe what was just imported. It must stay false on every other path: a
+        /// device that imported nothing still needs that pass, or it keeps SimHub's
+        /// stock all-channels-on defaults and sums to a silent 3x.
+        /// </summary>
+        private void Settle(MozaPlugin plugin, bool imported)
+        {
+            _legacyImportSettled = true;
+            _settings.LegacyLfeImported = true;
+            if (imported)
+                _settings.LfeChannelDefaultsNormalized = true;
+
+            var s = plugin.Settings;
+            if (s != null && s.LegacyLfeMigrationPending)
+            {
+                s.LegacyLfeMigrationPending = false;
+                try { plugin.PersistSettings(); } catch { /* best-effort */ }
+            }
+        }
+
+        private void ImportOnUiThread(DeviceInstance? motors, LedModuleDevice? leds, LegacyBaseScanResult legacy)
+        {
+            if (motors != null && legacy.Haptics != null)
+            {
+                try
+                {
+                    motors.SetSettings(legacy.Haptics, isDefault: false);
+                    // SetSettings rebuilds the hosted ShakeIt plugin wholesale, so
+                    // SimHub's stock channels provider is back on. Re-assert ours now
+                    // rather than waiting for the ~1 Hz tick.
+                    MozaBaseHapticsBridge.TryInstallChannelsProvider(motors);
+                    MozaLog.Info("[AZOM] Imported the pre-1.6 wheelbase LFE effects into this device's Haptics section");
+                }
+                catch (Exception ex)
+                {
+                    MozaLog.Warn($"[AZOM] Could not import the pre-1.6 wheelbase LFE effects: {ex.Message}");
+                }
+            }
+
+            if (leds != null && legacy.Leds != null)
+            {
+                try
+                {
+                    leds.SetSettings(legacy.Leds, isDefault: false);
+                    MozaLog.Info("[AZOM] Imported the pre-1.6 wheelbase ambient LED profile");
+                }
+                catch (Exception ex)
+                {
+                    MozaLog.Warn($"[AZOM] Could not import the pre-1.6 wheelbase ambient LED profile: {ex.Message}");
+                }
+            }
+        }
+
         /// <summary>
         /// Remove SimHub's "Connection" sub-device from the composite.
         ///
@@ -316,6 +489,12 @@ namespace MozaPlugin.Devices.Extensions
             _connectionSwapAttempted = false;
             _motorsDevice = null;
 
+            // Not reset: _settings.LegacyLfeImported. It is persisted with the device
+            // profile precisely so the import survives a reload; only the in-memory
+            // retry latch clears with the extension.
+            _legacyImportSettled = false;
+            _legacyImportTick = 0;
+
             _driverInjected = false;
         }
 
@@ -339,6 +518,15 @@ namespace MozaPlugin.Devices.Extensions
             {
                 _providerInstallTick = 0;
                 TryEarlyProviderInstall();
+            }
+
+            // Same cadence, its own counter: this one keeps retrying until the
+            // Haptics section exists (it only appears after the user restarts SimHub
+            // with a definition carrying HapticsFeature), then settles for good.
+            if (!_legacyImportSettled && ++_legacyImportTick >= ProviderInstallEveryNFrames)
+            {
+                _legacyImportTick = 0;
+                TryImportLegacySettings();
             }
         }
 

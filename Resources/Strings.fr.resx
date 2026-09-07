@@ -742,7 +742,7 @@ Id : {2}</value></data>
   <data name="SliderLabel_WheelbaseLfeSource" xml:space="preserve"><value>Source LFE de la base</value></data>
   <data name="Option_WheelbaseLfeSourcePlugin" xml:space="preserve"><value>Onglet LFE du plugin</value></data>
   <data name="Option_WheelbaseLfeSourceShakeIt" xml:space="preserve"><value>SimHub ShakeIt</value></data>
-  <data name="Status_WheelbaseLfeShakeItUnavailable" xml:space="preserve"><value>Nécessite SimHub 9.12 ou plus récent.</value></data>
+  <data name="Status_WheelbaseLfeShakeItUnavailable" xml:space="preserve"><value>Nécessite SimHub 9.12 ou plus récent — l'onglet LFE du plugin est utilisé.</value></data>
   <data name="Status_WheelbaseLfeSourceRestartRequired" xml:space="preserve"><value>Définition d'appareil mise à jour. Redémarrez SimHub pour l'appliquer.</value></data>
   <data name="SliderLabel_ForzaCompatMode" xml:space="preserve"><value>Compatibilité Forza Horizon</value></data>
   <data name="Label_BaseGraphMode" xml:space="preserve"><value>Graphique</value></data>
@@ -775,4 +775,5 @@ Id : {2}</value></data>
   <data name="Upload_StatusComplete" xml:space="preserve"><value>Terminé - 100 %</value></data>
   <data name="Upload_StatusStopped" xml:space="preserve"><value>Arrêté - {0} %</value></data>
   <data name="Section_UploadSource" xml:space="preserve"><value>SOURCE DU TÉLÉVERSEMENT</value></data>
+  <data name="Banner_LegacyLfeMigrated_Body" xml:space="preserve"><value>Le retour haptique LFE de la base est désormais intégré au périphérique de base MOZA — ajoutez-le pour conserver vos effets.</value></data>
 </root>

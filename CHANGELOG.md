@@ -32,7 +32,8 @@ All notable changes to the AZOM plugin are documented here.
   overridden. Per-dashboard overrides still win.
 - **Wheelbase LEDs and LFE are now a single SimHub device** on SimHub 9.12+, shipping a set of
   ShakeIt default effects. A **Wheelbase LFE source** option (Options tab) chooses between the
-  plugin's LFE tab and SimHub ShakeIt.
+  plugin's LFE tab and SimHub ShakeIt. New installs start on SimHub ShakeIt; upgrading never
+  changes the source you are already using.
 - **Wheelbase ambient LED controls** — per-LED colours for both strips, idle and sleep effects
   with their own animation speeds, and the sleep timeout. R16 Ultra strip length added.
 - **Wheelbase product images** — the base now shows its own render in SimHub's Devices list.
@@ -178,6 +179,22 @@ All notable changes to the AZOM plugin are documented here.
 
 ### Changed
 
+- **Your old wheelbase haptics and LED settings come across on upgrade.** Up to 1.5.7 a
+  wheelbase showed up as two entries in SimHub's Devices list — "Wheelbase LFE haptics" and
+  "MOZA Wheel Base" — and both are replaced by the single model-named device, so both vanish
+  when you update. The plugin now picks up the settings they leave behind: add the model-named
+  wheelbase device (MOZA R16, MOZA R21, …) and your ShakeIt effects, gains and per-game
+  profiles are already in place. Wheelbase LFE is switched to SimHub ShakeIt for you, and a
+  notice on the plugin page explains what moved until the transfer is done. Ambient LED effects
+  transfer too, on bases whose strip is the same length as the old shared device's — a shorter
+  strip is left alone rather than handed a profile written for a longer one. If you had already
+  moved to the new device and set your effects up yourself, nothing is touched.
+- **Wheelbase LFE source needs SimHub 9.12 or newer.** The combined device is a 9.12 feature, so
+  on older SimHub the plugin's own LFE tab is used instead and the Options row now says why.
+  Updating SimHub switches you over with nothing further to do.
+- **Clear all settings now resets to first-install defaults** instead of a bare configuration, so
+  dashboard telemetry for new wheels and the wheelbase LFE source come back the way a fresh
+  install would set them.
 - **Base tab header tidied.** Calibrate Center now sits directly under the steering arc it acts
   on, and the performance-output and graph selectors share one row instead of stacking.
 - **The diagnostics report now includes the wheelbase itself.** A "Base identity" section reports

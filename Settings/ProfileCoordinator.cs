@@ -137,7 +137,11 @@ namespace MozaPlugin.Settings
         internal void ClearSettings()
         {
             _plugin.TelemetrySender?.Stop();
-            _plugin._settings = new MozaPluginSettings();
+            // Fresh-install defaults, not a bare `new`: reset must land the user
+            // where a first-time install would, or "clear all settings" silently
+            // hands them a worse configuration than a clean install (dashboard
+            // telemetry off for new wheels, wheelbase LFE off ShakeIt).
+            _plugin._settings = MozaPluginSettings.CreateForNewInstall();
             _plugin.SaveCommonSettings("MozaPluginSettings", _plugin.Settings);
             // InitProfileSystem re-pushes the master-mapper defaults from the
             // freshly-seeded profile, replacing the cleared set's snapshot.
