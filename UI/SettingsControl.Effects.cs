@@ -255,6 +255,11 @@ namespace MozaPlugin.UI
                 : isClutch ? MBoosterUiConstants.ClutchDeadzoneMinKg : MBoosterUiConstants.BrakeDeadzoneMinKg;
             MBoosterDeadzoneSlider.Maximum = isThrottle ? MBoosterUiConstants.ThrottleDeadzoneMaxKg
                 : isClutch ? MBoosterUiConstants.ClutchDeadzoneMaxKg : MBoosterUiConstants.BrakeDeadzoneMaxKg;
+            // Pedal Feel's curve plots absolute force, so its Y ceiling is
+            // this role's own Max Force ceiling (200kg Brake / 20kg
+            // Throttle-Clutch) — otherwise a light pedal's whole curve would
+            // sit squashed against the bottom of a 200kg axis.
+            MBoosterInputCurveEditor.YMax = MBoosterMaxForceSlider.Maximum;
 
             // Effects list is role-scoped too: ABS, Lockup, Threshold, and
             // Brake Fade are all brake-specific (ABS/Lockup/Threshold trigger
@@ -306,6 +311,7 @@ namespace MozaPlugin.UI
             MBoosterMaxForceSlider.Maximum = MBoosterUiConstants.BrakeMaxForceMaxKg;
             MBoosterDeadzoneSlider.Minimum = MBoosterUiConstants.BrakeDeadzoneMinKg;
             MBoosterDeadzoneSlider.Maximum = MBoosterUiConstants.BrakeDeadzoneMaxKg;
+            MBoosterInputCurveEditor.YMax = MBoosterMaxForceSlider.Maximum;
 
             // Seed every control to its default once. The curve editors take no
             // node data of their own — they two-way bind to the hidden data-store

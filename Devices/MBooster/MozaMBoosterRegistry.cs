@@ -615,7 +615,10 @@ namespace MozaPlugin.Devices.MBooster
         // Default/un-dragged shape of the Pedal Feel curve's 6 Y nodes
         // (mbooster-brake-feelcurve-1..6, cmdId 0xAB selectors 0x08-0x0D),
         // as a fraction (0-1) of the way from Deadzone to Max Force —
-        // REVISED to evenly-spaced sevenths (k/7 for k=1..6). A "Deadzone
+        // REVISED to evenly-spaced sevenths (k/7 for k=1..6). Sevenths are
+        // what "evenly spaced" means here: these 6 are the interior points
+        // of an 8-point graph whose two ends are fixed and undraggable —
+        // (0,0) = Deadzone (0x07) and (100,100) = Max Force (0x0E). A "Deadzone
         // slider does nothing" report prompted 4 fresh sweeps
         // (clutch-0-8kg-deadzone-sweep.pcapng, clutch-4-20kg-maxforce-sweep
         // .pcapng, throttle-0-6kg-deadzone-sweep.pcapng, throttle-4-20kg-

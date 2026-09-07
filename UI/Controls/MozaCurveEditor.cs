@@ -216,6 +216,70 @@ namespace MozaControls
                     (d, e) => ((MozaCurveEditor)d).Recompute()));
         public bool AnchorAtTopRight { get => (bool)GetValue(AnchorAtTopRightProperty); set => SetValue(AnchorAtTopRightProperty, value); }
 
+        // When true, whichever corner anchors are enabled above are also
+        // DRAWN as node-styled circles — dimmed and hit-test-transparent, so
+        // they read as real points that can't be dragged. Used by the Pedal
+        // Feel curve, whose graph is 8 points: (0,0) set by the Deadzone
+        // slider, 6 draggable nodes, and a (100,100) node set by Max Force
+        // (selectors 0x07 / 0x08-0x0D / 0x0E — see
+        // docs/protocol/devices/mbooster.md "Pedal Feel"). Off by default:
+        // AnchorAtOrigin is on for every output curve in the app, and none of
+        // those show a point at the origin.
+        public static readonly DependencyProperty ShowAnchorPointsProperty =
+            DependencyProperty.Register(nameof(ShowAnchorPoints), typeof(bool), typeof(MozaCurveEditor),
+                new FrameworkPropertyMetadata(false, FrameworkPropertyMetadataOptions.AffectsRender,
+                    (d, e) => ((MozaCurveEditor)d).Recompute()));
+        public bool ShowAnchorPoints { get => (bool)GetValue(ShowAnchorPointsProperty); set => SetValue(ShowAnchorPointsProperty, value); }
+
+        // When true (with ShowAnchorPoints + AnchorAtTopRight), the top-right
+        // anchor point is draggable VERTICALLY — it writes SpanHigh, so bind
+        // that to whatever value the point represents (Pedal Feel: the Max
+        // Force slider) and the drag drives it. Never draggable in X: it is
+        // the curve's fixed end, at full-scale input. Pit House behaves the
+        // same way for this point.
+        public static readonly DependencyProperty AnchorEndDraggableInYProperty =
+            DependencyProperty.Register(nameof(AnchorEndDraggableInY), typeof(bool), typeof(MozaCurveEditor),
+                new FrameworkPropertyMetadata(false));
+        public bool AnchorEndDraggableInY { get => (bool)GetValue(AnchorEndDraggableInYProperty); set => SetValue(AnchorEndDraggableInYProperty, value); }
+
+        // Y sub-range the node values are a PERCENTAGE of, in axis units
+        // (NaN on either = off, the default: node Y values are plain axis
+        // values, as every other curve in this app uses them).
+        //
+        // The Pedal Feel curve needs this because its 6 stored nodes are
+        // percentages of the Deadzone→Max Force span while the plot itself
+        // has to be in absolute kg: the two ends of that span are themselves
+        // graph points (selectors 0x07 and 0x0E), and the top one is
+        // user-draggable, which a span-normalized axis cannot express — 100%
+        // *is* Max Force there, so the point could never move. With the
+        // absolute axis, dragging Max Force down rescales every node's kg
+        // while its stored percentage stays put, which is exactly what the
+        // wire does (see docs/protocol/devices/mbooster.md "Pedal Feel").
+        public static readonly DependencyProperty SpanLowProperty =
+            DependencyProperty.Register(nameof(SpanLow), typeof(double), typeof(MozaCurveEditor),
+                new FrameworkPropertyMetadata(double.NaN,
+                    FrameworkPropertyMetadataOptions.BindsTwoWayByDefault | FrameworkPropertyMetadataOptions.AffectsRender,
+                    (d, e) => ((MozaCurveEditor)d).Recompute()));
+        public double SpanLow { get => (double)GetValue(SpanLowProperty); set => SetValue(SpanLowProperty, value); }
+
+        public static readonly DependencyProperty SpanHighProperty =
+            DependencyProperty.Register(nameof(SpanHigh), typeof(double), typeof(MozaCurveEditor),
+                new FrameworkPropertyMetadata(double.NaN,
+                    FrameworkPropertyMetadataOptions.BindsTwoWayByDefault | FrameworkPropertyMetadataOptions.AffectsRender,
+                    (d, e) => ((MozaCurveEditor)d).Recompute()));
+        public double SpanHigh { get => (double)GetValue(SpanHighProperty); set => SetValue(SpanHighProperty, value); }
+
+        // Node Y values are percentages of SpanLow..SpanHigh rather than
+        // plain axis values.
+        private bool SpanMode => !double.IsNaN(SpanLow) && !double.IsNaN(SpanHigh);
+
+        // Axis-unit width of that span. Zero (Max Force dragged down onto
+        // Deadzone) flattens the curve onto SpanLow rather than dividing by
+        // zero; the inverse conversion refuses to run at all.
+        private double SpanRange => Math.Max(0, SpanHigh - SpanLow);
+
+        private bool EndAnchorGrabbable => AnchorEndDraggableInY && AnchorAtTopRight && ShowAnchorPoints;
+
         // Diagonal y=x reference line from plot lower-left to upper-right —
         // the "nominal" / linear response. Shown on output curves to make it
         // easy to read deviation. Off on the EQ where a y=x line is
@@ -324,6 +388,57 @@ namespace MozaControls
                 typeof(MozaCurveEditor), new PropertyMetadata(-10000.0));
         public static readonly DependencyProperty LiveMarkerTopProperty = LiveMarkerTopKey.DependencyProperty;
         public double LiveMarkerTop => (double)GetValue(LiveMarkerTopProperty);
+
+        // The two fixed anchor points (see ShowAnchorPoints) — Border
+        // top-left corner, same convention as NodeXKeys, with the anchor's
+        // own Y value (YMin / YMax) as the in-circle text.
+        private static readonly DependencyPropertyKey AnchorStartVisibleKey =
+            DependencyProperty.RegisterReadOnly(nameof(AnchorStartVisible), typeof(Visibility),
+                typeof(MozaCurveEditor), new PropertyMetadata(Visibility.Collapsed));
+        public static readonly DependencyProperty AnchorStartVisibleProperty = AnchorStartVisibleKey.DependencyProperty;
+        public Visibility AnchorStartVisible => (Visibility)GetValue(AnchorStartVisibleProperty);
+
+        private static readonly DependencyPropertyKey AnchorStartLeftKey =
+            DependencyProperty.RegisterReadOnly(nameof(AnchorStartLeft), typeof(double),
+                typeof(MozaCurveEditor), new PropertyMetadata(-10000.0));
+        public static readonly DependencyProperty AnchorStartLeftProperty = AnchorStartLeftKey.DependencyProperty;
+        public double AnchorStartLeft => (double)GetValue(AnchorStartLeftProperty);
+
+        private static readonly DependencyPropertyKey AnchorStartTopKey =
+            DependencyProperty.RegisterReadOnly(nameof(AnchorStartTop), typeof(double),
+                typeof(MozaCurveEditor), new PropertyMetadata(-10000.0));
+        public static readonly DependencyProperty AnchorStartTopProperty = AnchorStartTopKey.DependencyProperty;
+        public double AnchorStartTop => (double)GetValue(AnchorStartTopProperty);
+
+        private static readonly DependencyPropertyKey AnchorStartValueKey =
+            DependencyProperty.RegisterReadOnly(nameof(AnchorStartValue), typeof(string),
+                typeof(MozaCurveEditor), new PropertyMetadata(string.Empty));
+        public static readonly DependencyProperty AnchorStartValueProperty = AnchorStartValueKey.DependencyProperty;
+        public string AnchorStartValue => (string)GetValue(AnchorStartValueProperty);
+
+        private static readonly DependencyPropertyKey AnchorEndVisibleKey =
+            DependencyProperty.RegisterReadOnly(nameof(AnchorEndVisible), typeof(Visibility),
+                typeof(MozaCurveEditor), new PropertyMetadata(Visibility.Collapsed));
+        public static readonly DependencyProperty AnchorEndVisibleProperty = AnchorEndVisibleKey.DependencyProperty;
+        public Visibility AnchorEndVisible => (Visibility)GetValue(AnchorEndVisibleProperty);
+
+        private static readonly DependencyPropertyKey AnchorEndLeftKey =
+            DependencyProperty.RegisterReadOnly(nameof(AnchorEndLeft), typeof(double),
+                typeof(MozaCurveEditor), new PropertyMetadata(-10000.0));
+        public static readonly DependencyProperty AnchorEndLeftProperty = AnchorEndLeftKey.DependencyProperty;
+        public double AnchorEndLeft => (double)GetValue(AnchorEndLeftProperty);
+
+        private static readonly DependencyPropertyKey AnchorEndTopKey =
+            DependencyProperty.RegisterReadOnly(nameof(AnchorEndTop), typeof(double),
+                typeof(MozaCurveEditor), new PropertyMetadata(-10000.0));
+        public static readonly DependencyProperty AnchorEndTopProperty = AnchorEndTopKey.DependencyProperty;
+        public double AnchorEndTop => (double)GetValue(AnchorEndTopProperty);
+
+        private static readonly DependencyPropertyKey AnchorEndValueKey =
+            DependencyProperty.RegisterReadOnly(nameof(AnchorEndValue), typeof(string),
+                typeof(MozaCurveEditor), new PropertyMetadata(string.Empty));
+        public static readonly DependencyProperty AnchorEndValueProperty = AnchorEndValueKey.DependencyProperty;
+        public string AnchorEndValue => (string)GetValue(AnchorEndValueProperty);
 
         // 10 node centre positions exposed individually for Canvas-positioned ellipses
         private static readonly DependencyPropertyKey[] NodeXKeys = new DependencyPropertyKey[10];
@@ -521,6 +636,11 @@ namespace MozaControls
 
         // -------- Drag state --------
         private int _dragNode = -1;
+        // Set instead of _dragNode when the grab landed on the vertically
+        // draggable top-right anchor point (see AnchorEndDraggableInY) —
+        // kept separate rather than encoded as a negative _dragNode so every
+        // existing `_dragNode >= 0` / `< 0` test keeps its meaning.
+        private bool _dragEndAnchor;
         private Canvas? _canvas;
 
         // Endpoint-drag rescale baseline (see EndpointsOnlyDraggableInX) —
@@ -544,7 +664,7 @@ namespace MozaControls
                 _canvas.MouseLeftButtonDown += OnMouseDown;
                 _canvas.MouseMove += OnMouseMove;
                 _canvas.MouseLeftButtonUp += OnMouseUp;
-                _canvas.LostMouseCapture += (_, __) => _dragNode = -1;
+                _canvas.LostMouseCapture += (_, __) => { _dragNode = -1; _dragEndAnchor = false; };
             }
         }
 
@@ -553,7 +673,11 @@ namespace MozaControls
             if (_canvas == null) return;
             var p = e.GetPosition(_canvas);
             _dragNode = FindClosestNode(p);
-            if (_dragNode >= 0)
+            // The end anchor sits right next to the last node's own hit area,
+            // so whichever centre the pointer is actually nearer wins.
+            _dragEndAnchor = HitEndAnchorCloser(p, _dragNode);
+            if (_dragEndAnchor) _dragNode = -1;
+            if (_dragNode >= 0 || _dragEndAnchor)
             {
                 int lastNode = ClampedNodeCount() - 1;
                 if (EndpointsOnlyDraggableInX && (_dragNode == 0 || _dragNode == lastNode))
@@ -576,8 +700,8 @@ namespace MozaControls
 
         private void OnMouseMove(object sender, MouseEventArgs e)
         {
-            if (_dragNode < 0 || _canvas == null) return;
-            if (e.LeftButton != MouseButtonState.Pressed) { _dragNode = -1; _canvas.ReleaseMouseCapture(); return; }
+            if ((_dragNode < 0 && !_dragEndAnchor) || _canvas == null) return;
+            if (e.LeftButton != MouseButtonState.Pressed) { _dragNode = -1; _dragEndAnchor = false; _canvas.ReleaseMouseCapture(); return; }
             ApplyDrag(e.GetPosition(_canvas));
         }
 
@@ -585,6 +709,7 @@ namespace MozaControls
         {
             if (_canvas != null && _canvas.IsMouseCaptured) _canvas.ReleaseMouseCapture();
             _dragNode = -1;
+            _dragEndAnchor = false;
         }
 
         private int FindClosestNode(Point p)
@@ -610,29 +735,75 @@ namespace MozaControls
             return best;
         }
 
+        // True when the vertically draggable end anchor is both hit and nearer
+        // to the pointer than <paramref name="bestNode"/> (-1 = no node hit).
+        private bool HitEndAnchorCloser(Point p, int bestNode)
+        {
+            if (!EndAnchorGrabbable || AnchorEndVisible != Visibility.Visible) return false;
+            double r = NodeHalf + 4.0;
+            double cx = AnchorEndLeft + NodeHalf;
+            double cy = AnchorEndTop + NodeHalf;
+            double d = (p.X - cx) * (p.X - cx) + (p.Y - cy) * (p.Y - cy);
+            if (d > r * r) return false;
+            if (bestNode < 0) return true;
+            double nx = (double)GetValue(NodeXProperties[bestNode]) + NodeHalf;
+            double ny = (double)GetValue(NodeYProperties[bestNode]) + NodeHalf;
+            return d < (p.X - nx) * (p.X - nx) + (p.Y - ny) * (p.Y - ny);
+        }
+
+        // Pointer Y → axis units.
+        private double PointerToAxisValue(Point p)
+        {
+            double h = _canvas?.ActualHeight ?? ActualHeight;
+            double plotH = Math.Max(1, h - PadTop - PadBottom);
+            double y01 = (h - PadBottom - p.Y) / plotH;
+            return YMin + y01 * Math.Max(1, YMax - YMin);
+        }
+
         private void ApplyDrag(Point p)
         {
+            // Top-right anchor: vertical only, and it moves SpanHigh rather
+            // than any node (see AnchorEndDraggableInY). Never below SpanLow,
+            // the curve's own start point.
+            if (_dragEndAnchor)
+            {
+                double lo = double.IsNaN(SpanLow) ? YMin : SpanLow;
+                SpanHigh = Math.Round(Math.Max(lo, Math.Min(YMax, PointerToAxisValue(p))));
+                return;
+            }
+
             int lastNode = ClampedNodeCount() - 1;
             bool isEndpoint = _dragNode == 0 || _dragNode == lastNode;
 
             // Vertical drag — locked for the first node when
             // EndpointsOnlyDraggableInX is set (see its doc comment): that
-            // node moves horizontally only.
-            if (!(EndpointsOnlyDraggableInX && _dragNode == 0))
+            // node moves horizontally only. A collapsed span (Max Force
+            // dragged down onto Deadzone) has no Y to place a node at, so it
+            // skips the vertical half too and leaves horizontal drag working.
+            bool span = SpanMode;
+            double spanRange = span ? SpanRange : 0;
+            bool canDragY = !(EndpointsOnlyDraggableInX && _dragNode == 0)
+                            && (!span || spanRange > 0);
+            if (canDragY)
             {
-                double h = _canvas?.ActualHeight ?? ActualHeight;
-                double plotH = Math.Max(1, h - PadTop - PadBottom);
-                double y01 = (h - PadBottom - p.Y) / plotH;
-                double range = Math.Max(1, YMax - YMin);
-                double v = Math.Max(YMin, Math.Min(YMax, Math.Round(YMin + y01 * range)));
+                // Node values are stored in axis units, or as a percentage of
+                // SpanLow..SpanHigh when that's in use — convert the pointer
+                // back into whichever, then clamp in that same space.
+                double axisValue = PointerToAxisValue(p);
+                double storedMin = span ? 0.0 : YMin;
+                double storedMax = span ? 100.0 : YMax;
+                double v = span
+                    ? Math.Round((axisValue - SpanLow) / spanRange * 100.0)
+                    : Math.Round(axisValue);
+                v = Math.Max(storedMin, Math.Min(storedMax, v));
                 if (!double.IsNaN(LastNodeYMax) && _dragNode == lastNode)
                     v = Math.Min(v, LastNodeYMax);
                 // Clamp to the neighbours' Y too — same crossing-prevention
                 // reasoning as the X neighbour-clamp below, just per-axis.
                 if (ClampYToAdjacentNodes)
                 {
-                    double loY = _dragNode == 0 ? YMin : GetY(_dragNode - 1);
-                    double hiY = _dragNode == lastNode ? YMax : GetY(_dragNode + 1);
+                    double loY = _dragNode == 0 ? storedMin : GetY(_dragNode - 1);
+                    double hiY = _dragNode == lastNode ? storedMax : GetY(_dragNode + 1);
                     if (hiY < loY) hiY = loY;
                     v = Math.Max(loY, Math.Min(hiY, v));
                 }
@@ -653,8 +824,13 @@ namespace MozaControls
                 double x01 = (p.X - PadLeft) / (0.98 * plotW);
                 double dataX = x01 * 100.0;
 
+                // The top-right corner anchor is a real point of the curve
+                // (AnchorAtTopRight), so the last node owes it the same
+                // 1-unit gap every other neighbour pair gets — otherwise it
+                // can be dragged onto it, giving two points at X=100.
+                double lastHi = AnchorAtTopRight ? 99.0 : 100.0;
                 double lo = _dragNode == 0 ? 1.0 : GetX(_dragNode - 1) + 1.0;
-                double hi = _dragNode == lastNode ? 100.0 : GetX(_dragNode + 1) - 1.0;
+                double hi = _dragNode == lastNode ? lastHi : GetX(_dragNode + 1) - 1.0;
                 if (hi < lo) hi = lo;
                 dataX = Math.Round(Math.Max(lo, Math.Min(hi, dataX)));
 
@@ -680,6 +856,28 @@ namespace MozaControls
                 {
                     SetX(_dragNode, dataX);
                 }
+            }
+        }
+
+        // Park (or place) one end point's circle. Off-canvas when hidden so a
+        // stale position can't ghost-render.
+        private void SetAnchorPoint(bool show, Point p, double value,
+            DependencyPropertyKey visibleKey, DependencyPropertyKey leftKey,
+            DependencyPropertyKey topKey, DependencyPropertyKey valueKey)
+        {
+            if (show)
+            {
+                SetValue(visibleKey, Visibility.Visible);
+                SetValue(leftKey, p.X - NodeHalf);
+                SetValue(topKey, p.Y - NodeHalf);
+                SetValue(valueKey, ((int)Math.Round(value)).ToString(CultureInfo.InvariantCulture));
+            }
+            else
+            {
+                SetValue(visibleKey, Visibility.Collapsed);
+                SetValue(leftKey, -10000.0);
+                SetValue(topKey, -10000.0);
+                SetValue(valueKey, string.Empty);
             }
         }
 
@@ -812,6 +1010,11 @@ namespace MozaControls
             }
             double[] ys = { Y1, Y2, Y3, Y4, Y5, Y6, Y7, Y8, Y9, Y10 };
             double range = Math.Max(1, YMax - YMin);
+            // Node values are a percentage of SpanLow..SpanHigh in span mode
+            // (Pedal Feel), plain axis values everywhere else.
+            bool spanMode = SpanMode;
+            double spanLow = spanMode ? SpanLow : 0.0;
+            double spanRange = spanMode ? SpanRange : 0.0;
 
             // ---- Node pixel positions + in-circle value strings ----
             var pts = new Point[nodeCount];
@@ -819,7 +1022,8 @@ namespace MozaControls
             {
                 double frac = Math.Max(0, Math.Min(1, nodeFracs[i]));
                 double x = PadLeft + frac * plotW;
-                double yClamped = Math.Max(YMin, Math.Min(YMax, ys[i]));
+                double yValue = spanMode ? spanLow + (ys[i] / 100.0) * spanRange : ys[i];
+                double yClamped = Math.Max(YMin, Math.Min(YMax, yValue));
                 if (!double.IsNaN(LastNodeYMax) && i == nodeCount - 1)
                     yClamped = Math.Min(yClamped, LastNodeYMax);
                 double y = PadTop + (1 - (yClamped - YMin) / range) * plotH;
@@ -856,9 +1060,24 @@ namespace MozaControls
             int realCount = nodeCount + (anchorStart ? 1 : 0) + (anchorEnd ? 1 : 0);
             var real = new Point[realCount];
             int wi = 0;
-            if (anchorStart) real[wi++] = new Point(PadLeft, PadTop + plotH);
+            // In span mode the two anchors are the span's own ends (Pedal
+            // Feel: Deadzone and Max Force), so they ride up and down with
+            // those values instead of being pinned to the plot's corners.
+            double startValue = spanMode ? Math.Max(YMin, Math.Min(YMax, spanLow)) : YMin;
+            double endValue = spanMode ? Math.Max(YMin, Math.Min(YMax, SpanHigh)) : YMax;
+            double startPixY = PadTop + (1 - (startValue - YMin) / range) * plotH;
+            double endPixY = PadTop + (1 - (endValue - YMin) / range) * plotH;
+            if (anchorStart) real[wi++] = new Point(PadLeft, startPixY);
             for (int i = 0; i < nodeCount; i++) real[wi++] = pts[i];
-            if (anchorEnd) real[wi++] = new Point(PadLeft + 0.98 * plotW, PadTop);
+            if (anchorEnd) real[wi++] = new Point(PadLeft + 0.98 * plotW, endPixY);
+
+            // Same two points, optionally drawn as node circles the user
+            // can't drag sideways — see ShowAnchorPoints.
+            bool drawAnchors = ShowAnchorPoints;
+            SetAnchorPoint(drawAnchors && anchorStart, real[0], startValue,
+                AnchorStartVisibleKey, AnchorStartLeftKey, AnchorStartTopKey, AnchorStartValueKey);
+            SetAnchorPoint(drawAnchors && anchorEnd, real[realCount - 1], endValue,
+                AnchorEndVisibleKey, AnchorEndLeftKey, AnchorEndTopKey, AnchorEndValueKey);
 
             var allPts = new Point[realCount + 2];
             allPts[0] = real[0];

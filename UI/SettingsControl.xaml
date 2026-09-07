@@ -1953,10 +1953,10 @@
                                             <TextBlock Grid.Row="0" Grid.Column="1" x:Name="MBoosterPedalFeelLiveLabel" Text="{x:Static res:Strings.Label_InputForce}" Style="{StaticResource SliderLabel}" HorizontalAlignment="Center" Margin="0,0,0,6"/>
                                             <TextBlock Grid.Row="0" Grid.Column="2" Text="{x:Static res:Strings.SliderLabel_MaxForceKg}" Style="{StaticResource SliderLabel}"
                                                        MinWidth="0" MaxWidth="70" TextAlignment="Center" HorizontalAlignment="Center" Margin="0,0,0,6"/>
-                                            <!-- Vertical Deadzone slider, same Height as the curve editor so its
-                                                 0-40kg span lines up top-to-bottom with the curve's own 0-100%
-                                                 span (40kg at the top, matching the curve's top edge; 0kg at the
-                                                 bottom, matching the curve's bottom edge). -->
+                                            <!-- Vertical Deadzone slider (Brake 0-37kg, role-scoped in
+                                                 UpdateMBoosterConfigVisibilityForRole). Its value is also the
+                                                 curve's own (0,0) start point — the curve plots in kg, so
+                                                 raising it visibly lifts where the curve begins. -->
                                             <StackPanel Grid.Row="1" Grid.Column="0" Margin="0,0,6,0" HorizontalAlignment="Center">
                                                 <Slider x:Name="MBoosterDeadzoneSlider" Style="{StaticResource MozaSliderVertical}" Height="220"
                                                         TickFrequency="0.1" ValueChanged="MBoosterDeadzoneSlider_ValueChanged"/>
@@ -1966,12 +1966,23 @@
                                                          KeyDown="SliderValueBox_KeyDown" LostFocus="SliderValueBox_LostFocus"
                                                          Text="0.0"/>
                                             </StackPanel>
+                                            <!-- Y axis is absolute force: 0 to this role's Max Force ceiling
+                                                 (set in UpdateMBoosterConfigVisibilityForRole, since the ceiling
+                                                 is 200kg for a Brake but 20kg for a Throttle/Clutch). The 6
+                                                 stored nodes stay percentages of the Deadzone-Max Force span —
+                                                 SpanLow/SpanHigh convert them — so the (0,0) Deadzone point and
+                                                 the (100,100) Max Force point are both plotted where their
+                                                 sliders put them, and dragging the Max Force point vertically
+                                                 writes the slider back. -->
                                             <ctrl:MozaCurveEditor Grid.Row="1" Grid.Column="1" x:Name="MBoosterInputCurveEditor" Height="220" NodeCount="6"
                                                                   AllowHorizontalDrag="True" AnchorAtTopRight="True"
+                                                                  ShowAnchorPoints="True" AnchorEndDraggableInY="True"
+                                                                  SpanLow="{Binding Value, ElementName=MBoosterDeadzoneSlider, Mode=OneWay}"
+                                                                  SpanHigh="{Binding Value, ElementName=MBoosterMaxForceSlider, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                                                   ClampYToAdjacentNodes="True"/>
-                                            <!-- Vertical Max Force slider, same Height/scaling logic as Deadzone
-                                                 above, mirrored to the curve editor's right (0kg bottom, 200kg
-                                                 top). -->
+                                            <!-- Vertical Max Force slider (Brake 24-200kg, role-scoped),
+                                                 mirrored to the curve editor's right. Two-way with the curve's
+                                                 top-right point: drag either. -->
                                             <StackPanel Grid.Row="1" Grid.Column="2" Margin="6,0,0,0" HorizontalAlignment="Center">
                                                 <Slider x:Name="MBoosterMaxForceSlider" Style="{StaticResource MozaSliderVertical}" Height="220"
                                                         TickFrequency="1" ValueChanged="MBoosterMaxForceSlider_ValueChanged"/>
@@ -2050,29 +2061,29 @@
                                         <!-- Data-store sliders, driven by MBoosterInputCurveEditor -->
                                         <StackPanel Visibility="Collapsed">
                                             <Slider x:Name="MBoosterInputY1Slider" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="MBoosterInputY1Slider_ValueChanged"/>
-                                            <TextBox x:Name="MBoosterInputY1Value" Text="20"/>
+                                            <TextBox x:Name="MBoosterInputY1Value" Text="14"/>
                                             <Slider x:Name="MBoosterInputY2Slider" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="MBoosterInputY2Slider_ValueChanged"/>
-                                            <TextBox x:Name="MBoosterInputY2Value" Text="40"/>
+                                            <TextBox x:Name="MBoosterInputY2Value" Text="29"/>
                                             <Slider x:Name="MBoosterInputY3Slider" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="MBoosterInputY3Slider_ValueChanged"/>
-                                            <TextBox x:Name="MBoosterInputY3Value" Text="60"/>
+                                            <TextBox x:Name="MBoosterInputY3Value" Text="43"/>
                                             <Slider x:Name="MBoosterInputY4Slider" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="MBoosterInputY4Slider_ValueChanged"/>
-                                            <TextBox x:Name="MBoosterInputY4Value" Text="80"/>
+                                            <TextBox x:Name="MBoosterInputY4Value" Text="57"/>
                                             <Slider x:Name="MBoosterInputY5Slider" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="MBoosterInputY5Slider_ValueChanged"/>
-                                            <TextBox x:Name="MBoosterInputY5Value" Text="100"/>
+                                            <TextBox x:Name="MBoosterInputY5Value" Text="71"/>
                                             <Slider x:Name="MBoosterInputY6Slider" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="MBoosterInputY6Slider_ValueChanged"/>
-                                            <TextBox x:Name="MBoosterInputY6Value" Text="100"/>
+                                            <TextBox x:Name="MBoosterInputY6Value" Text="86"/>
                                             <Slider x:Name="MBoosterInputX1Slider" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="MBoosterInputX1Slider_ValueChanged"/>
-                                            <TextBox x:Name="MBoosterInputX1Value" Text="8"/>
+                                            <TextBox x:Name="MBoosterInputX1Value" Text="14"/>
                                             <Slider x:Name="MBoosterInputX2Slider" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="MBoosterInputX2Slider_ValueChanged"/>
-                                            <TextBox x:Name="MBoosterInputX2Value" Text="19"/>
+                                            <TextBox x:Name="MBoosterInputX2Value" Text="29"/>
                                             <Slider x:Name="MBoosterInputX3Slider" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="MBoosterInputX3Slider_ValueChanged"/>
-                                            <TextBox x:Name="MBoosterInputX3Value" Text="44"/>
+                                            <TextBox x:Name="MBoosterInputX3Value" Text="43"/>
                                             <Slider x:Name="MBoosterInputX4Slider" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="MBoosterInputX4Slider_ValueChanged"/>
-                                            <TextBox x:Name="MBoosterInputX4Value" Text="72"/>
+                                            <TextBox x:Name="MBoosterInputX4Value" Text="57"/>
                                             <Slider x:Name="MBoosterInputX5Slider" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="MBoosterInputX5Slider_ValueChanged"/>
-                                            <TextBox x:Name="MBoosterInputX5Value" Text="90"/>
+                                            <TextBox x:Name="MBoosterInputX5Value" Text="71"/>
                                             <Slider x:Name="MBoosterInputX6Slider" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="MBoosterInputX6Slider_ValueChanged"/>
-                                            <TextBox x:Name="MBoosterInputX6Value" Text="98"/>
+                                            <TextBox x:Name="MBoosterInputX6Value" Text="86"/>
                                         </StackPanel>
                                     </StackPanel>
 

@@ -450,24 +450,34 @@ namespace MozaPlugin.UI
             _plugin.SaveSettings();
             if (role != MBoosterRole.Disabled)
                 ClearDuplicateMBoosterRoleAssignments(identity, axisIndex, role);
-            // Throttle's and Clutch's Max Force/Deadzone ranges are narrower
-            // than Brake's — a pedal freshly reassigned to either may still
-            // be carrying an out-of-range stored value from whatever role it
-            // had before (e.g. 140kg from Brake). Clamp it into range and
-            // re-push immediately, targeting THIS specific axis (not
-            // necessarily the one selected in the UI — see
-            // PushMBoosterFeelCurve's axis-explicit overload).
-            if ((role == MBoosterRole.Throttle || role == MBoosterRole.Clutch) && controller != null)
+            // Every role's Max Force/Deadzone range differs (Brake 24-200kg /
+            // 0-37kg, Throttle-Clutch 4-20kg with their own deadzones) — a
+            // pedal freshly reassigned to any of them may still be carrying
+            // an out-of-range stored value from whatever role it had before
+            // (140kg from Brake on a Throttle, or 20kg from a Throttle on a
+            // Brake, which is now under Brake's 24kg floor). Clamp it into
+            // range and re-push immediately, targeting THIS specific axis
+            // (not necessarily the one selected in the UI — see
+            // PushMBoosterFeelCurve's axis-explicit overload). Left alone,
+            // the stored value and the slider disagree until the user happens
+            // to drag it, and the Pedal Feel curve plots against a span the
+            // hardware isn't using.
+            if (role != MBoosterRole.Disabled && controller != null)
             {
                 var cfg = global::MozaPlugin.Devices.MBooster.MozaMBoosterRegistry.GetOrCreatePedalConfig(s, axisIndex, controller.SoleConnectedAxis());
                 if (cfg != null)
                 {
-                    float dzMin = role == MBoosterRole.Clutch ? MBoosterUiConstants.ClutchDeadzoneMinKg : MBoosterUiConstants.ThrottleDeadzoneMinKg;
-                    float dzMax = role == MBoosterRole.Clutch ? MBoosterUiConstants.ClutchDeadzoneMaxKg : MBoosterUiConstants.ThrottleDeadzoneMaxKg;
+                    bool isBrake = role == MBoosterRole.Brake;
+                    float dzMin = isBrake ? MBoosterUiConstants.BrakeDeadzoneMinKg
+                        : role == MBoosterRole.Clutch ? MBoosterUiConstants.ClutchDeadzoneMinKg : MBoosterUiConstants.ThrottleDeadzoneMinKg;
+                    float dzMax = isBrake ? MBoosterUiConstants.BrakeDeadzoneMaxKg
+                        : role == MBoosterRole.Clutch ? MBoosterUiConstants.ClutchDeadzoneMaxKg : MBoosterUiConstants.ThrottleDeadzoneMaxKg;
+                    float mfMin = isBrake ? MBoosterUiConstants.BrakeMaxForceMinKg : MBoosterUiConstants.ThrottleMaxForceMinKg;
+                    float mfMax = isBrake ? MBoosterUiConstants.BrakeMaxForceMaxKg : MBoosterUiConstants.ThrottleMaxForceMaxKg;
                     bool clamped = false;
                     if (cfg.MaxForceKg >= 0)
                     {
-                        float mf = Math.Max(MBoosterUiConstants.ThrottleMaxForceMinKg, Math.Min(MBoosterUiConstants.ThrottleMaxForceMaxKg, cfg.MaxForceKg));
+                        float mf = Math.Max(mfMin, Math.Min(mfMax, cfg.MaxForceKg));
                         if (Math.Abs(mf - cfg.MaxForceKg) > 0.0001f) { cfg.MaxForceKg = mf; clamped = true; }
                     }
                     if (cfg.DeadzoneKg >= 0)

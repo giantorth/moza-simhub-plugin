@@ -21,7 +21,7 @@ namespace MozaPlugin.Devices.MBooster
         // Pedal Feel Max Force/Deadzone slider bounds, role-scoped — a
         // Throttle or Clutch pedal is a much lighter spring than a brake's
         // load cell, so both get their own narrower Max Force range instead
-        // of the Brake-shaped 0-200kg (same 4-20kg for both — shared
+        // of the Brake-shaped 24-200kg (same 4-20kg for both — shared
         // constant, not duplicated per role). Deadzone differs per role
         // (Clutch's spring has more built-in play than Throttle's), so it
         // stays a separate constant each. Selected in
@@ -32,10 +32,14 @@ namespace MozaPlugin.Devices.MBooster
         public const float ThrottleDeadzoneMaxKg = 5f;
         public const float ClutchDeadzoneMinKg = 0f;
         public const float ClutchDeadzoneMaxKg = 8f;
-        public const float BrakeMaxForceMinKg = 0f;
+        // Brake bounds are Pit House's own (user-reported from its UI): Max
+        // Force starts at 24kg, not 0 — matching the low end of the original
+        // max-force-24-75-128-166-200.pcapng sweep — and Deadzone tops out at
+        // 37kg. Both were previously guessed from the XAML's old 0-40/0-200.
+        public const float BrakeMaxForceMinKg = 24f;
         public const float BrakeMaxForceMaxKg = 200f;
         public const float BrakeDeadzoneMinKg = 0f;
-        public const float BrakeDeadzoneMaxKg = 40f;
+        public const float BrakeDeadzoneMaxKg = 37f;
 
         // Engine Vibration's hardware-safe frequency range. No longer a
         // user-facing slider bound — Engine's frequency is telemetry-derived
@@ -175,6 +179,9 @@ namespace MozaPlugin.Devices.MBooster
         // see MozaMBoosterRegistry.ComputeFeelCurveY and
         // MBoosterDeviceController.PushFeelCurveResync. See
         // docs/protocol/devices/mbooster.md "Sim Input Mapping" / "Pedal Feel".
+        // Pedal Feel's 6 draggable nodes sit between two FIXED points the
+        // user can't drag — (0,0) = Deadzone and (100,100) = Max Force — for
+        // 8 points on the graph, matching selectors 0x07-0x0E one for one.
         public const int SimInputMappingNodeCount = 6;
         public const int PedalFeelNodeCount = 6;
     }
@@ -819,7 +826,7 @@ namespace MozaPlugin.Devices.MBooster
         // and MBoosterDeviceController.PushFeelCurveResync.
         public float[]? InputCurveX { get; set; } = null;
 
-        // Deadzone at the start of pedal travel, in kg of force (0..40) —
+        // Deadzone at the start of pedal travel, in kg of force (0..37) —
         // REAL hardware calibration (wire command mbooster-brake-deadzone,
         // cmdId 0xAB selector 0x07), reverse-engineered from
         // deadzone-0-5-11-14.pcapng (bug bundle 5VR5AQ8Y). Same kg encoding
@@ -831,7 +838,7 @@ namespace MozaPlugin.Devices.MBooster
         // default); see docs/protocol/devices/mbooster.md "Pedal Feel".
         public float DeadzoneKg { get; set; } = -1;
 
-        // Force (kg, 0..200) at which the pedal's raw HID axis reaches
+        // Force (kg, 24..200) at which the pedal's raw HID axis reaches
         // 100% travel — REAL hardware calibration (wire command
         // mbooster-brake-maxforce, cmdId 0xAB selector 0x0E), reverse-
         // engineered from max-force-24-75-128-166-200.pcapng (bug bundle

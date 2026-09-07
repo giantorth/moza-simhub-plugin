@@ -183,18 +183,12 @@ namespace MozaPlugin.UI
         private void MBoosterCurvePreset_Exponential(object s, RoutedEventArgs e) => ApplyMBoosterCurvePreset(MBoosterCurvePresets[2]);
         private void MBoosterCurvePreset_Parabolic(object s, RoutedEventArgs e)   => ApplyMBoosterCurvePreset(MBoosterCurvePresets[3]);
 
-        // Pedal Feel curve presets (6 nodes) — derived by sampling the
-        // existing 5-point PedalCurvePresets shapes (Linear/S-Curve/
-        // Exponential/Parabolic) at this curve's own fixed breakpoints
-        // (k/7, see MozaMBoosterRegistry.FeelCurveFractions), not new
-        // hand-picked values, so the presets keep the same visual identity
-        // users already know from the 5-point curve.
-        //
-        // These were originally sampled at 8.05/19.5/44.2/72.4/90.0/97.9%,
-        // which is what FeelCurveFractions held before the Max-Force fix
-        // replaced it with the hardware-verified k/7 spacing; the presets
-        // were never resampled, so Linear's nodes came out bunched instead
-        // of evenly spaced (deltas 8/11/25/28/18/8 rather than ~14 each).
+        // Pedal Feel curve presets — the 6 DRAGGABLE nodes only. The graph
+        // is 8 points: fixed (0,0) (Deadzone) and fixed (100,100) (Max
+        // Force) with these 6 evenly spaced between them, so each preset is
+        // the 5-point PedalCurvePresets shape (which spans that same 0-100
+        // square) resampled at k/7 for k=1..6 — see
+        // MozaMBoosterRegistry.FeelCurveFractions.
         private static readonly int[][] MBoosterInputCurvePresets =
         {
             new[] { 14, 29, 43, 57, 71, 86 }, // Linear
@@ -426,7 +420,7 @@ namespace MozaPlugin.UI
             _plugin.SaveSettings();
         }
 
-        // Deadzone at the start of pedal travel (0..40kg) — CONFIRMED real
+        // Deadzone at the start of pedal travel (0..37kg Brake) — CONFIRMED real
         // hardware calibration (mbooster-brake-deadzone, cmdId 0xAB selector
         // 0x07), reverse-engineered from deadzone-0-5-11-14.pcapng (bug
         // bundle 5VR5AQ8Y). See MBoosterDeviceController.PushFeelCurveResync
@@ -445,8 +439,12 @@ namespace MozaPlugin.UI
             _plugin.SaveSettings();
         }
 
-        // Max Force (0..200kg) — the force at which the pedal's raw HID axis
-        // reaches 100% travel. CONFIRMED real hardware calibration
+        // Max Force (24..200kg Brake) — the force at which the pedal's raw HID
+        // axis
+        // reaches 100% travel. Also the Pedal Feel curve's own top-right
+        // point, which is bound two-way to this slider — dragging that point
+        // vertically lands here (see MozaCurveEditor.AnchorEndDraggableInY).
+        // CONFIRMED real hardware calibration
         // (mbooster-brake-maxforce, cmdId 0xAB selector 0x0E), reverse-
         // engineered from max-force-24-75-128-166-200.pcapng (bug bundle
         // 5VR5AQ8Y) — not clamped to Max Threshold on the wire. See

@@ -847,6 +847,41 @@
                       Fill="{x:Null}"
                       Effect="{StaticResource CyanGlowSoftEffect}"
                       Data="{Binding CurveGeometry, RelativeSource={RelativeSource TemplatedParent}}"/>
+                <!-- The curve's two END points (see MozaCurveEditor.ShowAnchorPoints):
+                     for Pedal Feel, (0,0) = Deadzone and (100,100) = Max Force.
+                     Both are drawn before the draggable nodes so a node dragged up
+                     against one sits on top of it, and both are hit-test-transparent
+                     (the Canvas handles dragging by distance, not by hit target).
+
+                     The START point is dimmed — it can't be dragged at all, its value
+                     comes from the Deadzone slider. The END point is styled like a
+                     normal node because AnchorEndDraggableInY makes it draggable
+                     vertically; every current ShowAnchorPoints user sets that. -->
+                <Border Width="28" Height="28" CornerRadius="14" Opacity="0.45" IsHitTestVisible="False"
+                        Background="#FF1E242A"
+                        BorderBrush="{TemplateBinding AccentBrush}" BorderThickness="2"
+                        Visibility="{Binding AnchorStartVisible, RelativeSource={RelativeSource TemplatedParent}}"
+                        Canvas.Left="{Binding AnchorStartLeft, RelativeSource={RelativeSource TemplatedParent}}"
+                        Canvas.Top="{Binding AnchorStartTop, RelativeSource={RelativeSource TemplatedParent}}">
+                    <TextBlock Text="{Binding AnchorStartValue, RelativeSource={RelativeSource TemplatedParent}}"
+                               FontFamily="{StaticResource FontMono}" FontSize="11"
+                               Foreground="{TemplateBinding AccentBrush}"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                               IsHitTestVisible="False"/>
+                </Border>
+                <Border Width="28" Height="28" CornerRadius="14" IsHitTestVisible="False"
+                        Background="#FF1E242A"
+                        BorderBrush="{TemplateBinding AccentBrush}" BorderThickness="2"
+                        Effect="{StaticResource CyanGlowSoftEffect}"
+                        Visibility="{Binding AnchorEndVisible, RelativeSource={RelativeSource TemplatedParent}}"
+                        Canvas.Left="{Binding AnchorEndLeft, RelativeSource={RelativeSource TemplatedParent}}"
+                        Canvas.Top="{Binding AnchorEndTop, RelativeSource={RelativeSource TemplatedParent}}">
+                    <TextBlock Text="{Binding AnchorEndValue, RelativeSource={RelativeSource TemplatedParent}}"
+                               FontFamily="{StaticResource FontMono}" FontSize="11"
+                               Foreground="{TemplateBinding AccentBrush}"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                               IsHitTestVisible="False"/>
+                </Border>
                 <!-- Live position indicator (see MozaCurveEditor.LiveX) — a dashed
                      guide line from the axis up to the spline, and a small dot
                      ON the spline at the current pedal travel, updated at the

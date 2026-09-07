@@ -1086,7 +1086,10 @@ implementation had. `CurveY` (Sim Input Mapping, above) is unaffected —
 it's a completely separate, still-host-side remap that runs where
 `EvaluateInputCurve` used to.
 
-The curve's default (un-dragged) X breakpoints — `{8.049, 19.495, 44.245,
+**Superseded by the two subsections below** (kept for the reasoning
+trail): the breakpoints are `k/7`, not these, and X is on a fixed 0-200kg
+scale, not the Deadzone→Max Force span. The curve's default (un-dragged) X
+breakpoints — `{8.049, 19.495, 44.245,
 72.433, 90.040, 97.910}%` of the Deadzone→Max Force span — are the SAME
 constants documented under Deadzone/Max Force below
 (`MozaMBoosterRegistry.FeelCurveFractions`), now reframed twice over: they
@@ -1102,6 +1105,51 @@ section. Same passive-pedal protection as Deadzone/Max Force
 brake-named singleton `0xAB` write with no per-pedal selector, so editing
 it from a passive pedal's page would overwrite the active pedal's
 registers instead.
+
+### Graph shape — 8 points, 6 of them draggable
+
+Pit House draws this curve as **8 points**, one per Y selector in the
+`0x07`-`0x0E` family, and only the middle 6 can be dragged:
+
+| Graph point | Selector | Draggable |
+|---|---|---|
+| `(0,0)` — start | `0x07` Deadzone | no — set by the Deadzone slider |
+| 6 interior nodes | `0x08`-`0x0D` | yes, both axes (`InputCurveY`/`InputCurveX`) |
+| `(100,100)` — terminates the line | `0x0E` Max Force | vertically only — X is pinned at full-scale input |
+
+So "evenly spaced" for the interior nodes means **sevenths** — 7 equal
+gaps across the 8 points — which is exactly the `k/7` spacing the sweep
+captures below independently confirmed on the wire, and what the four
+curve presets (`SettingsControl.MBoosterInputCurvePresets`) are sampled
+at. Source for the layout and the drag affordances is the user's own
+reading of Pit House's UI, not a capture; the selector mapping beside it
+is capture-confirmed.
+
+**The vertical drag on that last point forces the plot's Y axis to be
+absolute force.** Its Y *is* Max Force (`0x0E`) — there is no other
+selector left for it to be — so on a Y axis normalized to the
+Deadzone→Max Force span, that point is 100% by definition and could never
+move. AZOM therefore plots this curve in kg: `YMax` = the role's own Max
+Force ceiling (200kg Brake, 20kg Throttle/Clutch, set in
+`UpdateMBoosterConfigVisibilityForRole`), the `(0,0)` point sits at
+`DeadzoneKg` and the `(100,100)` point at `MaxForceKg`, both bound to
+their sliders (`MozaCurveEditor.SpanLow`/`SpanHigh`, the latter two-way so
+the drag writes the slider). The 6 interior nodes are **still stored** as
+percentages of the span — `SpanLow`/`SpanHigh` convert for display and
+drag only, so nothing about `InputCurveY`'s wire contract changes.
+
+A consequence, and it matches the wire exactly: dragging Max Force down
+rescales every interior node's kg while its stored percentage stays put,
+which is precisely the `(value − deadzone) / (maxForce − deadzone)`
+invariance the four sweep captures measured. Deadzone likewise lifts where
+the curve starts — neither slider had any visible effect on the old
+span-normalized plot.
+
+AZOM draws the two end points via `MozaCurveEditor.ShowAnchorPoints`
+(dimmed node circles on the `AnchorAtOrigin`/`AnchorAtTopRight` ends, the
+top one grabbable when `AnchorEndDraggableInY` is set), and keeps a 1-unit
+X gap between the last draggable node and the `(100,100)` point — the same
+gap every other neighbouring node pair keeps.
 
 ### Pedal Feel default curve shape and node X domain — REVISED (mBooster "Deadzone slider does nothing" report)
 
@@ -1368,7 +1416,8 @@ defaults for a still-untouched profile).
 ### Deadzone / Max Force — REVISED: real hardware calibration, not host-side (bug bundle 5VR5AQ8Y)
 
 The same card also has two force-based sliders, **Deadzone** (`DeadzoneKg`,
-0–40kg) and **Max Force** (`MaxForceKg`, 0–200kg). These were originally
+0–37kg) and **Max Force** (`MaxForceKg`, 24–200kg — Brake role; Throttle/
+Clutch get their own narrower ranges, see `MBoosterUiConstants`). These were originally
 implemented as a purely host-side kg-space remap
 (`MozaMBoosterRegistry.ApplyDeadzoneAndMaxForce`, applied to the raw HID
 axis position before `EvaluateInputCurve`, and clamped to whatever
@@ -1424,7 +1473,11 @@ confirmed selector `0x07`). This directly contradicts the original
 design's ceiling logic (`ApplyMBoosterMaxForceCeiling`,
 `ResolveFullScaleKg` — both removed): Max Force is an independent
 parameter, not a rescale of Threshold's own span. The slider's range is
-simply the fixed 0–200kg the XAML always declared.
+24–200kg for a Brake — Pit House's own bounds, reported by the user from
+its UI (the earlier 0–200kg was just what AZOM's XAML happened to declare).
+Deadzone's is 0–37kg on the same authority. `MBoosterUiConstants
+.BrakeMaxForceMinKg`/`BrakeDeadzoneMaxKg`; the 24kg floor also matches the
+low end of `max-force-24-75-128-166-200.pcapng`'s own sweep.
 
 Like every other real calibration field, both use the shared `-1` "not
 yet set / no override" sentinel (previously 0/200 = "off"), so a fresh
