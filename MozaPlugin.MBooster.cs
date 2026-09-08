@@ -369,6 +369,7 @@ namespace MozaPlugin
                 if (!string.IsNullOrEmpty(model) && model.IndexOf("mBooster", StringComparison.OrdinalIgnoreCase) >= 0)
                 {
                     MozaLog.Info($"[AZOM/mBooster] mBooster identified on the pedal port ({c.PortName}) — registering routed lane (dev 0x{c.HostDeviceId:x2})");
+                    RememberRoutedMBoosterSlot(c.Identity, true);
                     _mboosterRegistry?.AddRoutedLane(c);
                 }
                 else
@@ -377,10 +378,66 @@ namespace MozaPlugin
                     // retire the probe. Dispose skips the motor disable frames
                     // when the model never identified as an mBooster.
                     MozaLog.Debug($"[AZOM/mBooster] pedal sub-device ({c.PortName}) is '{model}', not an mBooster — routed probe retired");
+                    // Drop any stale marker so pedals-* writes un-suppress after a
+                    // hookup swap (mBooster replaced by CRP2 on the same port), then
+                    // re-apply: the marker may have suppressed this profile's pedal
+                    // calibration during Init, and nothing else would retry it.
+                    if (RememberRoutedMBoosterSlot(c.Identity, false))
+                    {
+                        try { _hardwareApplier?.ApplyPedalsToHardware(_settings?.ProfileStore?.CurrentProfile); }
+                        catch (Exception ex) { MozaLog.Debug($"[AZOM/mBooster] Pedals re-apply after probe retire: {ex.Message}"); }
+                    }
                     try { c.Dispose(); } catch (Exception ex) { MozaLog.Debug($"[AZOM/mBooster] Probe dispose: {ex.Message}"); }
                 }
             }
             catch (Exception ex) { MozaLog.Warn($"[AZOM/mBooster] routed model resolution: {ex.Message}"); }
+        }
+
+        /// <summary>Persist (or drop) "this pedal slot holds an mBooster" for the
+        /// transport identity. Copy-on-write: the reader is the hardware write path
+        /// and this runs on the connection read thread, so a fresh list is built and
+        /// reference-swapped rather than mutated under a lock.</summary>
+        private bool RememberRoutedMBoosterSlot(string identity, bool isMBooster)
+        {
+            if (string.IsNullOrEmpty(identity)) return false;
+            var settings = _settings;
+            if (settings == null) return false;
+            try
+            {
+                var current = settings.RoutedMBoosterPedalSlots;
+                bool present = current != null
+                    && current.Any(s => string.Equals(s, identity, StringComparison.OrdinalIgnoreCase));
+                if (present == isMBooster) return false;
+                var next = current == null ? new List<string>() : new List<string>(current);
+                if (isMBooster) next.Add(identity);
+                else next.RemoveAll(s => string.Equals(s, identity, StringComparison.OrdinalIgnoreCase));
+                settings.RoutedMBoosterPedalSlots = next;
+                MozaLog.Info($"[AZOM/mBooster] pedal slot {MBoosterDeviceController.ShortIdentity(identity)} " +
+                             $"remembered as {(isMBooster ? "mBooster" : "not an mBooster")} — " +
+                             $"pedals-* writes {(isMBooster ? "suppressed" : "allowed")} from next Init");
+                SaveSettings();
+                return true;
+            }
+            catch (Exception ex) { MozaLog.Debug($"[AZOM/mBooster] remember routed slot: {ex.Message}"); }
+            return false;
+        }
+
+        /// <summary>Does the pedal slot (dev 0x19) hold an mBooster per the persisted
+        /// marker? This is the only answer available during Init, before the model
+        /// probe can round-trip — the window in which a persistent-wire reload's
+        /// ApplyProfile would otherwise push CRP calibration onto an mBooster.
+        /// With no owner recorded the pipe is still unknown, so ANY remembered slot
+        /// counts: over-suppressing for a poll tick is cheap, a CRP calibration
+        /// sweep against a motorized pedal is not.</summary>
+        internal bool IsRoutedMBoosterPedalSlotRemembered()
+        {
+            var slots = _settings?.RoutedMBoosterPedalSlots;
+            if (slots == null || slots.Count == 0) return false;
+            var owner = DetectionState.PedalsOwner;
+            string port = owner?.Connection?.LastPortName ?? "";
+            if (string.IsNullOrEmpty(port)) return true;
+            string identity = "routedpedals:" + port;
+            return slots.Any(s => string.Equals(s, identity, StringComparison.OrdinalIgnoreCase));
         }
 
         /// <summary>One heal pass over a single profile's device entry — the

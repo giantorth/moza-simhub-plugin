@@ -63,6 +63,15 @@ namespace MozaPlugin
             StartupUtc = DateTime.UtcNow;
             // Reset detection flags so a plugin reload doesn't carry over stale
             // "device detected" state from the prior session.
+            //
+            // Only ever reset OUR OWN bag: SimHub constructs a new MozaPlugin per
+            // reload, so DetectionState is a fresh instance here and the persistent
+            // bag adopted further down is a different object. On a same-object
+            // re-Init they would be reference-identical and this would wipe the
+            // persistent bag in place, leaving the adopt a no-op — every flag false,
+            // LastKnownWheelModel empty, no WheelModelInfo restore.
+            if (ReferenceEquals(DetectionState, s_persistentDetectionState))
+                DetectionState = new Devices.DeviceDetectionState();
             ResetDetectionFlags();
             // Belt-and-braces for the defensive double-Init path above. Coordinator
             // is null on a brand-new instance; only fires after a re-Init.
@@ -389,6 +398,15 @@ namespace MozaPlugin
                     if (wheelKnown && savedWheelId != 0)
                     {
                         _deviceManager.LockWheelId(savedWheelId);
+                        // Arm the display-wedge watchdog. Its timestamp is per
+                        // instance and is only stamped by DeviceProber's first-sight
+                        // blocks, which this reload path skips — so without this the
+                        // watchdog's `wheelDetectedTicks != 0` guard never passes and
+                        // a display that wedges after a game switch has no recovery.
+                        // Harmless when the display is healthy: the guard also
+                        // requires !IsDisplayDetected, and the reused sender already
+                        // reports it detected.
+                        NoteWheelDetected();
                     }
                     else if (wheelKnown)
                     {

@@ -1217,6 +1217,11 @@ namespace MozaPlugin.Hardware
                     _data.PedalsClutchCurve[i] = profile.PedalsClutchCurve[i];
 
             if (!_detectionState.PedalsDetected) return;
+            // These writes bypass the WriteIfPedalsDetected wrappers, so the mBooster
+            // guard has to be applied here too — one gate for the whole burst. Without
+            // it a profile apply pushes the CRP/SRP calibration set onto a routed
+            // mBooster's registers (same group/cmd bytes as mbooster-*).
+            if (SuppressPedalsWrite("pedals-* profile apply")) return;
             var dm = PedalsManager;
             if (profile.PedalsThrottleDir      >= 0) dm.WriteSetting("pedals-throttle-dir", profile.PedalsThrottleDir);
             if (profile.PedalsThrottleMin      >= 0) dm.WriteSetting("pedals-throttle-min", profile.PedalsThrottleMin);
@@ -1747,13 +1752,19 @@ namespace MozaPlugin.Hardware
 
         private bool SuppressPedalsWrite(string command)
         {
-            if (!(_plugin?.MBoosterRegistry?.AnyRoutedPedalLane ?? false)) return false;
+            bool live = _plugin?.MBoosterRegistry?.AnyRoutedPedalLane ?? false;
+            // The live lane can't exist yet during Init — on a persistent-wire reload
+            // the routed probe hasn't round-tripped when ApplyProfile runs — so fall
+            // back to the marker persisted the last time this slot identified.
+            bool remembered = !live && (_plugin?.IsRoutedMBoosterPedalSlotRemembered() ?? false);
+            if (!live && !remembered) return false;
             bool isNew;
             lock (_pedalsWriteSuppressedLogged) isNew = _pedalsWriteSuppressedLogged.Add(command ?? "");
             if (isNew)
                 MozaLog.Info(
                     $"[AZOM] '{command}' suppressed — the pedal slot (0x19) holds an mBooster, " +
-                    "not CRP/SRP pedals; use the mBooster card");
+                    $"not CRP/SRP pedals ({(live ? "routed lane registered" : "remembered from a prior session")}); " +
+                    "use the mBooster card");
             return true;
         }
         public void WriteIfHgpDetected(string command, int value)

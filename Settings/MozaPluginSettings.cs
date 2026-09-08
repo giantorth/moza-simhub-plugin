@@ -178,6 +178,15 @@ namespace MozaPlugin.Settings
         public Dictionary<string, bool[]> MBoosterKnownPedals { get; set; }
             = new Dictionary<string, bool[]>(StringComparer.OrdinalIgnoreCase);
 
+        // Routed-lane identities ("routedpedals:<port>") whose pedal slot (dev 0x19)
+        // last identified as an mBooster rather than CRP/SRP pedals. Read by
+        // HardwareApplier.SuppressPedalsWrite to block the pedals-* command set —
+        // byte-identical to mbooster-* — during Init, before the model probe can
+        // answer. Without it every plugin reload lands one CRP calibration burst on
+        // the mBooster's registers. Maintained (added AND removed) by
+        // MozaPlugin.OnRoutedMBoosterModelResolved, so a hookup swap self-corrects.
+        public List<string> RoutedMBoosterPedalSlots { get; set; } = new List<string>();
+
         // Last successful COM port per device lane — seeded into that lane's
         // MozaSerialConnection on startup to skip re-probing. Empty = no saved port.
         public string LastWheelbasePort { get; set; } = "";

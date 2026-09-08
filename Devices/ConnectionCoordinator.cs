@@ -620,9 +620,12 @@ namespace MozaPlugin.Devices
         {
             if (_hubManager == null || !_hubManager.IsConnected) return;
             var dm = _hubManager.DeviceManager;
-            if (!_detectionState.PedalsDetected)
+            // Owner-null also re-probes: the flag can ride a persistent-wire reload
+            // that cleared the owner, and the ACK is what re-points it (mirrors the
+            // primary pipe's gate in MozaPlugin.PollStatusCore).
+            if (!_detectionState.PedalsDetected || _detectionState.PedalsOwner == null)
                 dm.SendPresenceProbe(MozaProtocol.DevicePedals);
-            if (!_detectionState.HandbrakeDetected)
+            if (!_detectionState.HandbrakeDetected || _detectionState.HandbrakeOwner == null)
                 dm.SendPresenceProbe(MozaProtocol.DeviceHandbrake);
             // HGP/SGP shifter behind the hub (dev 0x1A). Gated per-pipe — a shifter
             // detected on another lane must not suppress this slot's probe.

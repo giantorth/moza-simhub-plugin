@@ -464,9 +464,14 @@ namespace MozaPlugin
                 _deviceManager.ProbeWheelDetection();
             if (!DetectionState.DashDetected)
                 _deviceManager.SendPresenceProbe(MozaProtocol.DeviceDash);
-            if (!DetectionState.HandbrakeDetected)
+            // Also re-probe when the flag rode a persistent-wire reload but End()
+            // cleared the owner: the ACK is the only thing that re-points it (and,
+            // for pedals, re-arms the routed-mBooster probe — see MarkPedalsDetected).
+            // Closes as soon as an owner is recorded. HGP/SGP need no equivalent —
+            // their gate below is already owner-keyed.
+            if (!DetectionState.HandbrakeDetected || DetectionState.HandbrakeOwner == null)
                 _deviceManager.SendPresenceProbe(MozaProtocol.DeviceHandbrake);
-            if (!DetectionState.PedalsDetected)
+            if (!DetectionState.PedalsDetected || DetectionState.PedalsOwner == null)
                 _deviceManager.SendPresenceProbe(MozaProtocol.DevicePedals);
             // HGP/SGP attached to the base's peripheral port (dev 0x1A). A shifter on
             // its own USB port is found by MozaStandalonePeripheralRegistry instead;

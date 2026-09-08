@@ -423,7 +423,13 @@ namespace MozaPlugin.Devices
         {
             if (_detectionState.PedalsDetected)
             {
+                // Flag rode a persistent-wire reload; End() cleared the owner.
                 if (_detectionState.PedalsOwner == null) _detectionState.PedalsOwner = _deviceManager;
+                // The registry and its routed probes are per instance and were
+                // disposed with the prior one, so the routed lane has to be
+                // re-interrogated even though the flag says "already detected".
+                // Idempotent per owning pipe (ProbeRoutedMBooster's ContainsKey guard).
+                _plugin.ProbeRoutedMBooster(_deviceManager);
                 return;
             }
             // Owner first, then flag (see MarkHandbrakeDetected). The owning
@@ -671,6 +677,22 @@ namespace MozaPlugin.Devices
             dm.ReadSetting("base-fw-version-b");
         }
 
+        /// <summary>Base identity reads (dev 0x13 direct) plus the firmware probes.
+        /// Issued at first-sight detection and re-issued by the persistent-wire
+        /// reload repair in DetectDevices — MozaData is per instance, so a reload
+        /// starts with these fields blank while the detection latches ride the bag.
+        /// See DeviceDetectionState.ResetBase for what blank identity costs.</summary>
+        internal void SendBaseIdentityProbes()
+        {
+            _deviceManager.ReadSetting("base-model-name");
+            _deviceManager.ReadSetting("base-sw-version");
+            _deviceManager.ReadSetting("base-hw-version");
+            _deviceManager.ReadSetting("base-hw-sub");
+            _deviceManager.ReadSetting("base-mcu-uid");
+            _deviceManager.ReadSetting("base-identity-11");
+            SendBaseFwVersionProbes();
+        }
+
         /// <summary>
         /// Write (or refresh, or remove) this wheelbase's SimHub device definition.
         /// Called from both capability replies — the ambient probe and the firmware
@@ -735,10 +757,42 @@ namespace MozaPlugin.Devices
             }
 
             // Base flag rode a persistent-wire reload; End() cleared the owner —
-            // the first pipe to answer the base probe re-points it.
+            // the first pipe to answer the base probe re-points it. A null owner is
+            // also the once-per-reload trigger for re-reading everything the
+            // first-sight cascade below would have fetched: that block is gated on
+            // !BaseDetected, so on a reload it never runs, yet MozaData is fresh and
+            // starts blank. Left alone, base settings, base identity, the ambient
+            // block and the 10-band EQ values stay empty for the whole instance —
+            // and blank identity empties the SDK DeviceCatalog, making every
+            // device-scoped CoAP URI answer 4.04 (see DeviceDetectionState.ResetBase).
+            // BaseDetected deliberately stays TRUE: clearing it would make the
+            // reload's ApplyProfile a no-op and drop FFB strength / steering limit
+            // until the cascade re-ran.
             if (commandName == "base-mcu-temp" && _detectionState.BaseDetected
                 && _detectionState.BaseOwner == null)
+            {
                 _detectionState.BaseOwner = _deviceManager;
+
+                // Re-open the capability latches that gate the two switch cases
+                // below (neither is nested under !BaseDetected, so re-eliciting
+                // their replies is enough to re-run the ambient and EQ10 re-reads).
+                _detectionState.BaseAmbientLedSupported = false;
+                _detectionState.BaseEq10Probed = false;
+                _detectionState.BaseFwVersionLogged = false;
+                // A prior instance that exhausted the retry budget would otherwise
+                // leave TickBaseFwVersionRetry gated off forever, so BaseSupportsLfe
+                // could never re-resolve and LFE + the 10-band EQ stayed disabled.
+                _detectionState.BaseFwVersionProbeRetries = 0;
+
+                _deviceManager.ReadSettings(BaseSettingsReadCommands);
+                _deviceManager.ReadSetting("main-model-name");
+                _deviceManager.ReadSetting("main-model-name-b");
+                // Re-runs the ambient block (its own re-reads + definition deploy).
+                _deviceManager.ReadSetting("base-ambient-brightness");
+                // Identity + fw; the fw reply re-runs the deferred EQ10 apply/read.
+                SendBaseIdentityProbes();
+                MozaLog.Debug("[AZOM] Base rode a persistent-wire reload — re-reading settings, identity and capabilities");
+            }
 
             // Base detection — IsBaseConnected was just set by UpdateFromCommand;
             // re-apply the profile so base settings get pushed.
@@ -793,13 +847,7 @@ namespace MozaPlugin.Devices
                     // (and hence WheelDeviceId lock-in) happens *after* base
                     // detection in the typical R5/R9/R12/R21/R25 flow — the
                     // probes have to fly before we know whether to skip them.
-                    _deviceManager.ReadSetting("base-model-name");
-                    _deviceManager.ReadSetting("base-sw-version");
-                    _deviceManager.ReadSetting("base-hw-version");
-                    _deviceManager.ReadSetting("base-hw-sub");
-                    _deviceManager.ReadSetting("base-mcu-uid");
-                    _deviceManager.ReadSetting("base-identity-11");
-                    SendBaseFwVersionProbes();
+                    SendBaseIdentityProbes();
                 }
             }
 
