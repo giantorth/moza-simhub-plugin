@@ -61,7 +61,10 @@ All notable changes to the AZOM plugin are documented here.
   Clutch.
 - **mBooster Pedal Feel and the input-curve editors have been rebuilt** to mirror Pit House's
   own layout, so the two read the same way side by side. The curves gained more nodes, and the
-  Segmented Damping plots were redrawn.
+  Segmented Damping plots were redrawn. The pedal-feel graph now draws all eight of its points:
+  the start point the Deadzone slider sets, the six you can drag, and a Max Force point that
+  drags up and down — sideways it stays put, at full input. The graph is plotted in kilograms,
+  so moving either slider visibly reshapes the curve instead of leaving it looking identical.
 - **Natural Friction and Segmented Damping can be switched off.** Each gained an enable toggle
   that pushes zeroes to the hardware without discarding what you set, so switching one back on
   restores the values the sliders already show — the same thing Pit House's own toggles do on
@@ -96,7 +99,13 @@ All notable changes to the AZOM plugin are documented here.
   brightness — so the wheel's stored value never primed the plugin's cache. Settings are also
   verified with a read-back now.
 - **Locked wheel identity and LED caches survive a plugin reload.**
-- **The display watchdog no longer kills a live session.**
+- **The wheelbase reports its identity again after a game switch.** Model name, firmware and
+  hardware revisions and the MCU ID went blank on every reload, which emptied the SDK device
+  catalogue and made device-scoped SDK requests fail; the ambient-LED and 10-band equalizer
+  values came back empty with them, and a base that had earlier failed its firmware probe could
+  never re-resolve LFE support.
+- **The display watchdog no longer kills a live session**, and it arms again after a game
+  switch — a display that stops answering can be recovered instead of staying dark.
 - **A dashboard that came up empty and stayed that way.** Re-sending the channel definitions
   cleared the entire retransmit queue, which also threw away the in-flight handshake that
   commits them — and losing that one chunk left the dashboard blank for the rest of the session,
@@ -132,6 +141,23 @@ All notable changes to the AZOM plugin are documented here.
 - **A pedal you set to Brake no longer becomes a Throttle when you chain a second one on.** The
   first axis reverted to the position-based default the moment the lane grew, which hid the
   brake-only Sensor Output Ratio and Max Threshold sliders and mis-routed calibration writes.
+- **mBooster effects no longer play on the wrong pedal.** Effects are addressed to the motor that
+  holds the pedal's role, so two pedals sharing one role sent both sets to the same motor — one
+  pedal playing effects you set up on another, the other silent. The role defaults could produce
+  exactly that: a pedal set to Brake while it was the only one kept Brake when you chained a
+  second on, and that second pedal claimed Brake again as its position default. Defaults now
+  always work out to one pedal per role, and where a role is still claimed twice — a profile that
+  already saved it that way — each pedal is addressed on its own instead, with a log line naming
+  the role to fix.
+- **Effects and calibration on a lone mBooster follow the role you gave it.** A chain-capable hub
+  reports three axis slots however many pedals are plugged in, and the effect engine and
+  calibration writes worked roles out from those three rather than from the pedal actually wired.
+  A single pedal you had set to Brake could be driven as a Clutch: Brake Fade never ran, Bite
+  Point ran instead, and its calibration went to another pedal's registers. Every part of the
+  plugin now works roles out the way the pedal list shows them — including the diagnostics
+  report, which could previously name a different role than the one being played.
+- **mBooster Deadzone and Max Force cover the ranges Pit House uses** — 0–37 kg and 24–200 kg on
+  a brake, rather than 0–40 kg and 0–200 kg.
 - **The mBooster tab opens with your saved settings** rather than defaults — the UI seeded
   itself before the profile had finished loading.
 - **The Traction Control and Wheel Spin test toggles work on a brake or clutch pedal.** Both
@@ -144,6 +170,15 @@ All notable changes to the AZOM plugin are documented here.
   spacing and never resampled when the Max Force fix corrected it, so Linear came out bunched
   instead of evenly spaced. The presets and the node positions now derive from one source.
 - **An mBooster on the wheelbase's own pedal port is detected.**
+- **An mBooster on the pedal port survives a game switch.** Switching games reloads the plugin,
+  and the routed pedal lane was only ever found on first detection — so the mBooster tab
+  disappeared, listed no devices when shown, and the newly selected profile's settings and
+  effects never reached the pedal until SimHub was restarted.
+- **Your CRP/SRP pedal calibration is no longer written to an mBooster.** Both answer the same
+  registers, so applying a profile could push plain-pedal travel, range and curve values at a
+  motorized pedal. The guard that already covered the pedal sliders now covers profile applies
+  too, and the plugin remembers which pedal port holds an mBooster across restarts so the
+  protection is in place before the device has finished identifying.
 - **Each mBooster gets its own send lane**, so one pedal's effects can't queue up behind
   another's on a multi-pedal rig.
 - **Max Force and Max Threshold agree with the hardware again**, including an overflow that
