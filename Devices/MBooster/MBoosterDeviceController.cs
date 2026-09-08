@@ -552,9 +552,86 @@ namespace MozaPlugin.Devices.MBooster
         public byte MotorDeviceForRole(int roleIndex, int axisFallback)
         {
             var map = _roleToDevice;
-            if (map != null && roleIndex >= 0 && map.TryGetValue(roleIndex, out var dev))
+            if (map != null && roleIndex >= 0 && !RoleIsAmbiguous(roleIndex)
+                && map.TryGetValue(roleIndex, out var dev))
                 return dev;
             return MotorDeviceForCurrentAxis(axisFallback);
+        }
+
+        /// <summary>
+        /// Whether more than one connected axis on this lane resolves to
+        /// <paramref name="roleIndex"/> — i.e. two physical pedals claim one
+        /// role, which is never valid (see
+        /// <see cref="MozaMBoosterRegistry.ResolveAxisRole"/>).
+        ///
+        /// The role→device map is keyed by role alone, so an ambiguous role
+        /// would hand every axis claiming it the SAME motor device: two
+        /// pedals' effect streams on one motor, the other pedal silent — a
+        /// user reported exactly this as effects playing on the wrong pedal.
+        /// Fall back to the axis-index mapping for those, which is distinct
+        /// per axis by construction; it may not match a chain's plug order
+        /// (that's what the map is for), but it never collides.
+        /// </summary>
+        private bool RoleIsAmbiguous(int roleIndex)
+        {
+            if (roleIndex < 0) return false;
+            var s = CurrentSettings;
+            int axisCount = ConnectedAxisCount;
+            int raw = AxisCount > 0 ? AxisCount : 1;
+            if (raw > MaxAxes) raw = MaxAxes;
+            int count = 0;
+            for (int a = 0; a < raw; a++)
+            {
+                if (!IsAxisConnected(a)) continue;
+                if (RoleIndexOf(MozaMBoosterRegistry.ResolveAxisRole(s, a, axisCount)) != roleIndex) continue;
+                if (++count > 1) { LogRoleAmbiguityOnce(roleIndex); return true; }
+            }
+            return false;
+        }
+
+        // Warn once per (lane, role): this is a settings state the user can
+        // see and fix (two pedal rows showing the same role), and it silently
+        // costs them one pedal's position and sends both pedals' effects to
+        // one motor, so a support bundle needs to say so out loud.
+        private readonly HashSet<int> _roleAmbiguityLogged = new HashSet<int>();
+        private void LogRoleAmbiguityOnce(int roleIndex)
+        {
+            lock (_roleAmbiguityLogged)
+                if (!_roleAmbiguityLogged.Add(roleIndex)) return;
+            MozaLog.Warn(
+                $"[AZOM/mBooster] {ShortIdentity(Identity)}: two connected pedals both resolve to " +
+                $"'{RoleName(roleIndex)}'. Effects for that role route by axis index instead of the " +
+                $"chain map, and one pedal's position is dropped — assign each pedal a distinct role.");
+        }
+
+        /// <summary>Role → the 0/1/2 index the chain map and the motor-frame
+        /// addressing use (-1 = Disabled/none).</summary>
+        internal static int RoleIndexOf(MBoosterRole role) =>
+            role == MBoosterRole.Throttle ? 0
+            : role == MBoosterRole.Brake ? 1
+            : role == MBoosterRole.Clutch ? 2 : -1;
+
+        /// <summary>
+        /// How many of this lane's axes are genuinely wired pedals, per
+        /// <see cref="IsAxisConnected"/> — the count every role resolution on
+        /// this lane must pass to
+        /// <see cref="MozaMBoosterRegistry.ResolveAxisRole"/>, since raw
+        /// <see cref="AxisCount"/> is 3 on any chain-capable hub no matter how
+        /// many pedals are plugged in, and that difference changes the answer
+        /// (a sole pedal's own configured Role vs the axis-order default).
+        /// Never below 1 — a lane always has at least the one pedal.
+        /// </summary>
+        public int ConnectedAxisCount
+        {
+            get
+            {
+                int raw = AxisCount > 0 ? AxisCount : 1;
+                if (raw > MaxAxes) raw = MaxAxes;
+                int n = 0;
+                for (int a = 0; a < raw; a++)
+                    if (IsAxisConnected(a)) n++;
+                return n > 0 ? n : 1;
+            }
         }
 
         /// <summary>Role→motor device id with no axis to fall back on (used by
@@ -563,7 +640,8 @@ namespace MozaPlugin.Devices.MBooster
         public byte MotorDeviceForRole(int roleIndex)
         {
             var map = _roleToDevice;
-            if (map != null && roleIndex >= 0 && map.TryGetValue(roleIndex, out var dev))
+            if (map != null && roleIndex >= 0 && !RoleIsAmbiguous(roleIndex)
+                && map.TryGetValue(roleIndex, out var dev))
                 return dev;
             return HostDeviceId;
         }
@@ -641,10 +719,8 @@ namespace MozaPlugin.Devices.MBooster
             if (soleActive >= 0)
             {
                 var soleRole = MozaMBoosterRegistry.ResolveAxisRole(
-                    CurrentSettings, soleActive, Math.Max(1, AxisCount));
-                int soleRoleIdx = soleRole == MBoosterRole.Throttle ? 0
-                                : soleRole == MBoosterRole.Brake ? 1
-                                : soleRole == MBoosterRole.Clutch ? 2 : -1;
+                    CurrentSettings, soleActive, ConnectedAxisCount);
+                int soleRoleIdx = RoleIndexOf(soleRole);
                 if (soleRoleIdx >= 0)
                 {
                     PublishRoleMap(new Dictionary<int, byte> { [soleRoleIdx] = HostDeviceId });

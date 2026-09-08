@@ -381,10 +381,17 @@ namespace MozaPlugin.Devices.MBooster
                         var s = _settingsLookup(c.Identity);
                         int axisCount = c.AxisCount > 0 ? c.AxisCount : 3;
                         if (axisCount > MBoosterDeviceController.MaxAxes) axisCount = MBoosterDeviceController.MaxAxes;
+                        // Role resolution uses the CONNECTED count (see
+                        // MBoosterDeviceController.ConnectedAxisCount), not the
+                        // loop bound above — otherwise this mirrors positions
+                        // in under the axis-order default role instead of the
+                        // pedal's own, disagreeing with the merge below and
+                        // with what the workers play.
+                        int roleAxisCount = c.ConnectedAxisCount;
                         for (int a = 0; a < axisCount; a++)
                         {
                             double v;
-                            switch (ResolveAxisRole(s, a, axisCount))
+                            switch (ResolveAxisRole(s, a, roleAxisCount))
                             {
                                 case MBoosterRole.Throttle: v = _data.ThrottlePosition / 100.0; break;
                                 case MBoosterRole.Brake:    v = _data.BrakePosition / 100.0; break;
@@ -928,15 +935,46 @@ namespace MozaPlugin.Devices.MBooster
             // Losing an explicitly-set Brake there used to hide the brake-only
             // Sensor Output Ratio/Max Threshold sliders (and mis-route
             // calibration writes) for a pedal the user never touched.
-            if (axisIndex == 0 && s?.Role is MBoosterRole role0 && role0 != MBoosterRole.Disabled)
-                return role0;
-            switch (axisIndex)
-            {
-                case 0:  return MBoosterRole.Throttle;  // Rx (0x33)
-                case 1:  return MBoosterRole.Brake;     // Ry (0x34)
-                case 2:  return MBoosterRole.Clutch;    // Rz (0x35)
-                default: return MBoosterRole.Disabled;
-            }
+            var legacy = s?.Role ?? MBoosterRole.Disabled;
+            if (axisIndex == 0 && legacy != MBoosterRole.Disabled)
+                return legacy;
+            return PositionalRole(axisIndex, legacy);
+        }
+
+        // Axis order → role, the standard Moza pedal convention: Rx(0x33) =
+        // Throttle, Ry(0x34) = Brake, Rz(0x35) = Clutch.
+        private static readonly MBoosterRole[] PositionalRoles =
+            { MBoosterRole.Throttle, MBoosterRole.Brake, MBoosterRole.Clutch };
+
+        /// <summary>
+        /// The positional default for an axis, EXCLUDING whatever role axis 0
+        /// already took from the legacy <see cref="MBoosterDeviceSettings.Role"/>
+        /// field (<see cref="MBoosterRole.Disabled"/> = nothing claimed, plain
+        /// axis order).
+        ///
+        /// Without the exclusion, a lane that grew from one pedal to several
+        /// while Role said "Brake" handed BOTH axis 0 (honoring Role, above)
+        /// and axis 1 (positional default) the Brake role. Two pedals claiming
+        /// one role is never a valid state — the UI enforces that on every
+        /// explicit assignment (ClearDuplicateMBoosterRoleAssignments) — and it
+        /// broke both halves of the pedal pipeline: the second pedal's position
+        /// was dropped as a collision (see LogCollisionOnce), and because
+        /// MBoosterEffectWorker.TargetDevice addresses frames by ROLE, both
+        /// pedals' effect streams were sent to the SAME motor — one pedal
+        /// playing the other's effects while the other stayed silent.
+        /// </summary>
+        private static MBoosterRole PositionalRole(int axisIndex, MBoosterRole claimedByAxis0)
+        {
+            if (axisIndex < 0 || axisIndex >= PositionalRoles.Length) return MBoosterRole.Disabled;
+            var positional = PositionalRoles[axisIndex];
+            if (claimedByAxis0 == MBoosterRole.Disabled || positional != claimedByAxis0)
+                return positional;
+            // This axis's positional role is the one axis 0 just took from the
+            // legacy Role field, so the two SWAP: this axis inherits axis 0's
+            // own positional role (Throttle) instead. A swap keeps the lane a
+            // permutation — every role on exactly one pedal — while leaving
+            // every non-colliding axis on its documented positional default.
+            return PositionalRoles[0];
         }
 
         /// <summary>

@@ -418,15 +418,29 @@ namespace MozaPlugin.UI
         /// one pedal of a chain (seeding the array from the currently-resolved
         /// roles first, so unedited axes keep their effective role).
         /// </summary>
-        private static void SetMBoosterPedalRole(MBoosterDeviceSettings s, int axisCount, int axisIndex, MBoosterRole role)
+        /// <summary>
+        /// Persist one pedal's role. <paramref name="rawAxisCount"/> sizes the
+        /// <see cref="MBoosterDeviceSettings.AxisRoles"/> array (it's indexed by
+        /// HID axis index, so it must cover every axis, wired or not), while
+        /// <paramref name="connectedAxisCount"/> is what role RESOLUTION uses —
+        /// the same split every other caller makes (see
+        /// <see cref="MBoosterDeviceController.ConnectedAxisCount"/>). Passing
+        /// the raw count to both, as this used to, seeded the array with
+        /// axis-order defaults instead of each pedal's own resolved role,
+        /// baking in a wrong (and sometimes duplicated) set the moment the user
+        /// touched any one dropdown.
+        /// </summary>
+        private static void SetMBoosterPedalRole(
+            MBoosterDeviceSettings s, int connectedAxisCount, int rawAxisCount, int axisIndex, MBoosterRole role)
         {
-            if (axisCount <= 1) { s.Role = role; return; }
+            if (connectedAxisCount <= 1) { s.Role = role; return; }
+            int length = Math.Max(rawAxisCount, axisIndex + 1);
             var roles = s.AxisRoles;
-            if (roles == null || roles.Length != axisCount)
+            if (roles == null || roles.Length != length)
             {
-                var seeded = new MBoosterRole[axisCount];
-                for (int i = 0; i < axisCount; i++)
-                    seeded[i] = global::MozaPlugin.Devices.MBooster.MozaMBoosterRegistry.ResolveAxisRole(s, i, axisCount);
+                var seeded = new MBoosterRole[length];
+                for (int i = 0; i < length; i++)
+                    seeded[i] = global::MozaPlugin.Devices.MBooster.MozaMBoosterRegistry.ResolveAxisRole(s, i, connectedAxisCount);
                 s.AxisRoles = roles = seeded;
             }
             if (axisIndex >= 0 && axisIndex < roles.Length)
@@ -446,7 +460,8 @@ namespace MozaPlugin.UI
             var s = _plugin.GetOrCreateMBoosterSettings(identity);
             var controller = _plugin.MBoosterRegistry?.FindByIdentity(identity);
             int axisCount = controller != null && controller.AxisCount > 0 ? controller.AxisCount : 1;
-            SetMBoosterPedalRole(s, axisCount, axisIndex, role);
+            int connectedAxisCount = controller?.ConnectedAxisCount ?? 1;
+            SetMBoosterPedalRole(s, connectedAxisCount, axisCount, axisIndex, role);
             _plugin.SaveSettings();
             if (role != MBoosterRole.Disabled)
                 ClearDuplicateMBoosterRoleAssignments(identity, axisIndex, role);

@@ -36,6 +36,14 @@ namespace MozaPlugin.Hardware
             // follow-up (needs a per-pedal settings UI); this fixes the routing
             // for the pedal the current single calibration set configures.
             int axisCount = controller.AxisCount > 0 ? controller.AxisCount : 1;
+            // Roles resolve against the CONNECTED pedal count, never raw
+            // axisCount above (which is the loop bound, and is 3 on any
+            // chain-capable hub regardless of how many pedals are plugged in
+            // — passing it would override a sole pedal's own configured Role
+            // with the axis-order default and write its calibration under the
+            // wrong throttle-/brake-/clutch- command prefix). Same convention
+            // as the UI row list, the position merge and the effect workers.
+            int roleAxisCount = controller.ConnectedAxisCount;
             // Apply EACH hosted pedal's calibration to its role-specific command.
             // Pedal 0 (master) keeps its calibration in the flat fields (the
             // existing UI); the additional chained pedals (axes 1+) store theirs
@@ -50,7 +58,7 @@ namespace MozaPlugin.Hardware
             {
                 if (connectedAxes != null && (axis >= connectedAxes.Length || !connectedAxes[axis]))
                     continue;
-                var role = global::MozaPlugin.Devices.MBooster.MozaMBoosterRegistry.ResolveAxisRole(s, axis, axisCount);
+                var role = global::MozaPlugin.Devices.MBooster.MozaMBoosterRegistry.ResolveAxisRole(s, axis, roleAxisCount);
                 string? prefix =
                     role == global::MozaPlugin.Devices.MBooster.MBoosterRole.Throttle ? "throttle"
                     : role == global::MozaPlugin.Devices.MBooster.MBoosterRole.Brake ? "brake"

@@ -276,9 +276,14 @@ namespace MozaPlugin.UI
                     for (int a = 0; a < d.AxisCount && a < MBoosterDeviceController.MaxAxes; a++)
                     {
                         string flag = connected == null ? "?" : (a < connected.Length && connected[a] ? "+" : "-");
-                        roleParts.Add($"ax{a}[{flag}]={MozaMBoosterRegistry.ResolveAxisRole(s, a, d.AxisCount)}");
+                        roleParts.Add($"ax{a}[{flag}]={MozaMBoosterRegistry.ResolveAxisRole(s, a, d.ConnectedAxisCount)}");
                     }
-                    sb.AppendLine($"        axes={d.AxisCount}  roles=[{string.Join(", ", roleParts)}]");
+                    // Roles resolve against the CONNECTED count — the count the
+                    // effect workers, calibration writes and position merge all
+                    // use. Reporting the raw-count answer here (as this did)
+                    // makes a bundle disagree with the pipeline it's meant to
+                    // explain, which is how a role mix-up stays hidden.
+                    sb.AppendLine($"        axes={d.AxisCount}  connected={d.ConnectedAxisCount}  roles=[{string.Join(", ", roleParts)}]");
                 }
                 AppendMBoosterPedalConfig(sb, d, s);
             }
@@ -310,14 +315,12 @@ namespace MozaPlugin.UI
                 string type = types == null || a >= types.Length ? "?"
                             : types[a] == 1 ? "active"
                             : types[a] == 2 ? "passive" : "unknown";
-                var role = MozaMBoosterRegistry.ResolveAxisRole(s, a, Math.Max(1, d.AxisCount));
+                var role = MozaMBoosterRegistry.ResolveAxisRole(s, a, d.ConnectedAxisCount);
                 // Resolve by ROLE, the way the effect worker and HardwareApplier
                 // actually address this pedal — the axis-index resolver can
                 // disagree with the role map, and then this line names a device
                 // no frame is sent to.
-                int roleIdx = role == Devices.MBooster.MBoosterRole.Throttle ? 0
-                            : role == Devices.MBooster.MBoosterRole.Brake ? 1
-                            : role == Devices.MBooster.MBoosterRole.Clutch ? 2 : -1;
+                int roleIdx = MBoosterDeviceController.RoleIndexOf(role);
                 byte dev = d.MotorDeviceForRole(roleIdx, a);
                 sb.AppendLine($"        ax{a} {role}/{type} → dev 0x{dev:x2}");
                 var cfg = MozaMBoosterRegistry.PeekPedalConfig(s, a, d.SoleConnectedAxis());

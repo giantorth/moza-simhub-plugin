@@ -101,7 +101,11 @@ namespace MozaPlugin.UI.Import
                 var s = c.CurrentSettings;
                 if (s == null) continue;
 
-                int axisCount = c.AxisCount > 0 ? c.AxisCount : 1;
+                // Roles resolve against the CONNECTED pedal count, matching
+                // the mBooster tab's own row list — raw AxisCount is 3 on any
+                // chain-capable hub however many pedals are wired, and would
+                // label a sole pedal by axis order instead of its own Role.
+                int axisCount = c.ConnectedAxisCount;
                 var axes = c.ConnectedAxisIndices();
                 var types = c.AxisTypes;
 
