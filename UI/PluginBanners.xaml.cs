@@ -35,8 +35,9 @@ namespace MozaPlugin.UI
 
         /// <summary>
         /// Optional in-app navigation for the SDK nudge's "Configure" button
-        /// (plugin pane: switch to the SDK tab). Null on device pages → the
-        /// Configure button is hidden (there is no SDK tab to reach from a device
+        /// (plugin pane: switch to the Options tab, where the SDK toggles live).
+        /// Null on device pages → the Configure button is hidden (there is no
+        /// such tab to reach from a device
         /// page); Dismiss still works and persists.
         /// </summary>
         public Action? ConfigureSdkInApp { get; set; }
@@ -83,6 +84,7 @@ namespace MozaPlugin.UI
             // progress line (progress + completion are event-driven instead).
             if (!UpdateInstallCoordinator.Instance.InstallInProgress) RefreshUpdateBanner();
             RefreshSdkPrompt();
+            RefreshLegacyLfeBanner();
         }
 
         // ===== 1. Status hints =====
@@ -266,7 +268,7 @@ namespace MozaPlugin.UI
             var s = MozaPlugin.Instance?.Settings;
             bool show = s != null && !s.SdkEmulationEnabled && !s.SdkPromptDismissed;
             SdkPromptBanner.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
-            // Configure can only reach the SDK tab on the plugin pane.
+            // Configure can only reach the Options tab on the plugin pane.
             if (SdkPromptConfigureButton != null)
                 SdkPromptConfigureButton.Visibility =
                     ConfigureSdkInApp != null ? Visibility.Visible : Visibility.Collapsed;
@@ -293,17 +295,41 @@ namespace MozaPlugin.UI
             RefreshSdkPrompt();
         }
 
+        // ===== 4. Pre-1.6 wheelbase haptics migration =====
+
+        // Stays up across the restart AND the "add the model-named device" step, so
+        // it is persisted rather than session-scoped. Cleared by the import itself
+        // once the settings actually land on the new device.
+        private void RefreshLegacyLfeBanner()
+        {
+            var s = MozaPlugin.Instance?.Settings;
+            LegacyLfeBanner.Visibility =
+                s != null && s.LegacyLfeMigrationPending ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        private void LegacyLfeDismiss_Click(object sender, RoutedEventArgs e)
+        {
+            var plugin = MozaPlugin.Instance;
+            var s = plugin?.Settings;
+            if (s != null && s.LegacyLfeMigrationPending)
+            {
+                s.LegacyLfeMigrationPending = false;
+                try { plugin!.PersistSettings(); } catch { /* best-effort */ }
+            }
+            RefreshLegacyLfeBanner();
+        }
+
         // Open a URL via the OS shell (browser on Windows; winebrowser → xdg-open
         // under Wine/Proton).
         private static void OpenExternalUrl(string url)
         {
             try
             {
-                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                using (System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
                 {
                     FileName = url,
                     UseShellExecute = true,
-                });
+                })) { }
             }
             catch (Exception ex)
             {
