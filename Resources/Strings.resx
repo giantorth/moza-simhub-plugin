@@ -734,7 +734,6 @@ Id: {2}</value></data>
   <data name="StalkKind_ReleaseHeld" xml:space="preserve"><value>Release held keys</value></data>
   <data name="StalkKind_WiperStage" xml:space="preserve"><value>Wiper stage {0}</value></data>
   <data name="StalkKind_LightStage" xml:space="preserve"><value>Light stage {0}</value></data>
-  <data name="Option_ReleaseChannelPr" xml:space="preserve"><value>PR #{0}: {1}</value></data>
   <data name="Status_UpdatePrChannelGone" xml:space="preserve"><value>PR closed — switched to Stable</value></data>
   <data name="Subtitle_FfbEqualizer10" xml:space="preserve"><value>// per-band gain · 100% = neutral · 500% = max boost</value></data>
   <data name="Label_EqSensitivity" xml:space="preserve"><value>SENSITIVITY</value></data>

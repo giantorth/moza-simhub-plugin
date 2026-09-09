@@ -794,7 +794,6 @@ namespace MozaPlugin.Resources
         public static string StalkKind_ReleaseHeld => Get("StalkKind_ReleaseHeld");
         public static string StalkKind_WiperStage => Get("StalkKind_WiperStage");
         public static string StalkKind_LightStage => Get("StalkKind_LightStage");
-        public static string Option_ReleaseChannelPr => Get("Option_ReleaseChannelPr");
         public static string Status_UpdatePrChannelGone => Get("Status_UpdatePrChannelGone");
         public static string Subtitle_FfbEqualizer10 => Get("Subtitle_FfbEqualizer10");
         public static string Label_EqSensitivity => Get("Label_EqSensitivity");
