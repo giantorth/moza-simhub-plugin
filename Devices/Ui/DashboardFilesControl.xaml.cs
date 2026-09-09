@@ -827,7 +827,13 @@ namespace MozaPlugin.Devices.Ui
             uint bw = ts?.UploadLastBytesWritten ?? 0;
             uint total = ts?.UploadLastTotalSize ?? 0;
             byte status = ts?.UploadLastStatusByte ?? 0;
-            int pct = total == 0 ? 0 : (int)(bw * 100L / total);
+            // Percentage comes from UploadProgress (content sub-msgs emitted),
+            // NOT bw/total: the wheel's ready-ack sometimes echoes total_size
+            // into bytes_written, which read 100 % before a single content chunk
+            // had gone out (bundle NS9G817J). bw/total still decides
+            // complete-vs-stopped below — "does the wheel have all the bytes"
+            // is exactly what it answers.
+            int pct = (int)Math.Round((ts?.UploadProgress ?? 0.0) * 100.0);
 
             UploadInfoProgressText.Text =
                   inFlight    ? string.Format(Strings.Upload_StatusUploading, pct)

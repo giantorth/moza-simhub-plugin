@@ -59,6 +59,15 @@ namespace MozaPlugin.Telemetry
                 // on a wheel that has no bound dashboard (no tiers) at all.
                 TickEmitDeviceLogPoll();
 
+                // Dashboard-upload progress on the wheel's RPM bar. Sits with
+                // the device-log pull ABOVE the Preamble branch and the
+                // no-tiers early return below: the connect-time upload is
+                // dispatched before this timer even starts and can run through
+                // the whole preamble, and a wheel with no bound dashboard
+                // uploads too. Internally paced and idempotent, so both
+                // senders ticking it is harmless.
+                Devices.Led.UploadProgressLedBar.Tick(MozaPlugin.Instance);
+
                 // Preamble: ~1 second of heartbeats while the wheel acks our
                 // session opens and pushes its initial catalog + state. No
                 // telemetry, no value frames; once the tick countdown elapses

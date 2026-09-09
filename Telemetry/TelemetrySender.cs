@@ -892,6 +892,9 @@ namespace MozaPlugin.Telemetry
         public uint UploadLastTotalSize => _uploader?.LastTotalSize ?? 0;
         /// <summary>Last XOR status byte from a wheel ack sub-msg.</summary>
         public byte UploadLastStatusByte => _uploader?.LastStatusByte ?? 0;
+        /// <summary>0..1 progress of the in-flight upload; 0 when idle. See
+        /// <see cref="Dashboard.WheelUploadCoordinator.UploadProgress"/>.</summary>
+        public double UploadProgress => _uploader?.UploadProgress ?? 0.0;
 
         /// <summary>
         /// Trigger a manual upload of <paramref name="content"/> to the wheel.
@@ -990,6 +993,12 @@ namespace MozaPlugin.Telemetry
             // default level) and Warn for everything else.
             _uploader.UploadCompleted += outcome =>
             {
+                // Hand the RPM strip back to the live LED pipeline. Fires from
+                // RunBackgroundUpload's finally on EVERY exit path, so it also
+                // covers the cases the tick-driven release can't reach — the
+                // sender going Idle mid-upload stops the tick that would
+                // otherwise notice.
+                Devices.Led.UploadProgressLedBar.Release();
                 string name = string.IsNullOrEmpty(_uploader.MzdashName) ? "dashboard" : _uploader.MzdashName;
                 switch (outcome)
                 {
