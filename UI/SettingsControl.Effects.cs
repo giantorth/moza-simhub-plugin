@@ -225,6 +225,13 @@ namespace MozaPlugin.UI
             MBoosterDeadzoneMaxForcePanel.Visibility = hwVisibility;
             MBoosterNaturalFrictionPanel.Visibility = hwVisibility;
             MBoosterSegDampCard.Visibility = hwVisibility;
+            // Both calibration routines are motor-driven — the travel sweep IS
+            // the motor moving the pedal, and a rotor locate needs a rotor. A
+            // passive pedal has neither, and these are brake-named singleton
+            // commands, so running one from a passive pedal's page would
+            // calibrate the ACTIVE pedal instead.
+            MBoosterCalButtonsPanel.Visibility = hwVisibility;
+            RefreshMBoosterCalUi();
         }
 
         /// <summary>
@@ -299,6 +306,10 @@ namespace MozaPlugin.UI
             MBoosterDeadzoneMaxForcePanel.Visibility = Visibility.Visible;
             MBoosterNaturalFrictionPanel.Visibility = Visibility.Visible;
             MBoosterSegDampCard.Visibility = Visibility.Visible;
+            // Visible but inert: RefreshMBoosterCalUi leaves both buttons
+            // disabled without a connected, motorized pedal, and the routines
+            // reboot real hardware — there is nothing to demo by clicking.
+            MBoosterCalButtonsPanel.Visibility = Visibility.Visible;
             MBoosterAbsExpander.Visibility = Visibility.Visible;
             MBoosterLockupExpander.Visibility = Visibility.Visible;
             MBoosterThresholdExpander.Visibility = Visibility.Visible;
@@ -329,6 +340,10 @@ namespace MozaPlugin.UI
                 SeedMBoosterEffectControls(null);
             }
             _mboosterDemoSeeded = true;
+            // Leaves both calibration buttons disabled (no connected pedal) —
+            // called here because this path bypasses the passive/role updaters
+            // that normally drive them.
+            RefreshMBoosterCalUi();
         }
 
         // ===== Effect handlers =====

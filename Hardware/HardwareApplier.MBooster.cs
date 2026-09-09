@@ -140,6 +140,23 @@ namespace MozaPlugin.Hardware
                     controller.SendIntWrite("mbooster-brake-friction-0", frictionRaw, dev);
                     controller.SendIntWrite("mbooster-brake-friction-1", frictionRaw, dev);
                 }
+                // Plain Virtual Damping (cmdId 0xAD, press/release selectors).
+                // A register set of its own, separate from Segmented Damping
+                // below — real Pit House pushes BOTH on every config apply, so
+                // omitting this left the pedal on whatever damping was last
+                // written by Pit House itself. Sentinel-guarded per selector so
+                // an untouched profile still writes nothing. See
+                // docs/protocol/devices/mbooster.md "Pedal Feel".
+                if (ownsPedalFeelHardware && cfg.DampingPressPct >= 0)
+                {
+                    controller.SendIntWrite("mbooster-brake-damping-press",
+                        global::MozaPlugin.Protocol.MozaMBoosterProtocol.EncodeFrictionPct(cfg.DampingPressPct), dev);
+                }
+                if (ownsPedalFeelHardware && cfg.DampingReleasePct >= 0)
+                {
+                    controller.SendIntWrite("mbooster-brake-damping-release",
+                        global::MozaPlugin.Protocol.MozaMBoosterProtocol.EncodeFrictionPct(cfg.DampingReleasePct), dev);
+                }
                 // Segmented Damping (both "When Pressed" and "When
                 // Released" — see cfg.SegmentedDamping). One wire command
                 // carries the whole feature's state at once, so a fresh

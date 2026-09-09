@@ -780,4 +780,13 @@ Id: {2}</value></data>
   <data name="Upload_StatusStopped" xml:space="preserve"><value>Detenido - {0} %</value></data>
   <data name="Section_UploadSource" xml:space="preserve"><value>ORIGEN DE CARGA</value></data>
   <data name="Banner_LegacyLfeMigrated_Body" xml:space="preserve"><value>La háptica LFE de la base ahora forma parte del dispositivo de base MOZA: añade ese dispositivo para conservar tus efectos.</value></data>
+  <data name="Button_TravelCalibration" xml:space="preserve"><value>CAL. RECORRIDO</value></data>
+  <data name="Button_MotorCalibration" xml:space="preserve"><value>CAL. MOTOR</value></data>
+  <data name="Hint_MBoosterTravelCal" xml:space="preserve"><value>Calibrando el recorrido del pedal: el motor mueve el pedal por sí solo, no lo pises. Quedan {0}s…</value></data>
+  <data name="Hint_MBoosterMotorCal" xml:space="preserve"><value>Calibrando el motor: no pises el pedal. Tarda alrededor de un minuto. Quedan {0}s…</value></data>
+  <data name="Hint_MBoosterCalRebooting" xml:space="preserve"><value>Reiniciando el pedal para terminar: se reconectará en unos segundos.</value></data>
+  <data name="Hint_MBoosterCalBusyElsewhere" xml:space="preserve"><value>Se está ejecutando una calibración en otro pedal.</value></data>
+  <data name="Status_CalibrationFailed" xml:space="preserve"><value>La calibración falló: {0}</value></data>
+  <data name="SliderLabel_DampingPress" xml:space="preserve"><value>Amortiguación (al pisar)</value></data>
+  <data name="SliderLabel_DampingRelease" xml:space="preserve"><value>Amortiguación (al soltar)</value></data>
 </root>

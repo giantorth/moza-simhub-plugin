@@ -778,4 +778,13 @@ Id: {2}</value></data>
   <data name="Upload_StatusStopped" xml:space="preserve"><value>Interrotto - {0}%</value></data>
   <data name="Section_UploadSource" xml:space="preserve"><value>ORIGINE CARICAMENTO</value></data>
   <data name="Banner_LegacyLfeMigrated_Body" xml:space="preserve"><value>Il feedback aptico LFE della base fa ora parte del dispositivo base MOZA: aggiungi quel dispositivo per trasferire i tuoi effetti.</value></data>
+  <data name="Button_TravelCalibration" xml:space="preserve"><value>CAL. CORSA</value></data>
+  <data name="Button_MotorCalibration" xml:space="preserve"><value>CAL. MOTORE</value></data>
+  <data name="Hint_MBoosterTravelCal" xml:space="preserve"><value>Calibrazione della corsa del pedale: il motore muove il pedale da solo, non premerlo. Restano {0}s…</value></data>
+  <data name="Hint_MBoosterMotorCal" xml:space="preserve"><value>Calibrazione del motore: non premere il pedale. Richiede circa un minuto. Restano {0}s…</value></data>
+  <data name="Hint_MBoosterCalRebooting" xml:space="preserve"><value>Riavvio del pedale per completare: si riconnetterà tra pochi secondi.</value></data>
+  <data name="Hint_MBoosterCalBusyElsewhere" xml:space="preserve"><value>È in corso una calibrazione su un altro pedale.</value></data>
+  <data name="Status_CalibrationFailed" xml:space="preserve"><value>Calibrazione non riuscita: {0}</value></data>
+  <data name="SliderLabel_DampingPress" xml:space="preserve"><value>Smorzamento (pressione)</value></data>
+  <data name="SliderLabel_DampingRelease" xml:space="preserve"><value>Smorzamento (rilascio)</value></data>
 </root>

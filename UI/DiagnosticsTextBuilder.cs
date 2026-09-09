@@ -290,8 +290,37 @@ namespace MozaPlugin.UI
                     sb.AppendLine($"        axes={d.AxisCount}  connected={d.ConnectedAxisCount}  roles=[{string.Join(", ", roleParts)}]");
                 }
                 AppendMBoosterPedalConfig(sb, d, s);
+                AppendMBoosterStatusRegisters(sb, d);
             }
             return sb.ToString().TrimEnd();
+        }
+
+        /// <summary>
+        /// The group-35 status registers real Pit House polls that AZOM had no
+        /// names for. Only 0xB4 has a decoded meaning — the pedal's
+        /// calibration-mode state (2 = normal, 0 = mid travel calibration),
+        /// which is why a travel calibration MUST be followed by a soft reboot.
+        /// The rest (0x0D, 0x21-0x24) read as per-unit constants in every
+        /// capture so far and are printed raw so the next bundle from a
+        /// different topology can settle what they mean, instead of the values
+        /// being guessed at. See docs/protocol/devices/mbooster.md.
+        /// </summary>
+        private static void AppendMBoosterStatusRegisters(StringBuilder sb, MBoosterDeviceController d)
+        {
+            var regs = d.StatusRegisters();
+            if (regs.Count == 0) return;
+            var parts = new System.Collections.Generic.List<string>();
+            foreach (var kv in regs)
+            {
+                // Key is "<dev hex>:mbooster-<name>" — drop the shared prefix.
+                int cut = kv.Key.IndexOf(":mbooster-", StringComparison.Ordinal);
+                string label = cut >= 0
+                    ? kv.Key.Substring(0, cut + 1) + kv.Key.Substring(cut + ":mbooster-".Length)
+                    : kv.Key;
+                parts.Add($"{label}={kv.Value}");
+            }
+            parts.Sort(StringComparer.Ordinal);
+            sb.AppendLine($"        status=[{string.Join(", ", parts)}]");
         }
 
         /// <summary>
@@ -342,6 +371,7 @@ namespace MozaPlugin.UI
                     $"travel={FmtMm(cfg.TravelStartMm)}..{FmtMm(cfg.TravelEndMm)} " +
                     $"endstop={FmtRaw(cfg.EndstopFrontStiffness)}/{FmtRaw(cfg.EndstopEndStiffness)} " +
                     $"friction={FmtPct(cfg.NaturalFrictionPct)} " +
+                    $"damping={FmtPct(cfg.DampingPressPct)}/{FmtPct(cfg.DampingReleasePct)} " +
                     $"inCurveY={(cfg.InputCurveY != null ? "set" : "—")} " +
                     $"inCurveX={(cfg.InputCurveX != null ? "set" : "—")}");
             }

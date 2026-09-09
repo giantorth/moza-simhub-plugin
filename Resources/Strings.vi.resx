@@ -775,4 +775,13 @@ Id: {2}</value></data>
   <data name="Upload_StatusStopped" xml:space="preserve"><value>Đã dừng - {0}%</value></data>
   <data name="Section_UploadSource" xml:space="preserve"><value>NGUỒN TẢI LÊN</value></data>
   <data name="Banner_LegacyLfeMigrated_Body" xml:space="preserve"><value>Phản hồi rung LFE của đế đã chuyển vào thiết bị đế MOZA — hãy thêm thiết bị đó để chuyển các hiệu ứng của bạn.</value></data>
+  <data name="Button_TravelCalibration" xml:space="preserve"><value>HIỆU CHUẨN HÀNH TRÌNH</value></data>
+  <data name="Button_MotorCalibration" xml:space="preserve"><value>HIỆU CHUẨN MÔ-TƠ</value></data>
+  <data name="Hint_MBoosterTravelCal" xml:space="preserve"><value>Đang hiệu chuẩn hành trình bàn đạp — mô-tơ tự di chuyển bàn đạp, đừng đặt chân lên. Còn {0}s…</value></data>
+  <data name="Hint_MBoosterMotorCal" xml:space="preserve"><value>Đang hiệu chuẩn mô-tơ — đừng đặt chân lên bàn đạp. Việc này mất khoảng một phút. Còn {0}s…</value></data>
+  <data name="Hint_MBoosterCalRebooting" xml:space="preserve"><value>Đang khởi động lại bàn đạp để hoàn tất — nó sẽ kết nối lại sau vài giây.</value></data>
+  <data name="Hint_MBoosterCalBusyElsewhere" xml:space="preserve"><value>Một hiệu chuẩn đang chạy trên bàn đạp khác.</value></data>
+  <data name="Status_CalibrationFailed" xml:space="preserve"><value>Hiệu chuẩn thất bại: {0}</value></data>
+  <data name="SliderLabel_DampingPress" xml:space="preserve"><value>Giảm chấn (khi đạp)</value></data>
+  <data name="SliderLabel_DampingRelease" xml:space="preserve"><value>Giảm chấn (khi nhả)</value></data>
 </root>

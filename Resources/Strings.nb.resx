@@ -780,4 +780,13 @@ Id: {2}</value></data>
   <data name="Upload_StatusStopped" xml:space="preserve"><value>Stoppet - {0} %</value></data>
   <data name="Section_UploadSource" xml:space="preserve"><value>OPPLASTINGSKILDE</value></data>
   <data name="Banner_LegacyLfeMigrated_Body" xml:space="preserve"><value>LFE-haptikken for wheelbasen er nå en del av MOZA-wheelbase-enheten – legg til den enheten for å overføre effektene dine.</value></data>
+  <data name="Button_TravelCalibration" xml:space="preserve"><value>KALIBRER VANDRING</value></data>
+  <data name="Button_MotorCalibration" xml:space="preserve"><value>KALIBRER MOTOR</value></data>
+  <data name="Hint_MBoosterTravelCal" xml:space="preserve"><value>Kalibrerer pedalvandring – motoren beveger pedalen selv, så hold foten unna. {0}s igjen…</value></data>
+  <data name="Hint_MBoosterMotorCal" xml:space="preserve"><value>Kalibrerer motoren – hold foten unna pedalen. Dette tar omtrent ett minutt. {0}s igjen…</value></data>
+  <data name="Hint_MBoosterCalRebooting" xml:space="preserve"><value>Starter pedalen på nytt for å fullføre – den kobler seg til igjen om noen sekunder.</value></data>
+  <data name="Hint_MBoosterCalBusyElsewhere" xml:space="preserve"><value>En kalibrering kjører på en annen pedal.</value></data>
+  <data name="Status_CalibrationFailed" xml:space="preserve"><value>Kalibreringen mislyktes: {0}</value></data>
+  <data name="SliderLabel_DampingPress" xml:space="preserve"><value>Demping (trykk)</value></data>
+  <data name="SliderLabel_DampingRelease" xml:space="preserve"><value>Demping (slipp)</value></data>
 </root>

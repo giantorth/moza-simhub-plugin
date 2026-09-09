@@ -774,4 +774,13 @@ Id: {2}</value></data>
   <data name="Upload_StatusStopped" xml:space="preserve"><value>Σταμάτησε - {0}%</value></data>
   <data name="Section_UploadSource" xml:space="preserve"><value>ΠΗΓΗ ΑΠΟΣΤΟΛΗΣ</value></data>
   <data name="Banner_LegacyLfeMigrated_Body" xml:space="preserve"><value>Τα απτικά εφέ LFE της βάσης μεταφέρθηκαν στη συσκευή βάσης MOZA — προσθέστε αυτήν τη συσκευή για να μεταφερθούν τα εφέ σας.</value></data>
+  <data name="Button_TravelCalibration" xml:space="preserve"><value>ΒΑΘΜ. ΔΙΑΔΡΟΜΗΣ</value></data>
+  <data name="Button_MotorCalibration" xml:space="preserve"><value>ΒΑΘΜ. ΜΟΤΕΡ</value></data>
+  <data name="Hint_MBoosterTravelCal" xml:space="preserve"><value>Βαθμονόμηση διαδρομής πεντάλ — το μοτέρ κινεί μόνο του το πεντάλ, μη το πατάτε. Απομένουν {0}s…</value></data>
+  <data name="Hint_MBoosterMotorCal" xml:space="preserve"><value>Βαθμονόμηση μοτέρ — μη πατάτε το πεντάλ. Διαρκεί περίπου ένα λεπτό. Απομένουν {0}s…</value></data>
+  <data name="Hint_MBoosterCalRebooting" xml:space="preserve"><value>Επανεκκίνηση του πεντάλ για ολοκλήρωση — θα επανασυνδεθεί σε λίγα δευτερόλεπτα.</value></data>
+  <data name="Hint_MBoosterCalBusyElsewhere" xml:space="preserve"><value>Εκτελείται βαθμονόμηση σε άλλο πεντάλ.</value></data>
+  <data name="Status_CalibrationFailed" xml:space="preserve"><value>Η βαθμονόμηση απέτυχε: {0}</value></data>
+  <data name="SliderLabel_DampingPress" xml:space="preserve"><value>Απόσβεση (πάτημα)</value></data>
+  <data name="SliderLabel_DampingRelease" xml:space="preserve"><value>Απόσβεση (απελευθέρωση)</value></data>
 </root>

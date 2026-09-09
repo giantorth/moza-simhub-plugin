@@ -782,4 +782,13 @@ Id: {2}</value></data>
   <data name="Upload_StatusStopped" xml:space="preserve"><value>Stopped - {0}%</value></data>
   <data name="Section_UploadSource" xml:space="preserve"><value>UPLOAD SOURCE</value></data>
   <data name="Banner_LegacyLfeMigrated_Body" xml:space="preserve"><value>Wheelbase LFE haptics moved into the MOZA wheelbase device — add that device to carry your effects over.</value></data>
+  <data name="Button_TravelCalibration" xml:space="preserve"><value>TRAVEL CAL.</value></data>
+  <data name="Button_MotorCalibration" xml:space="preserve"><value>MOTOR CAL.</value></data>
+  <data name="Hint_MBoosterTravelCal" xml:space="preserve"><value>Calibrating pedal travel — the motor moves the pedal itself, so keep your foot off it. {0}s left…</value></data>
+  <data name="Hint_MBoosterMotorCal" xml:space="preserve"><value>Calibrating the motor — keep your foot off the pedal. This takes about a minute. {0}s left…</value></data>
+  <data name="Hint_MBoosterCalRebooting" xml:space="preserve"><value>Restarting the pedal to finish — it reconnects in a few seconds.</value></data>
+  <data name="Hint_MBoosterCalBusyElsewhere" xml:space="preserve"><value>A calibration is running on another pedal.</value></data>
+  <data name="Status_CalibrationFailed" xml:space="preserve"><value>Calibration failed: {0}</value></data>
+  <data name="SliderLabel_DampingPress" xml:space="preserve"><value>Damping (press)</value></data>
+  <data name="SliderLabel_DampingRelease" xml:space="preserve"><value>Damping (release)</value></data>
 </root>

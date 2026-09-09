@@ -775,4 +775,13 @@ Id: {2}</value></data>
   <data name="Upload_StatusStopped" xml:space="preserve"><value>已停止 - {0}%</value></data>
   <data name="Section_UploadSource" xml:space="preserve"><value>上传来源</value></data>
   <data name="Banner_LegacyLfeMigrated_Body" xml:space="preserve"><value>底座 LFE 触感已并入 MOZA 底座设备 — 添加该设备即可迁移你的效果。</value></data>
+  <data name="Button_TravelCalibration" xml:space="preserve"><value>行程校准</value></data>
+  <data name="Button_MotorCalibration" xml:space="preserve"><value>电机校准</value></data>
+  <data name="Hint_MBoosterTravelCal" xml:space="preserve"><value>正在校准踏板行程 — 电机会自行推动踏板，请勿踩踏。剩余 {0} 秒…</value></data>
+  <data name="Hint_MBoosterMotorCal" xml:space="preserve"><value>正在校准电机 — 请勿踩踏板。大约需要一分钟。剩余 {0} 秒…</value></data>
+  <data name="Hint_MBoosterCalRebooting" xml:space="preserve"><value>正在重启踏板以完成校准 — 几秒后会重新连接。</value></data>
+  <data name="Hint_MBoosterCalBusyElsewhere" xml:space="preserve"><value>另一个踏板正在进行校准。</value></data>
+  <data name="Status_CalibrationFailed" xml:space="preserve"><value>校准失败：{0}</value></data>
+  <data name="SliderLabel_DampingPress" xml:space="preserve"><value>阻尼（踩下）</value></data>
+  <data name="SliderLabel_DampingRelease" xml:space="preserve"><value>阻尼（松开）</value></data>
 </root>

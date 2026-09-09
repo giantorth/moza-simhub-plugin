@@ -774,4 +774,13 @@ Id: {2}</value></data>
   <data name="Upload_StatusStopped" xml:space="preserve"><value>중지됨 - {0}%</value></data>
   <data name="Section_UploadSource" xml:space="preserve"><value>업로드 소스</value></data>
   <data name="Banner_LegacyLfeMigrated_Body" xml:space="preserve"><value>휠베이스 LFE 햅틱이 MOZA 휠베이스 장치로 통합되었습니다 — 해당 장치를 추가하면 효과가 그대로 이전됩니다.</value></data>
+  <data name="Button_TravelCalibration" xml:space="preserve"><value>행정 캘리브레이션</value></data>
+  <data name="Button_MotorCalibration" xml:space="preserve"><value>모터 캘리브레이션</value></data>
+  <data name="Hint_MBoosterTravelCal" xml:space="preserve"><value>페달 행정을 캘리브레이션하는 중입니다. 모터가 직접 페달을 움직이므로 발을 떼고 기다리세요. {0}초 남음…</value></data>
+  <data name="Hint_MBoosterMotorCal" xml:space="preserve"><value>모터를 캘리브레이션하는 중입니다. 페달에서 발을 떼세요. 약 1분 걸립니다. {0}초 남음…</value></data>
+  <data name="Hint_MBoosterCalRebooting" xml:space="preserve"><value>마무리를 위해 페달을 재시작하는 중입니다. 몇 초 후 다시 연결됩니다.</value></data>
+  <data name="Hint_MBoosterCalBusyElsewhere" xml:space="preserve"><value>다른 페달에서 캘리브레이션이 실행 중입니다.</value></data>
+  <data name="Status_CalibrationFailed" xml:space="preserve"><value>캘리브레이션 실패: {0}</value></data>
+  <data name="SliderLabel_DampingPress" xml:space="preserve"><value>감쇠 (밟을 때)</value></data>
+  <data name="SliderLabel_DampingRelease" xml:space="preserve"><value>감쇠 (놓을 때)</value></data>
 </root>

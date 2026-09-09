@@ -765,4 +765,13 @@
   <data name="Upload_StatusStopped" xml:space="preserve"><value>Yowl Boof - {0}%</value></data>
   <data name="Section_UploadSource" xml:space="preserve"><value>BORK YIP SNARF</value></data>
   <data name="Banner_LegacyLfeMigrated_Body" xml:space="preserve"><value>Wroof Yowl Grr Barff Yip Howl Arf!</value></data>
+  <data name="Button_TravelCalibration" xml:space="preserve"><value>BORK!!</value></data>
+  <data name="Button_MotorCalibration" xml:space="preserve"><value>YOWFF!!</value></data>
+  <data name="Hint_MBoosterTravelCal" xml:space="preserve"><value>Yip Woof Bark Yap — Grr Awoo Wuff Barff, Yowl Arf Wan. {0} Woof Grrowl…</value></data>
+  <data name="Hint_MBoosterMotorCal" xml:space="preserve"><value>Yowff Grr Awoo — Yowl Arf Wuff Barff. Woof Yip Bark Grrowl. {0} Wan…</value></data>
+  <data name="Hint_MBoosterCalRebooting" xml:space="preserve"><value>Awoo Wuff Barff Yip — Woof Grr Yowl Bark Wan.</value></data>
+  <data name="Hint_MBoosterCalBusyElsewhere" xml:space="preserve"><value>Grrowl Yap Woof Barff Yip Bark.</value></data>
+  <data name="Status_CalibrationFailed" xml:space="preserve"><value>Grr Barff Yowl: {0}</value></data>
+  <data name="SliderLabel_DampingPress" xml:space="preserve"><value>Woof (Yap)</value></data>
+  <data name="SliderLabel_DampingRelease" xml:space="preserve"><value>Woof (Grr)</value></data>
 </root>

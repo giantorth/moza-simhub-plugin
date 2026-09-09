@@ -775,4 +775,13 @@ Id: {2}</value></data>
   <data name="Upload_StatusStopped" xml:space="preserve"><value>Gestoppt - {0} %</value></data>
   <data name="Section_UploadSource" xml:space="preserve"><value>UPLOAD-QUELLE</value></data>
   <data name="Banner_LegacyLfeMigrated_Body" xml:space="preserve"><value>Die Wheelbase-LFE-Haptik ist jetzt Teil des MOZA-Wheelbase-Geräts — fügen Sie dieses Gerät hinzu, um Ihre Effekte zu übernehmen.</value></data>
+  <data name="Button_TravelCalibration" xml:space="preserve"><value>WEG KALIBR.</value></data>
+  <data name="Button_MotorCalibration" xml:space="preserve"><value>MOTOR KALIBR.</value></data>
+  <data name="Hint_MBoosterTravelCal" xml:space="preserve"><value>Pedalweg wird kalibriert – der Motor bewegt das Pedal selbst, nimm den Fuß weg. Noch {0}s…</value></data>
+  <data name="Hint_MBoosterMotorCal" xml:space="preserve"><value>Motor wird kalibriert – nimm den Fuß vom Pedal. Das dauert etwa eine Minute. Noch {0}s…</value></data>
+  <data name="Hint_MBoosterCalRebooting" xml:space="preserve"><value>Pedal wird zum Abschluss neu gestartet – es verbindet sich in wenigen Sekunden wieder.</value></data>
+  <data name="Hint_MBoosterCalBusyElsewhere" xml:space="preserve"><value>Auf einem anderen Pedal läuft gerade eine Kalibrierung.</value></data>
+  <data name="Status_CalibrationFailed" xml:space="preserve"><value>Kalibrierung fehlgeschlagen: {0}</value></data>
+  <data name="SliderLabel_DampingPress" xml:space="preserve"><value>Dämpfung (Treten)</value></data>
+  <data name="SliderLabel_DampingRelease" xml:space="preserve"><value>Dämpfung (Lösen)</value></data>
 </root>

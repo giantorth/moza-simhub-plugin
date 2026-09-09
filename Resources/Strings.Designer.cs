@@ -833,5 +833,14 @@ namespace MozaPlugin.Resources
         public static string Upload_StatusStopped => Get("Upload_StatusStopped");
         public static string Section_UploadSource => Get("Section_UploadSource");
         public static string Banner_LegacyLfeMigrated_Body => Get("Banner_LegacyLfeMigrated_Body");
+        public static string Button_TravelCalibration => Get("Button_TravelCalibration");
+        public static string Button_MotorCalibration => Get("Button_MotorCalibration");
+        public static string Hint_MBoosterTravelCal => Get("Hint_MBoosterTravelCal");
+        public static string Hint_MBoosterMotorCal => Get("Hint_MBoosterMotorCal");
+        public static string Hint_MBoosterCalRebooting => Get("Hint_MBoosterCalRebooting");
+        public static string Hint_MBoosterCalBusyElsewhere => Get("Hint_MBoosterCalBusyElsewhere");
+        public static string Status_CalibrationFailed => Get("Status_CalibrationFailed");
+        public static string SliderLabel_DampingPress => Get("SliderLabel_DampingPress");
+        public static string SliderLabel_DampingRelease => Get("SliderLabel_DampingRelease");
     }
 }

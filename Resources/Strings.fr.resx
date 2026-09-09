@@ -775,4 +775,13 @@ Id : {2}</value></data>
   <data name="Upload_StatusStopped" xml:space="preserve"><value>Arrêté - {0} %</value></data>
   <data name="Section_UploadSource" xml:space="preserve"><value>SOURCE DU TÉLÉVERSEMENT</value></data>
   <data name="Banner_LegacyLfeMigrated_Body" xml:space="preserve"><value>Le retour haptique LFE de la base est désormais intégré au périphérique de base MOZA — ajoutez-le pour conserver vos effets.</value></data>
+  <data name="Button_TravelCalibration" xml:space="preserve"><value>CAL. COURSE</value></data>
+  <data name="Button_MotorCalibration" xml:space="preserve"><value>CAL. MOTEUR</value></data>
+  <data name="Hint_MBoosterTravelCal" xml:space="preserve"><value>Calibrage de la course de la pédale — le moteur déplace la pédale lui-même, ne posez pas le pied dessus. Encore {0}s…</value></data>
+  <data name="Hint_MBoosterMotorCal" xml:space="preserve"><value>Calibrage du moteur — ne posez pas le pied sur la pédale. Cela prend environ une minute. Encore {0}s…</value></data>
+  <data name="Hint_MBoosterCalRebooting" xml:space="preserve"><value>Redémarrage de la pédale pour terminer — elle se reconnecte dans quelques secondes.</value></data>
+  <data name="Hint_MBoosterCalBusyElsewhere" xml:space="preserve"><value>Un calibrage est en cours sur une autre pédale.</value></data>
+  <data name="Status_CalibrationFailed" xml:space="preserve"><value>Échec du calibrage : {0}</value></data>
+  <data name="SliderLabel_DampingPress" xml:space="preserve"><value>Amortissement (appui)</value></data>
+  <data name="SliderLabel_DampingRelease" xml:space="preserve"><value>Amortissement (relâchement)</value></data>
 </root>

@@ -1836,7 +1836,30 @@
                     <ctrl:SectionCard Grid.Row="0" Title="{x:Static res:Strings.Section_MBoosterPedals}"
                                       Subtitle="{x:Static res:Strings.Subtitle_MBoosterPedals}"
                                       Icon="{StaticResource IconPedals}" Margin="22,18,22,0">
+                        <!-- The two real hardware calibration ROUTINES ride this card's
+                             HEADER, on the title's own line, via the template's
+                             header-right ContentPresenter (HeaderedContentControl.Header
+                             — see Themes/Generic.xaml). They belong to this card rather
+                             than Pedal Feel because the pedal they act on is the one
+                             selected in the row list below, and because both soft-reboot
+                             the unit, which visibly stalls the trace underneath. This
+                             card isn't IsCollapsible, so the header's click-to-collapse
+                             handler stays inert and can't swallow a button click.
+                             See MBoosterCalibrationRunner. -->
+                        <ctrl:SectionCard.Header>
+                            <StackPanel x:Name="MBoosterCalButtonsPanel" Orientation="Horizontal"
+                                        VerticalAlignment="Center">
+                                <Button x:Name="MBoosterTravelCalButton" Content="{x:Static res:Strings.Button_TravelCalibration}"
+                                        Margin="0,0,6,0" Click="MBoosterTravelCalButton_Click"/>
+                                <Button x:Name="MBoosterMotorCalButton" Content="{x:Static res:Strings.Button_MotorCalibration}"
+                                        Click="MBoosterMotorCalButton_Click"/>
+                            </StackPanel>
+                        </ctrl:SectionCard.Header>
                         <StackPanel>
+                            <!-- Collapsed while idle, so it costs no vertical space
+                                 until a routine is actually running. -->
+                            <TextBlock x:Name="MBoosterCalStatus" Style="{StaticResource MutedHintText}"
+                                       TextWrapping="Wrap" TextAlignment="Right" Margin="0,0,0,8" Visibility="Collapsed"/>
                             <ctrl:BandwidthSparkline x:Name="MBoosterPedalTraceViz" Height="70"
                                                       InBrush="{StaticResource RedBrush}"
                                                       InFillBrush="{StaticResource McuFillBrush}"
@@ -2192,6 +2215,39 @@
                                               IsCollapsible="True">
                                 <StackPanel>
                                     <ctrl:OffOnToggle x:Name="MBoosterSegDampEnable" Content="{x:Static res:Strings.Label_Enable}" VerticalAlignment="Center" Margin="0,0,0,12" Checked="MBoosterSegDampEnable_Changed" Unchecked="MBoosterSegDampEnable_Changed"/>
+                                    <!-- Plain (non-segmented) Virtual Damping, cmdId 0xAD selectors
+                                         0/1. A register set of its own that Pit House writes in the
+                                         same burst as the 0xB7 segments below — the firmware logs
+                                         `virtual_damping_press`/`_release` for these and
+                                         `virtual_damping_press1..3` for the segments. Same card
+                                         because it is the same feature family, so it inherits this
+                                         card's passive-pedal gating. -->
+                                    <Grid Margin="0,0,0,6">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="{x:Static res:Strings.SliderLabel_DampingPress}" Style="{StaticResource SliderLabel}"/>
+                                        <Slider Grid.Column="1" x:Name="MBoosterDampingPressSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="MBoosterDampingSlider_ValueChanged"/>
+                                        <TextBox Grid.Column="2" x:Name="MBoosterDampingPressValue" Style="{StaticResource SliderValueEditBox}"
+                                                 Tag="{Binding ElementName=MBoosterDampingPressSlider}"
+                                                 KeyDown="SliderValueBox_KeyDown" LostFocus="SliderValueBox_LostFocus"
+                                                 Text="0"/>
+                                    </Grid>
+                                    <Grid Margin="0,0,0,12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="{x:Static res:Strings.SliderLabel_DampingRelease}" Style="{StaticResource SliderLabel}"/>
+                                        <Slider Grid.Column="1" x:Name="MBoosterDampingReleaseSlider" Style="{StaticResource SettingSlider}" Minimum="0" Maximum="100" TickFrequency="1" ValueChanged="MBoosterDampingSlider_ValueChanged"/>
+                                        <TextBox Grid.Column="2" x:Name="MBoosterDampingReleaseValue" Style="{StaticResource SliderValueEditBox}"
+                                                 Tag="{Binding ElementName=MBoosterDampingReleaseSlider}"
+                                                 KeyDown="SliderValueBox_KeyDown" LostFocus="SliderValueBox_LostFocus"
+                                                 Text="0"/>
+                                    </Grid>
                                     <TextBlock Text="{x:Static res:Strings.Section_SegmentedDampingPressed}" Style="{StaticResource SectionTitleText}" Margin="0,0,0,12"/>
                                     <ctrl:MozaSegmentedBarEditor x:Name="MBoosterSegDampPressedPlot" Height="220" Margin="0,0,0,4"
                                                                   ToolTip="{x:Static res:Strings.Hint_SegmentedDampingExperimental}"
