@@ -171,6 +171,15 @@ namespace MozaPlugin
                     FixMBoosterCurveArraysSeventhsBug();
                 }
 
+                // Saved knob palettes that are entirely black were laundered from an
+                // unseeded _data mirror, not chosen — null them once so the wheel's
+                // own stored colours show and nothing re-writes black on apply.
+                if (!_settings.KnobColorAllBlackRepaired)
+                {
+                    _settings.KnobColorAllBlackRepaired = true;
+                    _profileCoordinator.RepairAllBlackKnobColorArrays();
+                }
+
                 // Initialise the GUID↔model registry up front — page-GUID
                 // resolution (current-wheel page lookup, per-page settings dicts)
                 // depends on it throughout runtime.

@@ -384,6 +384,17 @@ namespace MozaPlugin
             }
         }
 
+        /// <summary>
+        /// Mirror a packed profile/overlay colour array into <paramref name="target"/>
+        /// under <see cref="LedColorLock"/>. Negative (unset) slots are skipped. Does
+        /// not arm the A5 read-suppression gate — this is saved host state, not a pick.
+        /// </summary>
+        public void MirrorPackedColors(int[]? packed, byte[][] target)
+        {
+            if (packed == null) return;
+            lock (LedColorLock) Settings.MozaProfile.UnpackColorsInto(packed, target);
+        }
+
         // Wheel RPM colors (10 LEDs, [R, G, B] each)
         public readonly byte[][] WheelRpmColors = InitWheelRpmColorArray();
         public readonly byte[][] WheelRpmBlinkColors = InitRpmColorArray();
@@ -408,12 +419,12 @@ namespace MozaPlugin
         public readonly byte[][] WheelFlagColors = InitFlagColorArray();
         public readonly byte[] WheelIdleColor = new byte[] { 255, 255, 255 };
 
-        // Per-knob LED ring colors — W17 CS Pro (4 knobs) / W18 KS Pro (5 knobs).
-        // Background = idle colour shown when the knob is not being turned;
-        // primary = colour flashed on rotation. Wire: [0x27, group, role] + RGB,
-        // group 0..KnobCount-1, role 0=background, 1=primary.
+        // Per-knob Active LED colour — W17 CS Pro (4 knobs) / W18 KS Pro (5 knobs):
+        // the ring LED at the knob's current rotation position. Wire: [0x27, knob,
+        // role] + RGB, knob 0..KnobCount-1, role 0 = stored Active (read/write),
+        // role 1 = live position colour (read-only). See
+        // docs/protocol/findings/2026-05-10-knob-led-cmd27.md.
         public const int WheelKnobMax = 5;
-        public readonly byte[][] WheelKnobBackgroundColors = InitColorArray(WheelKnobMax);
         public readonly byte[][] WheelKnobPrimaryColors = InitColorArray(WheelKnobMax);
 
         // Per-LED knob ring (Inactive / background) colors. Up to 56 LEDs
