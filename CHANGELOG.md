@@ -16,14 +16,12 @@ All notable changes to the AZOM plugin are documented here.
 
 ### Fixed
 
-- **Dashboard uploads no longer stall part-way.** An upload could stop advancing and sit
-  there — at 20 %, at 3 %, anywhere — while the wheel was still sending. Two causes. The
-  upload was pushing bytes faster than the cable can carry them in one direction, which
-  left no room for the wheel's replies and made it re-send them; it now paces itself to
-  leave that room, which finishes sooner despite sending slower. And when the wheel did
-  re-send, the plugin lost its place in the reply stream permanently and stopped reading
-  anything further, so the transfer hung rather than recovering; repeated replies are now
-  recognised for what they are.
+- **Dashboard uploads no longer stall part-way.** An upload could stop advancing at any
+  percentage and sit there indefinitely, never finishing and never failing. The plugin was
+  overrunning the cable, losing its place in the wheel's replies, and giving up on the one
+  chunk the wheel was waiting for while flooding it with chunks it discards. It now paces
+  itself, re-sends only what the wheel is asking for, and reports a failure instead of
+  hanging.
 - **The upload percentage on the Files tab is no longer wrong.** It read the wheel's own
   byte count, which sometimes reports the full size before anything has actually been sent,
   so the figure could sit at 100 % for the whole upload. It now counts what has been sent.

@@ -71,6 +71,20 @@ namespace MozaPlugin.Telemetry.Dashboard
         /// drain IS its receive-window flow control.
         /// </summary>
         private readonly Func<int> _getRetransmitBacklog;
+        /// <summary>
+        /// Monotonic count of chunks the wheel has actually ACKED
+        /// (<c>SessionRetransmitter.AckedChunkCount</c>). This — not the queue
+        /// depth — is the transfer's liveness signal: the depth also falls when
+        /// the retransmitter gives up on a chunk, and treating that as progress
+        /// is what stopped the stall abort from ever firing in bundle 8MKDKT7R.
+        /// </summary>
+        private readonly Func<long> _getAckedChunkCount;
+        /// <summary>Mark / unmark the upload session as a reliable stream on the
+        /// retransmitter (no eviction, frontier-limited retransmits) and drop
+        /// its queue when the attempt ends. See
+        /// <c>SessionRetransmitter.HoldSession</c>.</summary>
+        private readonly Action<byte> _holdRetransmitSession;
+        private readonly Action<byte> _releaseRetransmitSession;
 
         // FT-eligible sessions the wheel device-inited. ChooseUploadSession
         // prefers 0x04 (legacy), then walks up looking for the first match.
@@ -278,7 +292,10 @@ namespace MozaPlugin.Telemetry.Dashboard
             Action<byte[]> sendAndTrackChunk,
             Action<byte, byte> sendSessionOpen,
             Action<byte> sendFileTransferActivate,
-            Func<int> getRetransmitBacklog)
+            Func<int> getRetransmitBacklog,
+            Func<long> getAckedChunkCount,
+            Action<byte> holdRetransmitSession,
+            Action<byte> releaseRetransmitSession)
         {
             _connection = connection;
             _shouldAbort = shouldAbort;
@@ -290,6 +307,9 @@ namespace MozaPlugin.Telemetry.Dashboard
             _sendSessionOpen = sendSessionOpen;
             _sendFileTransferActivate = sendFileTransferActivate;
             _getRetransmitBacklog = getRetransmitBacklog;
+            _getAckedChunkCount = getAckedChunkCount;
+            _holdRetransmitSession = holdRetransmitSession;
+            _releaseRetransmitSession = releaseRetransmitSession;
         }
 
         // Session-acquisition handshake state (Type02): _acquireTarget is the
@@ -869,6 +889,12 @@ namespace MozaPlugin.Telemetry.Dashboard
             Volatile.Write(ref _progressChunksSent, 0);
             Volatile.Write(ref _progressChunkTotal, 0);
             _isUploadInFlight = true;
+            // Reliable-stream hold for the whole attempt: the upload's chunks
+            // must not be dropped on retry exhaustion (an evicted chunk
+            // deadlocks the wheel's cumulative ack forever) and its retransmits
+            // must stay at the ack frontier instead of re-blasting the whole
+            // unacked span.
+            _holdRetransmitSession(uploadSess);
             try
             {
                 return SendDashboardUploadInner(content, uploadSess);
@@ -876,6 +902,12 @@ namespace MozaPlugin.Telemetry.Dashboard
             finally
             {
                 _isUploadInFlight = false;
+                // Release the hold AND drop the queue: whatever is still
+                // unacked belongs to an attempt that is over, and left in place
+                // it keeps retransmitting into a session nobody is reading.
+                // (Session09 and DashboardDownloader already do this; the
+                // upload path never did.)
+                _releaseRetransmitSession(uploadSess);
             }
         }
 
@@ -1232,23 +1264,36 @@ namespace MozaPlugin.Telemetry.Dashboard
                 Volatile.Write(ref _progressChunksSent, chunkIdx + 1);
 
                 // Window pacing: wait for the wheel's cumulative fc-acks to
-                // drain the retransmit backlog before the next sub-msg. The
-                // liveness clock resets whenever the backlog shrinks; a stall
-                // means the wheel stopped acking entirely.
+                // drain the retransmit backlog before the next sub-msg.
+                //
+                // The liveness clock resets on the ACKED-CHUNK COUNT, not on the
+                // backlog shrinking. Those look the same from the queue depth
+                // but are opposites: the depth also falls when the retransmitter
+                // evicts a chunk it has given up on. Keying on the depth meant
+                // every eviction re-armed this deadline, so the abort never
+                // fired — bundle 8MKDKT7R ran 6 minutes against a wheel ack
+                // frozen at seq 1391, emitting 1082 chunks past it, and the
+                // queue depth kept dipping as chunks aged out. The hold taken in
+                // SendDashboardUpload also stops that eviction now, so the depth
+                // is honest again; keying on real acks makes it not matter.
                 int backlog = _getRetransmitBacklog();
+                long acked = _getAckedChunkCount();
                 DateTime stallDeadline = DateTime.UtcNow.AddMilliseconds(BacklogStallTimeoutMs);
                 while (backlog > BacklogWindow && !_shouldAbort())
                 {
                     Thread.Sleep(50);
-                    int now = _getRetransmitBacklog();
-                    if (now < backlog)
+                    backlog = _getRetransmitBacklog();
+                    long ackedNow = _getAckedChunkCount();
+                    if (ackedNow != acked)
+                    {
+                        acked = ackedNow;
                         stallDeadline = DateTime.UtcNow.AddMilliseconds(BacklogStallTimeoutMs);
-                    backlog = now;
+                    }
                     if (DateTime.UtcNow >= stallDeadline)
                     {
                         MozaLog.Warn(
                             $"[AZOM] Session 0x{uploadSess:X2} sub-msg 2 chunk {chunkIdx + 1}/{upload.SubMsg2Chunks.Count}: " +
-                            $"wheel stopped fc-acking ({backlog} chunks unacked for {BacklogStallTimeoutMs}ms) — aborting upload");
+                            $"wheel stopped fc-acking ({backlog} chunks unacked, no ack for {BacklogStallTimeoutMs}ms) — aborting upload");
                         _outboundSeq = seq2;
                         _sendSessionEnd(uploadSess, (ushort)_outboundSeq);
                         return UploadOutcome.SubMsg2AckTimeout;

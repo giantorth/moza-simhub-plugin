@@ -359,6 +359,55 @@ have all the bytes" — which is how the Files tab still decides
 complete-vs-stopped, and how the coordinator recognises the
 complete-via-progress firmware variant.
 
+### Outbound flow control: retransmit at the ack frontier, and never drop
+
+The wheel's `fc:00 [session] [ack_seq:u16 LE]` is a **cumulative** ack, so two
+rules follow for the host side of an upload. Both were being broken, and
+together they deadlocked bundle **8MKDKT7R** (KS Pro) for six minutes.
+
+Note when parsing captures: the inbound ack frame carries a `c3 71` prefix
+before `fc 00`, so a matcher anchored at byte 0 sees no acks at all.
+
+**Observed state over the last 5 minutes of that transfer:**
+
+| | |
+|---|---|
+| wheel's sess-0x04 ack_seq | **frozen at 1391** — 3986 of 4094 acks repeat it |
+| host's highest sent seq | **2473** |
+| chunks sent past the ack point | **1082** |
+| distinct frames / transmissions | 1255 / 26174 → 20.9x each, **24.7x amplification** |
+
+The wheel was waiting for seq 1392. It never arrived, so its cumulative ack
+could not move, so everything from 1393 up was discarded on receipt.
+
+**Rule 1 — retransmit only at the frontier.** Re-offering the whole unacked
+span is not just wasted wire, it starves the one chunk that would unblock the
+transfer: 6.3 kB/s, 64 % of a half-duplex link, spent on frames the wheel was
+guaranteed to discard. `SessionRetransmitter.HoldSession` confines a held
+session's retransmits to `HeldRetransmitWindow` (8) seqs above its lowest
+unacked chunk. Modelled against the state above: 1136 frames instead of 37650,
+**33x less wire**, and seqs 1392-1399 get all of it.
+
+**Rule 2 — never drop an unacked chunk on a reliable stream.**
+`DueRetransmits` evicts at `maxRetries` (30). For a cumulative-ack stream an
+eviction is not recovery, it is a *permanent* deadlock: seq 1392 was dropped
+after 30 attempts, after which no future traffic could ever advance the wheel's
+ack. A held session is exempt from both that eviction and the `MaxQueueSize`
+LRU; the transfer's own stall timeout is what gives up, and it reports a
+failure instead of hanging.
+
+**And `QueueSize` is not a window signal.** The upload's pacing loop used queue
+depth for liveness — but depth falls both when the wheel acks *and* when the
+retransmitter gives up. Every eviction therefore re-armed the 90 s stall
+deadline, so the abort never fired, and the same false "window drained" reading
+let the emit loop run 1082 chunks past the wheel. `AckedChunkCount` is
+monotonic and advanced **only** by a genuine ack — never by eviction, never by
+`DropSession` — and is what the pacing loop watches now.
+
+Finally: the upload path never called `DropSession` on exit (Session09 and
+`DashboardDownloader` both do), so a finished attempt's unacked chunks kept
+retransmitting into a session nobody was reading. It does now.
+
 ### Session data chunk CRC — 4 bytes LE
 
 **Verified 2026-04-24 (again).** Each session `7c:00` data chunk carries a **4-byte CRC32-LE** trailer over the net body. A previous revision of this section briefly claimed 3 bytes; that claim was an artifact of a buggy `extract_frames` helper that dropped the last 2 bytes of each frame (real CRC's last byte + frame checksum). When raw tshark output is inspected directly every chunk's last 4 bytes match `zlib.crc32(net)` LE exactly.

@@ -984,7 +984,14 @@ namespace MozaPlugin.Telemetry
                 sendAndTrackChunk: SendAndTrackChunk,
                 sendSessionOpen: _sessionLife.SendSessionOpen,
                 sendFileTransferActivate: _sessionLife.SendFileTransferActivate,
-                getRetransmitBacklog: () => Retransmitter.QueueSize);
+                getRetransmitBacklog: () => Retransmitter.QueueSize,
+                getAckedChunkCount: () => Retransmitter.AckedChunkCount,
+                holdRetransmitSession: s => Retransmitter.HoldSession(s),
+                releaseRetransmitSession: s =>
+                {
+                    Retransmitter.ReleaseHold(s);
+                    Retransmitter.DropSession(s);
+                });
 
             // Single-line outcome log per upload attempt. Without this, a
             // silent failure (e.g. NoFtSession) only shows up as a Warn deep
