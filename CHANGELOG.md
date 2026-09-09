@@ -29,6 +29,8 @@ All notable changes to the AZOM plugin are documented here.
   again — or reconnecting mid-transfer — used to start a second attempt that fought the first
   over the same connection; both could fail. The second request is now declined while one is
   in progress.
+- **The BUTTON/KNOB selector applies correctly.** 
+- **Dropped unecessary idle polls.** .
 
 ## [1.6.0]
 

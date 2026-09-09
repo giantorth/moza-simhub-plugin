@@ -320,14 +320,13 @@ namespace MozaPlugin.Devices.Ui
                         ? Visibility.Visible : Visibility.Collapsed;
                     if (perKnob)
                     {
-                        // Per-knob mode: keep the hidden source-of-truth combos in sync;
-                        // the visible chips above each KnobRingViz forward to them.
+                        // Per-knob mode: the visible chips own the write; these hidden
+                        // stubs exist for the XAML handler contract and just mirror the
+                        // same resolved value.
                         var combos = new[] { WiKnobSignalMode0Combo, WiKnobSignalMode1Combo, WiKnobSignalMode2Combo, WiKnobSignalMode3Combo, WiKnobSignalMode4Combo };
-                        var ovSig = ov?.WheelKnobSignalModes;
                         for (int i = 0; i < 5; i++)
                         {
-                            int v = ovSig != null && i < ovSig.Length && ovSig[i] >= 0
-                                ? ovSig[i] : _data.WheelKnobSignalModes[i];
+                            int v = ResolveKnobSignalMode(ov, i);
                             if (v >= 0) SetComboSafe(combos[i], v);
                         }
                     }

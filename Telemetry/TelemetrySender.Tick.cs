@@ -848,12 +848,10 @@ namespace MozaPlugin.Telemetry
             }
         }
 
-        /// <summary>Widget-state poll cycle. Cycle of 80 slots at one frame per
-        /// 10 ticks gives ~0.4/s per slot; PitHouse capture cadence is ~0.2/s
-        /// per slot, within tolerable range.</summary>
-        /// <summary>Widget-state poll cycle at ~1 Hz. The cycle rotates
-        /// through 80 probes, so each individual probe gets covered every
-        /// ~80 seconds.</summary>
+        /// <summary>Widget-state poll cycle: one frame per ~1 Hz slow tick,
+        /// rotating through the 63 live probes in SendOneWidgetPoll, so each
+        /// individual probe recurs every ~63 s. PitHouse's own capture cadence
+        /// is ~0.2/s per probe — we stay well under it.</summary>
         private void TickEmitWidgetPoll()
         {
             int slow = Math.Max(8, 1000 / _baseTickMs);

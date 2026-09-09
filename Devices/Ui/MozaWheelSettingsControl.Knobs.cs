@@ -80,6 +80,10 @@ namespace MozaPlugin.Devices.Ui
                     if (_suppressEvents) return;
                     int v = chip.SelectedIndex;
                     if (v < 0) return;
+                    // The chip owns the write. Driving the hidden stub's
+                    // SelectedIndex instead drops the edit whenever the two already
+                    // agree; the stub is only kept in sync for the XAML handler
+                    // contract, silently so it can't double-write.
                     var hidden = knobIdx switch
                     {
                         0 => WiKnobSignalMode0Combo,
@@ -89,7 +93,11 @@ namespace MozaPlugin.Devices.Ui
                         4 => WiKnobSignalMode4Combo,
                         _ => null
                     };
-                    if (hidden != null && hidden.SelectedIndex != v) hidden.SelectedIndex = v;
+                    if (hidden != null && hidden.SelectedIndex != v)
+                    {
+                        using (_suppressor.Begin()) hidden.SelectedIndex = v;
+                    }
+                    WriteWiKnobSignalMode(knobIdx, v);
                 };
                 _wiKnobSignalChips[k] = chip;
 
@@ -192,8 +200,21 @@ namespace MozaPlugin.Devices.Ui
         private bool HasKnobEncoders()
             => ResolveKnobEncoderCount() > 0 || (_data?.WheelKnobModeSupported ?? false);
 
+        // Per-knob signal mode as the UI must render it: the per-(profile × wheel-page)
+        // overlay wins, _data (the wheel's own readback) only fills an unset slot —
+        // the same overlay-first rule the other input modes follow. Both the chips and
+        // the hidden stubs resolve through here so the two surfaces cannot disagree.
+        private int ResolveKnobSignalMode(WheelOverride? ov, int logicalKnob)
+        {
+            if (_data == null || logicalKnob < 0 || logicalKnob >= MozaData.WheelKnobMax) return -1;
+            var sig = ov?.WheelKnobSignalModes;
+            if (sig != null && logicalKnob < sig.Length && sig[logicalKnob] >= 0)
+                return sig[logicalKnob];
+            return _data.WheelKnobSignalModes[logicalKnob];
+        }
+
         // Called from RefreshInputsAndKnobsSignalMode — sync per-knob chip
-        // visibility + selected index from _data, toggle the per-knob signal grid
+        // visibility + selected index, toggle the per-knob signal grid
         // vs the legacy "All Rotaries" panel based on firmware support, and hide
         // signal-mode cards for knobs that don't exist on this wheel.
         internal void SyncKnobSignalChips()
@@ -213,13 +234,14 @@ namespace MozaPlugin.Devices.Ui
                 WiSignalModeGrid.Visibility = (perKnob && encoderCount > 0)
                     ? Visibility.Visible : Visibility.Collapsed;
             }
+            var ov = _plugin?.GetCurrentWheelOverlay(_plugin.Settings?.ProfileStore?.CurrentProfile);
             using (_suppressor.Begin())
             {
                 for (int k = 0; k < _wiKnobSignalChips.Length; k++)
                 {
                     var chip = _wiKnobSignalChips[k];
                     var card = _wiKnobSignalCardWrappers[k];
-                    int v = _data.WheelKnobSignalModes[k];
+                    int v = ResolveKnobSignalMode(ov, k);
                     bool present = k < encoderCount;
                     // Show every present knob's selector once firmware reports
                     // per-knob support. A not-yet-read value (-1) leaves the chip

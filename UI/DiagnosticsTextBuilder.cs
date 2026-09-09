@@ -534,6 +534,28 @@ namespace MozaPlugin.UI
                                + $"  want bri rpm={Bri(overlay.WheelRpmBrightness)} "
                                + $"btn={Bri(overlay.WheelButtonsBrightness)} knob={Bri(overlay.WheelKnobRingBrightness)}"
                              : ""));
+            // Per-encoder BUTTON/KNOB signal mode (0=Buttons, 1=Knob). Four views, because
+            // they are known to disagree: the profile's wish (overlay), the wheel's own
+            // 2A [fw] readback (data), and what the write cache thinks is in the register.
+            // `fw` is the firmware index the write addresses — it is NOT the logical knob
+            // on CS Pro / KS Pro (WheelModelInfo.KnobSignalModeOrder). The wheel stores all
+            // of them in one bitmask it also logs as "Table 2, Param 19 Written: N" in the
+            // Firmware debug section below, so the two can be compared directly.
+            int encCount = model.KnobEncoderCount >= 0
+                ? Math.Min(model.KnobEncoderCount, MozaData.WheelKnobMax) : swept;
+            if (encCount > 0)
+            {
+                var sigOv = overlay?.WheelKnobSignalModes;
+                sb.AppendLine("Knob signal:    knob   fw  overlay  data  mode c/w");
+                for (int k = 0; k < encCount; k++)
+                {
+                    int fw = model.SignalModeFirmwareIndex(k);
+                    string o = sigOv != null && k < sigOv.Length && sigOv[k] >= 0
+                        ? sigOv[k].ToString(CultureInfo.InvariantCulture) : "—";
+                    sb.AppendLine($"                {k + 1,4}  {fw,3}  {o,7}  {Bri(d.WheelKnobSignalModes[k]),4}"
+                                  + $"  {Cfg($"wheel-knob-signal-mode{fw}")}");
+                }
+            }
             // Header and rows share one width table so the columns line up. mode next to
             // mode-cache/want is the load-bearing pair: a wheel reporting Static while the
             // plugin wants SimHub means the mode write never landed, and the firmware is
