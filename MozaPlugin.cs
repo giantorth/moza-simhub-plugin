@@ -779,6 +779,23 @@ namespace MozaPlugin
         /// both senders share the wheel's file-transfer sessions — so the max
         /// is just "the one that is live".
         /// </summary>
+        /// <summary>
+        /// Monotonic ack count for the pipeline currently uploading, 0 when none
+        /// is. Liveness only — the absolute value is meaningless across
+        /// pipelines, callers just watch it move.
+        /// </summary>
+        internal long DashboardUploadAckedChunks
+        {
+            get
+            {
+                if (_telemetrySender?.IsUploadInFlight ?? false)
+                    return _telemetrySender!.UploadAckedChunkCount;
+                if (_cm2Sender?.IsUploadInFlight ?? false)
+                    return _cm2Sender!.UploadAckedChunkCount;
+                return 0L;
+            }
+        }
+
         internal double DashboardUploadProgress
         {
             get

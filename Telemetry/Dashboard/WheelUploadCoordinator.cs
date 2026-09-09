@@ -79,6 +79,10 @@ namespace MozaPlugin.Telemetry.Dashboard
         /// is what stopped the stall abort from ever firing in bundle 8MKDKT7R.
         /// </summary>
         private readonly Func<long> _getAckedChunkCount;
+        /// <summary>Monotonic held-session retransmit count — the congestion
+        /// window's loss signal. See
+        /// <c>SessionRetransmitter.HeldRetransmitCount</c>.</summary>
+        private readonly Func<long> _getHeldRetransmitCount;
         /// <summary>Mark / unmark the upload session as a reliable stream on the
         /// retransmitter (no eviction, frontier-limited retransmits) and drop
         /// its queue when the attempt ends. See
@@ -294,6 +298,7 @@ namespace MozaPlugin.Telemetry.Dashboard
             Action<byte> sendFileTransferActivate,
             Func<int> getRetransmitBacklog,
             Func<long> getAckedChunkCount,
+            Func<long> getHeldRetransmitCount,
             Action<byte> holdRetransmitSession,
             Action<byte> releaseRetransmitSession)
         {
@@ -308,6 +313,7 @@ namespace MozaPlugin.Telemetry.Dashboard
             _sendFileTransferActivate = sendFileTransferActivate;
             _getRetransmitBacklog = getRetransmitBacklog;
             _getAckedChunkCount = getAckedChunkCount;
+            _getHeldRetransmitCount = getHeldRetransmitCount;
             _holdRetransmitSession = holdRetransmitSession;
             _releaseRetransmitSession = releaseRetransmitSession;
         }
@@ -1252,13 +1258,54 @@ namespace MozaPlugin.Telemetry.Dashboard
             // reliable stream stalled forever waiting for it (692 repeated
             // fc-acks of the metadata's last seq; moza-wire-20260816-102131).
             // PitHouse: metadata 7..13, content 14.
-            const int BacklogWindow = 96;          // ~1.3 sub-msgs of 54B chunks in flight
+            // Chunks allowed in flight before the emit loop waits for the
+            // wheel's fc-acks to drain. This is a bandwidth-delay product:
+            // throughput = window / ack-latency, so too small a window leaves
+            // the link idle no matter how fast we are allowed to send.
+            //
+            // Congestion window, in chunks allowed in flight before the emit
+            // loop waits for the wheel's fc-acks. ACK-DRIVEN, because a fixed
+            // number is the wrong shape: the right value is a property of this
+            // wheel, this firmware and this cable, and guessing it costs real
+            // throughput in both directions. Measured on one W17 with the same
+            // 245 KB payload, by the wheel's own fc-ack rate:
+            //
+            //   fixed  96 (bundle 33E47E0M): 12.9 chunks/s acked, ~10 frames/s
+            //                                sent — balanced, but the SEND rate
+            //                                trailing the ACK rate means it was
+            //                                window-limited, i.e. idle-waiting
+            //                                with headroom left unused
+            //   fixed 512 (bundle 0NEKHQPH):  3.8 chunks/s acked, 22 frames/s
+            //                                sent — 83 % of sends wasted; past
+            //                                its capacity the wheel drops and
+            //                                the frontier retransmits eat the
+            //                                link, so throughput COLLAPSES
+            //
+            // So the useful window is somewhere above 96 and well below 512, and
+            // nothing static finds it. Slow-start from the known-good 96,
+            // doubling after every clean round, and halve on the first sign of
+            // loss — then additive-increase, so it settles just under capacity
+            // instead of oscillating. Loss is read from
+            // HeldRetransmitCount: a held chunk is only ever re-sent because
+            // the wheel did not ack it.
+            //
+            // NOTE for future tuning: judge any change by the ACK rate, never
+            // the byte rate. Overrunning the wheel makes outbound B/s go UP
+            // while useful progress goes DOWN — which is exactly how the 512
+            // experiment looked like it was working.
+            const int InitialBacklogWindow = 96;
+            const int MinBacklogWindow = 48;
+            const int MaxBacklogWindow = 512;
+            const int BacklogWindowGrowth = 16;
+            int backlogWindow = InitialBacklogWindow;
+            bool slowStart = true;
             const int BacklogStallTimeoutMs = 90000;
             int seq2 = _outboundSeq;
             _ackProgress.Reset();
             _subMsg2Response.Reset();
             for (int chunkIdx = 0; chunkIdx < upload.SubMsg2Chunks.Count; chunkIdx++)
             {
+                long retxBefore = _getHeldRetransmitCount();
                 EmitSubMsg(upload.SubMsg2Chunks[chunkIdx], uploadSess, ref seq2, InterFrameDelayMs);
                 if (_shouldAbort()) return UploadOutcome.Aborted;
                 Volatile.Write(ref _progressChunksSent, chunkIdx + 1);
@@ -1279,7 +1326,7 @@ namespace MozaPlugin.Telemetry.Dashboard
                 int backlog = _getRetransmitBacklog();
                 long acked = _getAckedChunkCount();
                 DateTime stallDeadline = DateTime.UtcNow.AddMilliseconds(BacklogStallTimeoutMs);
-                while (backlog > BacklogWindow && !_shouldAbort())
+                while (backlog > backlogWindow && !_shouldAbort())
                 {
                     Thread.Sleep(50);
                     backlog = _getRetransmitBacklog();
@@ -1299,6 +1346,30 @@ namespace MozaPlugin.Telemetry.Dashboard
                         return UploadOutcome.SubMsg2AckTimeout;
                     }
                 }
+
+                // Round done — adjust the window. Any held-session retransmit
+                // during it means the wheel dropped something, so we were over
+                // capacity: leave slow-start and halve. Otherwise probe upward.
+                int prevWindow = backlogWindow;
+                if (_getHeldRetransmitCount() != retxBefore)
+                {
+                    slowStart = false;
+                    backlogWindow = Math.Max(MinBacklogWindow, backlogWindow / 2);
+                }
+                else if (slowStart)
+                {
+                    backlogWindow = Math.Min(MaxBacklogWindow, backlogWindow * 2);
+                }
+                else
+                {
+                    backlogWindow = Math.Min(MaxBacklogWindow,
+                        backlogWindow + BacklogWindowGrowth);
+                }
+                if (backlogWindow != prevWindow)
+                    MozaLog.Debug(
+                        $"[AZOM] Upload window {prevWindow} -> {backlogWindow} chunks " +
+                        $"({(slowStart ? "slow-start" : "congestion-avoidance")}, " +
+                        $"round {chunkIdx + 1}/{upload.SubMsg2Chunks.Count})");
             }
             _outboundSeq = seq2;
 

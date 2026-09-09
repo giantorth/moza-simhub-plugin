@@ -14,8 +14,8 @@ namespace MozaPlugin.Devices.Led
     /// <see cref="MozaBaseLedDeviceManager"/>. The transfer and a 60 Hz LED
     /// stream contend for the same half-duplex 115200 link (the contention the
     /// catalog-negotiation throttle already exists for) and the wheel processes
-    /// upload rounds at a few hundred B/s, so the stream is replaced by ~2
-    /// frames/s of progress fill for the duration.
+    /// upload rounds at a few hundred B/s, so the stream is replaced by ~1
+    /// frame/s of progress fill for the duration.
     ///
     /// The bar spans only the CENTRE RPM band. The side elements — the 3-LED
     /// brow segment a display wheel carries at each end of its strip, or the
@@ -23,12 +23,15 @@ namespace MozaPlugin.Devices.Led
     /// 100 % scales over the 8-12 LEDs the band actually holds (CS Pro
     /// 16-3-3 = 10, KS Pro 18-3-3 = 12, ESSENZA SCV12 10-1-1 = 8).
     ///
-    /// Progress is the wheel's own committed-byte count
-    /// (<c>bytes_written / total_size</c> from its ack sub-msgs), the same
-    /// fraction the Files tab reports — so the bar and the UI can't disagree.
-    /// It reads 0 until the wheel's first ack carries a total_size, which the
-    /// frontier LED covers: the LED at the fill edge toggles once a second, so
-    /// the bar shows it is alive before it has anything to fill.
+    /// Progress is the host emit fraction (content sub-msgs on the wire / total
+    /// chunks), the same fraction the Files tab reports — so the bar and the UI
+    /// can't disagree. Explicitly not the wheel's <c>bytes_written</c>; see
+    /// <see cref="Telemetry.Dashboard.WheelUploadCoordinator.UploadProgress"/>
+    /// for why that is not a progress counter. It reads 0 through the metadata
+    /// handshake, which the frontier LED covers: the LED at the fill edge
+    /// toggles once a second, so the bar shows it is alive before it has
+    /// anything to fill. Liveness is separate — see
+    /// <see cref="StallReleaseSeconds"/>.
     ///
     /// Deliberately NOT tied to SimHub's <c>Display()</c> callback: an upload
     /// runs at connect time and from the Files tab with no game loaded, when
@@ -68,7 +71,7 @@ namespace MozaPlugin.Devices.Led
         private const int FeedsPerProgressStep = 1;
 
         /// <summary>
-        /// How long the committed-byte count may fail to advance before the
+        /// How long the wheel may fail to acknowledge a single chunk before the
         /// stand-down is abandoned: the bar stops feeding and the live pipeline
         /// takes its LEDs back, without waiting for the upload to admit defeat.
         ///
@@ -80,11 +83,14 @@ namespace MozaPlugin.Devices.Led
         /// <b>6 min 17 s</b> of frozen amber bar with the user's RPM, button and
         /// knob LEDs held off. This bounds that.</para>
         ///
-        /// <para>Must clear the SLOWEST healthy round. Per-round acks on 2026-08
-        /// W17 firmware legitimately take up to ~40 s while the wheel writes and
-        /// re-renders (ground truth: 26-round upload, round acks 7-40 s), and a
-        /// round is one 4092-byte advance — so 50 s gives a healthy slow round
-        /// 10 s of margin while cutting the pathological case by ~7x.</para>
+        /// <para>Watches the wheel's ACK COUNT, not the displayed fraction.
+        /// The fraction only ticks when a whole content sub-msg clears its
+        /// backlog drain, and late in a transfer that legitimately exceeds 50 s
+        /// — bundle 33E47E0M tripped this at 73 % while the wheel's ack seq was
+        /// advancing through 3659 distinct values right up to the capture, i.e.
+        /// a perfectly healthy transfer with its LEDs taken away. A single
+        /// chunk ack is a much finer-grained liveness signal than a 4092-byte
+        /// round, so 50 s is generous for it.</para>
         /// </summary>
         private const double StallReleaseSeconds = 50.0;
 
@@ -120,7 +126,7 @@ namespace MozaPlugin.Devices.Led
         private static double s_fraction;
         private static bool s_frontierLit;
         private static DateTime s_lastAdvanceUtc = DateTime.MinValue;
-        private static double s_lastAdvanceFraction = -1.0;
+        private static long s_lastAckedChunks = -1L;
         // Strip length the bar last painted, so ReleaseBar can blank exactly
         // what it lit even if the wheel model has since changed or gone away.
         private static int s_engagedRpmN;
@@ -199,19 +205,20 @@ namespace MozaPlugin.Devices.Led
                     s_fraction = p < 0.0 ? 0.0 : p > 1.0 ? 1.0 : p;
                     s_frontierLit = !s_frontierLit;
 
-                    // Stall watch on the committed-byte count. Any forward move
-                    // re-arms it; 0 counts as an advance only once, so the
-                    // metadata handshake doesn't bank credit indefinitely.
-                    if (s_fraction > s_lastAdvanceFraction || s_lastAdvanceUtc == DateTime.MinValue)
+                    // Stall watch on the wheel's ack count — see
+                    // StallReleaseSeconds for why not the displayed fraction.
+                    long acked = plugin.DashboardUploadAckedChunks;
+                    if (acked != s_lastAckedChunks || s_lastAdvanceUtc == DateTime.MinValue)
                     {
-                        s_lastAdvanceFraction = s_fraction;
+                        s_lastAckedChunks = acked;
                         s_lastAdvanceUtc = now;
                     }
                     else
                     {
-                        // A full bar can't advance further — it is waiting on the
-                        // wheel's completion ack, which is normal and slow. Judge
-                        // it against CompletionHoldSeconds instead.
+                        // Everything is on the wire and acked; the wheel is now
+                        // decompressing and writing, and sends no further chunk
+                        // acks while it does. Judge that against the longer
+                        // CompletionHoldSeconds.
                         double limit = s_fraction >= 1.0
                             ? CompletionHoldSeconds : StallReleaseSeconds;
                         if ((now - s_lastAdvanceUtc).TotalSeconds >= limit)
@@ -297,7 +304,7 @@ namespace MozaPlugin.Devices.Led
             lock (s_lock)
             {
                 s_lastAdvanceUtc = DateTime.MinValue;
-                s_lastAdvanceFraction = -1.0;
+                s_lastAckedChunks = -1L;
                 ReleaseBar();
             }
         }

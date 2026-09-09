@@ -86,6 +86,12 @@ namespace MozaPlugin.Telemetry.Sessions
         // that had been frozen at seq 1391 the whole time.
         private long _ackedChunks;
 
+        // Frames re-offered on the held session. A held chunk is only re-sent
+        // because the peer never acked it, so this rising IS the loss signal a
+        // transfer's congestion window needs — distinct from the ack counter,
+        // which says the peer is making progress but not at what cost.
+        private long _heldRetransmits;
+
         public int QueueSize { get { lock (_lock) return _queue.Count; } }
 
         /// <summary>
@@ -95,6 +101,13 @@ namespace MozaPlugin.Telemetry.Sessions
         /// only genuine peer progress. See <see cref="_ackedChunks"/>.
         /// </summary>
         public long AckedChunkCount { get { lock (_lock) return _ackedChunks; } }
+
+        /// <summary>
+        /// Monotonic count of retransmissions issued on the held session — the
+        /// loss signal for <c>WheelUploadCoordinator</c>'s congestion window.
+        /// Zero while a transfer is landing cleanly.
+        /// </summary>
+        public long HeldRetransmitCount { get { lock (_lock) return _heldRetransmits; } }
 
         /// <summary>
         /// Mark <paramref name="session"/> as a reliable stream for the duration
@@ -330,6 +343,7 @@ namespace MozaPlugin.Telemetry.Sessions
                         }
                     }
                     (output ??= new List<byte[]>()).Add(kv.Value.Frame);
+                    if (isHeld) _heldRetransmits++;
                     kv.Value.LastSentTicks = now;
                     kv.Value.SendCount++;
                     int next = kv.Value.NextDelayMs * 2;

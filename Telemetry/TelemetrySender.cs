@@ -895,6 +895,10 @@ namespace MozaPlugin.Telemetry
         /// <summary>0..1 progress of the in-flight upload; 0 when idle. See
         /// <see cref="Dashboard.WheelUploadCoordinator.UploadProgress"/>.</summary>
         public double UploadProgress => _uploader?.UploadProgress ?? 0.0;
+        /// <summary>Monotonic count of chunks the wheel has acked. The transfer's
+        /// liveness signal — see
+        /// <see cref="Sessions.SessionRetransmitter.AckedChunkCount"/>.</summary>
+        public long UploadAckedChunkCount => Retransmitter.AckedChunkCount;
 
         /// <summary>
         /// Trigger a manual upload of <paramref name="content"/> to the wheel.
@@ -986,6 +990,7 @@ namespace MozaPlugin.Telemetry
                 sendFileTransferActivate: _sessionLife.SendFileTransferActivate,
                 getRetransmitBacklog: () => Retransmitter.QueueSize,
                 getAckedChunkCount: () => Retransmitter.AckedChunkCount,
+                getHeldRetransmitCount: () => Retransmitter.HeldRetransmitCount,
                 holdRetransmitSession: s => Retransmitter.HoldSession(s),
                 releaseRetransmitSession: s =>
                 {
