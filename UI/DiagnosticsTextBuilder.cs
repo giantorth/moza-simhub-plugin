@@ -167,7 +167,9 @@ namespace MozaPlugin.UI
         /// <para><c>binary=</c> is the presence-probe latch that gates the settings
         /// reads, and <c>read=</c> whether those reads actually came back: a lane that
         /// is connected with <c>read=no</c> means the tab is showing MozaData defaults,
-        /// not the device's stored calibration.</para>
+        /// not the device's stored calibration. <c>rx=</c> is the age of the lane's
+        /// last inbound byte; the lane is polled every 5 s and the connection closes
+        /// a port silent for 30 s, so a healthy lane never shows more than ~5 s.</para>
         /// </summary>
         public static string BuildStandalonePeripherals(MozaPlugin plugin, MozaData data)
         {
@@ -201,10 +203,12 @@ namespace MozaPlugin.UI
                         : "n/a";
                 // capture= is this lane's CaptureLabel, i.e. the exact "source" column
                 // its frames carry in serial-capture-*.txt — ties a row to its traffic.
+                var rxAge = c.Connection.InboundAge;
+                string rx = rxAge.HasValue ? $"{(long)rxAge.Value.TotalMilliseconds} ms ago" : "—";
                 sb.AppendLine(
                     $"        tabFlag={(c.SharedFlagSet ? "set" : "clear")}  " +
                     $"ownsWrites={(c.OwnsPeripheral ? "yes" : "no")}  settingsRead={read}  " +
-                    $"pendingReads={c.PendingResponses.PendingCount}  capture={c.Connection.CaptureLabel}");
+                    $"pendingReads={c.PendingResponses.PendingCount}  rx={rx}  capture={c.Connection.CaptureLabel}");
                 var f = c.Connection.LastFailure;
                 if (f.Kind != ConnectionFailureKind.None)
                     sb.AppendLine($"        lastFailure={f.Kind} port={Blank(f.PortName ?? "")} '{f.Message}'");
