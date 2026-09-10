@@ -2,6 +2,36 @@
 
 All notable changes to the AZOM plugin are documented here.
 
+## [1.6.1]
+
+### Added
+
+- **The wheel's RPM bar shows upload progress.** While a dashboard is uploading, the LEDs
+  stop following telemetry and the RPM bar fills up as the transfer lands, with the LED at
+  the fill edge blinking. The lights on either end of the bar stay out, so the fill spans
+  only the bar itself. Pausing the LEDs is deliberate: they and the upload share one link,
+  and the upload gets it for the duration. The bar clears and the LEDs go back to telemetry
+  when the upload finishes — or earlier, if it stops making progress, so a stuck transfer
+  never keeps the LEDs to itself.
+
+### Fixed
+
+- **Dashboard uploads no longer stall part-way.** An upload could stop advancing at any
+  percentage and sit there indefinitely, never finishing and never failing. The plugin was
+  overrunning the cable, losing its place in the wheel's replies, and giving up on the one
+  chunk the wheel was waiting for while flooding it with chunks it discards. It now paces
+  itself, re-sends only what the wheel is asking for, and reports a failure instead of
+  hanging.
+- **The upload percentage on the Files tab is no longer wrong.** It read the wheel's own
+  byte count, which sometimes reports the full size before anything has actually been sent,
+  so the figure could sit at 100 % for the whole upload. It now counts what has been sent.
+- **Starting a second upload while one is running no longer breaks both.** Clicking Upload
+  again — or reconnecting mid-transfer — used to start a second attempt that fought the first
+  over the same connection; both could fail. The second request is now declined while one is
+  in progress.
+- **The BUTTON/KNOB selector applies correctly.** 
+- **Dropped unecessary idle polls.** .
+
 ## [1.6.0]
 
 ### Added

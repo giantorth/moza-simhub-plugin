@@ -770,6 +770,15 @@ namespace MozaPlugin.UI
             MBoosterNaturalFrictionEnable.IsChecked = frictionEnabled;
             MBoosterNaturalFrictionSlider.IsEnabled = frictionEnabled;
 
+            // Plain Virtual Damping (0xAD) — separate registers from the 0xB7
+            // segments below; see MBoosterDeviceSettings.DampingPressPct.
+            float dp = fx?.DampingPressPct ?? -1;
+            MBoosterDampingPressSlider.Value = dp >= 0 ? dp : 0;
+            SetValueText(MBoosterDampingPressValue, MBoosterDampingPressSlider.Value.ToString("F0"));
+            float dr = fx?.DampingReleasePct ?? -1;
+            MBoosterDampingReleaseSlider.Value = dr >= 0 ? dr : 0;
+            SetValueText(MBoosterDampingReleaseValue, MBoosterDampingReleaseSlider.Value.ToString("F0"));
+
             var sd = fx?.SegmentedDamping;
             bool dampingEnabled = sd?.DampingEnabled ?? true;
             MBoosterSegDampEnable.IsChecked = dampingEnabled;

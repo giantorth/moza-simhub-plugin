@@ -400,10 +400,12 @@ namespace MozaPlugin.Protocol
         // fires for a "half-open" port that delivers BytesToRead==0 forever
         // WITHOUT throwing (a real failure mode: sleep/resume, USB stall) — the
         // ReadLoop just spins at Thread.Sleep(2) and nothing triggers reconnect.
-        // We stamp the last successful read and, once the wheel HAS talked,
-        // force a reconnect if inbound goes silent past ReadIdleDeadMs. The
-        // plugin's ~1 Hz parity polls keep a healthy wheel answering well inside
-        // this window, so a breach means the port is dead, not merely idle.
+        // We stamp the last successful read and, once the device HAS talked,
+        // force a reconnect if inbound goes silent past ReadIdleDeadMs. Every
+        // lane owner must keep something answering well inside this window (the
+        // wheel's ~1 Hz parity polls, the hub / base-aux 5 s reads, the standalone
+        // lanes' 5 s presence probe), so a breach means the port is dead, not
+        // merely idle.
         private long _lastRxUtcTicks;
         private const int ReadIdleDeadMs = 30_000;
 
@@ -562,6 +564,18 @@ namespace MozaPlugin.Protocol
         public DateTime LastSuccessfulOpenUtc
         {
             get { lock (_failureLock) return _lastSuccessfulOpenUtc; }
+        }
+
+        /// <summary>Time since the last inbound byte on this connection; null
+        /// before the first one (or after the read-idle detector has fired).
+        /// Diagnostics only.</summary>
+        public TimeSpan? InboundAge
+        {
+            get
+            {
+                long lastRx = Interlocked.Read(ref _lastRxUtcTicks);
+                return lastRx == 0 ? (TimeSpan?)null : TimeSpan.FromTicks(DateTime.UtcNow.Ticks - lastRx);
+            }
         }
 
         /// <summary>

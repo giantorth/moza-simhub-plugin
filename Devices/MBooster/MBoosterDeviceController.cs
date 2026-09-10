@@ -321,6 +321,18 @@ namespace MozaPlugin.Devices.MBooster
         public event Action<string>? ModelNameResolved;
 
         /// <summary>
+        /// Every printable group-0x0E firmware-log line this lane emits, raw and
+        /// un-deduped. The device narrates its own calibration routines here
+        /// ("Pedal Calib Start" / "Backward" / "Forward" /
+        /// "pressure Calculating" / "End", "B-PD :Min … Max… Speed… B-L …",
+        /// "Motor Locate Start", "max_err … compen_theta_e …",
+        /// "Rotor Not Located"), which is the only real progress signal either
+        /// routine has — see <see cref="MBoosterCalibrationRunner"/>.
+        /// Fires on the connection's dispatch thread.
+        /// </summary>
+        public event Action<string>? FirmwareLogLine;
+
+        /// <summary>
         /// Seed <see cref="ConnectedAxes"/> from a persisted last-known value.
         /// No-op when live connectivity has already been parsed (or on a null/
         /// empty seed) — the device's own diagnostic always wins. Arms the
@@ -559,6 +571,49 @@ namespace MozaPlugin.Devices.MBooster
         }
 
         /// <summary>
+        /// Role index (0=Throttle, 1=Brake, 2=Clutch, -1=unknown) a HID axis
+        /// currently holds. Resolved against the CONNECTED axis count, never
+        /// the raw HID axis count — a chain-capable hub reports 3-4 axes
+        /// regardless of how many pedals are wired, and passing the raw count
+        /// drops <see cref="MozaMBoosterRegistry.ResolveAxisRole"/> into its
+        /// axis-order fallback.
+        /// </summary>
+        public int RoleIndexForAxis(int axisIndex)
+        {
+            int axisCount = ConnectedAxisIndices().Count;
+            if (axisCount <= 0) axisCount = 1;
+            var role = MozaMBoosterRegistry.ResolveAxisRole(CurrentSettings, axisIndex, axisCount);
+            return role == MBoosterRole.Throttle ? 0
+                 : role == MBoosterRole.Brake ? 1
+                 : role == MBoosterRole.Clutch ? 2 : -1;
+        }
+
+        /// <summary>
+        /// Device id an axis's own PHYSICAL (per-unit) calibration writes go to
+        /// — travel, endstop, damping, threshold, sensor ratio, and the two
+        /// calibration ROUTINES. Routed by role through the chain map, not by
+        /// raw HID axis; see <see cref="MotorDeviceForRole"/>. Single shared
+        /// implementation so the UI sliders, the connect-time apply and
+        /// <see cref="MBoosterCalibrationRunner"/> can never disagree about
+        /// which physical pedal they are addressing.
+        /// </summary>
+        public byte CalibDeviceForAxis(int axisIndex)
+            => MotorDeviceForRole(RoleIndexForAxis(axisIndex), axisIndex);
+
+        /// <summary>Command-name prefix ("throttle"/"brake"/"clutch") for an
+        /// axis's role, or null when unresolved.</summary>
+        public string? RolePrefixForAxis(int axisIndex)
+        {
+            switch (RoleIndexForAxis(axisIndex))
+            {
+                case 0: return "throttle";
+                case 1: return "brake";
+                case 2: return "clutch";
+                default: return null;
+            }
+        }
+
+        /// <summary>
         /// Whether more than one connected axis on this lane resolves to
         /// <paramref name="roleIndex"/> — i.e. two physical pedals claim one
         /// role, which is never valid (see
@@ -683,6 +738,56 @@ namespace MozaPlugin.Devices.MBooster
             RecomputeChainRoleMap();
         }
 
+        // Latest value of each register in StatusReadNames plus the motor
+        // calibration status, keyed "<dev hex>:<command name>" — per device,
+        // because a chain answers these from whichever unit was addressed and
+        // a calibration routine has to read back the state of the pedal IT is
+        // driving, not the host's. Only mbooster-calibration-state and
+        // mbooster-motor-cal-locate have decoded meanings; the rest ride along
+        // so a support bundle shows them (they read as per-unit constants in
+        // every capture so far — see docs/protocol/devices/mbooster.md).
+        private readonly System.Collections.Generic.Dictionary<string, int> _statusRegs =
+            new System.Collections.Generic.Dictionary<string, int>();
+        private readonly object _statusLock = new object();
+
+        /// <summary>
+        /// Pedal calibration-mode state for a device id, from register 0xB4:
+        /// 2 = normal operation, 0 = mid travel calibration, -1 = not read yet.
+        /// Proven by both 2026-09-08 captures — it drops to 0 within ~0.3s of a
+        /// travel-calibration start and returns to 2 only after the soft
+        /// reboot, tracking the firmware's own
+        /// `pedal_active_mode changed: 4` / `Table 6 Param 50`. That is what
+        /// makes the reboot mandatory rather than cosmetic.
+        /// </summary>
+        public int CalibrationStateFor(byte device) => StatusValue(device, "mbooster-calibration-state");
+
+        /// <summary>
+        /// Motor rotor-locate status for a device id, from the group-0x2A echo:
+        /// 1 = running, 3 = complete, -1 = nothing seen yet. No failure value
+        /// has ever been captured.
+        /// </summary>
+        public int MotorCalStateFor(byte device) => StatusValue(device, "mbooster-motor-cal-locate");
+
+        private int StatusValue(byte device, string name)
+        {
+            lock (_statusLock)
+                return _statusRegs.TryGetValue($"{device:x2}:{name}", out var v) ? v : -1;
+        }
+
+        private void StoreStatusRegister(byte device, string name, int value)
+        {
+            if (name != "mbooster-motor-cal-locate" && Array.IndexOf(StatusReadNames, name) < 0) return;
+            lock (_statusLock) _statusRegs[$"{device:x2}:{name}"] = value;
+        }
+
+        /// <summary>Snapshot of the status registers for the diagnostics dump,
+        /// keyed "&lt;dev hex&gt;:&lt;command name&gt;".</summary>
+        public System.Collections.Generic.Dictionary<string, int> StatusRegisters()
+        {
+            lock (_statusLock)
+                return new System.Collections.Generic.Dictionary<string, int>(_statusRegs);
+        }
+
         /// <summary>
         /// Automatic role→motor mapping for a chain, from the per-device
         /// calibration reads. Confirmed on hardware: every mBooster in the
@@ -803,6 +908,11 @@ namespace MozaPlugin.Devices.MBooster
             // carries it (same rationale as HardwareApplier's own flush teardown).
             try { StopCalibFlushTimer(flush: false); } catch { }
             lock (_calibLock) _deviceCalib.Clear();
+            // Status read-backs describe a live device; a stale 0xB4 or motor
+            // status surviving a reconnect would let a calibration runner
+            // conclude "already normal" / "already complete" before the
+            // reconnected pedal has answered anything.
+            lock (_statusLock) _statusRegs.Clear();
         }
 
         private void OnConnectionMessage(byte[] data)
@@ -839,7 +949,13 @@ namespace MozaPlugin.Devices.MBooster
                 int unswapped = ((data[1] & 0x0f) << 4) | ((data[1] & 0xf0) >> 4);
                 var probe = MozaResponseParser.Parse(data, busHint: "mbooster");
                 if (probe.HasValue && probe.Value.Name != null)
+                {
                     StoreCalib((byte)unswapped, probe.Value.Name, probe.Value.IntValue);
+                    // A calibration routine driving a CHAINED pedal reads its
+                    // 0xB4 / motor-locate status back through this branch, not
+                    // the host arm below.
+                    StoreStatusRegister((byte)unswapped, probe.Value.Name, probe.Value.IntValue);
+                }
                 string hex = ToHex(data);
                 bool isNew;
                 // Wire-derived key: cap so a response carrying a changing value can't
@@ -918,6 +1034,7 @@ namespace MozaPlugin.Devices.MBooster
                     if (r.Name == "mbooster-brake-threshold")
                         DeviceReportedMaxThresholdKg =
                             (float)MozaMBoosterProtocol.DecodeThresholdKg(r.IntValue);
+                    StoreStatusRegister(HostDeviceId, r.Name, r.IntValue);
                     StoreCalib(HostDeviceId, r.Name, r.IntValue);
                     MozaLog.Debug($"[AZOM/mBooster] {ShortIdentity(Identity)} {r.Name} = {r.IntValue}");
                     break;
@@ -971,6 +1088,14 @@ namespace MozaPlugin.Devices.MBooster
                 if (ch >= 0x20 && ch < 0x7f) sb.Append((char)ch);
             string ascii = sb.ToString().Trim();
             if (ascii.Length == 0) return;
+            // Publish every printable line BEFORE the connectivity filter and
+            // the dedupe set below: a calibration routine's own progress lines
+            // ("Pedal Calib Start/Backward/Forward/End", "compen_theta_e …",
+            // "Rotor Not Located") are none of the things this method keeps,
+            // and they repeat verbatim on a second run, which the dedupe set
+            // would swallow.
+            try { FirmwareLogLine?.Invoke(ascii); }
+            catch (Exception ex) { MozaLog.Debug($"[AZOM/mBooster] FirmwareLogLine handler: {ex.Message}"); }
             if (ascii.IndexOf("PD Linked", StringComparison.OrdinalIgnoreCase) < 0 &&
                 ascii.IndexOf("connected state", StringComparison.OrdinalIgnoreCase) < 0 &&
                 ascii.IndexOf("pedal is connected", StringComparison.OrdinalIgnoreCase) < 0 &&
@@ -1482,13 +1607,30 @@ namespace MozaPlugin.Devices.MBooster
         public void SendIdentityReads()
         {
             if (!_connection.IsConnected) return;
-            foreach (var name in new[]
-            {
-                "mbooster-model-name", "mbooster-serial-a", "mbooster-serial-b",
-                "mbooster-presence", "mbooster-device-type",
-            })
+            // Order matches real Pit House's own connect handshake frame for
+            // frame (see tools/cmd-frame-mbooster-cal.txt, checked against the
+            // 2026-09-08 captures). It runs again on every reconnect, which is
+            // what a calibration's soft reboot produces.
+            foreach (var name in IdentityReadOrder)
                 SendRead(name);
         }
+
+        /// <summary>Pit House's connect-handshake read order, verbatim.</summary>
+        private static readonly string[] IdentityReadOrder =
+        {
+            "mbooster-presence",
+            "mbooster-device-type",
+            "mbooster-mcu-uid",
+            "mbooster-device-presence",
+            "mbooster-capabilities",
+            "mbooster-model-name",
+            "mbooster-sw-version",
+            "mbooster-identity-11",
+            "mbooster-hw-version",
+            "mbooster-serial-a",
+            "mbooster-hw-sub",
+            "mbooster-serial-b",
+        };
 
         public void RequestCalibrationReads()
         {
@@ -1515,12 +1657,48 @@ namespace MozaPlugin.Devices.MBooster
             SendRead($"mbooster-{prefix}-max", dev);
             for (int i = 1; i <= 5; i++) SendRead($"mbooster-{prefix}-y{i}", dev);
             // Load-cell-only settings live under the brake-named command set.
+            // Everything below is a brake-named SINGLETON register (no
+            // per-pedal selector), so it is read once, for the brake role, on
+            // that role's own device — reading it per role would just re-read
+            // the same hardware three times. This is Pit House's own per-cycle
+            // read set; the plugin had been reading only angle-ratio and
+            // threshold out of it, so Travel / End Stop / Friction / Damping /
+            // Deadzone and the whole status block were never seeded from the
+            // device. See docs/protocol/devices/mbooster.md.
             if (roleIndex == 1)
             {
                 SendRead("mbooster-brake-angle-ratio", dev);
                 SendRead("mbooster-brake-threshold", dev);
+                SendRead("mbooster-brake-travel-start", dev);
+                SendRead("mbooster-brake-travel-end", dev);
+                SendRead("mbooster-brake-deadzone", dev);
+                SendRead("mbooster-brake-damping-press", dev);
+                SendRead("mbooster-brake-damping-release", dev);
+                SendRead("mbooster-brake-friction-0", dev);
+                SendRead("mbooster-brake-friction-1", dev);
+                SendRead("mbooster-brake-endstop-front", dev);
+                SendRead("mbooster-brake-endstop-end", dev);
+                // Calibration-mode state + the constants Pit House also polls.
+                // 0xB4 is the one with proven meaning (2 = normal, 0 = mid
+                // travel calibration); the rest ride along so a support bundle
+                // carries them.
+                foreach (var name in StatusReadNames)
+                    SendRead(name, dev);
             }
         }
+
+        /// <summary>Status registers Pit House reads that have no decoded
+        /// meaning yet, plus the calibration-mode state. Surfaced in the
+        /// diagnostics dump — see <see cref="StatusRegisters"/>.</summary>
+        internal static readonly string[] StatusReadNames =
+        {
+            "mbooster-calibration-state",
+            "mbooster-status-0d",
+            "mbooster-status-21",
+            "mbooster-status-22",
+            "mbooster-status-23",
+            "mbooster-status-24",
+        };
 
         /// <summary>Fire all five disable frames; called on disconnect / shutdown.
         /// Traction Control and Custom Effects share Engine's wire ID (no
@@ -1710,6 +1888,23 @@ namespace MozaPlugin.Devices.MBooster
             // any HID axis). The other workers' flag just sits unused since
             // their own Tick() gate never lets Brake Fade run.
             foreach (var w in _workers) w.SetBrakeFadeTestSustained(on);
+        }
+
+        /// <summary>
+        /// Park every effect worker on this lane while a hardware calibration
+        /// routine owns the pedal. Broadcast, like Brake Fade above: the
+        /// calibration addresses one role's device, but a chain's other
+        /// workers share the pipe and their keepalives/effects would still
+        /// interleave with it. The keepalive itself keeps flowing — see
+        /// <see cref="MBoosterEffectWorker.SetSuspended"/>.
+        /// </summary>
+        public void SetEffectsSuspended(bool on)
+        {
+            foreach (var w in _workers)
+            {
+                try { w.SetSuspended(on); }
+                catch (Exception ex) { MozaLog.Debug($"[AZOM/mBooster] SetSuspended: {ex.Message}"); }
+            }
         }
 
         /// <summary>

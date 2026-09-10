@@ -523,6 +523,11 @@ namespace MozaPlugin.Devices.MBooster
         float EndstopEndStiffness { get; set; }
         float NaturalFrictionPct { get; set; }
         bool NaturalFrictionEnabled { get; set; }
+        // Plain (non-segmented) virtual damping, cmdId 0xAD selectors 0/1 —
+        // a register set separate from SegmentedDamping's own per-segment
+        // fields, which Pit House writes in the same burst. -1 = not set.
+        float DampingPressPct { get; set; }
+        float DampingReleasePct { get; set; }
         MBoosterSegmentedDampingSettings SegmentedDamping { get; set; }
     }
 
@@ -565,6 +570,9 @@ namespace MozaPlugin.Devices.MBooster
         public float NaturalFrictionPct { get; set; } = -1;
         // Master on/off — see MBoosterDeviceSettings.NaturalFrictionEnabled.
         public bool NaturalFrictionEnabled { get; set; } = true;
+        // See MBoosterDeviceSettings.DampingPressPct.
+        public float DampingPressPct { get; set; } = -1;
+        public float DampingReleasePct { get; set; } = -1;
         public MBoosterSegmentedDampingSettings SegmentedDamping { get; set; } = new MBoosterSegmentedDampingSettings();
 
         // Per-pedal vibration effects (same defaults as the master's flat fields).
@@ -602,6 +610,8 @@ namespace MozaPlugin.Devices.MBooster
                 EndstopEndStiffness = EndstopEndStiffness,
                 NaturalFrictionPct = NaturalFrictionPct,
                 NaturalFrictionEnabled = NaturalFrictionEnabled,
+                DampingPressPct = DampingPressPct,
+                DampingReleasePct = DampingReleasePct,
                 SegmentedDamping = SegmentedDamping?.Clone() ?? new MBoosterSegmentedDampingSettings(),
                 Abs = Abs?.Clone() ?? new MBoosterEffectSettings(),
                 Lockup = Lockup?.Clone() ?? new MBoosterEffectSettings(),
@@ -900,6 +910,25 @@ namespace MozaPlugin.Devices.MBooster
         // existed.
         public bool NaturalFrictionEnabled { get; set; } = true;
 
+        // Plain (non-segmented) Virtual Damping, 0-100% each for press and
+        // release. Real hardware write on cmdId 0xAD with the same
+        // "fixed 0x00 + selector" shape as Natural Friction above (selector
+        // 0x00 = press, 0x01 = release), 2-byte int, raw = round(pct * 65535 /
+        // 100) — MozaMBoosterProtocol.EncodeFrictionPct's encoding.
+        //
+        // This is a GENUINELY SEPARATE register set from Segmented Damping
+        // (0xB7): the firmware's own log prints `virtual_damping_press` /
+        // `virtual_damping_release` for these and
+        // `virtual_damping_press1..3` / `_release1..3` for 0xB7's, out of the
+        // same Pit House write burst. Its physical full scales are 12.0 press
+        // and 10.0 release, so the captured 40%/25% decoded to 4.80000 and
+        // 2.50003. Pit House pushes both selectors on every config apply, so
+        // the plugin does too. -1 = "not yet set / no override", same sentinel
+        // as every other Pedal Feel field. See
+        // docs/protocol/devices/mbooster.md "Pedal Feel".
+        public float DampingPressPct { get; set; } = -1;
+        public float DampingReleasePct { get; set; } = -1;
+
         // Segmented Damping (Pit House-style) — see
         // MBoosterSegmentedDampingSettings and
         // docs/protocol/devices/mbooster.md "Segmented Damping".
@@ -947,6 +976,8 @@ namespace MozaPlugin.Devices.MBooster
                 EndstopEndStiffness = EndstopEndStiffness,
                 NaturalFrictionPct = NaturalFrictionPct,
                 NaturalFrictionEnabled = NaturalFrictionEnabled,
+                DampingPressPct = DampingPressPct,
+                DampingReleasePct = DampingReleasePct,
                 SegmentedDamping = SegmentedDamping?.Clone() ?? new MBoosterSegmentedDampingSettings(),
                 DisplayName = DisplayName,
             };
